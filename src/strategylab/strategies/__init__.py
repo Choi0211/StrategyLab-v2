@@ -1,0 +1,2 @@
+"""Strategy plugin module boundary."""
+

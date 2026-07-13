@@ -1,0 +1,2 @@
+"""Broker connector module boundary."""
+

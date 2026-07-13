@@ -1,0 +1,25 @@
+app:
+  name: StrategyLab v2
+  environment: development
+
+logging:
+  level: INFO
+  directory: logs
+
+modules:
+  enabled:
+    - core
+    - market
+    - strategies
+    - portfolio
+    - risk
+    - backtest
+    - research
+    - broker
+    - dashboard
+    - reports
+    - notification
+
+plugins:
+  paths: []
+

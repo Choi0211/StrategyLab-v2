@@ -1,0 +1,2 @@
+"""Notification module boundary."""
+
