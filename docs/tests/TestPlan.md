@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 6
+Status: Sprint 7
 
 ## Unit Tests
 
@@ -73,6 +73,12 @@ Sprint 6 adds:
 - emergency stop tests
 - circuit breaker tests
 - ATR position sizing tests
+
+Sprint 7 adds:
+
+- deterministic AI review prompt tests
+- AI review result schema validation tests
+- fallback review tests
 
 ## Integration Tests
 
