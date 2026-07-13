@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 4
+Status: Sprint 5
 
 ## Unit Tests
 
@@ -55,6 +55,15 @@ Sprint 4 adds:
 - deterministic equity curve tests
 - transaction cost tests
 - slippage tests
+
+Sprint 5 adds:
+
+- cash ledger debit/credit tests
+- position buy/sell/value tests
+- portfolio snapshot tests
+- allocation target validation tests
+- rebalance instruction tests
+- fixed quantity sizing tests
 
 ## Integration Tests
 
