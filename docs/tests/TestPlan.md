@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 2
+Status: Sprint 3
 
 ## Unit Tests
 
@@ -33,13 +33,24 @@ Sprint 2 adds:
 - in-memory adapter retrieval tests
 - in-memory adapter date filtering tests
 
+Sprint 3 adds:
+
+- strategy parameter default tests
+- strategy parameter type validation tests
+- strategy parameter bounds validation tests
+- strategy config round-trip tests
+- strategy registry registration tests
+- strategy registry duplicate rejection tests
+- deterministic signal generation tests
+- signal output contract tests
+
 ## Integration Tests
 
-No integration tests are required in Sprint 2.
+No integration tests are required in Sprint 3.
 
 ## Research Validation
 
-Research validation is not applicable in Sprint 2 because no strategy or backtest behavior is implemented.
+Research validation is not applicable in Sprint 3 because no backtest or research evaluation behavior is implemented.
 
 ## Secret Check
 
