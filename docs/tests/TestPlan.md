@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 3
+Status: Sprint 4
 
 ## Unit Tests
 
@@ -44,13 +44,25 @@ Sprint 3 adds:
 - deterministic signal generation tests
 - signal output contract tests
 
+Sprint 4 adds:
+
+- backtest config construction tests
+- trade record construction tests
+- equity curve record construction tests
+- known-scenario runner tests
+- deterministic result ID tests
+- deterministic trade log tests
+- deterministic equity curve tests
+- transaction cost tests
+- slippage tests
+
 ## Integration Tests
 
-No integration tests are required in Sprint 3.
+No integration tests are required in Sprint 4.
 
 ## Research Validation
 
-Research validation is not applicable in Sprint 3 because no backtest or research evaluation behavior is implemented.
+Research validation in Sprint 4 is limited to a known-scenario deterministic fixture. No production research validation is required yet.
 
 ## Secret Check
 
