@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 9
+Status: Sprint 10
 
 ## Unit Tests
 
@@ -90,6 +90,11 @@ Sprint 9 adds:
 - broker order/fill contract tests
 - paper broker fill tests
 - paper broker rejection tests
+
+Sprint 10 adds:
+
+- release artifact existence tests
+- release verification script
 
 ## Integration Tests
 
