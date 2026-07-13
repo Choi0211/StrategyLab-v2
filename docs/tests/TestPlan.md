@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 8
+Status: Sprint 9
 
 ## Unit Tests
 
@@ -84,6 +84,12 @@ Sprint 8 adds:
 
 - dashboard summary assembly tests
 - metric card and table view contract tests
+
+Sprint 9 adds:
+
+- broker order/fill contract tests
+- paper broker fill tests
+- paper broker rejection tests
 
 ## Integration Tests
 
