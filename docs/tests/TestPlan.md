@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 7
+Status: Sprint 8
 
 ## Unit Tests
 
@@ -79,6 +79,11 @@ Sprint 7 adds:
 - deterministic AI review prompt tests
 - AI review result schema validation tests
 - fallback review tests
+
+Sprint 8 adds:
+
+- dashboard summary assembly tests
+- metric card and table view contract tests
 
 ## Integration Tests
 
