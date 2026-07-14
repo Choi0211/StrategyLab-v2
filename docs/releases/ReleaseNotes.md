@@ -16,6 +16,8 @@ Base: StrategyLab v1.0 Stable Release
 - AI review schema foundation.
 - Dashboard view model foundation.
 - Safe broker interface and paper adapter.
+- End-to-end integration test from market fixture through strategy, portfolio sizing, risk validation, backtest, and paper broker fill.
+- GitHub Actions verification on Ubuntu and Windows with Python 3.11 and 3.12.
 
 ## Not Included
 
@@ -31,6 +33,6 @@ Run:
 
 ```bash
 PYTHONPATH=src;tests/unit python -m unittest discover -s tests/unit
+PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration
 python scripts/verify_release.py
 ```
-

@@ -18,9 +18,13 @@ Status: Passed
   - Command: `PYTHONPATH=src;tests/unit python -m unittest discover -s tests/unit`
   - Result: `Ran 69 tests`
   - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 1 test`
+  - Status: `OK`
 - Release verification: Passed
   - Command: `python scripts/verify_release.py`
-- Integration tests: N/A
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
 - Research validation: N/A
 - Secret check: Passed
 

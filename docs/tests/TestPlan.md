@@ -95,6 +95,8 @@ Sprint 10 adds:
 
 - release artifact existence tests
 - release verification script
+- end-to-end integration test
+- GitHub Actions verification on Ubuntu and Windows with Python 3.11 and 3.12
 
 ## Integration Tests
 
