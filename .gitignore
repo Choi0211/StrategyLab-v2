@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# StrategyLab-v2 secrets and runtime state
+logs/*
+!logs/.gitkeep
+.env.*
+!.env.example
+kis_token.json
+*_token.json
+*account*.json
+*trade_state*.json
+*.secret
+*.secrets

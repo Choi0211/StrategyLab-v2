@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strategylab-v2"
+version = "0.1.0"
+description = "AI-assisted quantitative strategy research platform"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "StrategyLab" }]
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
