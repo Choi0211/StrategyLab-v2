@@ -26,6 +26,20 @@ Required unit tests:
 - migration emits an audit event
 - policy revision requires rollback reference
 - policy revision cannot apply without user approval
+- duplicate ID rejection
+- immutable repository copy protection
+- deterministic chronological ordering by timestamp and ID
+- project/strategy/market AND filter behavior
+- duplicate candidate detection without merge
+- conflict candidate detection without resolution
+- KnowledgeApproval scope mismatch rejection
+- PolicyApproval scope and rollback mismatch rejection
+- ISO 8601 UTC timestamp rejection for invalid values
+- append-only audit behavior
+- audit target query
+- golden JSON fixture loading
+- migration fixture compatibility
+- no DB, vector, external AI API, private, or live trading imports
 
 ## Integration Tests
 
@@ -56,6 +70,12 @@ Golden fixtures:
 - user preference version fixture
 - policy rollback fixture
 - JSON migration fixture
+
+## Sprint 12-B Gate
+
+- `tests/unit/test_learning_repository.py` must pass.
+- Existing Sprint 12-A contract tests must continue to pass under UTC timestamp validation.
+- Release verification must remain green.
 
 ## Acceptance Gate
 

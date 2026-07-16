@@ -19,18 +19,25 @@ from gaon.learning.contracts import (
     SuccessPattern,
     UserPreference,
 )
+from gaon.learning.detection import ConflictCandidate, ConflictDetector, DuplicateCandidate, DuplicateDetector
 from gaon.learning.evidence.models import EvidenceRecord, EvidenceType
 from gaon.learning.experience.models import ExperiencePattern, ExperienceType
 from gaon.learning.knowledge.models import KnowledgeItem, KnowledgeStatus, transition_knowledge
 from gaon.learning.memory.models import LearningMemoryKind, LearningMemoryRecord, LearningMemoryStore
 from gaon.learning.policy.models import AutonomousAction, PolicyUpdateCandidate
+from gaon.learning.repository import InMemoryLearningRepository, LearningRepository
+from gaon.learning.time import validate_iso8601_utc
 
 __all__ = [
     "AutonomousAction",
     "AuditAction",
     "AuditEvent",
     "ConfidenceScore",
+    "ConflictCandidate",
+    "ConflictDetector",
     "ConversationSummary",
+    "DuplicateCandidate",
+    "DuplicateDetector",
     "EvidenceRecord",
     "EvidenceType",
     "ExperiencePattern",
@@ -46,6 +53,8 @@ __all__ = [
     "LearningMemoryStore",
     "LearningRecord",
     "LearningRecordType",
+    "InMemoryLearningRepository",
+    "LearningRepository",
     "PolicyApproval",
     "PolicyUpdateCandidate",
     "PolicyRevision",
@@ -55,4 +64,5 @@ __all__ = [
     "SuccessPattern",
     "UserPreference",
     "transition_knowledge",
+    "validate_iso8601_utc",
 ]

@@ -1,5 +1,16 @@
 # Changelog
 
+## Sprint 12-B Learning Memory Repository
+
+- Added `LearningRepository` protocol and deterministic `InMemoryLearningRepository`.
+- Added duplicate and conflict candidate detectors without automatic merge or resolution.
+- Added chronological lookup, project/strategy/market AND filters, and defensive copy storage behavior.
+- Added append-only audit event workflow with target queries.
+- Strengthened KnowledgeApproval and PolicyApproval scope matching.
+- Added ISO 8601 UTC timestamp validation for Learning Memory contracts.
+- Added golden JSON and migration compatibility fixtures.
+- Added Sprint 12-B repository tests and documentation updates.
+
 ## Sprint 12-A Learning Memory Contracts
 
 - Accepted ADR-0004 and ADR-0005 for Sprint 12 implementation.

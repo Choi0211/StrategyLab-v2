@@ -2,6 +2,28 @@
 
 Status: Passed
 
+## Sprint 12-B
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 108 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 1 test`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - `InMemoryLearningRepository`
+  - duplicate and conflict candidate detection
+  - chronological lookup and AND filters
+  - append-only audit workflow
+  - UTC timestamp validation
+  - golden JSON and migration fixtures
+  - approval scope mismatch guards
+
 ## Sprint 12-A
 
 - Unit tests: Passed

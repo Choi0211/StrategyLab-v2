@@ -304,21 +304,22 @@ Fields:
 Duplicate candidates are detected by:
 
 - same normalized statement
+- same normalized record content
 - same scope
 - same project/strategy/market tuple
 - overlapping evidence reference
 
-Duplicates are not automatically merged. They become a `LearningProposal`.
+Sprint 12-B implements candidate detection only. Duplicates are not automatically merged and do not mutate existing records.
 
 ## Conflict Detection
 
-Claims conflict when they share scope and topic but assert incompatible statements.
+Claims conflict when they share scope and topic or explicit target references but assert incompatible statements or states.
 
 Conflict result:
 
 - both claims remain below `Validated`
-- a review task is created
-- confidence is penalized
+- conflict candidates are returned for review
+- no automatic resolution or approval occurs
 
 ## Query Requirements
 
@@ -331,6 +332,16 @@ Learning Memory must support:
 - evidence source filter
 - status filter
 - related memory lookup for next research planning
+
+Sprint 12-B repository behavior:
+
+- `LearningRepository` defines add, get, list, chronological, filter, duplicate, conflict, and audit methods.
+- `InMemoryLearningRepository` stores deterministic JSON round-tripped objects for test isolation.
+- `filter(project, strategy, market)` uses AND semantics.
+- `list_chronological()` sorts explicitly by `created_at` then `record_id`.
+- stored records and audit events are returned as defensive copies.
+- duplicate IDs are rejected.
+- records without evidence are rejected before storage.
 
 ## Related Memory Retrieval Evaluation
 
@@ -360,6 +371,13 @@ Every change records:
 - timestamp
 - rollback_ref
 
+Sprint 12-B audit behavior:
+
+- `append_audit(event)` is append-only.
+- duplicate `event_id` values are rejected.
+- `replace_audit` and `delete_audit` are forbidden.
+- `list_audit(target_ref)` returns deterministic target-scoped events.
+
 ## JSON Versioning
 
 Every serialized payload must include:
@@ -374,6 +392,12 @@ Migration rules:
 - unsupported future versions fail closed
 - migration emits an audit event
 - migrated objects keep previous version reference
+
+Sprint 12-B adds golden JSON fixtures for the current LearningRecord schema and a migration compatibility fixture for v1 payloads.
+
+## Time Contract
+
+Sprint 12-B requires all Learning Memory timestamps to be ISO 8601 UTC values. Date-only strings and non-UTC offsets are rejected.
 
 ## Boundary
 

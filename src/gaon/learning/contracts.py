@@ -10,6 +10,7 @@ from typing import Any
 from gaon.learning.confidence.models import ConfidenceScore
 from gaon.learning.evidence.models import EvidenceRecord, EvidenceType
 from gaon.learning.knowledge.models import KnowledgeStatus
+from gaon.learning.time import validate_iso8601_utc
 
 LEARNING_CONTRACT_SCHEMA_VERSION = 1
 
@@ -130,7 +131,7 @@ class RevalidationSchedule:
         _require_text(self.schedule_id, "schedule_id")
         _require_text(self.target_ref, "target_ref")
         _require_text(self.reason, "reason")
-        _require_text(self.due_at, "due_at")
+        validate_iso8601_utc(self.due_at, "due_at")
         _require_text(self.frequency, "frequency")
         _require_scope(self.scope, self.project, self.strategy, self.market)
 
@@ -189,7 +190,7 @@ class KnowledgeApproval:
         _require_text(self.approval_id, "approval_id")
         _require_text(self.claim_id, "claim_id")
         _require_text(self.approved_by, "approved_by")
-        _require_text(self.approved_at, "approved_at")
+        validate_iso8601_utc(self.approved_at, "approved_at")
         _require_evidence(self.evidence, "knowledge approval")
         _require_scope(self.scope, self.project, self.strategy, self.market)
 
@@ -247,7 +248,7 @@ class PolicyApproval:
         _require_text(self.approval_id, "approval_id")
         _require_text(self.revision_id, "revision_id")
         _require_text(self.approved_by, "approved_by")
-        _require_text(self.approved_at, "approved_at")
+        validate_iso8601_utc(self.approved_at, "approved_at")
         _require_text(self.rollback_ref, "rollback_ref")
         _require_evidence(self.evidence, "policy approval")
         _require_scope(self.scope, self.project, self.strategy, self.market)
@@ -312,8 +313,8 @@ class LearningRecord:
         _require_text(self.record_id, "record_id")
         _require_text(self.content, "content")
         _require_scope(self.scope, self.project, self.strategy, self.market)
-        _require_text(self.created_at, "created_at")
-        _require_text(self.updated_at, "updated_at")
+        validate_iso8601_utc(self.created_at, "created_at")
+        validate_iso8601_utc(self.updated_at, "updated_at")
         if self.version < 1:
             raise ValueError("version must be positive")
         _require_evidence(self.evidence, "learning record")
@@ -397,6 +398,13 @@ class KnowledgeClaim:
             raise PermissionError("KnowledgeApproval is required")
         if approval.claim_id != self.claim_id:
             raise ValueError("KnowledgeApproval claim_id mismatch")
+        if (
+            approval.scope != self.scope
+            or approval.project != self.project
+            or approval.strategy != self.strategy
+            or approval.market != self.market
+        ):
+            raise ValueError("KnowledgeApproval scope mismatch")
         if self.conflicts:
             raise ValueError("conflicting claims cannot be validated")
         return replace(self, status=KnowledgeStatus.VALIDATED, approval=approval)
@@ -773,6 +781,13 @@ class PolicyRevision:
             raise ValueError("PolicyApproval revision_id mismatch")
         if approval.rollback_ref != self.rollback_ref:
             raise ValueError("PolicyApproval rollback_ref mismatch")
+        if (
+            approval.scope != self.scope
+            or approval.project != self.project
+            or approval.strategy != self.strategy
+            or approval.market != self.market
+        ):
+            raise ValueError("PolicyApproval scope mismatch")
         return replace(self, approval=approval, applied=True)
 
     def to_dict(self) -> dict[str, Any]:
@@ -845,7 +860,7 @@ class AuditEvent:
             raise ValueError("after_version must be positive")
         _require_scope(self.scope, self.project, self.strategy, self.market)
         _require_evidence(self.evidence, "audit event")
-        _require_text(self.timestamp, "timestamp")
+        validate_iso8601_utc(self.timestamp, "timestamp")
 
     def to_dict(self) -> dict[str, Any]:
         return {
