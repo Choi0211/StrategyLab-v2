@@ -37,8 +37,14 @@ def main() -> int:
             return tests.returncode
     required = [
         "docs/architecture/GaonPlatformMasterSpecification.md",
+        "docs/architecture/GaonDevelopmentContract.md",
         "docs/architecture/MasterBlueprint.md",
+        "docs/architecture/Sprint11_Brief.md",
         "docs/architecture/SprintRoadmap.md",
+        "docs/adr/ADR-0001-learning-memory-core.md",
+        "docs/rfc/RFC-0001-sprint11-learning-engine.md",
+        "docs/learning/LearningMemory.md",
+        "docs/conversation/ConversationEngine.md",
         "docs/tests/TestResults.md",
         "docs/releases/ReleaseNotes.md",
         "docs/releases/CHANGELOG.md",

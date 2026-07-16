@@ -900,7 +900,7 @@ Sprint 11 through Sprint 20 continue StrategyLab under the Gaon Platform Master 
 Planned scope:
 
 - Sprint 11: Research Brain
-- Sprint 12: Memory, Knowledge, Evidence, Citation, and Research History
+- Sprint 12: Learning Memory, Knowledge, Evidence, Citation, and Research History
 - Sprint 13: Strategy Generator
 - Sprint 14: V1 Adapter Contract
 - Sprint 15: Validation and Champion lifecycle

@@ -127,9 +127,9 @@ Sprint 11: Research Brain
 - Research Journal
 - Memory Foundation
 
-Sprint 12: Memory and Evidence
+Sprint 12: Learning Memory and Evidence
 
-- Memory
+- Learning Memory
 - Knowledge
 - Evidence
 - Citation
@@ -193,7 +193,7 @@ Research
   -> Strategy
   -> Experiment
   -> Validation
-  -> Memory
+  -> Learning Memory
   -> Next Research
 ```
 

@@ -3,6 +3,19 @@
 Status: Release Candidate Foundation  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 11 Development Start
+
+Sprint 11 starts the Gaon Research Brain and Learning Memory foundation.
+
+Included in Sprint 11 start:
+
+- Gaon Development Contract v1.0.
+- `gaon.learning` package boundary.
+- Learning Memory evidence rules.
+- Knowledge lifecycle and user approval rule for `Validated`.
+- Policy update candidate approval and rollback metadata.
+- ADR/RFC documentation for Learning Memory core.
+
 ## Included
 
 - Blueprint and sprint governance.

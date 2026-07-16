@@ -2,6 +2,26 @@
 
 Status: Passed
 
+## Sprint 11
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 75 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 1 test`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - Gaon Development Contract added.
+  - Learning Memory replaces Research Memory terminology for Sprint 11 planning.
+  - `gaon.learning` package boundary added.
+  - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts added.
+  - ADR and RFC added for Learning Memory core.
+
 ## Sprint 1
 
 - Unit tests: Passed

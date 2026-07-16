@@ -356,13 +356,13 @@ What it does not do:
 
 Current status: Planned.
 
-## Sprint 12: Memory and Evidence
+## Sprint 12: Learning Memory and Evidence
 
-Sprint 12 creates the evidence-backed memory foundation.
+Sprint 12 extends the evidence-backed Learning Memory foundation.
 
 What it builds:
 
-- memory records
+- Learning Memory records
 - knowledge records
 - evidence records
 - citation model
@@ -478,7 +478,7 @@ Research
   -> Strategy
   -> Experiment
   -> Validation
-  -> Memory
+  -> Learning Memory
   -> Next Research
 ```
 

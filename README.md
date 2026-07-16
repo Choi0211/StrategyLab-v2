@@ -16,6 +16,8 @@ StrategyLab v2 is currently a Foundation Release Candidate on `develop-v2`.
 
 Included foundations:
 
+- Gaon Learning Engine package boundary
+- Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
 - Core configuration, logging, module registry, and plugin boundaries
 - Market data models, validation, provenance, and in-memory adapter
 - Strategy metadata, parameters, registry, configs, and deterministic signals
@@ -111,6 +113,7 @@ The paper broker is deterministic and does not connect to a real broker.
 
 ## Module Structure
 
+- `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
 - `strategylab.core`: configuration, logging, module registry, plugin boundary
 - `strategylab.market`: market data contracts, validation, provenance
 - `strategylab.strategies`: strategy interface, parameters, registry, signals
@@ -147,5 +150,8 @@ Do not commit `.env`, token files, account files, real trade state, production l
 ## Master Documents
 
 - `docs/architecture/GaonPlatformMasterSpecification.md`: top-level Gaon Platform development specification
+- `docs/architecture/GaonDevelopmentContract.md`: Sprint 11 to Sprint 20 execution contract
 - `docs/architecture/MasterBlueprint.md`: StrategyLab v2 master blueprint
 - `docs/architecture/SprintRoadmap.md`: sprint operating roadmap
+- `docs/adr/ADR-0001-learning-memory-core.md`: Learning Memory architecture decision
+- `docs/rfc/RFC-0001-sprint11-learning-engine.md`: Sprint 11 Learning Engine RFC
