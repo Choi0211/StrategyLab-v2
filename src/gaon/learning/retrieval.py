@@ -4,10 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 from gaon.learning.contracts import LearningRecord, LearningRecordType
 from gaon.learning.detection import normalize_text
+from gaon.learning.evidence.models import EvidenceType
 from gaon.learning.time import parse_iso8601_utc
+
+
+class RelatedMemoryMode(str, Enum):
+    """Eligibility mode for related-memory retrieval."""
+
+    STRICT = "strict"
+    BROAD = "broad"
+    GLOBAL = "global"
 
 
 @dataclass(frozen=True)
@@ -22,6 +32,8 @@ class RelatedMemoryQuery:
     record_types: tuple[LearningRecordType, ...] = ()
     limit: int | None = None
     reference_time: str | None = None
+    mode: RelatedMemoryMode = RelatedMemoryMode.STRICT
+    aliases: dict[str, tuple[str, ...]] | None = None
 
 
 @dataclass(frozen=True)
@@ -85,12 +97,20 @@ class RelatedMemoryRetriever:
     def _eligible(self, query: RelatedMemoryQuery, record: LearningRecord) -> bool:
         if query.record_types and record.record_type not in query.record_types:
             return False
-        return (
-            record.scope == query.scope
-            or record.project == query.project
-            or record.strategy == query.strategy
-            or record.market == query.market
+        dimension_matches = sum(
+            (
+                record.project == query.project,
+                record.strategy == query.strategy,
+                record.market == query.market,
+            )
         )
+        if query.mode is RelatedMemoryMode.STRICT:
+            return record.scope == query.scope and dimension_matches >= 1
+        if query.mode is RelatedMemoryMode.BROAD:
+            return record.scope == query.scope or dimension_matches >= 2
+        if query.mode is RelatedMemoryMode.GLOBAL:
+            return True
+        raise ValueError("unsupported related-memory mode")
 
     def _score(self, query: RelatedMemoryQuery, record: LearningRecord, reference_time: datetime) -> RelatedMemoryResult:
         validation_state = record.confidence.validation_state.lower()
@@ -105,9 +125,9 @@ class RelatedMemoryRetriever:
             project_match=2.0 if record.project == query.project else 0.0,
             strategy_match=2.0 if record.strategy == query.strategy else 0.0,
             market_match=2.0 if record.market == query.market else 0.0,
-            topic_match=1.0 if normalize_text(query.query) in normalize_text(record.content) else 0.0,
+            topic_match=self._token_overlap_score(query, record),
             validation_state=self._validation_score(validation_state),
-            evidence_quality=min(len(record.evidence), 3) * 0.5,
+            evidence_quality=self._evidence_quality(record),
             recency=self._recency_score(record, reference_time),
             conflict_penalty=-record.confidence.conflict_penalty,
             revalidation_penalty=-1.0 if revalidation_due else 0.0,
@@ -147,3 +167,52 @@ class RelatedMemoryRetriever:
         if validation_state == "deprecated":
             return -3.0
         return 0.0
+
+    def _token_overlap_score(self, query: RelatedMemoryQuery, record: LearningRecord) -> float:
+        query_tokens = self._expanded_tokens(query.query, query.aliases)
+        content_tokens = self._expanded_tokens(record.content, query.aliases)
+        if not query_tokens or not content_tokens:
+            return 0.0
+        overlap = query_tokens.intersection(content_tokens)
+        return min(len(overlap) / len(query_tokens), 1.0) * 2.0
+
+    def _expanded_tokens(self, value: str, aliases: dict[str, tuple[str, ...]] | None) -> set[str]:
+        tokens = set(normalize_text(value).casefold().split())
+        alias_map = aliases or DEFAULT_ALIASES
+        expanded = set(tokens)
+        for canonical, equivalents in alias_map.items():
+            equivalent_tokens = set(normalize_text(canonical).casefold().split())
+            for equivalent in equivalents:
+                equivalent_tokens.update(normalize_text(equivalent).casefold().split())
+            if tokens.intersection(equivalent_tokens):
+                expanded.update(equivalent_tokens)
+        return expanded
+
+    def _evidence_quality(self, record: LearningRecord) -> float:
+        if not record.evidence:
+            return 0.0
+        scores = [_EVIDENCE_WEIGHTS.get(evidence.evidence_type, 0.5) for evidence in record.evidence]
+        average = sum(scores) / len(scores)
+        peak = max(scores)
+        diversity_bonus = min(len({evidence.evidence_type for evidence in record.evidence}) * 0.1, 0.3)
+        return round(average + peak * 0.5 + diversity_bonus, 4)
+
+
+DEFAULT_ALIASES: dict[str, tuple[str, ...]] = {
+    "ORB": ("Opening Range Breakout",),
+    "VWAP": ("Volume Weighted Average Price",),
+    "MDD": ("Maximum Drawdown",),
+    "PF": ("Profit Factor",),
+    "MA": ("Moving Average",),
+}
+
+_EVIDENCE_WEIGHTS: dict[EvidenceType, float] = {
+    EvidenceType.BACKTEST: 2.0,
+    EvidenceType.EXPERIMENT: 2.0,
+    EvidenceType.OFFICIAL_DOCUMENTATION: 1.8,
+    EvidenceType.PAPER: 1.6,
+    EvidenceType.DOCUMENT: 1.2,
+    EvidenceType.RESEARCH: 1.0,
+    EvidenceType.URL: 0.8,
+    EvidenceType.SOURCE: 0.7,
+}

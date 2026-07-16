@@ -156,6 +156,23 @@ Sprint 12 runtime adds:
 - Research Brain conversion and no-auto-save workflow
 - no DB/vector/external AI/private/live trading imports
 
+Gaon Runtime Collaboration adds:
+
+- configuration secret masking and fail-closed validation
+- deterministic event bus subscriber order and failure isolation
+- Conversation Runtime command and Korean natural-language intent parsing
+- approval safety responses without approval mutation
+- Telegram update parsing, allowed chat authorization, Markdown escaping, long message splitting, dry-run response
+- Notion research/memory/report mapping and dry-run idempotency
+- NotificationRequest/NotificationResult mapping and deduplication
+- deterministic DailyReport and WeeklyReview
+- in-memory Scheduler due job and duplicate run prevention
+- CLI dry-run command routing
+- Learning Memory claims snapshot export/import
+- STRICT/BROAD/GLOBAL related-memory retrieval modes
+- token overlap, alias matching, and EvidenceType quality scoring
+- no real network call, no shell execution, no broker/trading import
+
 ## Integration Tests
 
 Sprint 12 runtime adds an end-to-end Learning Memory integration:

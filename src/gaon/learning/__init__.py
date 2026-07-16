@@ -28,7 +28,7 @@ from gaon.learning.knowledge.models import KnowledgeItem, KnowledgeStatus, trans
 from gaon.learning.memory.models import LearningMemoryKind, LearningMemoryRecord, LearningMemoryStore
 from gaon.learning.policy.models import AutonomousAction, PolicyUpdateCandidate
 from gaon.learning.repository import InMemoryLearningRepository, LearningRepository
-from gaon.learning.retrieval import RelatedMemoryQuery, RelatedMemoryResult, RelatedMemoryRetriever, ScoreBreakdown
+from gaon.learning.retrieval import RelatedMemoryMode, RelatedMemoryQuery, RelatedMemoryResult, RelatedMemoryRetriever, ScoreBreakdown
 from gaon.learning.time import parse_iso8601_utc, validate_iso8601_utc
 
 __all__ = [
@@ -65,6 +65,7 @@ __all__ = [
     "PreparedMemory",
     "ResearchOutcome",
     "RelatedMemoryQuery",
+    "RelatedMemoryMode",
     "RelatedMemoryResult",
     "RelatedMemoryRetriever",
     "RevalidationSchedule",

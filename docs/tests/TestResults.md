@@ -2,6 +2,25 @@
 
 Status: Passed
 
+## Gaon Runtime Collaboration
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 126 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 6 tests`
+  - Status: `OK`
+- Scope:
+  - runtime configuration and secret masking
+  - event bus duplicate/failure isolation
+  - conversation intents and approval safety
+  - Telegram dry-run authorization and formatting
+  - Notion dry-run mapping and idempotency
+  - notification, daily/weekly reports, scheduler, CLI
+  - Learning Memory claims snapshot and retrieval modes
+
 ## Sprint 12-B
 
 - Unit tests: Passed

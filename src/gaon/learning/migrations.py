@@ -23,6 +23,7 @@ def migrate_repository_json(payload: str) -> str:
             "schema_version": LEARNING_REPOSITORY_SCHEMA_VERSION,
             "kind": LEARNING_REPOSITORY_KIND,
             "records": _require_list(decoded, "records"),
+            "claims": _optional_list(decoded, "claims"),
             "audit_events": _require_list(decoded, "audit_events"),
         }
         return json.dumps(migrated, sort_keys=True)
@@ -31,6 +32,13 @@ def migrate_repository_json(payload: str) -> str:
 
 def _require_list(decoded: dict[str, Any], field: str) -> list[dict[str, Any]]:
     value = decoded.get(field)
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list")
+    return value
+
+
+def _optional_list(decoded: dict[str, Any], field: str) -> list[dict[str, Any]]:
+    value = decoded.get(field, [])
     if not isinstance(value, list):
         raise ValueError(f"{field} must be a list")
     return value

@@ -1,0 +1,1 @@
+"""Gaon external integration contracts."""

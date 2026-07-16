@@ -3,6 +3,30 @@
 Status: Release Candidate Foundation  
 Base: StrategyLab v1.0 Stable Release
 
+## Gaon Runtime Collaboration
+
+Included:
+
+- runtime configuration with secret masking
+- deterministic in-process event bus
+- rule-based Conversation Runtime
+- Telegram dry-run adapter
+- Notion dry-run mapper and sync contracts
+- notification engine
+- daily report and weekly review contracts
+- in-memory scheduler
+- safe dry-run CLI
+- Learning Memory claims snapshot and retrieval hardening
+
+Not included:
+
+- real Telegram/Notion network execution
+- external AI API
+- vector DB or embeddings
+- MyMoneyGuard/KIS access
+- live trading
+- automatic approvals
+
 ## Sprint 12-B Learning Memory Repository
 
 Sprint 12-B adds deterministic repository and detection contracts for Learning Memory.
