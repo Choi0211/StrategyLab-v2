@@ -16,6 +16,12 @@ The sprint goal is to create the first testable learning contracts that allow Ga
 Included:
 
 - Gaon Learning Engine package boundary
+- Research Brain package boundary
+- Research Goal contract
+- Research Plan contract
+- Research Session contract
+- Research Interview contract
+- Research Journal contract
 - Learning Memory record contract
 - Evidence record contract
 - Knowledge lifecycle contract
@@ -23,6 +29,7 @@ Included:
 - Policy update candidate contract
 - Confidence score contract
 - Unit tests for Learning Memory guardrails
+- Unit tests for Research Brain guardrails
 - Sprint 11 architecture, ADR, RFC, and learning documentation
 
 Excluded:
@@ -41,6 +48,9 @@ Excluded:
 ## Acceptance Criteria
 
 - Learning Memory records require evidence.
+- Research Brain artifacts require evidence.
+- Research Plan is tied to one Research Goal.
+- Research Journal entries are immutable and reject duplicate IDs.
 - Knowledge cannot become `Validated` without user approval.
 - Policy update candidates require evidence and rollback metadata.
 - Forbidden autonomous actions are represented explicitly.

@@ -5,6 +5,7 @@ class ImportSmokeTest(unittest.TestCase):
     def test_package_imports(self) -> None:
         import gaon
         import gaon.learning
+        import gaon.research
         import strategylab
         import strategylab.backtest
         import strategylab.broker
