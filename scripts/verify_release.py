@@ -58,6 +58,14 @@ def main() -> int:
         "docs/releases/ReleaseNotes.md",
         "docs/releases/CHANGELOG.md",
         "docs/operations/Runbook.md",
+        "tests/fixtures/learning_memory/valid_repository_v1.json",
+        "tests/fixtures/learning_memory/legacy_repository_v0.json",
+        "tests/fixtures/learning_memory/unsupported_repository_v2.json",
+        "tests/fixtures/learning_memory/duplicate_record_ids.json",
+        "tests/fixtures/learning_memory/invalid_timestamp.json",
+        "tests/fixtures/learning_memory/missing_evidence.json",
+        "tests/fixtures/learning_memory/malformed_repository.json",
+        "tests/fixtures/learning_memory/related_memory_ranking.json",
     ]
     missing = [path for path in required if not (root / path).exists()]
     if missing:

@@ -24,7 +24,7 @@ Collected
 
 `Validated` requires explicit user approval.
 
-Knowledge approval and policy approval are separate contracts.
+Knowledge approval, policy approval, and preference approval are separate contracts.
 
 ## Rules
 
@@ -41,11 +41,13 @@ Forbidden:
 - deleting user preferences automatically
 - applying policy revisions without approval
 - using confidence score as approval
+- substituting one approval type for another
 
 ## Approval Separation
 
 - `KnowledgeApproval` validates a `KnowledgeClaim`.
 - `PolicyApproval` applies a `PolicyRevision`.
+- `PreferenceApproval` approves protected user preference changes.
 - `ConfidenceScore` can prioritize review but cannot approve either action.
 
 ## Revalidation

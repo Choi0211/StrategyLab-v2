@@ -304,21 +304,22 @@ Fields:
 Duplicate candidates are detected by:
 
 - same normalized statement
+- same normalized record content
 - same scope
 - same project/strategy/market tuple
 - overlapping evidence reference
 
-Duplicates are not automatically merged. They become a `LearningProposal`.
+Sprint 12-B implements candidate detection only. Duplicates are not automatically merged and do not mutate existing records.
 
 ## Conflict Detection
 
-Claims conflict when they share scope and topic but assert incompatible statements.
+Claims conflict when they share scope and topic or explicit target references but assert incompatible statements or states.
 
 Conflict result:
 
 - both claims remain below `Validated`
-- a review task is created
-- confidence is penalized
+- conflict candidates are returned for review
+- no automatic resolution or approval occurs
 
 ## Query Requirements
 
@@ -331,6 +332,18 @@ Learning Memory must support:
 - evidence source filter
 - status filter
 - related memory lookup for next research planning
+
+Sprint 12-B repository behavior:
+
+- `LearningRepository` defines add, get, list, chronological, filter, duplicate, conflict, and audit methods.
+- `InMemoryLearningRepository` stores deterministic JSON round-tripped objects for test isolation.
+- `filter(project, strategy, market)` uses AND semantics.
+- `list_chronological()` sorts explicitly by `created_at` then `record_id`.
+- stored records and audit events are returned as defensive copies.
+- duplicate IDs are rejected.
+- records without evidence are rejected before storage.
+- repository JSON export/import uses versioned deterministic payloads.
+- legacy repository v0 payloads migrate through explicit migration functions.
 
 ## Related Memory Retrieval Evaluation
 
@@ -346,6 +359,29 @@ Related memory retrieval is ranked by:
 
 Confidence may contribute to ranking, but it must not grant approval or mutate memory.
 
+Sprint 12 runtime implements deterministic related-memory retrieval. Each result includes:
+
+- `record`
+- `total_score`
+- `score_breakdown`
+- `warnings`
+- `conflict_state`
+- `revalidation_state`
+
+Score components:
+
+- scope match
+- project match
+- strategy match
+- market match
+- topic/content match
+- validation state
+- evidence quality
+- recency
+- conflict penalty
+- revalidation overdue penalty
+- confidence signal
+
 ## Audit Log
 
 Every change records:
@@ -359,6 +395,14 @@ Every change records:
 - evidence
 - timestamp
 - rollback_ref
+
+Sprint 12-B audit behavior:
+
+- `append_audit(event)` is append-only.
+- duplicate `event_id` values are rejected.
+- `replace_audit` and `delete_audit` are forbidden.
+- `list_audit(target_ref)` returns deterministic target-scoped events.
+- `list_audit(target_ref, action)` uses AND semantics.
 
 ## JSON Versioning
 
@@ -374,6 +418,25 @@ Migration rules:
 - unsupported future versions fail closed
 - migration emits an audit event
 - migrated objects keep previous version reference
+
+Sprint 12-B adds golden JSON fixtures for the current LearningRecord schema and a migration compatibility fixture for v1 payloads.
+
+Sprint 12 runtime fixture files live under `tests/fixtures/learning_memory/` and include valid v1, legacy v0, unsupported v2, duplicate ID, invalid timestamp, missing evidence, malformed, and retrieval-ranking fixtures.
+
+## Research Brain Integration
+
+Sprint 12 runtime adds explicit conversion helpers:
+
+- ResearchGoal -> LearningRecord
+- ResearchPlan -> LearningRecord
+- completed ResearchSession -> ResearchOutcome
+- ResearchJournalEntry -> LearningRecord
+
+The workflow returns proposed records, duplicate candidates, and conflict candidates. It does not automatically save, validate, merge, deprecate, or apply policy.
+
+## Time Contract
+
+Sprint 12-B requires all Learning Memory timestamps to be ISO 8601 UTC values. Date-only strings and non-UTC offsets are rejected.
 
 ## Boundary
 

@@ -1,19 +1,19 @@
 # Sprint 12 Brief: Learning Memory Blueprint
 
-Status: Blueprint  
-Branch: feature/sprint12-learning-memory  
-Base: main 9312adb  
+Status: Sprint 12 Runtime Completion  
+Branch: feature/sprint12-memory-repository  
+Base: latest main  
 Parent Contract: `docs/architecture/GaonDevelopmentContract.md`  
 
 ## Objective
 
 Sprint 12 designs the Learning Memory system that allows Gaon to remember past research, failures, successes, user preferences, evidence, and conversations, then use those memories to prepare better future research plans.
 
-This sprint does not implement storage, vector search, AI providers, Telegram, Dashboard, MyMoneyGuard access, or trading behavior.
+Sprint 12-A implemented domain contracts. Sprint 12-B added deterministic in-memory repository and detection contracts. Sprint 12 runtime completion adds related-memory retrieval, JSON export/import, migration fixtures, audit action query, and Research Brain preparation workflow. It does not implement real storage, vector search, AI providers, Telegram, Dashboard, MyMoneyGuard access, or trading behavior.
 
 ## Scope
 
-Design only:
+Design and Sprint 12-B implementation:
 
 - Learning Memory domain model draft
 - evidence-backed storage contract
@@ -24,6 +24,12 @@ Design only:
 - versioned JSON and migration policy
 - query/filter requirements
 - test strategy
+- in-memory repository for contract tests
+- append-only audit workflow
+- ISO 8601 UTC timestamp validation
+- golden JSON fixture and migration compatibility fixture
+- related-memory deterministic retrieval
+- Research Brain conversion and no-auto-save preparation workflow
 
 ## Required Domain Model Draft
 
@@ -79,6 +85,35 @@ Design only:
 8. Add audit log and rollback contracts.
 9. Add JSON versioning and migration tests.
 10. Update documentation and release notes.
+
+## Sprint 12-B Implemented API
+
+- `LearningRepository`
+- `InMemoryLearningRepository`
+- `DuplicateDetector`
+- `ConflictDetector`
+- `DuplicateCandidate`
+- `ConflictCandidate`
+- `validate_iso8601_utc`
+- `GOLDEN_LEARNING_RECORD_JSON`
+- `MIGRATION_V1_LEARNING_RECORD_JSON`
+- `RelatedMemoryRetriever`
+- `RelatedMemoryQuery`
+- `RelatedMemoryResult`
+- `ScoreBreakdown`
+- `PreferenceApproval`
+- `prepare_memory`
+- `research_goal_to_record`
+- `research_plan_to_record`
+- `research_session_to_outcome`
+
+## Remaining Phase 2 Scope
+
+- richer evidence quality scoring policy
+- repository-backed LearningProposal generation
+- conflict candidate creation from ResearchOutcome pairs
+- revalidation due-query workflow
+- optional durable storage design after review
 
 ## Acceptance Criteria
 

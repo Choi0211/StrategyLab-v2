@@ -3,6 +3,38 @@
 Status: Release Candidate Foundation  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 12-B Learning Memory Repository
+
+Sprint 12-B adds deterministic repository and detection contracts for Learning Memory.
+
+Included:
+
+- `LearningRepository` protocol
+- `InMemoryLearningRepository`
+- duplicate candidate detection without automatic merge
+- conflict candidate detection without automatic resolution
+- chronological lookup
+- project/strategy/market AND filters
+- append-only audit workflow
+- KnowledgeApproval and PolicyApproval scope matching
+- ISO 8601 UTC timestamp validation
+- golden JSON and migration compatibility fixtures
+- related-memory retrieval with score breakdown
+- repository JSON export/import
+- explicit v0 to v1 migration path
+- Research Brain conversion and no-auto-save memory preparation
+- separate `PreferenceApproval`
+
+Not included:
+
+- real DB
+- vector DB
+- embedding or related-memory ranking
+- external AI API
+- Telegram or Dashboard runtime
+- MyMoneyGuard access
+- live trading
+
 ## Sprint 12-A Learning Memory Contracts
 
 Sprint 12-A adds domain contracts only.
@@ -26,7 +58,6 @@ Included:
 
 Not included:
 
-- repository implementation
 - search engine
 - real DB
 - vector DB

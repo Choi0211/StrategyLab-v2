@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "kind": "learning_repository",
+  "records": [
+    {
+      "record_id": "duplicate-record",
+      "record_type": "knowledge_claim",
+      "content": "First duplicate.",
+      "scope": "strategy-research",
+      "project": "StrategyLab",
+      "strategy": "ORB",
+      "market": "KRX",
+      "created_at": "2026-07-17T00:00:00Z",
+      "updated_at": "2026-07-17T00:00:00Z",
+      "version": 1,
+      "evidence": [{"evidence_id": "ev-001", "evidence_type": "research", "reference": "fixture", "summary": "fixture evidence"}],
+      "confidence": {"value": 0.5, "reason": "fixture", "evidence_count": 1, "validation_state": "need_validation", "recency": 1.0, "conflict_penalty": 0.0},
+      "revalidation": {"schedule_id": "rv-001", "target_ref": "duplicate-record", "reason": "scheduled validation", "due_at": "2026-08-01T00:00:00Z", "frequency": "monthly", "status": "pending", "scope": "strategy-research", "project": "StrategyLab", "strategy": "ORB", "market": "KRX"},
+      "audit_ref": "audit-001"
+    },
+    {
+      "record_id": "duplicate-record",
+      "record_type": "knowledge_claim",
+      "content": "Second duplicate.",
+      "scope": "strategy-research",
+      "project": "StrategyLab",
+      "strategy": "ORB",
+      "market": "KRX",
+      "created_at": "2026-07-17T00:00:01Z",
+      "updated_at": "2026-07-17T00:00:01Z",
+      "version": 1,
+      "evidence": [{"evidence_id": "ev-002", "evidence_type": "research", "reference": "fixture", "summary": "fixture evidence"}],
+      "confidence": {"value": 0.5, "reason": "fixture", "evidence_count": 1, "validation_state": "need_validation", "recency": 1.0, "conflict_penalty": 0.0},
+      "revalidation": {"schedule_id": "rv-002", "target_ref": "duplicate-record", "reason": "scheduled validation", "due_at": "2026-08-01T00:00:00Z", "frequency": "monthly", "status": "pending", "scope": "strategy-research", "project": "StrategyLab", "strategy": "ORB", "market": "KRX"},
+      "audit_ref": "audit-002"
+    }
+  ],
+  "audit_events": []
+}
