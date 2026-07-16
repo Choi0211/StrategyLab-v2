@@ -107,6 +107,12 @@ Sprint 11 adds:
 - user approval requirement for `Validated` knowledge
 - policy update evidence and rollback tests
 - forbidden autonomous action contract tests
+- Research Brain import smoke test
+- Research Goal evidence and Learning Memory export tests
+- Research Plan deterministic construction tests
+- Research Session goal/plan matching tests
+- Research Interview question/answer alignment tests
+- Research Journal immutability and duplicate rejection tests
 
 ## Integration Tests
 

@@ -15,6 +15,7 @@ Included in Sprint 11 start:
 - Knowledge lifecycle and user approval rule for `Validated`.
 - Policy update candidate approval and rollback metadata.
 - ADR/RFC documentation for Learning Memory core.
+- Research Brain contracts for evidence-backed goals, plans, sessions, interviews, and journals.
 
 ## Included
 
