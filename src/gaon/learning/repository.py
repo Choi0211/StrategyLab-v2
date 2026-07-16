@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from gaon.learning.contracts import AuditEvent, KnowledgeClaim, LearningRecord
+from gaon.learning.audit import filter_audit_events
+from gaon.learning.contracts import AuditAction, AuditEvent, KnowledgeClaim, LearningRecord, LearningRecordType
 from gaon.learning.detection import ConflictCandidate, ConflictDetector, DuplicateCandidate, DuplicateDetector
+from gaon.learning.migrations import migrate_repository_json
+from gaon.learning.retrieval import RelatedMemoryQuery, RelatedMemoryResult, RelatedMemoryRetriever
+from gaon.learning.serialization import repository_from_json, repository_to_json
+from gaon.learning.time import parse_iso8601_utc
 
 
 class LearningRepository(Protocol):
@@ -13,13 +18,25 @@ class LearningRepository(Protocol):
 
     def add(self, record: LearningRecord) -> None: ...
     def get(self, record_id: str) -> LearningRecord: ...
+    def exists(self, record_id: str) -> bool: ...
     def list_all(self) -> tuple[LearningRecord, ...]: ...
     def list_chronological(self) -> tuple[LearningRecord, ...]: ...
-    def filter(self, *, project: str | None = None, strategy: str | None = None, market: str | None = None) -> tuple[LearningRecord, ...]: ...
+    def filter(
+        self,
+        *,
+        scope: str | None = None,
+        project: str | None = None,
+        strategy: str | None = None,
+        market: str | None = None,
+        record_type: LearningRecordType | None = None,
+    ) -> tuple[LearningRecord, ...]: ...
     def find_duplicates(self, candidate: LearningRecord) -> tuple[DuplicateCandidate, ...]: ...
     def find_conflicts(self, candidate: KnowledgeClaim) -> tuple[ConflictCandidate, ...]: ...
+    def retrieve_related(self, query: RelatedMemoryQuery) -> tuple[RelatedMemoryResult, ...]: ...
     def append_audit(self, event: AuditEvent) -> None: ...
-    def list_audit(self, target_ref: str | None = None) -> tuple[AuditEvent, ...]: ...
+    def list_audit(self, target_ref: str | None = None, action: AuditAction | None = None) -> tuple[AuditEvent, ...]: ...
+    def export_json(self) -> str: ...
+    def import_json(self, payload: str) -> None: ...
 
 
 class InMemoryLearningRepository:
@@ -35,6 +52,7 @@ class InMemoryLearningRepository:
         self._audit_events: tuple[AuditEvent, ...] = ()
         self._duplicate_detector = duplicate_detector or DuplicateDetector()
         self._conflict_detector = conflict_detector or ConflictDetector()
+        self._retriever = RelatedMemoryRetriever()
 
     def add(self, record: LearningRecord) -> None:
         if not record.evidence:
@@ -56,26 +74,35 @@ class InMemoryLearningRepository:
         except KeyError as exc:
             raise KeyError(f"unknown record_id: {record_id}") from exc
 
+    def exists(self, record_id: str) -> bool:
+        return record_id in self._records
+
     def list_all(self) -> tuple[LearningRecord, ...]:
         return tuple(self._copy_record(record) for record in self._records.values())
 
     def list_chronological(self) -> tuple[LearningRecord, ...]:
-        return tuple(sorted(self.list_all(), key=lambda record: (record.created_at, record.record_id)))
+        return tuple(sorted(self.list_all(), key=lambda record: (parse_iso8601_utc(record.created_at, "created_at"), record.record_id)))
 
     def filter(
         self,
         *,
+        scope: str | None = None,
         project: str | None = None,
         strategy: str | None = None,
         market: str | None = None,
+        record_type: LearningRecordType | None = None,
     ) -> tuple[LearningRecord, ...]:
         records = self.list_chronological()
+        if scope is not None:
+            records = tuple(record for record in records if record.scope == scope)
         if project is not None:
             records = tuple(record for record in records if record.project == project)
         if strategy is not None:
             records = tuple(record for record in records if record.strategy == strategy)
         if market is not None:
             records = tuple(record for record in records if record.market == market)
+        if record_type is not None:
+            records = tuple(record for record in records if record.record_type is record_type)
         return records
 
     def find_duplicates(self, candidate: LearningRecord) -> tuple[DuplicateCandidate, ...]:
@@ -84,6 +111,9 @@ class InMemoryLearningRepository:
     def find_conflicts(self, candidate: KnowledgeClaim) -> tuple[ConflictCandidate, ...]:
         return self._conflict_detector.find(candidate, tuple(self._copy_claim(claim) for claim in self._claims.values()))
 
+    def retrieve_related(self, query: RelatedMemoryQuery) -> tuple[RelatedMemoryResult, ...]:
+        return self._retriever.retrieve(query, self.list_all())
+
     def append_audit(self, event: AuditEvent) -> None:
         if not event.evidence:
             raise ValueError("audit event requires evidence")
@@ -91,11 +121,26 @@ class InMemoryLearningRepository:
             raise ValueError(f"duplicate event_id: {event.event_id}")
         self._audit_events = (*self._audit_events, self._copy_audit(event))
 
-    def list_audit(self, target_ref: str | None = None) -> tuple[AuditEvent, ...]:
+    def list_audit(self, target_ref: str | None = None, action: AuditAction | None = None) -> tuple[AuditEvent, ...]:
         events = tuple(self._copy_audit(event) for event in self._audit_events)
-        if target_ref is not None:
-            events = tuple(event for event in events if event.target_ref == target_ref)
-        return events
+        return filter_audit_events(events, target_ref=target_ref, action=action)
+
+    def export_json(self) -> str:
+        return repository_to_json(self.list_chronological(), self.list_audit())
+
+    def import_json(self, payload: str) -> None:
+        records, audit_events = repository_from_json(migrate_repository_json(payload))
+        if len({record.record_id for record in records}) != len(records):
+            raise ValueError("import contains duplicate record_id values")
+        if len({event.event_id for event in audit_events}) != len(audit_events):
+            raise ValueError("import contains duplicate event_id values")
+        imported_records: dict[str, LearningRecord] = {}
+        for record in records:
+            if not record.evidence:
+                raise ValueError("import contains learning record without evidence")
+            imported_records[record.record_id] = self._copy_record(record)
+        self._records = imported_records
+        self._audit_events = tuple(self._copy_audit(event) for event in filter_audit_events(audit_events))
 
     def replace_audit(self, event: AuditEvent) -> None:
         raise PermissionError("audit events are append-only")

@@ -19,6 +19,7 @@ Included foundations:
 - Gaon Learning Engine package boundary
 - Sprint 12-A Learning Memory domain contracts
 - Sprint 12-B in-memory Learning Repository, duplicate/conflict detection, audit workflow, UTC timestamp guard, and golden JSON fixtures
+- Sprint 12 Runtime related-memory retrieval, repository JSON export/import, migration fixtures, and Research Brain preparation workflow
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -120,6 +121,8 @@ The paper broker is deterministic and does not connect to a real broker.
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
 - `gaon.learning.repository`: deterministic in-memory Learning Memory repository contract for tests
 - `gaon.learning.detection`: duplicate and conflict candidate detection without automatic merge or resolution
+- `gaon.learning.retrieval`: deterministic related-memory ranking with score breakdown
+- `gaon.learning.integration`: Research Brain to Learning Memory candidate preparation without automatic save
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts
 - `strategylab.core`: configuration, logging, module registry, plugin boundary
 - `strategylab.market`: market data contracts, validation, provenance

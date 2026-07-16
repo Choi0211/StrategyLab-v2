@@ -6,11 +6,11 @@ Status: Passed
 
 - Unit tests: Passed
   - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
-  - Result: `Ran 108 tests`
+  - Result: `Ran 119 tests`
   - Status: `OK`
 - Integration tests: Passed
   - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
-  - Result: `Ran 1 test`
+  - Result: `Ran 2 tests`
   - Status: `OK`
 - Release verification: Passed
   - Command: `python scripts/verify_release.py`
@@ -23,6 +23,9 @@ Status: Passed
   - UTC timestamp validation
   - golden JSON and migration fixtures
   - approval scope mismatch guards
+  - related-memory retrieval score breakdown
+  - repository JSON export/import and v0 migration
+  - Research Brain conversion and no-auto-save preparation workflow
 
 ## Sprint 12-A
 

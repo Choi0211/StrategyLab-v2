@@ -39,6 +39,13 @@ Required unit tests:
 - audit target query
 - golden JSON fixture loading
 - migration fixture compatibility
+- related retrieval deterministic ranking
+- retrieval score breakdown
+- conflict/revalidation penalty
+- repository JSON export/import round-trip
+- v0 to v1 repository migration
+- Research Brain conversion workflow
+- Research Memory workflow does not auto-save
 - no DB, vector, external AI API, private, or live trading imports
 
 ## Integration Tests

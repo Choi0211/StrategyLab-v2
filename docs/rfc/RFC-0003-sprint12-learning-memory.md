@@ -40,6 +40,7 @@ Design and then implement Learning Memory around:
 - `RevalidationSchedule`
 - `KnowledgeApproval`
 - `PolicyApproval`
+- `PreferenceApproval`
 - `AuditEvent`
 
 ## Acceptance Criteria
@@ -52,12 +53,15 @@ Design and then implement Learning Memory around:
 - confidence cannot approve knowledge, apply policy, or change user preferences
 - `Validated` requires user approval
 - `KnowledgeApproval` and `PolicyApproval` are separate contracts
+- `PreferenceApproval` is separate from knowledge and policy approvals
 - failure and success memories are separate
 - user preferences cannot be auto-deleted or overwritten
 - chronological lookup works
 - project, strategy, and market filters work
 - related memories can be retrieved for planning
 - related-memory evaluation covers scope match, project/strategy/market match, evidence quality, validation state, recency, conflict state, and revalidation status
+- repository JSON export/import round-trips deterministically
+- Research Brain results can be prepared as Learning Memory candidates without automatic save
 - JSON schema version is present
 - unsupported future schema versions fail closed
 - audit log records all changes

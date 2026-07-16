@@ -26,8 +26,11 @@ The storage boundary must support:
 - detect conflicting claims
 - list records chronologically
 - filter by project, strategy, and market
+- filter by scope and record type
 - retrieve related memories for a research plan
 - append audit events
+- query audit events by target and action
+- export/import versioned repository JSON
 - restore a prior policy revision through rollback metadata
 
 Related memory retrieval ranking must evaluate:
@@ -41,6 +44,8 @@ Related memory retrieval ranking must evaluate:
 - revalidation status
 
 Confidence can help sort results, but it cannot approve knowledge, apply policy, or change user preferences.
+
+Sprint 12 runtime implementation uses `InMemoryLearningRepository` only. It is a deterministic contract/runtime for tests and research preparation, not a durable database.
 
 ## Non-Goals
 

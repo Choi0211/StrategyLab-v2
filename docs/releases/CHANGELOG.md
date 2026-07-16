@@ -10,6 +10,11 @@
 - Added ISO 8601 UTC timestamp validation for Learning Memory contracts.
 - Added golden JSON and migration compatibility fixtures.
 - Added Sprint 12-B repository tests and documentation updates.
+- Added related-memory deterministic retrieval with score breakdown.
+- Added repository JSON export/import and explicit v0 to v1 migration path.
+- Added synthetic golden fixtures under `tests/fixtures/learning_memory/`.
+- Added Research Brain to Learning Memory conversion and no-auto-save preparation workflow.
+- Added `PreferenceApproval` as a separate approval contract.
 
 ## Sprint 12-A Learning Memory Contracts
 

@@ -19,6 +19,11 @@ Included:
 - KnowledgeApproval and PolicyApproval scope matching
 - ISO 8601 UTC timestamp validation
 - golden JSON and migration compatibility fixtures
+- related-memory retrieval with score breakdown
+- repository JSON export/import
+- explicit v0 to v1 migration path
+- Research Brain conversion and no-auto-save memory preparation
+- separate `PreferenceApproval`
 
 Not included:
 

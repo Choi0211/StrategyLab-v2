@@ -17,3 +17,10 @@ def validate_iso8601_utc(value: str, field: str) -> None:
         raise ValueError(f"{field} must be ISO 8601 UTC") from exc
     if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
         raise ValueError(f"{field} must be UTC")
+
+
+def parse_iso8601_utc(value: str, field: str) -> datetime:
+    """Parse a validated ISO 8601 UTC timestamp."""
+
+    validate_iso8601_utc(value, field)
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)

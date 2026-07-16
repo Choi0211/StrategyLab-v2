@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 12-A
+Status: Sprint 12 Runtime
 
 ## Unit Tests
 
@@ -131,9 +131,36 @@ Sprint 12-A adds:
 - invalid kind and unsupported version rejection tests
 - no secret/private/live trading import tests
 
+Sprint 12 runtime adds:
+
+- duplicate ID rejection
+- evidence-less repository import rejection
+- immutable repository copy protection
+- deep immutable metrics protection
+- chronological UTC ordering and timestamp tie-breaks
+- scope/project/strategy/market/record type filters
+- duplicate candidate detection without merge
+- conflict candidate detection without resolution
+- approval scope mismatch rejection
+- PreferenceApproval type separation
+- invalid UTC and non-UTC timestamp rejection
+- audit append-only behavior
+- duplicate audit ID rejection
+- audit target/action query
+- related-memory deterministic ranking
+- retrieval score breakdown
+- conflict and revalidation penalties
+- repository JSON round-trip
+- v0 to v1 migration
+- unsupported version and malformed fixture rejection
+- Research Brain conversion and no-auto-save workflow
+- no DB/vector/external AI/private/live trading imports
+
 ## Integration Tests
 
-Sprint 11 keeps the existing end-to-end StrategyLab integration test and does not add external-service integration.
+Sprint 12 runtime adds an end-to-end Learning Memory integration:
+
+ResearchGoal -> ResearchPlan -> completed ResearchSession -> ResearchOutcome -> duplicate/conflict preparation -> Repository add -> AuditEvent append -> Related Memory retrieval -> JSON export -> Repository import -> same retrieval result.
 
 ## Research Validation
 

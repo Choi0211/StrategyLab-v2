@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "learning_repository",
+  "records": [
+    {
+      "record_id": "record-invalid-time",
+      "record_type": "knowledge_claim",
+      "content": "Invalid timestamp fixture.",
+      "scope": "strategy-research",
+      "project": "StrategyLab",
+      "strategy": "ORB",
+      "market": "KRX",
+      "created_at": "2026-07-17",
+      "updated_at": "2026-07-17",
+      "version": 1,
+      "evidence": [{"evidence_id": "ev-001", "evidence_type": "research", "reference": "fixture", "summary": "fixture evidence"}],
+      "confidence": {"value": 0.5, "reason": "fixture", "evidence_count": 1, "validation_state": "need_validation", "recency": 1.0, "conflict_penalty": 0.0},
+      "revalidation": {"schedule_id": "rv-001", "target_ref": "record-invalid-time", "reason": "scheduled validation", "due_at": "2026-08-01T00:00:00Z", "frequency": "monthly", "status": "pending", "scope": "strategy-research", "project": "StrategyLab", "strategy": "ORB", "market": "KRX"},
+      "audit_ref": "audit-001"
+    }
+  ],
+  "audit_events": []
+}

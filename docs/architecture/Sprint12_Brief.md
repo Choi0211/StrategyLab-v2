@@ -1,6 +1,6 @@
 # Sprint 12 Brief: Learning Memory Blueprint
 
-Status: Sprint 12-B Implementation  
+Status: Sprint 12 Runtime Completion  
 Branch: feature/sprint12-memory-repository  
 Base: latest main  
 Parent Contract: `docs/architecture/GaonDevelopmentContract.md`  
@@ -9,7 +9,7 @@ Parent Contract: `docs/architecture/GaonDevelopmentContract.md`
 
 Sprint 12 designs the Learning Memory system that allows Gaon to remember past research, failures, successes, user preferences, evidence, and conversations, then use those memories to prepare better future research plans.
 
-Sprint 12-A implemented domain contracts. Sprint 12-B adds deterministic in-memory repository and detection contracts only. It does not implement real storage, vector search, AI providers, Telegram, Dashboard, MyMoneyGuard access, or trading behavior.
+Sprint 12-A implemented domain contracts. Sprint 12-B added deterministic in-memory repository and detection contracts. Sprint 12 runtime completion adds related-memory retrieval, JSON export/import, migration fixtures, audit action query, and Research Brain preparation workflow. It does not implement real storage, vector search, AI providers, Telegram, Dashboard, MyMoneyGuard access, or trading behavior.
 
 ## Scope
 
@@ -28,6 +28,8 @@ Design and Sprint 12-B implementation:
 - append-only audit workflow
 - ISO 8601 UTC timestamp validation
 - golden JSON fixture and migration compatibility fixture
+- related-memory deterministic retrieval
+- Research Brain conversion and no-auto-save preparation workflow
 
 ## Required Domain Model Draft
 
@@ -95,15 +97,23 @@ Design and Sprint 12-B implementation:
 - `validate_iso8601_utc`
 - `GOLDEN_LEARNING_RECORD_JSON`
 - `MIGRATION_V1_LEARNING_RECORD_JSON`
+- `RelatedMemoryRetriever`
+- `RelatedMemoryQuery`
+- `RelatedMemoryResult`
+- `ScoreBreakdown`
+- `PreferenceApproval`
+- `prepare_memory`
+- `research_goal_to_record`
+- `research_plan_to_record`
+- `research_session_to_outcome`
 
-## Remaining Sprint 12-C Scope
+## Remaining Phase 2 Scope
 
-- related-memory retrieval ranking
-- evidence quality scoring policy
-- revalidation due-query workflow
+- richer evidence quality scoring policy
 - repository-backed LearningProposal generation
-- integration with Research Brain outcome candidates
-- documentation updates for retrieval behavior
+- conflict candidate creation from ResearchOutcome pairs
+- revalidation due-query workflow
+- optional durable storage design after review
 
 ## Acceptance Criteria
 
