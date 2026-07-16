@@ -12,10 +12,15 @@ Development Method: Sprint
 Release Target: v2.0 Stable  
 Date: 2026-07-13  
 Owner Role: Chief AI Architect / Quant Research Lead
+Parent Specification: `docs/architecture/GaonPlatformMasterSpecification.md`
 
 ## 1. Executive Intent
 
-StrategyLab v2 will be developed as a public, modular, reproducible quant research platform. It is separated from the private MyMoneyGuard operating system so that research, backtesting, optimization, testing, and documentation can proceed without exposing secrets, account data, execution state, or operational logs.
+StrategyLab v2 will be developed as the first research lab inside the Gaon Platform. Gaon is Youngha's AI Engineering Partner, and StrategyLab is the public, modular, reproducible quant research platform that Gaon operates first.
+
+The parent standard for this Blueprint is the Gaon Platform Master Development Specification. If a StrategyLab decision conflicts with that specification, the Gaon Platform specification controls unless the user explicitly approves a Blueprint amendment.
+
+StrategyLab v2 is separated from the private MyMoneyGuard operating system so that research, backtesting, optimization, testing, and documentation can proceed without exposing secrets, account data, execution state, or operational logs.
 
 v1.0 is complete and stable. v2 development starts only after this Master Blueprint is accepted.
 
@@ -97,7 +102,9 @@ StrategyLab v2 may provide adapters that can later connect to MyMoneyGuard, but 
 
 StrategyLab v2 is an AI-assisted strategy research platform.
 
-It is not merely an auto-trading tool. It must support the full research loop:
+It is not merely an auto-trading tool. It is part of a long-term AI Engineering Platform whose purpose is sustained research, evidence, validation, documentation, and maintainable architecture.
+
+It must support the full research loop:
 
 1. Research
 2. Backtest
@@ -886,6 +893,25 @@ Documentation:
 - Changelog
 - Runbook
 
+### Sprint 11 to Sprint 20: Gaon Platform Research Expansion
+
+Sprint 11 through Sprint 20 continue StrategyLab under the Gaon Platform Master Development Specification.
+
+Planned scope:
+
+- Sprint 11: Research Brain
+- Sprint 12: Learning Memory, Knowledge, Evidence, Citation, and Research History
+- Sprint 13: Strategy Generator
+- Sprint 14: V1 Adapter Contract
+- Sprint 15: Validation and Champion lifecycle
+- Sprint 16: AI Provider abstraction and hallucination guard
+- Sprint 17: Telegram research interface with no trading
+- Sprint 18: Research and experiment dashboards
+- Sprint 19: full research loop
+- Sprint 20: Release Candidate, shadow mode, approval, rollback, acceptance test, and documentation
+
+Sprint 11 through Sprint 20 must not include PluginLab, AudioLab, DevLab, LearningLab, JUCE, Unreal, Wwise, or unrelated product work.
+
 ## 13. Documentation Standard
 
 Required documentation:
@@ -1082,4 +1108,3 @@ After this Blueprint is accepted:
 2. Commit this Blueprint to `docs/architecture/MasterBlueprint.md`.
 3. Create Sprint 1 Brief: Core Refactoring and Project Foundation.
 4. Begin Sprint 1 only after the brief is accepted.
-

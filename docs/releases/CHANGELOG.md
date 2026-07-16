@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 11 Development Start
+
+- Added Gaon Development Contract v1.0.
+- Added `gaon.learning` package boundary.
+- Added Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts.
+- Added tests for evidence requirements, knowledge validation approval, policy rollback metadata, and forbidden autonomous actions.
+- Added Sprint 11 Brief, ADR-0001, RFC-0001, Learning Memory guide, and Conversation Engine boundary.
+- Updated roadmap terminology from Memory to Learning Memory for Sprint 12 planning.
+
 ## v2.0 Foundation Release Candidate
 
 - Added Core foundation.
@@ -12,4 +21,3 @@
 - Added Dashboard view model foundation.
 - Added Broker Connector and Paper Trading foundation.
 - Added release verification script and documentation.
-

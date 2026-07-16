@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 10
+Status: Sprint 11
 
 ## Unit Tests
 
@@ -98,9 +98,19 @@ Sprint 10 adds:
 - end-to-end integration test
 - GitHub Actions verification on Ubuntu and Windows with Python 3.11 and 3.12
 
+Sprint 11 adds:
+
+- Gaon package import smoke test
+- Learning Memory evidence requirement tests
+- required Learning Memory category tests
+- Knowledge lifecycle transition tests
+- user approval requirement for `Validated` knowledge
+- policy update evidence and rollback tests
+- forbidden autonomous action contract tests
+
 ## Integration Tests
 
-No integration tests are required in Sprint 4.
+Sprint 11 keeps the existing end-to-end StrategyLab integration test and does not add external-service integration.
 
 ## Research Validation
 
