@@ -3,6 +3,38 @@
 Status: Release Candidate Foundation  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 12-A Learning Memory Contracts
+
+Sprint 12-A adds domain contracts only.
+
+Included:
+
+- LearningRecord
+- KnowledgeClaim
+- ResearchOutcome
+- FailurePattern
+- SuccessPattern
+- UserPreference
+- ConversationSummary
+- ConfidenceScore
+- LearningProposal
+- PolicyRevision
+- RevalidationSchedule
+- KnowledgeApproval
+- PolicyApproval
+- AuditEvent
+
+Not included:
+
+- repository implementation
+- search engine
+- real DB
+- vector DB
+- external AI API
+- Telegram or Dashboard runtime
+- MyMoneyGuard access
+- live trading
+
 ## Sprint 11 Development Start
 
 Sprint 11 starts the Gaon Research Brain and Learning Memory foundation.

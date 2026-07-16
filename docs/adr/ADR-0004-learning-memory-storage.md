@@ -1,6 +1,6 @@
 # ADR-0004: Learning Memory Storage Contract
 
-Status: Proposed  
+Status: Accepted  
 Date: 2026-07-16  
 Sprint: 12  
 
@@ -29,6 +29,18 @@ The storage boundary must support:
 - retrieve related memories for a research plan
 - append audit events
 - restore a prior policy revision through rollback metadata
+
+Related memory retrieval ranking must evaluate:
+
+- scope match
+- project/strategy/market match
+- evidence quality
+- validation state
+- recency
+- conflict state
+- revalidation status
+
+Confidence can help sort results, but it cannot approve knowledge, apply policy, or change user preferences.
 
 ## Non-Goals
 
