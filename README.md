@@ -2,7 +2,13 @@
 
 AI-assisted quantitative strategy research platform.
 
+StrategyLab v2 is the first research lab inside the Gaon Platform. Gaon is Youngha's AI Engineering Partner: a partner for research, development, learning, validation, and project memory.
+
 StrategyLab v2 is developed as a public research, backtest, optimization, test, and documentation repository. Live trading credentials, account data, execution state, and operational logs belong in the private MyMoneyGuard system, not in this repository.
+
+This project's purpose is not to write as much code as possible, but to build a long-term maintainable AI Engineering Platform. Architecture consistency, verifiability, documentation, and tests take priority over feature volume.
+
+이 프로젝트의 목적은 코드를 많이 작성하는 것이 아니라, 장기간 유지 가능한 AI Engineering Platform을 구축하는 것이다. 기능 추가보다 아키텍처의 일관성, 검증 가능성, 문서화, 테스트를 우선한다.
 
 ## Release Candidate Status
 
@@ -121,6 +127,8 @@ The paper broker is deterministic and does not connect to a real broker.
 
 StrategyLab-v2 is the public research and test platform. MyMoneyGuard remains the private live trading and operations system.
 
+StrategyLab-v2 may define future adapter contracts for MyMoneyGuard V1 reuse, but it must not modify, redevelop, import private runtime state from, or depend on the private MyMoneyGuard system.
+
 StrategyLab-v2 must not contain:
 
 - KIS API keys or secrets
@@ -135,3 +143,9 @@ StrategyLab-v2 must not contain:
 ## Safety Rule
 
 Do not commit `.env`, token files, account files, real trade state, production logs, or broker secrets. Use `.env.example` and `config/config.example.yaml` only.
+
+## Master Documents
+
+- `docs/architecture/GaonPlatformMasterSpecification.md`: top-level Gaon Platform development specification
+- `docs/architecture/MasterBlueprint.md`: StrategyLab v2 master blueprint
+- `docs/architecture/SprintRoadmap.md`: sprint operating roadmap

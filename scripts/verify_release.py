@@ -36,6 +36,7 @@ def main() -> int:
             print(tests.stderr)
             return tests.returncode
     required = [
+        "docs/architecture/GaonPlatformMasterSpecification.md",
         "docs/architecture/MasterBlueprint.md",
         "docs/architecture/SprintRoadmap.md",
         "docs/tests/TestResults.md",

@@ -2,11 +2,13 @@
 
 Status: Active  
 Branch: develop-v2  
-Source of Truth: `docs/architecture/MasterBlueprint.md`
+Source of Truth: `docs/architecture/GaonPlatformMasterSpecification.md` and `docs/architecture/MasterBlueprint.md`
 
 ## Purpose
 
 This roadmap explains what each StrategyLab v2 sprint is meant to achieve. It is written as an operating guide for development, review, and scope control.
+
+StrategyLab is the first research lab inside the Gaon Platform. Sprint work must preserve the Gaon rules: evidence before approval, public/private separation, no live trading code in the public repository, no MyMoneyGuard V1 redevelopment, and documentation plus tests for every sprint.
 
 Every sprint follows the same order:
 
@@ -333,6 +335,176 @@ Completion signal:
 
 Current status: Planned.
 
+## Sprint 11: Research Brain
+
+Sprint 11 starts the Gaon research-partner layer for StrategyLab.
+
+What it builds:
+
+- research goal model
+- research planner
+- research session
+- research interview contract
+- research journal
+- memory foundation
+
+What it does not do:
+
+- add live trading
+- add private MyMoneyGuard access
+- implement PluginLab, AudioLab, DevLab, LearningLab, JUCE, Unreal, or Wwise
+
+Current status: Planned.
+
+## Sprint 12: Memory and Evidence
+
+Sprint 12 creates the evidence-backed memory foundation.
+
+What it builds:
+
+- memory records
+- knowledge records
+- evidence records
+- citation model
+- duplicate detection
+- research history
+
+Current status: Planned.
+
+## Sprint 13: Strategy Generator
+
+Sprint 13 creates deterministic strategy hypothesis generation.
+
+What it builds:
+
+- hypothesis model
+- experiment queue
+- parameter space
+- deterministic seed handling
+
+Current status: Planned.
+
+## Sprint 14: V1 Adapter Contract
+
+Sprint 14 defines contracts for future MyMoneyGuard V1 reuse.
+
+What it builds:
+
+- BacktestPort
+- OptimizerPort
+- WalkForwardPort
+- MonteCarloPort
+- golden fixture
+- mock adapter
+- version check
+
+What it does not do:
+
+- modify MyMoneyGuard V1
+- reimplement MyMoneyGuard V1 internals
+- connect to private files or live accounts
+
+Current status: Planned.
+
+## Sprint 15: Validation
+
+Sprint 15 formalizes strategy validation and champion lifecycle.
+
+What it builds:
+
+- champion league
+- walk-forward validation
+- Monte Carlo validation
+- overfitting checks
+- rejected, champion, and retired states
+
+Current status: Planned.
+
+## Sprint 16: AI Provider
+
+Sprint 16 abstracts AI providers and adds evidence controls.
+
+What it builds:
+
+- OpenAI provider boundary
+- local LLM provider boundary
+- knowledge search
+- citation enforcement
+- hallucination guard
+
+Current status: Planned.
+
+## Sprint 17: Telegram Research Interface
+
+Sprint 17 adds a research-only Telegram conversation boundary.
+
+What it builds:
+
+- conversation model
+- research request
+- research status
+- research report
+
+What it does not do:
+
+- execute trades
+- send live broker orders
+- expose account or token data
+
+Current status: Planned.
+
+## Sprint 18: Dashboard Expansion
+
+Sprint 18 expands the dashboard for research operations.
+
+What it builds:
+
+- research dashboard
+- experiment dashboard
+- Notion sync boundary
+- research journal view
+
+Current status: Planned.
+
+## Sprint 19: Research Loop
+
+Sprint 19 connects the core StrategyLab research cycle.
+
+Target loop:
+
+```text
+Research
+  -> Knowledge
+  -> Strategy
+  -> Experiment
+  -> Validation
+  -> Memory
+  -> Next Research
+```
+
+Current status: Planned.
+
+## Sprint 20: Release Candidate
+
+Sprint 20 prepares the Gaon-backed StrategyLab release candidate.
+
+What it builds:
+
+- shadow mode
+- approval workflow
+- export
+- rollback
+- acceptance test
+- documentation
+
+Completion signal:
+
+- final audit passes
+- architecture, security, public/private separation, V1 compatibility, documentation, tests, and release readiness are verified
+- no merge to `main` occurs before final audit approval
+
+Current status: Planned.
+
 ## Operating Rule
 
 When a new idea appears, it must be classified before action:
@@ -341,4 +513,3 @@ When a new idea appears, it must be classified before action:
 - `blueprint-gap`: requires blueprint amendment
 - `future-backlog`: record for later
 - `rejected`: conflicts with StrategyLab v2 rules
-
