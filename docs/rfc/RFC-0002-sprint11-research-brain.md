@@ -24,8 +24,12 @@ The package reuses `gaon.learning.evidence` and `gaon.learning.memory` instead o
 - Research goals require evidence and export a Learning Memory record.
 - Research plans require steps and export a Learning Memory record.
 - Sessions reject mismatched goal/plan pairs.
+- Sessions reject invalid transitions.
+- Completed sessions cannot transition again.
 - Interviews require aligned questions and answers.
+- Interviews can represent unanswered questions.
 - Journals are immutable and reject duplicate entries.
+- Research Brain objects support versioned JSON round-trip serialization.
 - Unit tests, integration tests, and release verification pass.
 
 ## Non-Goals

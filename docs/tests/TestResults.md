@@ -6,7 +6,7 @@ Status: Passed
 
 - Unit tests: Passed
   - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
-  - Result: `Ran 81 tests`
+  - Result: `Ran 85 tests`
   - Status: `OK`
 - Integration tests: Passed
   - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
@@ -22,6 +22,7 @@ Status: Passed
   - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts added.
   - ADR and RFC added for Learning Memory core.
   - Research Brain package added with Goal, Plan, Session, Interview, and Journal contracts.
+  - Research Brain hardening added session transition guards, terminal completed sessions, pending interview answers, and versioned JSON round-trip.
   - ADR-0003, RFC-0002, and Research Brain guide added.
 
 ## Sprint 1

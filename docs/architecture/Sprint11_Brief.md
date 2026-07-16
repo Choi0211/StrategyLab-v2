@@ -50,6 +50,10 @@ Excluded:
 - Learning Memory records require evidence.
 - Research Brain artifacts require evidence.
 - Research Plan is tied to one Research Goal.
+- Research Session follows an explicit transition table.
+- Completed Research Session cannot transition again.
+- Research Interview can represent unanswered questions.
+- Research Brain objects support versioned JSON round-trip.
 - Research Journal entries are immutable and reject duplicate IDs.
 - Knowledge cannot become `Validated` without user approval.
 - Policy update candidates require evidence and rollback metadata.
