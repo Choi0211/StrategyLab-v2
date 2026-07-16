@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 12-A Learning Memory Contracts
+
+- Accepted ADR-0004 and ADR-0005 for Sprint 12 implementation.
+- Updated RFC-0003 to accepted for implementation.
+- Added Sprint 12-A Learning Memory domain contracts.
+- Reused existing `EvidenceRecord` instead of creating a duplicate evidence model.
+- Added separate `KnowledgeApproval` and `PolicyApproval` contracts.
+- Added approval gates, rollback gates, confidence limits, preference protection, and versioned JSON tests.
+
 ## Sprint 11 Development Start
 
 - Added Gaon Development Contract v1.0.

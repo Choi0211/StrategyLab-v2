@@ -1,6 +1,6 @@
 # RFC-0003: Sprint 12 Learning Memory
 
-Status: Proposed  
+Status: Accepted for implementation  
 Sprint: 12  
 
 ## Problem
@@ -38,6 +38,9 @@ Design and then implement Learning Memory around:
 - `LearningProposal`
 - `PolicyRevision`
 - `RevalidationSchedule`
+- `KnowledgeApproval`
+- `PolicyApproval`
+- `AuditEvent`
 
 ## Acceptance Criteria
 
@@ -45,12 +48,16 @@ Design and then implement Learning Memory around:
 - duplicate candidates are detected
 - conflicting equivalent claims are detected
 - confidence calculation is explicit and testable
+- confidence is a review-priority and retrieval-ranking signal only
+- confidence cannot approve knowledge, apply policy, or change user preferences
 - `Validated` requires user approval
+- `KnowledgeApproval` and `PolicyApproval` are separate contracts
 - failure and success memories are separate
 - user preferences cannot be auto-deleted or overwritten
 - chronological lookup works
 - project, strategy, and market filters work
 - related memories can be retrieved for planning
+- related-memory evaluation covers scope match, project/strategy/market match, evidence quality, validation state, recency, conflict state, and revalidation status
 - JSON schema version is present
 - unsupported future schema versions fail closed
 - audit log records all changes

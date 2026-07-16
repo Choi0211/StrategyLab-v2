@@ -2,6 +2,27 @@
 
 Status: Passed
 
+## Sprint 12-A
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 94 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 1 test`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - Learning Memory domain contracts added.
+  - EvidenceRecord is reused from the existing `gaon.learning.evidence` contract.
+  - KnowledgeApproval and PolicyApproval are separate contracts.
+  - ConfidenceScore is a review and retrieval signal only and cannot approve knowledge, policy, or preference changes.
+  - UserPreference automatic delete and overwrite are blocked.
+  - Versioned JSON round-trip and fail-closed schema checks are covered.
+
 ## Sprint 11
 
 - Unit tests: Passed

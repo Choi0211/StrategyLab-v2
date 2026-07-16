@@ -17,6 +17,7 @@ StrategyLab v2 is currently a Foundation Release Candidate on `develop-v2`.
 Included foundations:
 
 - Gaon Learning Engine package boundary
+- Sprint 12-A Learning Memory domain contracts
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

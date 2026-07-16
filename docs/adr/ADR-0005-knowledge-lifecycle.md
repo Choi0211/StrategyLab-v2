@@ -1,6 +1,6 @@
 # ADR-0005: Knowledge Lifecycle and Approval Gate
 
-Status: Proposed  
+Status: Accepted  
 Date: 2026-07-16  
 Sprint: 12  
 
@@ -24,6 +24,8 @@ Collected
 
 `Validated` requires explicit user approval.
 
+Knowledge approval and policy approval are separate contracts.
+
 ## Rules
 
 - Collected: raw evidence-backed claim
@@ -38,6 +40,13 @@ Forbidden:
 - validating conflicting claims
 - deleting user preferences automatically
 - applying policy revisions without approval
+- using confidence score as approval
+
+## Approval Separation
+
+- `KnowledgeApproval` validates a `KnowledgeClaim`.
+- `PolicyApproval` applies a `PolicyRevision`.
+- `ConfidenceScore` can prioritize review but cannot approve either action.
 
 ## Revalidation
 

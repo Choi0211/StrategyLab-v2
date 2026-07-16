@@ -1,6 +1,6 @@
 # StrategyLab v2 Test Plan
 
-Status: Sprint 11
+Status: Sprint 12-A
 
 ## Unit Tests
 
@@ -117,6 +117,19 @@ Sprint 11 adds:
 - Research Interview pending question tests
 - Research Journal immutability and duplicate rejection tests
 - Research Brain versioned JSON round-trip tests
+
+Sprint 12-A adds:
+
+- Learning Memory contract import tests
+- evidence-required tests for new domain contracts
+- immutable dataclass behavior tests
+- KnowledgeApproval gate tests
+- PolicyApproval and rollback gate tests
+- ConfidenceScore cannot approve tests
+- UserPreference automatic overwrite/delete prevention tests
+- versioned JSON round-trip tests
+- invalid kind and unsupported version rejection tests
+- no secret/private/live trading import tests
 
 ## Integration Tests
 

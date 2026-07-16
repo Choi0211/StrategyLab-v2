@@ -15,6 +15,7 @@ Gaon may learn from memory, but it must not change itself without validation, ap
 
 - Evidence first
 - Confidence is explicit, not implied
+- Confidence is only a review-priority and retrieval-ranking signal
 - Knowledge is promoted through lifecycle states
 - User approval is required for `Validated`
 - User preferences are protected from automatic deletion and overwrite
@@ -205,6 +206,47 @@ confidence = evidence_strength + validation_weight + recency_weight - conflict_p
 
 Sprint 12 defines the contract only. Exact weighting may be implemented after tests and review.
 
+Limits:
+
+- Confidence cannot approve `Validated` knowledge.
+- Confidence cannot apply policy revisions.
+- Confidence cannot change or overwrite user preferences.
+- Confidence only helps prioritize review and sort retrieval results.
+
+### KnowledgeApproval
+
+Approval record for validating knowledge.
+
+Fields:
+
+- `approval_id`
+- `claim_id`
+- `approved_by`
+- `approved_at`
+- `evidence`
+
+Rules:
+
+- required for `Validated`
+- separate from policy approval
+
+### PolicyApproval
+
+Approval record for applying policy revisions.
+
+Fields:
+
+- `approval_id`
+- `revision_id`
+- `approved_by`
+- `approved_at`
+- `evidence`
+
+Rules:
+
+- required before policy revision application
+- separate from knowledge approval
+
 ### LearningProposal
 
 Proposed learning update.
@@ -289,6 +331,20 @@ Learning Memory must support:
 - evidence source filter
 - status filter
 - related memory lookup for next research planning
+
+## Related Memory Retrieval Evaluation
+
+Related memory retrieval is ranked by:
+
+- scope match
+- project/strategy/market match
+- evidence quality
+- validation state
+- recency
+- conflict state
+- revalidation status
+
+Confidence may contribute to ranking, but it must not grant approval or mutate memory.
 
 ## Audit Log
 
