@@ -1,0 +1,70 @@
+# Sprint 12 Test Plan: Learning Memory
+
+Status: Blueprint  
+
+## Unit Tests
+
+Required unit tests:
+
+- `LearningRecord` rejects missing evidence
+- `KnowledgeClaim` rejects missing evidence
+- `KnowledgeClaim` lifecycle valid transitions
+- `KnowledgeClaim` rejects `Validated` without user approval
+- duplicate detection identifies equivalent records
+- conflict detection identifies incompatible equivalent claims
+- confidence calculation returns bounded score
+- `FailurePattern` and `SuccessPattern` remain distinct
+- `UserPreference` cannot be auto-deleted
+- `UserPreference` cannot be overwritten without proposal and audit event
+- chronological lookup returns ordered records
+- project filter works
+- strategy filter works
+- market filter works
+- related-memory lookup returns scoped memories
+- JSON version is included
+- unsupported future JSON version fails closed
+- migration emits an audit event
+- policy revision requires rollback reference
+- policy revision cannot apply without user approval
+
+## Integration Tests
+
+Required integration tests:
+
+- Research Brain goal and plan create Learning Memory candidates
+- Research outcome becomes a claim candidate, not validated knowledge
+- failure pattern and success pattern are stored separately
+- user preference affects related-memory search without being overwritten
+- policy revision proposal records audit and rollback metadata
+
+## Regression Tests
+
+Regression tests:
+
+- Sprint 11 Research Brain tests continue to pass
+- Learning Memory foundation tests continue to pass
+- release verification continues to pass
+
+## Golden Fixtures
+
+Golden fixtures:
+
+- duplicate claim fixture
+- conflicting claim fixture
+- validated claim with approval fixture
+- deprecated claim fixture
+- user preference version fixture
+- policy rollback fixture
+- JSON migration fixture
+
+## Acceptance Gate
+
+Sprint 12 cannot close unless:
+
+- unit tests pass
+- integration tests pass
+- golden fixture tests pass
+- migration tests pass
+- release verification passes
+- documentation is updated
+- no secrets or private MyMoneyGuard files are introduced
