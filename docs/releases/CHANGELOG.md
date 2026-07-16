@@ -9,6 +9,7 @@
 - Added Sprint 11 Brief, ADR-0001, RFC-0001, Learning Memory guide, and Conversation Engine boundary.
 - Updated roadmap terminology from Memory to Learning Memory for Sprint 12 planning.
 - Added Research Brain contracts for Research Goal, Plan, Session, Interview, and Journal.
+- Hardened Research Brain with explicit session transitions, terminal completed sessions, pending interview answers, and versioned JSON round-trip support.
 
 ## v2.0 Foundation Release Candidate
 

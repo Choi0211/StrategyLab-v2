@@ -16,6 +16,7 @@ Included in Sprint 11 start:
 - Policy update candidate approval and rollback metadata.
 - ADR/RFC documentation for Learning Memory core.
 - Research Brain contracts for evidence-backed goals, plans, sessions, interviews, and journals.
+- Research Brain hardening for session transitions, pending interview answers, and versioned JSON round-trip serialization.
 
 ## Included
 

@@ -75,6 +75,24 @@ class GaonResearchBrainTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ResearchSession("bad-session", goal, other_plan, ResearchSessionStatus.PLANNED, (self.evidence(),))
 
+    def test_session_rejects_invalid_and_completed_transitions(self) -> None:
+        goal = self.goal()
+        plan = build_research_plan(goal, plan_id="plan-001", steps=("review evidence",))
+        session = ResearchSession(
+            session_id="session-001",
+            goal=goal,
+            plan=plan,
+            status=ResearchSessionStatus.PLANNED,
+            evidence=(self.evidence(),),
+        )
+
+        with self.assertRaises(ValueError):
+            session.transition(ResearchSessionStatus.COMPLETED)
+
+        completed = session.transition(ResearchSessionStatus.RUNNING).transition(ResearchSessionStatus.COMPLETED)
+        with self.assertRaises(ValueError):
+            completed.transition(ResearchSessionStatus.RUNNING)
+
     def test_interview_requires_aligned_questions_and_answers(self) -> None:
         interview = ResearchInterview(
             interview_id="interview-001",
@@ -87,6 +105,20 @@ class GaonResearchBrainTest(unittest.TestCase):
         self.assertEqual(interview.goal_id, "goal-001")
         with self.assertRaises(ValueError):
             ResearchInterview("bad", "goal-001", ("q1", "q2"), ("a1",), (self.evidence(),))
+
+    def test_interview_can_track_pending_questions(self) -> None:
+        interview = ResearchInterview(
+            interview_id="interview-002",
+            goal_id="goal-001",
+            questions=("What market?", "What timeframe?"),
+            answers=("Korean equities", None),
+            evidence=(self.evidence(),),
+        )
+
+        self.assertFalse(interview.is_complete)
+        self.assertEqual(interview.pending_questions, ("What timeframe?",))
+        with self.assertRaises(ValueError):
+            ResearchInterview("bad-empty-answer", "goal-001", ("q1",), ("",), (self.evidence(),))
 
     def test_journal_is_immutable_and_rejects_duplicate_entries(self) -> None:
         entry = ResearchJournalEntry(
@@ -102,6 +134,44 @@ class GaonResearchBrainTest(unittest.TestCase):
         self.assertEqual(updated.entries, (entry,))
         with self.assertRaises(ValueError):
             updated.add_entry(entry)
+
+    def test_research_brain_json_round_trip(self) -> None:
+        goal = self.goal()
+        plan = build_research_plan(goal, plan_id="plan-001", steps=("review evidence",))
+        session = ResearchSession(
+            session_id="session-001",
+            goal=goal,
+            plan=plan,
+            status=ResearchSessionStatus.RUNNING,
+            evidence=(self.evidence(),),
+            notes=("started",),
+        )
+        interview = ResearchInterview(
+            interview_id="interview-001",
+            goal_id=goal.goal_id,
+            questions=("What market?", "What timeframe?"),
+            answers=("Korean equities", None),
+            evidence=(self.evidence(),),
+        )
+        entry = ResearchJournalEntry(
+            entry_id="entry-001",
+            entry_type=ResearchJournalEntryType.DECISION,
+            content="Use public fixtures first.",
+            evidence=(self.evidence(),),
+        )
+        journal = ResearchJournal("journal-001", session.session_id, (entry,))
+
+        self.assertEqual(ResearchGoal.from_json(goal.to_json()), goal)
+        self.assertEqual(ResearchPlan.from_json(plan.to_json()), plan)
+        self.assertEqual(ResearchSession.from_json(session.to_json()), session)
+        self.assertEqual(ResearchInterview.from_json(interview.to_json()), interview)
+        self.assertEqual(ResearchJournal.from_json(journal.to_json()), journal)
+
+    def test_research_brain_rejects_wrong_json_kind(self) -> None:
+        goal = self.goal()
+
+        with self.assertRaises(ValueError):
+            ResearchPlan.from_json(goal.to_json())
 
 
 if __name__ == "__main__":

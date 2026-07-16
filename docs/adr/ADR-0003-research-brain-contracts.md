@@ -27,8 +27,12 @@ The Research Brain contracts use existing `gaon.learning` evidence and memory ty
 - Every goal, plan, session, interview, and journal entry requires evidence.
 - Research plans are deterministic and tied to a single research goal.
 - Research sessions require a matching goal and plan.
+- Research sessions follow an explicit transition table.
+- Completed research sessions are terminal.
+- Research interviews may represent unanswered questions.
 - Research journals are immutable and reject duplicate entry IDs.
 - Research Goal and Research Plan can export Learning Memory records.
+- Research Brain objects support versioned JSON round-trip serialization.
 
 ## Non-Goals
 

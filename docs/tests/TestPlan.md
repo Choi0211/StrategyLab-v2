@@ -111,8 +111,12 @@ Sprint 11 adds:
 - Research Goal evidence and Learning Memory export tests
 - Research Plan deterministic construction tests
 - Research Session goal/plan matching tests
+- Research Session invalid transition tests
+- Research Session completed-state terminal tests
 - Research Interview question/answer alignment tests
+- Research Interview pending question tests
 - Research Journal immutability and duplicate rejection tests
+- Research Brain versioned JSON round-trip tests
 
 ## Integration Tests
 
