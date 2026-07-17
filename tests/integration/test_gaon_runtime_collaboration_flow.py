@@ -41,7 +41,7 @@ class GaonRuntimeCollaborationIntegrationTest(unittest.TestCase):
         bus = InMemoryEventBus()
         runtime = TelegramRuntime(ConversationRuntime(bus), allowed_chat_ids=("100",))
         message = parse_update(
-            {"message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 200}, "text": "/status"}},
+            {"update_id": 1, "message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 200}, "text": "/status"}},
             received_at="2026-07-17T00:00:00Z",
         )
 

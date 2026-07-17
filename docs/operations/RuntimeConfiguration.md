@@ -31,4 +31,26 @@ Required execute-mode conditions:
 - dry-run disabled explicitly
 - execute mode selected explicitly
 
+Telegram message execution also requires `GAON_TELEGRAM_ALLOWED_CHAT_IDS`. The only exception is `telegram-discover-chat --execute`, which exists to discover the first private chat ID and never sends a Telegram message.
+
 Tests do not require real tokens.
+
+## Telegram Production Smoke Commands
+
+Dry-run remains the default:
+
+```powershell
+py -3.11 -m gaon.runtime.cli telegram-poll-once
+```
+
+Production smoke commands require all gates:
+
+```powershell
+$env:GAON_RUNTIME_MODE = "execute"
+$env:GAON_DRY_RUN = "false"
+$env:GAON_TELEGRAM_ENABLED = "true"
+$env:GAON_TELEGRAM_BOT_TOKEN = "<private-token>"
+py -3.11 -m gaon.runtime.cli telegram-get-me --execute
+```
+
+The project does not auto-load `.env` and does not add `python-dotenv`. Keep secrets outside Git and inject them through the operating environment.

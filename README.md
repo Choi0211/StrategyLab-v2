@@ -20,7 +20,7 @@ Included foundations:
 - Sprint 12-A Learning Memory domain contracts
 - Sprint 12-B in-memory Learning Repository, duplicate/conflict detection, audit workflow, UTC timestamp guard, and golden JSON fixtures
 - Sprint 12 Runtime related-memory retrieval, repository JSON export/import, migration fixtures, and Research Brain preparation workflow
-- Gaon Runtime collaboration contracts: Event Bus, Conversation Runtime, Telegram dry-run adapter, Notion dry-run mapper, notifications, reports, scheduler, and safe CLI
+- Gaon Runtime collaboration contracts: Event Bus, Conversation Runtime, Telegram production smoke client, Notion dry-run mapper, notifications, reports, scheduler, and safe CLI
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -117,6 +117,24 @@ fill = broker.submit_order(BrokerOrder("AAA", OrderSide.BUY, 1))
 
 The paper broker is deterministic and does not connect to a real broker.
 
+## Telegram Smoke Usage
+
+Telegram production smoke commands are one-shot research conversation checks. They do not approve, trade, run shell commands, mutate GitHub, or access MyMoneyGuard.
+
+```powershell
+$env:GAON_RUNTIME_MODE = "execute"
+$env:GAON_DRY_RUN = "false"
+$env:GAON_TELEGRAM_ENABLED = "true"
+$env:GAON_TELEGRAM_BOT_TOKEN = "<private-token-outside-repo>"
+py -3.11 -m gaon.runtime.cli telegram-get-me --execute
+py -3.11 -m gaon.runtime.cli telegram-discover-chat --execute
+$env:GAON_TELEGRAM_ALLOWED_CHAT_IDS = "<discovered-chat-id>"
+py -3.11 -m gaon.runtime.cli telegram-send-smoke --execute --chat-id <discovered-chat-id>
+py -3.11 -m gaon.runtime.cli telegram-poll-once --execute
+```
+
+See `docs/operations/TelegramSetup.md` for the full safe setup flow. The project does not auto-load `.env`, and automated tests never call the real Telegram network.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -125,7 +143,7 @@ The paper broker is deterministic and does not connect to a real broker.
 - `gaon.learning.retrieval`: deterministic related-memory ranking with score breakdown
 - `gaon.learning.integration`: Research Brain to Learning Memory candidate preparation without automatic save
 - `gaon.runtime`: configuration, event bus, conversation runtime, notifications, reports, scheduler, safe CLI
-- `gaon.integrations.telegram`: Telegram dry-run contracts and conversation bridge
+- `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts
 - `strategylab.core`: configuration, logging, module registry, plugin boundary

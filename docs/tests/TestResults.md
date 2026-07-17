@@ -2,6 +2,27 @@
 
 Status: Passed
 
+## Telegram Production Connection
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 139 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 10 tests`
+  - Status: `OK`
+- Scope:
+  - Telegram Bot API standard-library client
+  - fake HTTP success paths for `getMe`, `getUpdates`, and `sendMessage`
+  - HTTP 401/429/500, malformed JSON, `ok=false`, timeout, and token masking
+  - chat discovery deduplication and preview limiting
+  - private text update parsing and ignored update handling
+  - allowed chat enforcement, unauthorized no-send behavior, and offset reporting
+  - smoke-send fixed message and arbitrary text exclusion
+  - production CLI execution gates with dry-run default
+  - no real Telegram network call, no shell execution, no GitHub mutation, no broker/trading import
+
 ## Gaon Runtime Collaboration
 
 - Unit tests: Passed

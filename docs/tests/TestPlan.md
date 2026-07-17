@@ -163,6 +163,9 @@ Gaon Runtime Collaboration adds:
 - Conversation Runtime command and Korean natural-language intent parsing
 - approval safety responses without approval mutation
 - Telegram update parsing, allowed chat authorization, Markdown escaping, long message splitting, dry-run response
+- Telegram Bot API client `getMe`, `getUpdates`, `sendMessage`, `deleteWebhook`, and `getWebhookInfo` contract tests with fake HTTP
+- Telegram HTTP 401/429/500, malformed JSON, `ok=false`, timeout, token masking, discover-chat deduplication, and offset handling tests
+- Telegram production smoke CLI gate tests for `telegram-get-me`, `telegram-discover-chat`, `telegram-send-smoke`, and `telegram-poll-once`
 - Notion research/memory/report mapping and dry-run idempotency
 - NotificationRequest/NotificationResult mapping and deduplication
 - deterministic DailyReport and WeeklyReview
@@ -178,6 +181,13 @@ Gaon Runtime Collaboration adds:
 Sprint 12 runtime adds an end-to-end Learning Memory integration:
 
 ResearchGoal -> ResearchPlan -> completed ResearchSession -> ResearchOutcome -> duplicate/conflict preparation -> Repository add -> AuditEvent append -> Related Memory retrieval -> JSON export -> Repository import -> same retrieval result.
+
+Telegram production smoke connection adds fake-transport integration flows:
+
+- getUpdates -> discover unique private chat
+- allowed `/status` update -> Conversation Runtime -> sendMessage
+- unauthorized update -> no sendMessage
+- long response chunks -> same chat delivery
 
 ## Research Validation
 

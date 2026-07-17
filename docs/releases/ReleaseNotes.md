@@ -10,7 +10,8 @@ Included:
 - runtime configuration with secret masking
 - deterministic in-process event bus
 - rule-based Conversation Runtime
-- Telegram dry-run adapter
+- Telegram production smoke client and dry-run adapter
+- Telegram one-shot smoke commands for bot metadata, chat discovery, smoke send, and poll-once processing
 - Notion dry-run mapper and sync contracts
 - notification engine
 - daily report and weekly review contracts
@@ -20,7 +21,9 @@ Included:
 
 Not included:
 
-- real Telegram/Notion network execution
+- long-running Telegram daemon or webhook server
+- offset persistence storage
+- real Notion network execution
 - external AI API
 - vector DB or embeddings
 - MyMoneyGuard/KIS access
