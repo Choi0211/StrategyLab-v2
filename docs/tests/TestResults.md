@@ -2,6 +2,28 @@
 
 Status: Passed
 
+## Sprint 18-23 v2 Completion Release Candidate
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 183 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 15 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - approval replay/tamper/cross-scope guards
+  - SQLite repository and migration coverage
+  - durable queue, scheduler, and recovery coverage
+  - controlled runtime loop and CLI smoke coverage
+  - security and chaos coverage
+  - TradingAdapter contract and fake adapter tests
+  - no live Telegram/OpenAI/Notion/Broker verification
+
 ## Sprint 17 Production Runtime Service
 
 - Unit tests: Passed

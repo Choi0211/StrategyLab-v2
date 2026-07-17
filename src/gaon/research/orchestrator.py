@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gaon.research.approval import ApprovalDecision, ApprovalRequest, validate_approval
+from gaon.research.approval import ApprovalDecision, ApprovalRequest, InMemoryApprovalStore, create_approval_request
 from gaon.research.planner import plan_research_request
 from gaon.research.tasks import ResearchProposal, ResearchRequest, ResearchRun, ResearchRunStatus, ResearchTask
 
@@ -33,40 +33,61 @@ class InMemoryResearchQueue:
 
 
 class ResearchOrchestrator:
-    def __init__(self, queue: InMemoryResearchQueue | None = None) -> None:
+    def __init__(self, queue: InMemoryResearchQueue | None = None, approvals: InMemoryApprovalStore | None = None, *, approval_signing_secret: str = "test-approval-signing-secret") -> None:
         self._queue = queue or InMemoryResearchQueue()
+        self._approvals = approvals or InMemoryApprovalStore()
+        self._approval_signing_secret = approval_signing_secret
         self._proposals: dict[str, ResearchProposal] = {}
         self._runs: dict[str, ResearchRun] = {}
-        self._approvals: dict[str, ApprovalRequest] = {}
         self._audit_events: list[str] = []
 
     @property
     def audit_events(self) -> tuple[str, ...]:
         return tuple(self._audit_events)
 
-    def propose(self, request: ResearchRequest, *, chat_id: str, approval_token: str, expires_at: str) -> tuple[ResearchProposal, ApprovalRequest, ResearchRun]:
+    def propose(self, request: ResearchRequest, *, chat_id: str, approval_token: str, expires_at: str, nonce: str | None = None) -> tuple[ResearchProposal, ApprovalRequest, ResearchRun]:
         proposal = plan_research_request(request)
-        approval = ApprovalRequest(f"approval:{proposal.proposal_id}", proposal.proposal_id, request.actor, chat_id, approval_token, expires_at)
+        approval = create_approval_request(
+            f"approval:{proposal.proposal_id}",
+            proposal.proposal_id,
+            request.actor,
+            chat_id,
+            approval_token,
+            request.created_at,
+            expires_at,
+            signing_secret=self._approval_signing_secret,
+            nonce=nonce,
+        )
         run = ResearchRun(f"run:{proposal.proposal_id}", proposal, ResearchRunStatus.PROPOSED).transition(ResearchRunStatus.AWAITING_APPROVAL, event_id=f"audit:{proposal.proposal_id}:awaiting")
         self._proposals[proposal.proposal_id] = proposal
-        self._approvals[proposal.proposal_id] = approval
+        self._approvals.add(approval)
         self._runs[run.run_id] = run
         self._queue.add(QueueItem(1, proposal.proposal_id, ResearchTask(f"task:{proposal.proposal_id}", proposal.plan.goal)))
         self._audit_events.append(f"proposal_created:{proposal.proposal_id}")
         return proposal, approval, run
 
     def approve(self, decision: ApprovalDecision, *, now: str) -> ResearchRun:
-        request = self._approvals[decision.proposal_id]
-        validate_approval(request, decision, now=now)
+        approval = self._approvals.approve(decision, now=now, signing_secret=self._approval_signing_secret)
         run = self._runs[f"run:{decision.proposal_id}"]
         approved = run.transition(ResearchRunStatus.APPROVED, event_id=f"audit:{decision.proposal_id}:approved")
         self._runs[approved.run_id] = approved
-        self._audit_events.append(f"approved:{decision.proposal_id}:{decision.actor}")
+        self._audit_events.append(f"approved:{decision.proposal_id}:{decision.actor}:{approval.approval_id}")
         return approved
 
-    def start(self, proposal_id: str, *, approval_token: str) -> ResearchRun:
+    def start(self, proposal_id: str, *, approval_token: str, actor: str | None = None, chat_id: str | None = None, now: str | None = None) -> ResearchRun:
         run = self._runs[f"run:{proposal_id}"]
-        running = run.transition(ResearchRunStatus.RUNNING, approval_token=approval_token, event_id=f"audit:{proposal_id}:running")
+        proposal = self._proposals[proposal_id]
+        approval = self._approvals.get_by_proposal(proposal_id)
+        consumed = self._approvals.consume(
+            proposal_id,
+            run_id=run.run_id,
+            actor=actor or proposal.created_by,
+            chat_id=chat_id or approval.requested_chat_id,
+            token=approval_token,
+            now=now or proposal.created_at,
+            signing_secret=self._approval_signing_secret,
+        )
+        running = run.transition(ResearchRunStatus.RUNNING, approval_token=approval_token, event_id=f"audit:{proposal_id}:running:{consumed.approval_id}")
         self._runs[running.run_id] = running
         self._audit_events.append(f"running:{proposal_id}")
         return running

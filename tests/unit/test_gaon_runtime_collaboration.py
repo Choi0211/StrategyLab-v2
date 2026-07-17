@@ -88,12 +88,22 @@ class GaonRuntimeCollaborationTest(unittest.TestCase):
             load_runtime_config({"GAON_RUNTIME_MODE": "execute"})
         with self.assertRaises(ConfigurationError):
             load_runtime_config({"GAON_RUNTIME_MODE": "execute", "GAON_DRY_RUN": "false"})
+        with self.assertRaises(ConfigurationError):
+            load_runtime_config(
+                {
+                    "GAON_RUNTIME_MODE": "execute",
+                    "GAON_DRY_RUN": "false",
+                    "GAON_TELEGRAM_ENABLED": "true",
+                    "GAON_TELEGRAM_BOT_TOKEN": "synthetic-token",
+                }
+            )
         config = load_runtime_config(
             {
                 "GAON_RUNTIME_MODE": "execute",
                 "GAON_DRY_RUN": "false",
                 "GAON_TELEGRAM_ENABLED": "true",
                 "GAON_TELEGRAM_BOT_TOKEN": "synthetic-token",
+                "GAON_APPROVAL_SIGNING_SECRET": "synthetic-approval-secret",
             }
         )
         self.assertFalse(config.dry_run)

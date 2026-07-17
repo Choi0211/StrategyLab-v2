@@ -31,9 +31,14 @@ class RuntimeServiceTest(unittest.TestCase):
 
     def test_health_service_retry_and_duplicate_guard(self) -> None:
         store = RuntimeStateStore(":memory:")
+        ticks: list[str] = []
         service = GaonRuntimeService(GaonRuntimeConfig(), store)
         self.assertTrue(all(check.ready for check in readiness(GaonRuntimeConfig(), store)))
         self.assertTrue(service.start().running)
+        service = GaonRuntimeService(GaonRuntimeConfig(telegram_bot_token="synthetic-token"), store, tick=lambda: ticks.append("tick"), poll_interval_seconds=0.0)
+        self.assertEqual(service.run_once().ticks, 1)
+        self.assertEqual(ticks, ["tick"])
+        self.assertNotIn("synthetic-token", str(service.logs))
         self.assertFalse(service.stop().running)
         self.assertEqual(RetryPolicy(max_attempts=3, base_delay_seconds=1, max_delay_seconds=3).delay_for_attempt(3), 3)
         guard = DuplicateMessageGuard()
@@ -49,7 +54,15 @@ class RuntimeServiceTest(unittest.TestCase):
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(cli_main(["db-check"]), 0)
-        self.assertIn("schema_version=1", output.getvalue())
+        self.assertIn("schema_version=3", output.getvalue())
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(cli_main(["run"]), 0)
+        self.assertIn("ticks=1", output.getvalue())
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(cli_main(["status"]), 0)
+        self.assertIn("running=False", output.getvalue())
 
 
 if __name__ == "__main__":

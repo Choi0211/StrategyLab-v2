@@ -41,7 +41,14 @@ class FakeAssistantProvider:
 
 class TelegramProductionConnectionFlowTest(unittest.TestCase):
     def config(self) -> GaonRuntimeConfig:
-        return GaonRuntimeConfig(mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="synthetic-token", telegram_allowed_chat_ids=("100",))
+        return GaonRuntimeConfig(
+            mode="execute",
+            dry_run=False,
+            telegram_enabled=True,
+            telegram_bot_token="synthetic-token",
+            telegram_allowed_chat_ids=("100",),
+            approval_signing_secret="synthetic-approval-secret",
+        )
 
     def test_get_updates_to_discover_chat_flow(self) -> None:
         client = FakeTelegramClient(

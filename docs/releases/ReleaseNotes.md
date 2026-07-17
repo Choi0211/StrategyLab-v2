@@ -1,7 +1,27 @@
-# StrategyLab v2.0 Foundation Release Candidate Notes
+# StrategyLab v2 Completion Release Candidate Notes
 
-Status: Release Candidate Foundation  
+Status: v2 Completion Release Candidate  
 Base: StrategyLab v1.0 Stable Release
+
+## Sprint 18-23 Production Hardening
+
+Included:
+
+- HMAC-SHA256 approval token digest storage and single-use approval consumption
+- SQLite runtime repository layer and schema v2 migration
+- schema v3 durable queue, durable scheduler, idempotent duplicate guard, and recovery contracts
+- controlled runtime service loop with readiness, graceful stop, bounded drain, CLI run/status/backup, and redacted structured logs
+- security and chaos tests for replay, tampering, prompt injection as data, provider failure, duplicate storms, restart recovery, scheduler idempotency, log redaction, and backup restore
+- broker-free TradingAdapter protocol, risk-gate contracts, fake adapter tests, and v1 rollout plan
+
+Not included:
+
+- live Telegram daemon verification
+- live OpenAI provider verification
+- live Notion synchronization verification
+- live broker verification
+- private MyMoneyGuard integration
+- automatic trading or approval
 
 ## Gaon Runtime Collaboration
 
