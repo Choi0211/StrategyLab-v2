@@ -24,6 +24,14 @@
 - Added in-memory deterministic queue with deduplication and retry limits.
 - Added research orchestration unit and integration flow tests without autonomous execution.
 
+## Sprint 17 Production Runtime Service
+
+- Added SQLite runtime state schema, migrations, offset recovery, processed message idempotency, audit event storage, and backup helper.
+- Added health/readiness/db-check CLI paths without secret output.
+- Added service and worker foundations with readiness gate, duplicate guard, and bounded retry policy.
+- Added systemd service example, env example, install/upgrade/rollback guide scripts, and VPS operations documentation.
+- Added restart recovery and runtime service smoke tests.
+
 ## Sprint 13 Conversational Assistant Foundation
 
 - Added deterministic Korean natural-language intent routing for greetings, Gaon calls, help, status, market status, stock analysis, schedules, backtests, recent research, and memory search requests.

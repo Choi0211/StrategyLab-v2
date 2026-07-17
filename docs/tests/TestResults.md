@@ -2,6 +2,33 @@
 
 Status: Passed
 
+## Sprint 17 Production Runtime Service
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 165 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 15 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- CLI smoke: Passed
+  - `config-check`
+  - `health`
+  - `db-check`
+- Scope:
+  - SQLite schema migration and runtime state store
+  - restart offset recovery
+  - duplicate processed message guard
+  - bounded retry policy
+  - health/readiness/db checks
+  - backup helper
+  - systemd/VPS deployment documentation
+  - no real deployment or network smoke
+
 ## Sprint 16 Guarded Research Assistant Orchestration
 
 - Unit tests: Passed

@@ -35,3 +35,7 @@ Do not commit real API keys or `.env` files.
 - Automatic memory writes.
 - Automatic approval.
 - Trading or broker execution.
+
+## Production Check
+
+Use `python -m gaon.runtime.cli assistant-check` for a safe readiness placeholder. It does not call the real provider or print secrets.

@@ -15,7 +15,9 @@ from gaon.integrations.telegram.transport import discover_private_chats, parse_u
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.conversation import ConversationRuntime
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
+from gaon.runtime.health import readiness
 from gaon.runtime.reports import build_daily_report, build_weekly_review
+from gaon.runtime.storage import RuntimeStateStore
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 
@@ -24,6 +26,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gaon.runtime")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("config-check")
+    db_check = sub.add_parser("db-check")
+    db_check.add_argument("--db", default=":memory:")
+    health = sub.add_parser("health")
+    health.add_argument("--db", default=":memory:")
+    ready = sub.add_parser("readiness")
+    ready.add_argument("--db", default=":memory:")
+    sub.add_parser("telegram-check")
+    sub.add_parser("assistant-check")
+    sub.add_parser("notion-check")
     _add_dry_run_flags(sub.add_parser("telegram-get-me"))
     _add_dry_run_flags(sub.add_parser("telegram-discover-chat"))
     poll = sub.add_parser("telegram-poll-once")
@@ -54,6 +65,15 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args: argparse.Namespace) -> int:
     if args.command == "config-check":
         print(load_runtime_config(os.environ).__repr__())
+    elif args.command in {"health", "readiness", "db-check"}:
+        store = RuntimeStateStore(args.db)
+        try:
+            for check in readiness(load_runtime_config(os.environ), store):
+                print(f"{check.name}: {'ready' if check.ready else 'not-ready'} {check.message}")
+        finally:
+            store.close()
+    elif args.command in {"telegram-check", "assistant-check", "notion-check"}:
+        print(f"{args.command}: dry-run readiness check")
     elif args.command == "daily-report":
         print(build_daily_report(args.date, f"{args.date}T00:00:00Z").to_text())
     elif args.command == "weekly-review":

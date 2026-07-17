@@ -153,6 +153,10 @@ Sprint 15 adds a guarded provider boundary. The default deterministic provider n
 
 Sprint 16 adds guarded research proposal, approval, run-state, and queue contracts. Research can be planned and approved explicitly, but it is not an autonomous agent loop and does not execute trades, shell commands, arbitrary code, or automatic Learning Memory writes.
 
+## Production Runtime Service
+
+Sprint 17 adds a SQLite-backed runtime state foundation, health/readiness checks, bounded retry helpers, restart recovery tests, and VPS deployment documentation. The service files are provided for reviewed deployment; this repository does not deploy to VPS automatically.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -164,6 +168,8 @@ Sprint 16 adds guarded research proposal, approval, run-state, and queue contrac
 - `gaon.runtime.memory_context`: read-only Learning Memory context builder for conversation
 - `gaon.runtime.providers`: deterministic and OpenAI-compatible guarded assistant providers
 - `gaon.research.orchestrator`: guarded research proposal, approval, run, and queue contracts
+- `gaon.runtime.storage`: SQLite runtime state for offsets, processed messages, scheduler state, research state, audit events, and notification attempts
+- `gaon.runtime.service`: production runtime service boundary and health checks
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts
