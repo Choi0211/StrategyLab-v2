@@ -65,6 +65,8 @@ Sprint 18 approval security stores only HMAC-SHA256 approval token digests. Raw 
 
 Schema v1 databases are migrated in place to v2 without deleting existing offsets, processed message IDs, proposals, approvals, runs, audit events, or notification attempts. Unsupported schema versions fail closed.
 
+Sprint 20 adds schema v3 durable runtime queue state. Queue records use `PENDING`, `LEASED`, `RUNNING`, `SUCCEEDED`, `FAILED`, and `CANCELLED`, with lease timeout recovery and dedupe keys. Scheduler jobs persist `next_run_at`, `last_run_at`, idempotency key, and execution status so duplicate ticks are ignored.
+
 Health commands:
 
 ```powershell

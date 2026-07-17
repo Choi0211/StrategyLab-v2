@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -14,9 +14,14 @@ def migrate(connection: sqlite3.Connection) -> None:
     if current is None:
         _create_v1(connection)
         _upgrade_v1_to_v2(connection)
+        _upgrade_v2_to_v3(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
+        _upgrade_v2_to_v3(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 2:
+        _upgrade_v2_to_v3(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -91,6 +96,29 @@ def _upgrade_v1_to_v2(connection: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduler_jobs_idempotency ON scheduler_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_notifications_target_status ON notification_attempts(target_ref, status);
         CREATE INDEX IF NOT EXISTS idx_runtime_audit_type_created ON runtime_audit_events(event_type, created_at);
+        """
+    )
+
+
+def _upgrade_v2_to_v3(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_queue (
+            item_id TEXT PRIMARY KEY,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+            available_at TEXT NOT NULL,
+            leased_until TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_runtime_queue_status_available ON runtime_queue(status, available_at, priority);
+        CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_status_next ON scheduler_jobs(execution_status, next_run_at);
         """
     )
 
