@@ -12,6 +12,7 @@ from gaon.research.brain import (
     build_research_plan,
 )
 from gaon.research.approval import ApprovalDecision, ApprovalRequest, ApprovalStatus, InMemoryApprovalStore
+from gaon.research.evidence import Citation, EvidenceBundle, EvidenceItem, build_evidence_bundle, evidence_from_search
 from gaon.research.orchestrator import InMemoryResearchQueue, QueueItem, ResearchOrchestrator
 from gaon.research.planner import plan_research_request
 from gaon.research.planning import ResearchPlan as ValidatedResearchPlan
@@ -32,6 +33,9 @@ __all__ = [
     "ApprovalDecision",
     "ApprovalRequest",
     "ApprovalStatus",
+    "Citation",
+    "EvidenceBundle",
+    "EvidenceItem",
     "FakeSearchProvider",
     "InMemoryApprovalStore",
     "InMemoryResearchQueue",
@@ -47,6 +51,7 @@ __all__ = [
     "ResearchStep",
     "ResearchStepType",
     "ValidatedResearchPlan",
+    "build_evidence_bundle",
     "ResearchTask",
     "ResearchTaskStatus",
     "RssAtomSearchProvider",
@@ -55,6 +60,7 @@ __all__ = [
     "SourceMetadata",
     "plan_research_request",
     "deterministic_research_plan",
+    "evidence_from_search",
     "provider_backed_research_plan",
     "plan_lifecycle_event",
     "validate_research_plan_steps",

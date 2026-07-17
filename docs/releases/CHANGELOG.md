@@ -15,6 +15,13 @@
 - Added canonical URL normalization, domain allow/deny filtering, result limits, content-size limits, duplicate URL removal, timeout and bounded retry behavior.
 - Added search metrics and durable event helper coverage without live network tests.
 
+## Sprint 32 Evidence Ranking and Context Building
+
+- Added EvidenceItem, EvidenceBundle, citation, and evidence-to-context contracts.
+- Added canonical URL normalization reuse, content hashing, exact duplicate removal, conservative near-duplicate detection, stable ranking, and citation ID assignment.
+- Added memory/external evidence merge, context budget enforcement, truncation diagnostics, and contradiction preservation.
+- Added explicit source-quality rule hook with conservative defaults.
+
 ## Sprint 24 Provider Registry and Routing
 
 - Added explicit assistant provider registry with stable-name lookup, duplicate registration protection, and unknown provider fail-fast behavior.
