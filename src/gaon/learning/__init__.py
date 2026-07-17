@@ -23,7 +23,6 @@ from gaon.learning.contracts import (
 from gaon.learning.detection import ConflictCandidate, ConflictDetector, DuplicateCandidate, DuplicateDetector
 from gaon.learning.evidence.models import EvidenceRecord, EvidenceType
 from gaon.learning.experience.models import ExperiencePattern, ExperienceType
-from gaon.learning.integration import PreparedMemory, prepare_memory, research_goal_to_record, research_journal_entry_to_record, research_plan_to_record, research_session_to_outcome
 from gaon.learning.knowledge.models import KnowledgeItem, KnowledgeStatus, transition_knowledge
 from gaon.learning.memory.models import LearningMemoryKind, LearningMemoryRecord, LearningMemoryStore
 from gaon.learning.policy.models import AutonomousAction, PolicyUpdateCandidate
@@ -82,3 +81,20 @@ __all__ = [
     "transition_knowledge",
     "validate_iso8601_utc",
 ]
+
+_LAZY_INTEGRATION_EXPORTS = {
+    "PreparedMemory",
+    "prepare_memory",
+    "research_goal_to_record",
+    "research_journal_entry_to_record",
+    "research_plan_to_record",
+    "research_session_to_outcome",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_INTEGRATION_EXPORTS:
+        from gaon.learning import integration
+
+        return getattr(integration, name)
+    raise AttributeError(name)

@@ -8,6 +8,7 @@ from gaon.runtime.events import EventType, RuntimeEvent
 from gaon.runtime.notifications import NotificationChannel, NotificationEngine, NotificationPriority, NotificationRequest
 from gaon.runtime.reports import DailyReport, WeeklyReview
 from gaon.runtime.scheduler import InMemoryScheduler, ScheduledJob, ScheduleSpec
+from gaon.runtime.providers import DeterministicAssistantProvider, OpenAICompatibleAssistantProvider
 
 __all__ = [
     "ConversationInput",
@@ -16,6 +17,7 @@ __all__ = [
     "AssistantProvider",
     "AssistantProviderResponse",
     "AssistantRequest",
+    "DeterministicAssistantProvider",
     "DailyReport",
     "EventType",
     "GaonRuntimeConfig",
@@ -25,6 +27,7 @@ __all__ = [
     "NotificationEngine",
     "NotificationPriority",
     "NotificationRequest",
+    "OpenAICompatibleAssistantProvider",
     "RuntimeEvent",
     "ScheduleSpec",
     "ScheduledJob",

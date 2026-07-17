@@ -11,7 +11,11 @@ Included:
 - deterministic in-process event bus
 - deterministic Korean Conversation Runtime
 - Sprint 13 natural-language intent router and Gaon persona layer
+- Sprint 14 read-only memory-aware conversation context
 - Assistant Provider interface for future LLM providers without SDK or network implementation
+- Sprint 15 guarded assistant provider integration with deterministic fallback and OpenAI-compatible fake-transport tests
+- Sprint 16 guarded research orchestration with explicit approval gates and in-memory queue
+- Sprint 17 SQLite runtime state, health checks, service skeleton, backup helper, and VPS deployment docs
 - Telegram production smoke client and dry-run adapter
 - Telegram one-shot smoke commands for bot metadata, chat discovery, smoke send, and poll-once processing
 - Notion dry-run mapper and sync contracts
@@ -28,6 +32,7 @@ Not included:
 - real Notion network execution
 - real LLM provider connection
 - market data, calendar, stock analysis, or Telegram-triggered backtest execution
+- automatic Learning Memory mutation from conversation
 - external AI API
 - vector DB or embeddings
 - MyMoneyGuard/KIS access

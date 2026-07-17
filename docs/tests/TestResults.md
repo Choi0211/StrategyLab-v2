@@ -2,6 +2,97 @@
 
 Status: Passed
 
+## Sprint 17 Production Runtime Service
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 165 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 15 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- CLI smoke: Passed
+  - `config-check`
+  - `health`
+  - `db-check`
+- Scope:
+  - SQLite schema migration and runtime state store
+  - restart offset recovery
+  - duplicate processed message guard
+  - bounded retry policy
+  - health/readiness/db checks
+  - backup helper
+  - systemd/VPS deployment documentation
+  - no real deployment or network smoke
+
+## Sprint 16 Guarded Research Assistant Orchestration
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 162 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 14 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - deterministic research proposal creation
+  - approval actor/chat/token/expiry checks
+  - approval-gated run state machine
+  - queue deduplication and retry limits
+  - audit event recording
+  - no autonomous execution or Learning Memory mutation
+
+## Sprint 15 Guarded Assistant Provider Integration
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 158 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 13 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - provider contracts and metadata
+  - deterministic fallback provider
+  - OpenAI-compatible fake HTTP provider
+  - prompt injection separation
+  - provider timeout/malformed response fallback
+  - provider safety validation
+  - no real network calls
+
+## Sprint 14 Memory-Aware Conversation
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 152 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 12 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - read-only Learning Memory context builder
+  - STRICT/BROAD/GLOBAL retrieval fallback
+  - conflict and revalidation warnings
+  - confidence used only as ranking signal
+  - Telegram memory query fake flow
+  - no repository mutation
+
 ## Sprint 13 Conversational Assistant Foundation
 
 - Unit tests: Passed

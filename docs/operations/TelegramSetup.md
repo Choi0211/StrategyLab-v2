@@ -116,3 +116,7 @@ Sprint 13 adds deterministic Korean natural-language handling. The same Telegram
 - `지난 연구 알려줘`
 
 The assistant explains disconnected capabilities instead of pretending to execute them. Real LLM providers, market data, schedules, stock analysis, and Telegram-triggered backtest execution remain separate future connections.
+
+## Durable Offset State
+
+Sprint 17 adds SQLite runtime state for processed message IDs and Telegram update offsets. This prevents duplicate processing after restart when the production service uses the runtime store. The database must not store bot tokens or raw secret-bearing payloads.

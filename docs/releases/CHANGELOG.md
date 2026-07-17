@@ -1,5 +1,37 @@
 # Changelog
 
+## Sprint 14 Memory-Aware Conversation
+
+- Added read-only conversation context contracts for retrieved memory, research context, references, and build results.
+- Added deterministic Learning Memory context builder with STRICT/BROAD/GLOBAL fallback.
+- Added duplicate record removal, warning propagation, conflict and revalidation state summaries, and confidence-as-ranking-signal messaging.
+- Connected memory context to selected research and memory intents without mutating repositories.
+- Added Telegram memory query end-to-end coverage with fake runtime flow.
+
+## Sprint 15 Guarded Assistant Provider Integration
+
+- Expanded Assistant Provider contracts with capabilities, health, metadata, and provider error classes.
+- Added deterministic fallback provider and OpenAI-compatible HTTP provider with injectable transport.
+- Added prompt builder that separates instructions from user text and retrieved memory data.
+- Added provider response validation, secret masking, timeout/malformed response fallback, and safety bypass for order/approval requests.
+- Added fake Telegram/provider end-to-end coverage without real network calls.
+
+## Sprint 16 Guarded Research Assistant Orchestration
+
+- Added deterministic research request planner, proposal, approval, run, review, and queue contracts.
+- Added explicit approval validation with actor, chat, token, and expiry checks.
+- Added run state machine with terminal states and approval-gated running transition.
+- Added in-memory deterministic queue with deduplication and retry limits.
+- Added research orchestration unit and integration flow tests without autonomous execution.
+
+## Sprint 17 Production Runtime Service
+
+- Added SQLite runtime state schema, migrations, offset recovery, processed message idempotency, audit event storage, and backup helper.
+- Added health/readiness/db-check CLI paths without secret output.
+- Added service and worker foundations with readiness gate, duplicate guard, and bounded retry policy.
+- Added systemd service example, env example, install/upgrade/rollback guide scripts, and VPS operations documentation.
+- Added restart recovery and runtime service smoke tests.
+
 ## Sprint 13 Conversational Assistant Foundation
 
 - Added deterministic Korean natural-language intent routing for greetings, Gaon calls, help, status, market status, stock analysis, schedules, backtests, recent research, and memory search requests.

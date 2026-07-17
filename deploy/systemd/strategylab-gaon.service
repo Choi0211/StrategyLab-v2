@@ -1,0 +1,19 @@
+[Unit]
+Description=StrategyLab Gaon Runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=strategylab
+Group=strategylab
+WorkingDirectory=/opt/strategylab-v2
+EnvironmentFile=/etc/strategylab/gaon.env
+ExecStart=/opt/strategylab-v2/.venv/bin/python -m gaon.runtime.cli health
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -54,3 +54,15 @@ py -3.11 -m gaon.runtime.cli telegram-get-me --execute
 ```
 
 The project does not auto-load `.env` and does not add `python-dotenv`. Keep secrets outside Git and inject them through the operating environment.
+
+## Runtime State
+
+Sprint 17 stores operational runtime state in SQLite. The database may contain Telegram offsets, processed message IDs, scheduler job state, research proposals, approvals, runs, audit events, and notification delivery attempts. It must not contain tokens, API keys, account IDs, or private trading state.
+
+Health commands:
+
+```powershell
+py -3.11 -m gaon.runtime.cli health --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli readiness --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli db-check --db runtime.sqlite
+```

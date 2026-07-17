@@ -1,8 +1,14 @@
 import unittest
 
 from gaon.integrations.telegram.contracts import TelegramResponse
+from gaon.integrations.telegram.runtime import TelegramRuntime
+from gaon.integrations.telegram.transport import parse_update
+from gaon.learning import ConfidenceScore, EvidenceRecord, EvidenceType, InMemoryLearningRepository, LearningRecord, LearningRecordType, RevalidationSchedule, RevalidationStatus
 from gaon.runtime.cli import discover_chats, poll_once
+from gaon.runtime import ConversationRuntime
+from gaon.runtime.assistant_provider import AssistantProviderResponse
 from gaon.runtime.config import GaonRuntimeConfig
+from gaon.runtime.memory_context import MemoryContextBuilder
 
 
 class FakeTelegramClient:
@@ -19,6 +25,18 @@ class FakeTelegramClient:
         response = TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"fake:{len(self.sent)}", message_id=str(len(self.sent) + 1))
         self.sent.append(response)
         return response
+
+
+class FakeAssistantProvider:
+    @property
+    def capabilities(self):
+        return None
+
+    def health(self):
+        return None
+
+    def respond(self, request):
+        return AssistantProviderResponse("영하님, provider telegram 응답입니다.", route="provider", references=request.references, provider_name="fake", model="fake")
 
 
 class TelegramProductionConnectionFlowTest(unittest.TestCase):
@@ -59,6 +77,43 @@ class TelegramProductionConnectionFlowTest(unittest.TestCase):
         self.assertEqual(results[0].next_offset, 26)
         self.assertEqual(client.sent[0].chat_id, "100")
         self.assertIn("영하님", client.sent[0].text)
+
+    def test_telegram_memory_query_uses_context_flow(self) -> None:
+        repository = InMemoryLearningRepository()
+        evidence = (EvidenceRecord("ev-tg-memory", EvidenceType.RESEARCH, "telegram-fixture", "telegram memory evidence"),)
+        repository.add(
+            LearningRecord(
+                "tg-memory",
+                LearningRecordType.KNOWLEDGE_CLAIM,
+                "ORB Telegram memory context",
+                "strategy-research",
+                "StrategyLab",
+                "ORB",
+                "KRX",
+                "2026-07-17T00:00:00Z",
+                "2026-07-17T00:00:00Z",
+                1,
+                evidence,
+                ConfidenceScore(0.8, "fixture", 1, "need_validation", 1.0, 0.0),
+                RevalidationSchedule("rv-tg", "tg-memory", "scheduled", "2026-08-01T00:00:00Z", "monthly", RevalidationStatus.PENDING, "strategy-research", "StrategyLab", "ORB", "KRX"),
+                "audit:tg",
+            )
+        )
+        runtime = TelegramRuntime(ConversationRuntime(context_builder=MemoryContextBuilder(repository)), allowed_chat_ids=("100",))
+        message = parse_update({"update_id": 50, "message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 200}, "text": "/memory ORB"}}, received_at="2026-07-17T00:00:00Z")
+
+        responses = runtime.handle_message(message)
+
+        self.assertIn("관련 기록 1건", responses[0].text)
+        self.assertIn("tg-memory", responses[0].text)
+
+    def test_telegram_provider_flow_fake_transport(self) -> None:
+        runtime = TelegramRuntime(ConversationRuntime(assistant_provider=FakeAssistantProvider()), allowed_chat_ids=("100",))
+        message = parse_update({"update_id": 60, "message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 200}, "text": "안녕"}}, received_at="2026-07-17T00:00:00Z")
+
+        responses = runtime.handle_message(message)
+
+        self.assertIn("provider telegram", responses[0].text)
 
     def test_unauthorized_update_does_not_send_message_flow(self) -> None:
         client = FakeTelegramClient(({"update_id": 30, "message": {"message_id": 1, "chat": {"id": 999}, "from": {"id": 200}, "text": "/status"}},))
