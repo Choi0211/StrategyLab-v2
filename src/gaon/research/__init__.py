@@ -13,6 +13,8 @@ from gaon.research.brain import (
 )
 from gaon.research.approval import ApprovalDecision, ApprovalRequest, ApprovalStatus, InMemoryApprovalStore
 from gaon.research.evidence import Citation, EvidenceBundle, EvidenceItem, build_evidence_bundle, evidence_from_search
+from gaon.research.knowledge import KnowledgeClaim as ResearchKnowledgeClaim
+from gaon.research.knowledge import KnowledgeProposal, KnowledgeProposalStatus, SQLiteKnowledgeProposalRepository, build_knowledge_proposal, proposal_from_bundle
 from gaon.research.orchestrator import InMemoryResearchQueue, QueueItem, ResearchOrchestrator
 from gaon.research.planner import plan_research_request
 from gaon.research.planning import ResearchPlan as ValidatedResearchPlan
@@ -39,6 +41,8 @@ __all__ = [
     "FakeSearchProvider",
     "InMemoryApprovalStore",
     "InMemoryResearchQueue",
+    "KnowledgeProposal",
+    "KnowledgeProposalStatus",
     "LocalFixtureSearchProvider",
     "OptionalWebSearchProvider",
     "QueueItem",
@@ -50,6 +54,7 @@ __all__ = [
     "ResearchRunStatus",
     "ResearchStep",
     "ResearchStepType",
+    "ResearchKnowledgeClaim",
     "ValidatedResearchPlan",
     "build_evidence_bundle",
     "ResearchTask",
@@ -58,10 +63,13 @@ __all__ = [
     "SearchQuery",
     "SearchResult",
     "SourceMetadata",
+    "SQLiteKnowledgeProposalRepository",
+    "build_knowledge_proposal",
     "plan_research_request",
     "deterministic_research_plan",
     "evidence_from_search",
     "provider_backed_research_plan",
     "plan_lifecycle_event",
+    "proposal_from_bundle",
     "validate_research_plan_steps",
 ]

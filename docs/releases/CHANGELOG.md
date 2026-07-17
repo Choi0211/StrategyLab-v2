@@ -22,6 +22,13 @@
 - Added memory/external evidence merge, context budget enforcement, truncation diagnostics, and contradiction preservation.
 - Added explicit source-quality rule hook with conservative defaults.
 
+## Sprint 33 Evidence-Backed Knowledge Proposals
+
+- Added schema v6 knowledge proposal and trusted knowledge tables.
+- Added evidence-linked research knowledge claims, proposal confidence, stable proposal hashes, explicit versions, provenance, review/expiration metadata, and insufficient-evidence status.
+- Added contradiction surfacing and proposal lifecycle event/metrics helpers.
+- Kept proposal persistence separate from trusted knowledge and disallowed direct trusted promotion.
+
 ## Sprint 24 Provider Registry and Routing
 
 - Added explicit assistant provider registry with stable-name lookup, duplicate registration protection, and unknown provider fail-fast behavior.
