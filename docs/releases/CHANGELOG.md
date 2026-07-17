@@ -35,6 +35,13 @@
 - Enforced proposal-first writes, trusted-workflow validation, system namespace authorization, and secret marker rejection.
 - Added deterministic read-only context retrieval and backup/restore coverage without vector DB or automatic LLM validation.
 
+## Sprint 29 Phase A Integration and v2.1 RC
+
+- Integrated metrics and explicit plugin lifecycle into the controlled runtime service.
+- Added event replay dry-run CLI diagnostic.
+- Added Gaon Phase A architecture document, provider/plugin/event/memory ADRs, and project vision document.
+- Updated README, release notes, operations guidance, and test results for v2.1 Release Candidate status.
+
 ## Sprint 23 v2 Release Candidate and Trading Adapter Contract
 
 - Added broker-free `gaon.adapters.TradingAdapter` protocol and fake adapter contract tests.

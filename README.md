@@ -12,7 +12,7 @@ This project's purpose is not to write as much code as possible, but to build a 
 
 ## Release Candidate Status
 
-StrategyLab v2 is currently a v2 Completion Release Candidate candidate branch with Sprint 18-23 production hardening.
+StrategyLab v2 is currently a v2.1 Release Candidate candidate branch with Gaon Phase A platform foundations.
 
 Included foundations:
 
@@ -23,6 +23,7 @@ Included foundations:
 - Gaon Runtime collaboration contracts: Event Bus, deterministic Korean Conversation Runtime, Assistant Provider interface, Telegram production smoke client, Notion dry-run mapper, notifications, reports, scheduler, and safe CLI
 - Sprint 18-22 approval hardening, SQLite repositories, durable queue/scheduler, controlled runtime loop, backup hardening, and security/chaos coverage
 - Sprint 23 broker-free TradingAdapter contract and v1 rollout plan
+- Phase A v2.1 provider registry, plugin lifecycle, metrics, durable event store, safe replay, and long-term memory foundation
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -135,6 +136,19 @@ py -3.11 -m gaon.runtime.cli telegram-send-smoke --execute --chat-id <discovered
 py -3.11 -m gaon.runtime.cli telegram-poll-once --execute
 ```
 
+## Phase A Runtime CLI
+
+```powershell
+py -3.11 -m gaon.runtime.cli config-check
+py -3.11 -m gaon.runtime.cli health
+py -3.11 -m gaon.runtime.cli db-check
+py -3.11 -m gaon.runtime.cli status
+py -3.11 -m gaon.runtime.cli metrics
+py -3.11 -m gaon.runtime.cli event-replay-dry-run
+```
+
+These commands are deterministic and do not perform live Telegram, OpenAI, Notion, broker, KIS, VPS, or MyMoneyGuard calls.
+
 See `docs/operations/TelegramSetup.md` for the full safe setup flow. The project does not auto-load `.env`, and automated tests never call the real Telegram network.
 
 ## Conversational Assistant
@@ -176,6 +190,11 @@ Sprint 23 adds `gaon.adapters.TradingAdapter` as a broker-free public contract. 
 - `gaon.research.orchestrator`: guarded research proposal, approval, run, and queue contracts
 - `gaon.runtime.storage`: SQLite runtime state for offsets, processed messages, scheduler state, research state, audit events, and notification attempts
 - `gaon.runtime.service`: production runtime service boundary and health checks
+- `gaon.runtime.provider_registry`: explicit assistant provider registration and deterministic fallback
+- `gaon.runtime.plugins`: explicit allowlist plugin lifecycle
+- `gaon.runtime.metrics`: internal metrics collector and snapshot export
+- `gaon.runtime.event_store`: durable append-only event store and safe replay
+- `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
 - `gaon.adapters`: broker-free TradingAdapter protocol, risk-gate contracts, and fake adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts

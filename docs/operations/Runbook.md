@@ -31,6 +31,19 @@ Linux/macOS bash:
 python3.11 scripts/verify_release.py
 ```
 
+## Phase A Diagnostics
+
+```powershell
+py -3.11 -m gaon.runtime.cli config-check
+py -3.11 -m gaon.runtime.cli health
+py -3.11 -m gaon.runtime.cli db-check
+py -3.11 -m gaon.runtime.cli status
+py -3.11 -m gaon.runtime.cli metrics
+py -3.11 -m gaon.runtime.cli event-replay-dry-run
+```
+
+Expected runtime DB schema version: `5`.
+
 ## Safety
 
 Do not add:
@@ -45,5 +58,5 @@ Do not add:
 ## Git Push
 
 ```bash
-git push origin develop-v2
+git push origin feature/gaon-phase-a-v2.1
 ```
