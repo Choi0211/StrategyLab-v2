@@ -13,6 +13,7 @@ Gaon Runtime connects Conversation, Event Bus, Notification, Reports, Scheduler,
 - deterministic rule-based behavior
 - explicit events and correlation IDs
 - no approval side effects from Telegram or Notion
+- timezone support is limited to `UTC` and `Asia/Seoul`
 
 ## Components
 
@@ -37,3 +38,7 @@ Related Memory Retrieval supports:
 - `GLOBAL`
 
 Ranking is deterministic rule-based. It does not use vector similarity, embeddings, or external AI ranking.
+
+## Timezone Policy
+
+Runtime configuration validates only `UTC` and `Asia/Seoul`. The Windows-compatible fallback for `Asia/Seoul` is fixed UTC+09:00. DST timezone support is not implemented in this phase.

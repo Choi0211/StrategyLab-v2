@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from gaon.runtime.config import validate_hhmm, validate_timezone, validate_weekday
+
 
 @dataclass(frozen=True)
 class ScheduleSpec:
@@ -11,6 +13,12 @@ class ScheduleSpec:
     timezone: str
     run_at: str
     weekday: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_timezone(self.timezone)
+        validate_hhmm(self.run_at, "run_at")
+        if self.weekday is not None:
+            validate_weekday(self.weekday)
 
 
 @dataclass(frozen=True)

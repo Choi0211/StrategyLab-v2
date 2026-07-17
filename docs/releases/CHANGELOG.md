@@ -2,6 +2,8 @@
 
 ## Gaon Runtime Collaboration
 
+- Fixed Windows-safe runtime timezone validation for `UTC` and `Asia/Seoul`.
+- Strengthened runtime config validation for mode, booleans, HH:MM times, weekdays, and execute-mode guards.
 - Hardened Learning Memory snapshots with `claims` export/import.
 - Added STRICT/BROAD/GLOBAL related-memory modes, token overlap, aliases, and EvidenceType quality scoring.
 - Added `gaon.runtime` configuration, events, in-memory event bus, conversation runtime, notifications, reports, scheduler, and safe dry-run CLI.

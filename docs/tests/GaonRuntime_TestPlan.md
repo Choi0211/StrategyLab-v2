@@ -3,6 +3,9 @@
 ## Unit
 
 - configuration fail-closed and secret masking
+- Windows-safe `Asia/Seoul` default timezone validation
+- `UTC` timezone validation
+- invalid timezone, boolean, mode, HH:MM, and weekday rejection
 - event bus ordering, duplicate rejection, failure isolation
 - conversation intents and unknown fallback
 - Telegram parsing, authorization, formatting, splitting

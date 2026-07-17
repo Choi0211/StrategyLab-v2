@@ -10,7 +10,7 @@ from gaon.integrations.telegram.transport import parse_update
 from gaon.learning import ConfidenceScore, EvidenceRecord, EvidenceType, InMemoryLearningRepository, KnowledgeClaim, KnowledgeStatus, LearningRecord, LearningRecordType, RelatedMemoryMode, RelatedMemoryQuery, RevalidationSchedule, RevalidationStatus
 from gaon.runtime import ConversationInput, ConversationRuntime, EventType, GaonRuntimeConfig, InMemoryEventBus, NotificationEngine, RuntimeEvent
 from gaon.runtime.cli import main as cli_main
-from gaon.runtime.config import load_runtime_config
+from gaon.runtime.config import load_runtime_config, timezone_for
 from gaon.runtime.errors import AuthorizationError, ConfigurationError
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.scheduler import InMemoryScheduler, ScheduledJob, ScheduleSpec
@@ -57,6 +57,46 @@ class GaonRuntimeCollaborationTest(unittest.TestCase):
             GaonRuntimeConfig(telegram_enabled=True)
         with self.assertRaises(ConfigurationError):
             GaonRuntimeConfig(telegram_allowed_chat_ids=("abc",))
+
+    def test_runtime_config_timezone_policy_is_windows_safe(self) -> None:
+        default_config = load_runtime_config({})
+        utc_config = load_runtime_config({"GAON_TIMEZONE": "UTC"})
+
+        self.assertEqual(default_config.timezone, "Asia/Seoul")
+        self.assertEqual(utc_config.timezone, "UTC")
+        self.assertEqual(timezone_for("Asia/Seoul").utcoffset(None).total_seconds(), 9 * 60 * 60)
+        self.assertEqual(timezone_for("UTC").utcoffset(None).total_seconds(), 0)
+        with self.assertRaises(ConfigurationError):
+            load_runtime_config({"GAON_TIMEZONE": "America/New_York"})
+
+    def test_runtime_config_rejects_invalid_scalar_values(self) -> None:
+        invalid_envs = (
+            {"GAON_TELEGRAM_ENABLED": "maybe"},
+            {"GAON_RUNTIME_MODE": "production"},
+            {"GAON_DAILY_REPORT_TIME": "9:00"},
+            {"GAON_DAILY_REPORT_TIME": "24:00"},
+            {"GAON_WEEKLY_REPORT_TIME": "10:99"},
+            {"GAON_WEEKLY_REPORT_DAY": "FUNDAY"},
+        )
+        for env in invalid_envs:
+            with self.subTest(env=env):
+                with self.assertRaises(ConfigurationError):
+                    load_runtime_config(env)
+
+    def test_execute_mode_requires_explicit_dry_run_false_and_enabled_integration(self) -> None:
+        with self.assertRaises(ConfigurationError):
+            load_runtime_config({"GAON_RUNTIME_MODE": "execute"})
+        with self.assertRaises(ConfigurationError):
+            load_runtime_config({"GAON_RUNTIME_MODE": "execute", "GAON_DRY_RUN": "false"})
+        config = load_runtime_config(
+            {
+                "GAON_RUNTIME_MODE": "execute",
+                "GAON_DRY_RUN": "false",
+                "GAON_TELEGRAM_ENABLED": "true",
+                "GAON_TELEGRAM_BOT_TOKEN": "synthetic-token",
+            }
+        )
+        self.assertFalse(config.dry_run)
 
     def test_event_bus_order_duplicate_and_failure_isolation(self) -> None:
         bus = InMemoryEventBus()

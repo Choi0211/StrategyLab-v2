@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import re
+from datetime import UTC, timezone, timedelta
 
 from gaon.runtime.errors import ConfigurationError, mask_secret
+
+SUPPORTED_TIMEZONES = ("UTC", "Asia/Seoul")
+SUPPORTED_WEEKDAYS = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
+SUPPORTED_MODES = ("dry-run", "execute")
 
 
 @dataclass(frozen=True)
@@ -26,10 +31,11 @@ class GaonRuntimeConfig:
     dry_run: bool = True
 
     def __post_init__(self) -> None:
-        try:
-            ZoneInfo(self.timezone)
-        except ZoneInfoNotFoundError as exc:
-            raise ConfigurationError(f"invalid timezone: {self.timezone}") from exc
+        validate_mode(self.mode)
+        validate_timezone(self.timezone)
+        validate_hhmm(self.daily_report_time, "daily_report_time")
+        validate_hhmm(self.weekly_report_time, "weekly_report_time")
+        validate_weekday(self.weekly_report_day)
         for chat_id in self.telegram_allowed_chat_ids:
             if not chat_id or not chat_id.lstrip("-").isdigit():
                 raise ConfigurationError("telegram allowed chat IDs must be numeric")
@@ -37,8 +43,12 @@ class GaonRuntimeConfig:
             raise ConfigurationError("telegram token is required when Telegram is enabled")
         if self.notion_enabled and not self.notion_token:
             raise ConfigurationError("notion token is required when Notion is enabled")
+        if self.mode == "execute" and self.dry_run:
+            raise ConfigurationError("execute mode requires GAON_DRY_RUN=false")
         if not self.dry_run and self.mode != "execute":
-            raise ConfigurationError("non-dry-run mode requires explicit execute mode")
+            raise ConfigurationError("dry_run=false requires execute mode")
+        if self.mode == "execute" and not (self.telegram_enabled or self.notion_enabled):
+            raise ConfigurationError("execute mode requires at least one integration enabled")
 
     def __repr__(self) -> str:
         return (
@@ -54,10 +64,10 @@ class GaonRuntimeConfig:
 def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
     return GaonRuntimeConfig(
         mode=env.get("GAON_RUNTIME_MODE", "dry-run"),
-        telegram_enabled=_bool(env.get("GAON_TELEGRAM_ENABLED")),
+        telegram_enabled=parse_bool(env.get("GAON_TELEGRAM_ENABLED"), "GAON_TELEGRAM_ENABLED", default=False),
         telegram_bot_token=env.get("GAON_TELEGRAM_BOT_TOKEN"),
         telegram_allowed_chat_ids=_csv(env.get("GAON_TELEGRAM_ALLOWED_CHAT_IDS")),
-        notion_enabled=_bool(env.get("GAON_NOTION_ENABLED")),
+        notion_enabled=parse_bool(env.get("GAON_NOTION_ENABLED"), "GAON_NOTION_ENABLED", default=False),
         notion_token=env.get("GAON_NOTION_TOKEN"),
         notion_parent_page_id=env.get("GAON_NOTION_PARENT_PAGE_ID"),
         notion_research_database_id=env.get("GAON_NOTION_RESEARCH_DATABASE_ID"),
@@ -66,12 +76,49 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         daily_report_time=env.get("GAON_DAILY_REPORT_TIME", "09:00"),
         weekly_report_day=env.get("GAON_WEEKLY_REPORT_DAY", "MONDAY"),
         weekly_report_time=env.get("GAON_WEEKLY_REPORT_TIME", "09:00"),
-        dry_run=_bool(env.get("GAON_DRY_RUN", "true")),
+        dry_run=parse_bool(env.get("GAON_DRY_RUN"), "GAON_DRY_RUN", default=True),
     )
 
 
-def _bool(value: str | None) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+def parse_bool(value: str | None, field: str, *, default: bool) -> bool:
+    if value is None or value == "":
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(f"{field} must be a boolean")
+
+
+def validate_timezone(value: str) -> None:
+    if value not in SUPPORTED_TIMEZONES:
+        raise ConfigurationError(f"unsupported timezone: {value}")
+
+
+def timezone_for(value: str) -> timezone:
+    validate_timezone(value)
+    if value == "UTC":
+        return UTC
+    return timezone(timedelta(hours=9), name="Asia/Seoul")
+
+
+def validate_mode(value: str) -> None:
+    if value not in SUPPORTED_MODES:
+        raise ConfigurationError("mode must be dry-run or execute")
+
+
+def validate_hhmm(value: str, field: str) -> None:
+    if re.fullmatch(r"[0-2][0-9]:[0-5][0-9]", value) is None:
+        raise ConfigurationError(f"{field} must use HH:MM format")
+    hour = int(value[:2])
+    if hour > 23:
+        raise ConfigurationError(f"{field} hour must be between 00 and 23")
+
+
+def validate_weekday(value: str) -> None:
+    if value.upper() not in SUPPORTED_WEEKDAYS:
+        raise ConfigurationError("weekly_report_day must be a valid weekday")
 
 
 def _csv(value: str | None) -> tuple[str, ...]:
