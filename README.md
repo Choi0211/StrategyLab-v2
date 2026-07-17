@@ -12,7 +12,7 @@ This project's purpose is not to write as much code as possible, but to build a 
 
 ## Release Candidate Status
 
-StrategyLab v2 is currently a Foundation Release Candidate on `develop-v2`.
+StrategyLab v2 is currently a v2 Completion Release Candidate candidate branch with Sprint 18-23 production hardening.
 
 Included foundations:
 
@@ -21,6 +21,8 @@ Included foundations:
 - Sprint 12-B in-memory Learning Repository, duplicate/conflict detection, audit workflow, UTC timestamp guard, and golden JSON fixtures
 - Sprint 12 Runtime related-memory retrieval, repository JSON export/import, migration fixtures, and Research Brain preparation workflow
 - Gaon Runtime collaboration contracts: Event Bus, deterministic Korean Conversation Runtime, Assistant Provider interface, Telegram production smoke client, Notion dry-run mapper, notifications, reports, scheduler, and safe CLI
+- Sprint 18-22 approval hardening, SQLite repositories, durable queue/scheduler, controlled runtime loop, backup hardening, and security/chaos coverage
+- Sprint 23 broker-free TradingAdapter contract and v1 rollout plan
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -155,7 +157,11 @@ Sprint 16 adds guarded research proposal, approval, run-state, and queue contrac
 
 ## Production Runtime Service
 
-Sprint 17 adds a SQLite-backed runtime state foundation, health/readiness checks, bounded retry helpers, restart recovery tests, and VPS deployment documentation. The service files are provided for reviewed deployment; this repository does not deploy to VPS automatically.
+Sprint 17-22 add SQLite-backed runtime state, health/readiness checks, bounded retry helpers, durable queue/scheduler recovery, controlled runtime loop commands, backup/restore hardening, and VPS deployment documentation. The service files are provided for reviewed deployment; this repository does not deploy to VPS automatically.
+
+## Trading Adapter Contract
+
+Sprint 23 adds `gaon.adapters.TradingAdapter` as a broker-free public contract. It defines read-only account, position, market, and runtime status methods plus an approval-gated order command lifecycle. Execution is disabled by default, and no live broker, KIS API, account ID, or MyMoneyGuard private code is connected.
 
 ## Module Structure
 
@@ -170,6 +176,7 @@ Sprint 17 adds a SQLite-backed runtime state foundation, health/readiness checks
 - `gaon.research.orchestrator`: guarded research proposal, approval, run, and queue contracts
 - `gaon.runtime.storage`: SQLite runtime state for offsets, processed messages, scheduler state, research state, audit events, and notification attempts
 - `gaon.runtime.service`: production runtime service boundary and health checks
+- `gaon.adapters`: broker-free TradingAdapter protocol, risk-gate contracts, and fake adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts
@@ -190,6 +197,8 @@ Sprint 17 adds a SQLite-backed runtime state foundation, health/readiness checks
 StrategyLab-v2 is the public research and test platform. MyMoneyGuard remains the private live trading and operations system.
 
 StrategyLab-v2 may define future adapter contracts for MyMoneyGuard V1 reuse, but it must not modify, redevelop, import private runtime state from, or depend on the private MyMoneyGuard system.
+
+The v1 rollout path is read-only -> paper -> shadow -> approval-gated execution, and it requires a future private-repository implementation plus explicit review before any production connection.
 
 StrategyLab-v2 must not contain:
 

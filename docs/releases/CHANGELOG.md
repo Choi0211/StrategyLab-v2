@@ -1,5 +1,39 @@
 # Changelog
 
+## Sprint 23 v2 Release Candidate and Trading Adapter Contract
+
+- Added broker-free `gaon.adapters.TradingAdapter` protocol and fake adapter contract tests.
+- Added read-only account, position, market, and runtime status contracts.
+- Added order command lifecycle, risk gate contracts, execution-disabled default, and approval reference requirement.
+- Added v1 integration rollout plan: read-only -> paper -> shadow -> approval-gated execution.
+- Documented that no live broker, KIS API, MyMoneyGuard private code, or Telegram-triggered order execution is connected.
+
+## Sprint 22 Security, Chaos, and Resilience Coverage
+
+- Replaced SQLite file-copy backup with `sqlite3.Connection.backup()` and atomic destination replacement.
+- Added deterministic tests for prompt-injection-as-data, provider failure, duplicate storm, restart recovery, duplicate scheduler tick, log redaction, bounded retry, and backup restore.
+
+## Sprint 21 Production Runtime Loop
+
+- Added controlled `GaonRuntimeService` loop with readiness, recovery, stop event, bounded drain, tick injection, and structured redacted logs.
+- Added CLI commands for `run`, `status`, and `backup`.
+
+## Sprint 20 Durable Queue, Scheduler, and Recovery
+
+- Added schema v3 runtime queue with PENDING, LEASED, RUNNING, SUCCEEDED, FAILED, and CANCELLED states.
+- Added lease timeout recovery, durable scheduler idempotency, and DB-backed duplicate message guard.
+
+## Sprint 19 SQLite Repository Layer
+
+- Added runtime repository protocols and SQLite implementations for Telegram state, audit events, approvals, proposals, runs, scheduler jobs, and notification attempts.
+- Added schema v2 migration and centralized runtime JSON serialization validation.
+
+## Sprint 18 Approval Security Hardening
+
+- Added explicit approval states and HMAC-SHA256 token digest storage.
+- Added single-use approval consumption bound to actor, chat, proposal, approval, expiry, nonce, and run ID.
+- Added execute-mode approval signing secret validation.
+
 ## Sprint 14 Memory-Aware Conversation
 
 - Added read-only conversation context contracts for retrieved memory, research context, references, and build results.
