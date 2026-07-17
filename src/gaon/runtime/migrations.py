@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -15,13 +15,19 @@ def migrate(connection: sqlite3.Connection) -> None:
         _create_v1(connection)
         _upgrade_v1_to_v2(connection)
         _upgrade_v2_to_v3(connection)
+        _upgrade_v3_to_v4(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
         _upgrade_v2_to_v3(connection)
+        _upgrade_v3_to_v4(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 2:
         _upgrade_v2_to_v3(connection)
+        _upgrade_v3_to_v4(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 3:
+        _upgrade_v3_to_v4(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -119,6 +125,42 @@ def _upgrade_v2_to_v3(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_runtime_queue_status_available ON runtime_queue(status, available_at, priority);
         CREATE INDEX IF NOT EXISTS idx_scheduler_jobs_status_next ON scheduler_jobs(execution_status, next_run_at);
+        """
+    )
+
+
+def _upgrade_v3_to_v4(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS durable_events (
+            event_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            actor_ref TEXT NOT NULL,
+            correlation_id TEXT NOT NULL,
+            causation_id TEXT,
+            scope TEXT NOT NULL,
+            project TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            market TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            audit_refs_json TEXT NOT NULL,
+            appended_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_durable_events_order ON durable_events(occurred_at, event_id);
+        CREATE TABLE IF NOT EXISTS replay_checkpoints (
+            projection_id TEXT PRIMARY KEY,
+            last_event_id TEXT,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS replay_failures (
+            failure_id TEXT PRIMARY KEY,
+            projection_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            error_type TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         """
     )
 

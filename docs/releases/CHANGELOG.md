@@ -21,6 +21,13 @@
 - Added bounded component and label validation to prevent prompt, message, chat ID, token, API key, secret, or arbitrary payload leakage.
 - Added concurrency and CLI tests without external observability dependencies.
 
+## Sprint 27 Durable Event Store and Safe Replay
+
+- Added schema v4 durable append-only event store and replay checkpoint tables.
+- Added deterministic event append/read, duplicate protection, bounded replay batches, oversized payload rejection, and v3-to-v4 migration coverage.
+- Added dry-run replay with side effects suppressed by default and checkpoint advancement only during non-dry-run successful projection processing.
+- Added projection failure isolation and replay failure recording.
+
 ## Sprint 23 v2 Release Candidate and Trading Adapter Contract
 
 - Added broker-free `gaon.adapters.TradingAdapter` protocol and fake adapter contract tests.

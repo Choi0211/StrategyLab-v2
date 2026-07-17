@@ -5,6 +5,7 @@ from gaon.runtime.assistant_provider import AssistantProvider, AssistantProvider
 from gaon.runtime.conversation import ConversationInput, ConversationResponse, ConversationRuntime
 from gaon.runtime.event_bus import InMemoryEventBus
 from gaon.runtime.events import EventType, RuntimeEvent
+from gaon.runtime.event_store import DurableEvent, ReplayResult, SQLiteEventStore
 from gaon.runtime.notifications import NotificationChannel, NotificationEngine, NotificationPriority, NotificationRequest
 from gaon.runtime.reports import DailyReport, WeeklyReview
 from gaon.runtime.scheduler import DurableScheduler, InMemoryScheduler, ScheduledJob, ScheduleSpec
@@ -23,6 +24,7 @@ __all__ = [
     "AssistantRequest",
     "AssistantProviderRegistry",
     "DeterministicAssistantProvider",
+    "DurableEvent",
     "DurableQueueItem",
     "DurableScheduler",
     "DurableTaskQueue",
@@ -47,7 +49,9 @@ __all__ = [
     "ProviderRegistration",
     "RoutingAssistantProvider",
     "QueueItemStatus",
+    "ReplayResult",
     "RuntimeEvent",
+    "SQLiteEventStore",
     "ScheduleSpec",
     "ScheduledJob",
     "WeeklyReview",
