@@ -17,6 +17,7 @@ from gaon.runtime.conversation import ConversationRuntime
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.health import readiness
 from gaon.runtime.reports import build_daily_report, build_weekly_review
+from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
@@ -32,6 +33,14 @@ def main(argv: list[str] | None = None) -> int:
     health.add_argument("--db", default=":memory:")
     ready = sub.add_parser("readiness")
     ready.add_argument("--db", default=":memory:")
+    run = sub.add_parser("run")
+    run.add_argument("--db", default=":memory:")
+    run.add_argument("--once", action="store_true", default=True)
+    status_cmd = sub.add_parser("status")
+    status_cmd.add_argument("--db", default=":memory:")
+    backup = sub.add_parser("backup")
+    backup.add_argument("--db", default="runtime.sqlite")
+    backup.add_argument("--destination", required=True)
     sub.add_parser("telegram-check")
     sub.add_parser("assistant-check")
     sub.add_parser("notion-check")
@@ -70,6 +79,20 @@ def _run(args: argparse.Namespace) -> int:
         try:
             for check in readiness(load_runtime_config(os.environ), store):
                 print(f"{check.name}: {'ready' if check.ready else 'not-ready'} {check.message}")
+        finally:
+            store.close()
+    elif args.command in {"run", "status"}:
+        store = RuntimeStateStore(args.db)
+        try:
+            service = GaonRuntimeService(load_runtime_config(os.environ), store)
+            status = service.run_once() if args.command == "run" else service.status()
+            print(f"running={status.running} ticks={status.ticks} active_workers={status.active_workers}")
+        finally:
+            store.close()
+    elif args.command == "backup":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(store.backup(args.destination))
         finally:
             store.close()
     elif args.command in {"telegram-check", "assistant-check", "notion-check"}:

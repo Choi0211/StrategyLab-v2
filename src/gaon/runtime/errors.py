@@ -49,3 +49,14 @@ def mask_secret(value: str | None) -> str:
     if len(value) <= 6:
         return "***"
     return f"{value[:2]}***{value[-2:]}"
+
+
+def redact_mapping(payload: dict[str, object]) -> dict[str, object]:
+    redacted: dict[str, object] = {}
+    for key, value in payload.items():
+        normalized = key.lower()
+        if any(token in normalized for token in ("token", "secret", "api_key", "password")):
+            redacted[key] = mask_secret(str(value) if value is not None else None)
+        else:
+            redacted[key] = value
+    return redacted
