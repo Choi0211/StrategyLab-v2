@@ -1,5 +1,5 @@
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 from gaon.integrations.notion.mapper import daily_report_payload, learning_memory_payload
@@ -130,7 +130,7 @@ class GaonRuntimeCollaborationTest(unittest.TestCase):
         runtime = ConversationRuntime()
         response = runtime.handle(ConversationInput("telegram", "u1", "c1", "m1", "/help", "2026-07-17T00:00:00Z"))
         self.assertIn("/status", response.text)
-        unknown = runtime.handle(ConversationInput("telegram", "u1", "c1", "m2", "매수해줘", "2026-07-17T00:00:00Z"))
+        unknown = runtime.handle(ConversationInput("telegram", "u1", "c1", "m2", "알 수 없는 요청", "2026-07-17T00:00:00Z"))
         self.assertIn("이해하지", unknown.text)
         self.assertFalse(unknown.approval_required)
         approval = runtime.handle(ConversationInput("telegram", "u1", "c1", "m3", "승인해줘", "2026-07-17T00:00:00Z"))
@@ -138,7 +138,7 @@ class GaonRuntimeCollaborationTest(unittest.TestCase):
 
     def test_telegram_parse_authorization_formatting_and_split(self) -> None:
         message = parse_update(
-            {"message": {"message_id": 1, "chat": {"id": 100, "type": "private"}, "from": {"id": 200}, "text": "/status"}},
+            {"update_id": 10, "message": {"message_id": 1, "chat": {"id": 100, "type": "private"}, "from": {"id": 200}, "text": "/status"}},
             received_at="2026-07-17T00:00:00Z",
         )
         runtime = TelegramRuntime(ConversationRuntime(), allowed_chat_ids=("100",))
@@ -182,11 +182,10 @@ class GaonRuntimeCollaborationTest(unittest.TestCase):
 
         with redirect_stdout(dry_run_output):
             self.assertEqual(cli_main(["telegram-poll-once"]), 0)
-        with redirect_stdout(execute_output):
-            self.assertEqual(cli_main(["telegram-poll-once", "--execute"]), 0)
+        with redirect_stdout(execute_output), redirect_stderr(StringIO()):
+            self.assertEqual(cli_main(["telegram-poll-once", "--execute"]), 1)
 
         self.assertIn("dry-run", dry_run_output.getvalue())
-        self.assertIn("execute requested but not implemented", execute_output.getvalue())
 
     def test_learning_claim_snapshot_and_retrieval_modes(self) -> None:
         repository = InMemoryLearningRepository()

@@ -2,6 +2,46 @@
 
 Status: Passed
 
+## Sprint 13 Conversational Assistant Foundation
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 148 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 11 tests`
+  - Status: `OK`
+- Scope:
+  - Korean natural-language intent routing
+  - Gaon persona responses that address the user as `영하님`
+  - deterministic `rule_based` assistant route without LLM dependencies
+  - Assistant Provider Protocol boundary for future providers
+  - safety warnings for approval, order, and execution-like requests
+  - Telegram ordinary text to Conversation Runtime to Telegram response flow
+  - no external AI SDK, API key, market data, calendar, stock analysis, or backtest executor connection
+
+## Telegram Production Connection
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 139 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 10 tests`
+  - Status: `OK`
+- Scope:
+  - Telegram Bot API standard-library client
+  - fake HTTP success paths for `getMe`, `getUpdates`, and `sendMessage`
+  - HTTP 401/429/500, malformed JSON, `ok=false`, timeout, and token masking
+  - chat discovery deduplication and preview limiting
+  - private text update parsing and ignored update handling
+  - allowed chat enforcement, unauthorized no-send behavior, and offset reporting
+  - smoke-send fixed message and arbitrary text exclusion
+  - production CLI execution gates with dry-run default
+  - no real Telegram network call, no shell execution, no GitHub mutation, no broker/trading import
+
 ## Gaon Runtime Collaboration
 
 - Unit tests: Passed

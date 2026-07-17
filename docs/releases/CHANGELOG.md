@@ -1,5 +1,24 @@
 # Changelog
 
+## Sprint 13 Conversational Assistant Foundation
+
+- Added deterministic Korean natural-language intent routing for greetings, Gaon calls, help, status, market status, stock analysis, schedules, backtests, recent research, and memory search requests.
+- Added Gaon persona responses that address the user as `영하님` and avoid claiming disconnected work was executed.
+- Added `AssistantProvider` request/response contracts for future OpenAI or local LLM integrations without adding any network provider or SDK dependency.
+- Updated Conversation Runtime to record the response route and preserve event bus publication and approval/order safety boundaries.
+- Added Telegram ordinary text end-to-end tests through the existing safe production smoke path.
+- Documented that market data, schedule, stock analysis, and backtest execution are future provider/adapter connections.
+
+## Telegram Production Connection
+
+- Added a standard-library Telegram Bot API client with injectable HTTP transport.
+- Added `getMe`, `getUpdates`, `sendMessage`, `deleteWebhook`, and `getWebhookInfo` operations.
+- Added safe error mapping for authentication, rate limit, server, malformed JSON, `ok=false`, timeout, and oversized response cases.
+- Added production smoke CLI commands: `telegram-get-me`, `telegram-discover-chat`, `telegram-send-smoke`, and `telegram-poll-once`.
+- Added fail-closed execution gates for runtime mode, dry-run, Telegram enablement, bot token, explicit `--execute`, and allowed chat IDs.
+- Added private text update parsing, ignored update results, chat discovery deduplication, message preview limiting, and manual offset reporting.
+- Added fake HTTP unit/integration tests; no real Telegram token or network call is required in automated tests.
+
 ## Gaon Runtime Collaboration
 
 - Fixed Windows-safe runtime timezone validation for `UTC` and `Asia/Seoul`.
