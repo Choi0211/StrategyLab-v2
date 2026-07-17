@@ -16,6 +16,14 @@
 - Added provider response validation, secret masking, timeout/malformed response fallback, and safety bypass for order/approval requests.
 - Added fake Telegram/provider end-to-end coverage without real network calls.
 
+## Sprint 16 Guarded Research Assistant Orchestration
+
+- Added deterministic research request planner, proposal, approval, run, review, and queue contracts.
+- Added explicit approval validation with actor, chat, token, and expiry checks.
+- Added run state machine with terminal states and approval-gated running transition.
+- Added in-memory deterministic queue with deduplication and retry limits.
+- Added research orchestration unit and integration flow tests without autonomous execution.
+
 ## Sprint 13 Conversational Assistant Foundation
 
 - Added deterministic Korean natural-language intent routing for greetings, Gaon calls, help, status, market status, stock analysis, schedules, backtests, recent research, and memory search requests.

@@ -2,6 +2,27 @@
 
 Status: Passed
 
+## Sprint 16 Guarded Research Assistant Orchestration
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 162 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 14 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - deterministic research proposal creation
+  - approval actor/chat/token/expiry checks
+  - approval-gated run state machine
+  - queue deduplication and retry limits
+  - audit event recording
+  - no autonomous execution or Learning Memory mutation
+
 ## Sprint 15 Guarded Assistant Provider Integration
 
 - Unit tests: Passed

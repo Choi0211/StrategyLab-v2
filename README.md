@@ -149,6 +149,10 @@ Sprint 14 adds read-only Learning Memory context for research and memory intents
 
 Sprint 15 adds a guarded provider boundary. The default deterministic provider needs no network. The OpenAI-compatible provider uses injectable standard-library HTTP plumbing for future execute-mode use, with fake transports in tests. Provider output is validated and falls back to rule-based responses on failure.
 
+## Research Orchestration
+
+Sprint 16 adds guarded research proposal, approval, run-state, and queue contracts. Research can be planned and approved explicitly, but it is not an autonomous agent loop and does not execute trades, shell commands, arbitrary code, or automatic Learning Memory writes.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -159,6 +163,7 @@ Sprint 15 adds a guarded provider boundary. The default deterministic provider n
 - `gaon.runtime`: configuration, event bus, deterministic Korean conversation runtime, assistant provider boundary, notifications, reports, scheduler, safe CLI
 - `gaon.runtime.memory_context`: read-only Learning Memory context builder for conversation
 - `gaon.runtime.providers`: deterministic and OpenAI-compatible guarded assistant providers
+- `gaon.research.orchestrator`: guarded research proposal, approval, run, and queue contracts
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts

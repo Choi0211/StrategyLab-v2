@@ -11,6 +11,10 @@ from gaon.research.brain import (
     ResearchSessionStatus,
     build_research_plan,
 )
+from gaon.research.approval import ApprovalDecision, ApprovalRequest
+from gaon.research.orchestrator import InMemoryResearchQueue, QueueItem, ResearchOrchestrator
+from gaon.research.planner import plan_research_request
+from gaon.research.tasks import ResearchExecutionPlan, ResearchProposal, ResearchRequest, ResearchRun, ResearchRunStatus, ResearchTask, ResearchTaskStatus
 
 __all__ = [
     "ResearchGoal",
@@ -22,4 +26,17 @@ __all__ = [
     "ResearchSession",
     "ResearchSessionStatus",
     "build_research_plan",
+    "ApprovalDecision",
+    "ApprovalRequest",
+    "InMemoryResearchQueue",
+    "QueueItem",
+    "ResearchExecutionPlan",
+    "ResearchOrchestrator",
+    "ResearchProposal",
+    "ResearchRequest",
+    "ResearchRun",
+    "ResearchRunStatus",
+    "ResearchTask",
+    "ResearchTaskStatus",
+    "plan_research_request",
 ]

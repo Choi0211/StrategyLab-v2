@@ -14,6 +14,7 @@ Included:
 - Sprint 14 read-only memory-aware conversation context
 - Assistant Provider interface for future LLM providers without SDK or network implementation
 - Sprint 15 guarded assistant provider integration with deterministic fallback and OpenAI-compatible fake-transport tests
+- Sprint 16 guarded research orchestration with explicit approval gates and in-memory queue
 - Telegram production smoke client and dry-run adapter
 - Telegram one-shot smoke commands for bot metadata, chat discovery, smoke send, and poll-once processing
 - Notion dry-run mapper and sync contracts
