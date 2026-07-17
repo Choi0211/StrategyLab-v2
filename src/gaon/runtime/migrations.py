@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -13,6 +13,10 @@ def migrate(connection: sqlite3.Connection) -> None:
     current = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
     if current is None:
         _create_v1(connection)
+        _upgrade_v1_to_v2(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 1:
+        _upgrade_v1_to_v2(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -67,3 +71,31 @@ def _create_v1(connection: sqlite3.Connection) -> None:
         );
         """
     )
+
+
+def _upgrade_v1_to_v2(connection: sqlite3.Connection) -> None:
+    _add_column(connection, "approvals", "requested_actor", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "approvals", "requested_chat_id", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "approvals", "token_digest", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "approvals", "issued_at", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "approvals", "nonce", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "approvals", "consumed_by_run_id", "TEXT")
+    _add_column(connection, "research_runs", "payload_json", "TEXT NOT NULL DEFAULT '{}'")
+    _add_column(connection, "scheduler_jobs", "idempotency_key", "TEXT")
+    _add_column(connection, "scheduler_jobs", "execution_status", "TEXT NOT NULL DEFAULT 'pending'")
+    _add_column(connection, "notification_attempts", "payload_json", "TEXT NOT NULL DEFAULT '{}'")
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_approvals_proposal_status ON approvals(proposal_id, status);
+        CREATE INDEX IF NOT EXISTS idx_research_runs_proposal_status ON research_runs(proposal_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduler_jobs_idempotency ON scheduler_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_notifications_target_status ON notification_attempts(target_ref, status);
+        CREATE INDEX IF NOT EXISTS idx_runtime_audit_type_created ON runtime_audit_events(event_type, created_at);
+        """
+    )
+
+
+def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

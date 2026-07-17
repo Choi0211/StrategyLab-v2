@@ -59,9 +59,11 @@ The project does not auto-load `.env` and does not add `python-dotenv`. Keep sec
 
 ## Runtime State
 
-Sprint 17 stores operational runtime state in SQLite. The database may contain Telegram offsets, processed message IDs, scheduler job state, research proposals, approvals, runs, audit events, and notification delivery attempts. It must not contain tokens, API keys, account IDs, or private trading state.
+Sprint 19 stores operational runtime state through repository interfaces over SQLite schema v2. The database may contain Telegram offsets, processed message IDs, scheduler job state, research proposals, approvals, runs, audit events, and notification delivery attempts. It must not contain tokens, API keys, account IDs, or private trading state.
 
 Sprint 18 approval security stores only HMAC-SHA256 approval token digests. Raw approval tokens must not be stored in SQLite, logs, audit payloads, fixtures, or exceptions. Approval consumption is single-use and binds the approval to the target run.
+
+Schema v1 databases are migrated in place to v2 without deleting existing offsets, processed message IDs, proposals, approvals, runs, audit events, or notification attempts. Unsupported schema versions fail closed.
 
 Health commands:
 
