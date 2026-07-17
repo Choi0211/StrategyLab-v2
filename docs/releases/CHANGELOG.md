@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 30 Validated Research Planning
+
+- Added bounded ResearchRequest, ResearchPlan, and ResearchStep contracts.
+- Added deterministic planner with stable plan hash and plan lifecycle event support.
+- Added allowlisted research step types, dependency validation, cycle rejection, and step limit enforcement.
+- Added optional provider-backed planner with free-only enforcement and structured output validation.
+- Added planner metrics coverage.
+
 ## Sprint 24 Provider Registry and Routing
 
 - Added explicit assistant provider registry with stable-name lookup, duplicate registration protection, and unknown provider fail-fast behavior.
