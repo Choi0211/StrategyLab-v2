@@ -29,6 +29,7 @@ class GaonRuntimeConfig:
     weekly_report_day: str = "MONDAY"
     weekly_report_time: str = "09:00"
     dry_run: bool = True
+    approval_signing_secret: str | None = None
 
     def __post_init__(self) -> None:
         validate_mode(self.mode)
@@ -49,6 +50,8 @@ class GaonRuntimeConfig:
             raise ConfigurationError("dry_run=false requires execute mode")
         if self.mode == "execute" and not (self.telegram_enabled or self.notion_enabled):
             raise ConfigurationError("execute mode requires at least one integration enabled")
+        if self.mode == "execute" and not self.approval_signing_secret:
+            raise ConfigurationError("execute mode requires GAON_APPROVAL_SIGNING_SECRET")
 
     def __repr__(self) -> str:
         return (
@@ -57,7 +60,8 @@ class GaonRuntimeConfig:
             f"telegram_bot_token={mask_secret(self.telegram_bot_token)!r}, "
             f"telegram_allowed_chat_ids={self.telegram_allowed_chat_ids!r}, "
             f"notion_enabled={self.notion_enabled!r}, notion_token={mask_secret(self.notion_token)!r}, "
-            f"timezone={self.timezone!r}, dry_run={self.dry_run!r})"
+            f"timezone={self.timezone!r}, dry_run={self.dry_run!r}, "
+            f"approval_signing_secret={mask_secret(self.approval_signing_secret)!r})"
         )
 
 
@@ -77,6 +81,7 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         weekly_report_day=env.get("GAON_WEEKLY_REPORT_DAY", "MONDAY"),
         weekly_report_time=env.get("GAON_WEEKLY_REPORT_TIME", "09:00"),
         dry_run=parse_bool(env.get("GAON_DRY_RUN"), "GAON_DRY_RUN", default=True),
+        approval_signing_secret=env.get("GAON_APPROVAL_SIGNING_SECRET"),
     )
 
 

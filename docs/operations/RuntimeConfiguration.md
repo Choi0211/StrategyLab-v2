@@ -30,6 +30,7 @@ Required execute-mode conditions:
 - token provided through environment
 - dry-run disabled explicitly
 - execute mode selected explicitly
+- `GAON_APPROVAL_SIGNING_SECRET` provided through environment
 
 Telegram message execution also requires `GAON_TELEGRAM_ALLOWED_CHAT_IDS`. The only exception is `telegram-discover-chat --execute`, which exists to discover the first private chat ID and never sends a Telegram message.
 
@@ -50,6 +51,7 @@ $env:GAON_RUNTIME_MODE = "execute"
 $env:GAON_DRY_RUN = "false"
 $env:GAON_TELEGRAM_ENABLED = "true"
 $env:GAON_TELEGRAM_BOT_TOKEN = "<private-token>"
+$env:GAON_APPROVAL_SIGNING_SECRET = "<private-approval-signing-secret>"
 py -3.11 -m gaon.runtime.cli telegram-get-me --execute
 ```
 
@@ -58,6 +60,8 @@ The project does not auto-load `.env` and does not add `python-dotenv`. Keep sec
 ## Runtime State
 
 Sprint 17 stores operational runtime state in SQLite. The database may contain Telegram offsets, processed message IDs, scheduler job state, research proposals, approvals, runs, audit events, and notification delivery attempts. It must not contain tokens, API keys, account IDs, or private trading state.
+
+Sprint 18 approval security stores only HMAC-SHA256 approval token digests. Raw approval tokens must not be stored in SQLite, logs, audit payloads, fixtures, or exceptions. Approval consumption is single-use and binds the approval to the target run.
 
 Health commands:
 

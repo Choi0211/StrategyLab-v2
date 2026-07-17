@@ -55,7 +55,14 @@ class FakeTelegramClient:
 
 class TelegramProductionConnectionTest(unittest.TestCase):
     def config(self, allowed: tuple[str, ...] = ("100",)) -> GaonRuntimeConfig:
-        return GaonRuntimeConfig(mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="synthetic-token", telegram_allowed_chat_ids=allowed)
+        return GaonRuntimeConfig(
+            mode="execute",
+            dry_run=False,
+            telegram_enabled=True,
+            telegram_bot_token="synthetic-token",
+            telegram_allowed_chat_ids=allowed,
+            approval_signing_secret="synthetic-approval-secret",
+        )
 
     def test_get_me_get_updates_and_send_message_success(self) -> None:
         fake = FakeTelegramHttp(
