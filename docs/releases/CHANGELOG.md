@@ -1,5 +1,12 @@
 # Changelog
 
+## Sprint 24 Provider Registry and Routing
+
+- Added explicit assistant provider registry with stable-name lookup, duplicate registration protection, and unknown provider fail-fast behavior.
+- Added configuration-based deterministic and OpenAI-compatible provider selection.
+- Added health-based deterministic fallback with structured fallback reason.
+- Added routing tests with fake OpenAI-compatible transport only; no real provider network calls are required.
+
 ## Sprint 23 v2 Release Candidate and Trading Adapter Contract
 
 - Added broker-free `gaon.adapters.TradingAdapter` protocol and fake adapter contract tests.

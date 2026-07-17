@@ -9,6 +9,7 @@ from gaon.runtime.notifications import NotificationChannel, NotificationEngine, 
 from gaon.runtime.reports import DailyReport, WeeklyReview
 from gaon.runtime.scheduler import DurableScheduler, InMemoryScheduler, ScheduledJob, ScheduleSpec
 from gaon.runtime.providers import DeterministicAssistantProvider, OpenAICompatibleAssistantProvider
+from gaon.runtime.provider_registry import AssistantProviderRegistry, ProviderRegistration, RoutingAssistantProvider, build_assistant_provider
 from gaon.runtime.worker import DurableQueueItem, DurableTaskQueue, QueueItemStatus
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "AssistantProvider",
     "AssistantProviderResponse",
     "AssistantRequest",
+    "AssistantProviderRegistry",
     "DeterministicAssistantProvider",
     "DurableQueueItem",
     "DurableScheduler",
@@ -32,10 +34,13 @@ __all__ = [
     "NotificationPriority",
     "NotificationRequest",
     "OpenAICompatibleAssistantProvider",
+    "ProviderRegistration",
+    "RoutingAssistantProvider",
     "QueueItemStatus",
     "RuntimeEvent",
     "ScheduleSpec",
     "ScheduledJob",
     "WeeklyReview",
+    "build_assistant_provider",
     "load_runtime_config",
 ]
