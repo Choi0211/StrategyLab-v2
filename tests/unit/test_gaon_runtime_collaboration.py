@@ -176,6 +176,18 @@ class GaonRuntimeCollaborationTest(unittest.TestCase):
         with redirect_stdout(StringIO()):
             self.assertEqual(cli_main(["config-check"]), 0)
 
+    def test_cli_dry_run_default_and_execute_flag_are_explicit(self) -> None:
+        dry_run_output = StringIO()
+        execute_output = StringIO()
+
+        with redirect_stdout(dry_run_output):
+            self.assertEqual(cli_main(["telegram-poll-once"]), 0)
+        with redirect_stdout(execute_output):
+            self.assertEqual(cli_main(["telegram-poll-once", "--execute"]), 0)
+
+        self.assertIn("dry-run", dry_run_output.getvalue())
+        self.assertIn("execute requested but not implemented", execute_output.getvalue())
+
     def test_learning_claim_snapshot_and_retrieval_modes(self) -> None:
         repository = InMemoryLearningRepository()
         record = self.record("record-001", content="Opening Range Breakout uses volume filter")

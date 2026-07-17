@@ -22,6 +22,7 @@ This phase does not claim general IANA timezone support. `UTC` uses `datetime.ti
 - `GAON_DAILY_REPORT_TIME` and `GAON_WEEKLY_REPORT_TIME` must use `HH:MM`.
 - `GAON_WEEKLY_REPORT_DAY` must be a valid English weekday name.
 - Unknown scalar values fail closed with `ConfigurationError`.
+- CLI commands default to dry-run. `--dry-run` and `--execute` are mutually exclusive where present.
 
 Required execute-mode conditions:
 

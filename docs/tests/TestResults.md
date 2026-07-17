@@ -6,7 +6,7 @@ Status: Passed
 
 - Unit tests: Passed
   - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
-  - Result: `Ran 129 tests`
+  - Result: `Ran 130 tests`
   - Status: `OK`
 - Integration tests: Passed
   - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
@@ -16,6 +16,7 @@ Status: Passed
   - runtime configuration and secret masking
   - Windows-safe timezone validation for `UTC` and `Asia/Seoul`
   - invalid boolean/mode/time/weekday rejection
+  - explicit CLI dry-run/execute flag behavior
   - event bus duplicate/failure isolation
   - conversation intents and approval safety
   - Telegram dry-run authorization and formatting
