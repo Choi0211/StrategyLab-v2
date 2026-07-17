@@ -16,6 +16,7 @@ from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.conversation import ConversationRuntime
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.health import readiness
+from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
@@ -41,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
+    sub.add_parser("metrics")
     sub.add_parser("telegram-check")
     sub.add_parser("assistant-check")
     sub.add_parser("notion-check")
@@ -95,6 +97,11 @@ def _run(args: argparse.Namespace) -> int:
             print(store.backup(args.destination))
         finally:
             store.close()
+    elif args.command == "metrics":
+        collector = MetricsCollector()
+        collector.increment("runtime_loops", component="cli")
+        collector.gauge("queue_depth", 0, component="runtime")
+        print(collector.snapshot().to_text())
     elif args.command in {"telegram-check", "assistant-check", "notion-check"}:
         print(f"{args.command}: dry-run readiness check")
     elif args.command == "daily-report":

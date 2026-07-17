@@ -14,6 +14,13 @@
 - Added duplicate plugin ID rejection, disabled-plugin guard, failure isolation, and redacted failure records.
 - Added fake Telegram, Notion, and Trading plugin tests without live network calls.
 
+## Sprint 26 Runtime Metrics and Observability
+
+- Added standard-library internal metrics collector for counters, gauges, and timing observations.
+- Added immutable metrics snapshot/export model and CLI `metrics` output.
+- Added bounded component and label validation to prevent prompt, message, chat ID, token, API key, secret, or arbitrary payload leakage.
+- Added concurrency and CLI tests without external observability dependencies.
+
 ## Sprint 23 v2 Release Candidate and Trading Adapter Contract
 
 - Added broker-free `gaon.adapters.TradingAdapter` protocol and fake adapter contract tests.
