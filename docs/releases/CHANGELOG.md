@@ -8,6 +8,13 @@
 - Added optional provider-backed planner with free-only enforcement and structured output validation.
 - Added planner metrics coverage.
 
+## Sprint 31 Safe Evidence Search Providers
+
+- Added provider-neutral search contracts with normalized source metadata.
+- Added fake, local fixture, RSS/Atom, and optional disabled-by-default web search providers.
+- Added canonical URL normalization, domain allow/deny filtering, result limits, content-size limits, duplicate URL removal, timeout and bounded retry behavior.
+- Added search metrics and durable event helper coverage without live network tests.
+
 ## Sprint 24 Provider Registry and Routing
 
 - Added explicit assistant provider registry with stable-name lookup, duplicate registration protection, and unknown provider fail-fast behavior.

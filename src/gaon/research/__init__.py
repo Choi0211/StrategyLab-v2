@@ -16,6 +16,7 @@ from gaon.research.orchestrator import InMemoryResearchQueue, QueueItem, Researc
 from gaon.research.planner import plan_research_request
 from gaon.research.planning import ResearchPlan as ValidatedResearchPlan
 from gaon.research.planning import ResearchStep, ResearchStepType, deterministic_research_plan, provider_backed_research_plan, plan_lifecycle_event, validate_research_plan_steps
+from gaon.research.search import FakeSearchProvider, LocalFixtureSearchProvider, OptionalWebSearchProvider, RssAtomSearchProvider, SearchQuery, SearchResult, SourceMetadata
 from gaon.research.tasks import ResearchExecutionPlan, ResearchProposal, ResearchRequest, ResearchRun, ResearchRunStatus, ResearchTask, ResearchTaskStatus
 
 __all__ = [
@@ -31,8 +32,11 @@ __all__ = [
     "ApprovalDecision",
     "ApprovalRequest",
     "ApprovalStatus",
+    "FakeSearchProvider",
     "InMemoryApprovalStore",
     "InMemoryResearchQueue",
+    "LocalFixtureSearchProvider",
+    "OptionalWebSearchProvider",
     "QueueItem",
     "ResearchExecutionPlan",
     "ResearchOrchestrator",
@@ -45,6 +49,10 @@ __all__ = [
     "ValidatedResearchPlan",
     "ResearchTask",
     "ResearchTaskStatus",
+    "RssAtomSearchProvider",
+    "SearchQuery",
+    "SearchResult",
+    "SourceMetadata",
     "plan_research_request",
     "deterministic_research_plan",
     "provider_backed_research_plan",
