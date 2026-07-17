@@ -12,6 +12,7 @@ from gaon.research.brain import (
     build_research_plan,
 )
 from gaon.research.approval import ApprovalDecision, ApprovalRequest, ApprovalStatus, InMemoryApprovalStore
+from gaon.research.approval_workflow import ResearchApprovalDecision, ResearchApprovalRequest, ResearchDecision, SQLiteResearchApprovalRepository, build_approval_request
 from gaon.research.evidence import Citation, EvidenceBundle, EvidenceItem, build_evidence_bundle, evidence_from_search
 from gaon.research.knowledge import KnowledgeClaim as ResearchKnowledgeClaim
 from gaon.research.knowledge import KnowledgeProposal, KnowledgeProposalStatus, SQLiteKnowledgeProposalRepository, build_knowledge_proposal, proposal_from_bundle
@@ -24,6 +25,9 @@ from gaon.research.tasks import ResearchExecutionPlan, ResearchProposal, Researc
 
 __all__ = [
     "ResearchGoal",
+    "ResearchApprovalDecision",
+    "ResearchApprovalRequest",
+    "ResearchDecision",
     "ResearchInterview",
     "ResearchJournal",
     "ResearchJournalEntry",
@@ -64,6 +68,8 @@ __all__ = [
     "SearchResult",
     "SourceMetadata",
     "SQLiteKnowledgeProposalRepository",
+    "SQLiteResearchApprovalRepository",
+    "build_approval_request",
     "build_knowledge_proposal",
     "plan_research_request",
     "deterministic_research_plan",

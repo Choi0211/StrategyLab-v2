@@ -29,6 +29,13 @@
 - Added contradiction surfacing and proposal lifecycle event/metrics helpers.
 - Kept proposal persistence separate from trusted knowledge and disallowed direct trusted promotion.
 
+## Sprint 34 Auditable Research Approval Workflow
+
+- Added schema v7 research approval decision table and idempotency index.
+- Added proposal hash/version-bound approval requests and approve/reject/revise decision contracts.
+- Added stale proposal rejection, repeated decision idempotency, promotion replay protection, audit events, and approval/rejection metrics.
+- Added dry-run research proposal CLI smoke commands.
+
 ## Sprint 24 Provider Registry and Routing
 
 - Added explicit assistant provider registry with stable-name lookup, duplicate registration protection, and unknown provider fail-fast behavior.

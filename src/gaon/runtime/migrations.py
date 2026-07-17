@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -18,6 +18,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v3_to_v4(connection)
         _upgrade_v4_to_v5(connection)
         _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
@@ -25,6 +26,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v3_to_v4(connection)
         _upgrade_v4_to_v5(connection)
         _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 2:
         _upgrade_v2_to_v3(connection)
@@ -39,9 +41,14 @@ def migrate(connection: sqlite3.Connection) -> None:
     elif int(current[0]) == 4:
         _upgrade_v4_to_v5(connection)
         _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 5:
         _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 6:
+        _upgrade_v6_to_v7(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -229,6 +236,26 @@ def _upgrade_v5_to_v6(connection: sqlite3.Connection) -> None:
             claims_json TEXT NOT NULL,
             evidence_refs_json TEXT NOT NULL
         );
+        """
+    )
+
+
+def _upgrade_v6_to_v7(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS research_approval_decisions (
+            decision_id TEXT PRIMARY KEY,
+            proposal_id TEXT NOT NULL,
+            proposal_hash TEXT NOT NULL,
+            proposal_version INTEGER NOT NULL,
+            actor_ref TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            decided_at TEXT NOT NULL,
+            consumed INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_approval_idempotency
+            ON research_approval_decisions(proposal_id, proposal_hash, proposal_version, actor_ref, decision);
         """
     )
 

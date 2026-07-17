@@ -46,6 +46,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("metrics")
     replay = sub.add_parser("event-replay-dry-run")
     replay.add_argument("--db", default=":memory:")
+    sub.add_parser("research-proposals-list")
+    show = sub.add_parser("research-proposals-show")
+    show.add_argument("proposal_id")
+    approve = sub.add_parser("research-proposals-approve")
+    approve.add_argument("proposal_id")
+    reject = sub.add_parser("research-proposals-reject")
+    reject.add_argument("proposal_id")
+    revise = sub.add_parser("research-proposals-revise")
+    revise.add_argument("proposal_id")
     sub.add_parser("telegram-check")
     sub.add_parser("assistant-check")
     sub.add_parser("notion-check")
@@ -112,6 +121,10 @@ def _run(args: argparse.Namespace) -> int:
             print(f"event-replay-dry-run: processed={result.processed} failed={result.failed} checkpoint={result.last_event_id or ''}")
         finally:
             store.close()
+    elif args.command == "research-proposals-list":
+        print("research-proposals: none")
+    elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
+        print(f"{args.command}: dry-run proposal_id={args.proposal_id}")
     elif args.command in {"telegram-check", "assistant-check", "notion-check"}:
         print(f"{args.command}: dry-run readiness check")
     elif args.command == "daily-report":
