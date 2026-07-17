@@ -7,6 +7,13 @@
 - Added health-based deterministic fallback with structured fallback reason.
 - Added routing tests with fake OpenAI-compatible transport only; no real provider network calls are required.
 
+## Sprint 25 Explicit Plugin Lifecycle
+
+- Added explicit plugin metadata, capability, health, registry, and manager contracts.
+- Added allowlist-only lifecycle for configure, start, health, and reverse-order stop.
+- Added duplicate plugin ID rejection, disabled-plugin guard, failure isolation, and redacted failure records.
+- Added fake Telegram, Notion, and Trading plugin tests without live network calls.
+
 ## Sprint 23 v2 Release Candidate and Trading Adapter Contract
 
 - Added broker-free `gaon.adapters.TradingAdapter` protocol and fake adapter contract tests.
