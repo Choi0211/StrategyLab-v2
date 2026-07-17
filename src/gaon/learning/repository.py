@@ -32,6 +32,7 @@ class LearningRepository(Protocol):
     ) -> tuple[LearningRecord, ...]: ...
     def find_duplicates(self, candidate: LearningRecord) -> tuple[DuplicateCandidate, ...]: ...
     def find_conflicts(self, candidate: KnowledgeClaim) -> tuple[ConflictCandidate, ...]: ...
+    def list_claims(self) -> tuple[KnowledgeClaim, ...]: ...
     def retrieve_related(self, query: RelatedMemoryQuery) -> tuple[RelatedMemoryResult, ...]: ...
     def append_audit(self, event: AuditEvent) -> None: ...
     def list_audit(self, target_ref: str | None = None, action: AuditAction | None = None) -> tuple[AuditEvent, ...]: ...
@@ -111,6 +112,9 @@ class InMemoryLearningRepository:
     def find_conflicts(self, candidate: KnowledgeClaim) -> tuple[ConflictCandidate, ...]:
         return self._conflict_detector.find(candidate, tuple(self._copy_claim(claim) for claim in self._claims.values()))
 
+    def list_claims(self) -> tuple[KnowledgeClaim, ...]:
+        return tuple(self._copy_claim(claim) for claim in sorted(self._claims.values(), key=lambda claim: claim.claim_id))
+
     def retrieve_related(self, query: RelatedMemoryQuery) -> tuple[RelatedMemoryResult, ...]:
         return self._retriever.retrieve(query, self.list_all())
 
@@ -126,12 +130,14 @@ class InMemoryLearningRepository:
         return filter_audit_events(events, target_ref=target_ref, action=action)
 
     def export_json(self) -> str:
-        return repository_to_json(self.list_chronological(), self.list_audit())
+        return repository_to_json(self.list_chronological(), self.list_audit(), self.list_claims())
 
     def import_json(self, payload: str) -> None:
-        records, audit_events = repository_from_json(migrate_repository_json(payload))
+        records, claims, audit_events = repository_from_json(migrate_repository_json(payload))
         if len({record.record_id for record in records}) != len(records):
             raise ValueError("import contains duplicate record_id values")
+        if len({claim.claim_id for claim in claims}) != len(claims):
+            raise ValueError("import contains duplicate claim_id values")
         if len({event.event_id for event in audit_events}) != len(audit_events):
             raise ValueError("import contains duplicate event_id values")
         imported_records: dict[str, LearningRecord] = {}
@@ -139,7 +145,13 @@ class InMemoryLearningRepository:
             if not record.evidence:
                 raise ValueError("import contains learning record without evidence")
             imported_records[record.record_id] = self._copy_record(record)
+        imported_claims: dict[str, KnowledgeClaim] = {}
+        for claim in claims:
+            if not claim.evidence:
+                raise ValueError("import contains knowledge claim without evidence")
+            imported_claims[claim.claim_id] = self._copy_claim(claim)
         self._records = imported_records
+        self._claims = imported_claims
         self._audit_events = tuple(self._copy_audit(event) for event in filter_audit_events(audit_events))
 
     def replace_audit(self, event: AuditEvent) -> None:

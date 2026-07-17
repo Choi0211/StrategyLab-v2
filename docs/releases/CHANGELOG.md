@@ -1,5 +1,17 @@
 # Changelog
 
+## Gaon Runtime Collaboration
+
+- Fixed Windows-safe runtime timezone validation for `UTC` and `Asia/Seoul`.
+- Strengthened runtime config validation for mode, booleans, HH:MM times, weekdays, and execute-mode guards.
+- Replaced ambiguous CLI `--dry-run` defaults with explicit mutually exclusive dry-run/execute flags.
+- Hardened Learning Memory snapshots with `claims` export/import.
+- Added STRICT/BROAD/GLOBAL related-memory modes, token overlap, aliases, and EvidenceType quality scoring.
+- Added `gaon.runtime` configuration, events, in-memory event bus, conversation runtime, notifications, reports, scheduler, and safe dry-run CLI.
+- Added Telegram dry-run contracts, update parsing, authorization, formatting, and conversation bridge.
+- Added Notion dry-run contracts, mapping, idempotent sync, and report payloads.
+- Added runtime collaboration docs, ADRs, RFC, operations guides, unit tests, and integration tests.
+
 ## Sprint 12-B Learning Memory Repository
 
 - Added `LearningRepository` protocol and deterministic `InMemoryLearningRepository`.

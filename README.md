@@ -20,6 +20,7 @@ Included foundations:
 - Sprint 12-A Learning Memory domain contracts
 - Sprint 12-B in-memory Learning Repository, duplicate/conflict detection, audit workflow, UTC timestamp guard, and golden JSON fixtures
 - Sprint 12 Runtime related-memory retrieval, repository JSON export/import, migration fixtures, and Research Brain preparation workflow
+- Gaon Runtime collaboration contracts: Event Bus, Conversation Runtime, Telegram dry-run adapter, Notion dry-run mapper, notifications, reports, scheduler, and safe CLI
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -123,6 +124,9 @@ The paper broker is deterministic and does not connect to a real broker.
 - `gaon.learning.detection`: duplicate and conflict candidate detection without automatic merge or resolution
 - `gaon.learning.retrieval`: deterministic related-memory ranking with score breakdown
 - `gaon.learning.integration`: Research Brain to Learning Memory candidate preparation without automatic save
+- `gaon.runtime`: configuration, event bus, conversation runtime, notifications, reports, scheduler, safe CLI
+- `gaon.integrations.telegram`: Telegram dry-run contracts and conversation bridge
+- `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts
 - `strategylab.core`: configuration, logging, module registry, plugin boundary
 - `strategylab.market`: market data contracts, validation, provenance
@@ -166,4 +170,8 @@ Do not commit `.env`, token files, account files, real trade state, production l
 - `docs/adr/ADR-0001-learning-memory-core.md`: Learning Memory architecture decision
 - `docs/rfc/RFC-0001-sprint11-learning-engine.md`: Sprint 11 Learning Engine RFC
 - `docs/rfc/RFC-0002-sprint11-research-brain.md`: Sprint 11 Research Brain RFC
+- `docs/rfc/RFC-0004-gaon-runtime-collaboration.md`: Gaon Runtime collaboration RFC
+- `docs/architecture/GaonRuntimeArchitecture.md`: Runtime architecture
+- `docs/architecture/ConversationRuntime.md`: Conversation Runtime contract
+- `docs/architecture/CollaborationIntegrations.md`: Telegram and Notion dry-run integration contracts
 - `docs/research/ResearchBrain.md`: Research Brain guide
