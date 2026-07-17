@@ -3,6 +3,25 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Gaon Phase B v3.0 Research Brain RC
+
+Included:
+
+- Sprint 30 validated research planning with deterministic and provider-backed plan contracts
+- Sprint 31 safe evidence provider contracts with fake, fixture, RSS/Atom, and disabled optional web providers
+- Sprint 32 evidence ranking, citation assignment, context budgeting, and contradiction preservation
+- Sprint 33 evidence-backed knowledge proposals stored separately from trusted knowledge
+- Sprint 34 auditable research approval workflow with stale proposal and replay protection
+- Sprint 35 Research Brain v3 orchestration, run states, checkpoints, reports, resume, CLI smoke paths, schema v8, and free-only runtime defaults
+
+Not included:
+
+- live broker, KIS, account, or MyMoneyGuard integration
+- live Telegram, Notion, GitHub, OpenAI, Claude, Gemini, or paid provider calls in automated tests
+- automatic trusted knowledge promotion
+- automatic policy update
+- automatic approval or trading execution
+
 ## Gaon Phase A v2.1
 
 Included:

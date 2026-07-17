@@ -53,10 +53,14 @@ class GaonRuntimeCollaborationTest(unittest.TestCase):
         config = GaonRuntimeConfig(telegram_enabled=False, telegram_bot_token="secret-token")
         self.assertNotIn("secret-token", repr(config))
         self.assertTrue(load_runtime_config({}).dry_run)
+        self.assertTrue(load_runtime_config({}).free_only_mode)
+        self.assertFalse(load_runtime_config({}).paid_provider_enabled)
         with self.assertRaises(ConfigurationError):
             GaonRuntimeConfig(telegram_enabled=True)
         with self.assertRaises(ConfigurationError):
             GaonRuntimeConfig(telegram_allowed_chat_ids=("abc",))
+        with self.assertRaises(ConfigurationError):
+            load_runtime_config({"GAON_FREE_ONLY_MODE": "true", "GAON_PAID_PROVIDER_ENABLED": "true"})
 
     def test_runtime_config_timezone_policy_is_windows_safe(self) -> None:
         default_config = load_runtime_config({})

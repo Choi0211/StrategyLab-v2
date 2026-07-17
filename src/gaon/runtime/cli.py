@@ -21,6 +21,7 @@ from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
+from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 
@@ -55,6 +56,18 @@ def main(argv: list[str] | None = None) -> int:
     reject.add_argument("proposal_id")
     revise = sub.add_parser("research-proposals-revise")
     revise.add_argument("proposal_id")
+    research_plan = sub.add_parser("research-plan")
+    research_plan.add_argument("--query", required=True)
+    research_run = sub.add_parser("research-run")
+    research_run.add_argument("--query", required=True)
+    research_run.add_argument("--dry-run", action="store_true", default=True)
+    research_status = sub.add_parser("research-status")
+    research_status.add_argument("run_id")
+    research_report = sub.add_parser("research-report")
+    research_report.add_argument("run_id")
+    research_report.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    research_resume = sub.add_parser("research-resume")
+    research_resume.add_argument("run_id")
     sub.add_parser("telegram-check")
     sub.add_parser("assistant-check")
     sub.add_parser("notion-check")
@@ -125,6 +138,21 @@ def _run(args: argparse.Namespace) -> int:
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
         print(f"{args.command}: dry-run proposal_id={args.proposal_id}")
+    elif args.command == "research-plan":
+        print(f"research-plan: dry-run query={args.query}")
+    elif args.command == "research-run":
+        store = RuntimeStateStore(":memory:")
+        try:
+            run, report = ResearchOrchestratorV3(SQLiteResearchRunRepository(store._connection)).run(args.query, run_id="cli-run", dry_run=args.dry_run)
+            print(f"research-run: {run.status.value} report={report.title}")
+        finally:
+            store.close()
+    elif args.command == "research-status":
+        print(f"research-status: dry-run run_id={args.run_id}")
+    elif args.command == "research-report":
+        print(f"# Research Report\n\nrun_id={args.run_id}\nformat={args.format}")
+    elif args.command == "research-resume":
+        print(f"research-resume: dry-run run_id={args.run_id}")
     elif args.command in {"telegram-check", "assistant-check", "notion-check"}:
         print(f"{args.command}: dry-run readiness check")
     elif args.command == "daily-report":

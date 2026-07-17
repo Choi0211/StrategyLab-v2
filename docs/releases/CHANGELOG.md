@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 35 Research Brain Orchestration
+
+- Added schema v8 Research Brain run and checkpoint tables.
+- Added deterministic ResearchOrchestratorV3 with run states, checkpoints, reports, resume, and metrics.
+- Added research CLI smoke commands for plan, run, status, report, and resume paths.
+- Added free-only runtime configuration defaults and paid-provider guardrails.
+- Added Phase B Research Brain architecture, runtime operations, free-only mode, and release candidate documentation.
+
 ## Sprint 30 Validated Research Planning
 
 - Added bounded ResearchRequest, ResearchPlan, and ResearchStep contracts.

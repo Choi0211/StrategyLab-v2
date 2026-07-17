@@ -17,6 +17,7 @@ from gaon.research.evidence import Citation, EvidenceBundle, EvidenceItem, build
 from gaon.research.knowledge import KnowledgeClaim as ResearchKnowledgeClaim
 from gaon.research.knowledge import KnowledgeProposal, KnowledgeProposalStatus, SQLiteKnowledgeProposalRepository, build_knowledge_proposal, proposal_from_bundle
 from gaon.research.orchestrator import InMemoryResearchQueue, QueueItem, ResearchOrchestrator
+from gaon.research.orchestration_v3 import ResearchOrchestratorV3, ResearchReport, ResearchRun as ResearchRunV3, ResearchRunState, SQLiteResearchRunRepository
 from gaon.research.planner import plan_research_request
 from gaon.research.planning import ResearchPlan as ValidatedResearchPlan
 from gaon.research.planning import ResearchStep, ResearchStepType, deterministic_research_plan, provider_backed_research_plan, plan_lifecycle_event, validate_research_plan_steps
@@ -52,10 +53,14 @@ __all__ = [
     "QueueItem",
     "ResearchExecutionPlan",
     "ResearchOrchestrator",
+    "ResearchOrchestratorV3",
     "ResearchProposal",
     "ResearchRequest",
     "ResearchRun",
     "ResearchRunStatus",
+    "ResearchRunState",
+    "ResearchRunV3",
+    "ResearchReport",
     "ResearchStep",
     "ResearchStepType",
     "ResearchKnowledgeClaim",
@@ -69,6 +74,7 @@ __all__ = [
     "SourceMetadata",
     "SQLiteKnowledgeProposalRepository",
     "SQLiteResearchApprovalRepository",
+    "SQLiteResearchRunRepository",
     "build_approval_request",
     "build_knowledge_proposal",
     "plan_research_request",

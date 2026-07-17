@@ -37,6 +37,8 @@ class GaonRuntimeConfig:
     assistant_model: str | None = None
     assistant_timeout_seconds: float = 10.0
     assistant_max_output_tokens: int = 500
+    free_only_mode: bool = True
+    paid_provider_enabled: bool = False
 
     def __post_init__(self) -> None:
         validate_mode(self.mode)
@@ -59,6 +61,8 @@ class GaonRuntimeConfig:
             raise ConfigurationError("execute mode requires at least one integration enabled")
         if self.mode == "execute" and not self.approval_signing_secret:
             raise ConfigurationError("execute mode requires GAON_APPROVAL_SIGNING_SECRET")
+        if self.free_only_mode and self.paid_provider_enabled:
+            raise ConfigurationError("paid providers cannot be enabled while GAON_FREE_ONLY_MODE=true")
 
     def __repr__(self) -> str:
         return (
@@ -70,7 +74,8 @@ class GaonRuntimeConfig:
             f"timezone={self.timezone!r}, dry_run={self.dry_run!r}, "
             f"approval_signing_secret={mask_secret(self.approval_signing_secret)!r}, "
             f"assistant_enabled={self.assistant_enabled!r}, assistant_provider={self.assistant_provider!r}, "
-            f"assistant_api_key={mask_secret(self.assistant_api_key)!r})"
+            f"assistant_api_key={mask_secret(self.assistant_api_key)!r}, "
+            f"free_only_mode={self.free_only_mode!r}, paid_provider_enabled={self.paid_provider_enabled!r})"
         )
 
 
@@ -98,6 +103,8 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         assistant_model=env.get("GAON_ASSISTANT_MODEL"),
         assistant_timeout_seconds=float(env.get("GAON_ASSISTANT_TIMEOUT_SECONDS", "10")),
         assistant_max_output_tokens=int(env.get("GAON_ASSISTANT_MAX_OUTPUT_TOKENS", "500")),
+        free_only_mode=parse_bool(env.get("GAON_FREE_ONLY_MODE"), "GAON_FREE_ONLY_MODE", default=True),
+        paid_provider_enabled=parse_bool(env.get("GAON_PAID_PROVIDER_ENABLED"), "GAON_PAID_PROVIDER_ENABLED", default=False),
     )
 
 
