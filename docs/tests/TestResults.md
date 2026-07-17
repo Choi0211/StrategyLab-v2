@@ -2,6 +2,25 @@
 
 Status: Passed
 
+## Sprint 13 Conversational Assistant Foundation
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 148 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 11 tests`
+  - Status: `OK`
+- Scope:
+  - Korean natural-language intent routing
+  - Gaon persona responses that address the user as `영하님`
+  - deterministic `rule_based` assistant route without LLM dependencies
+  - Assistant Provider Protocol boundary for future providers
+  - safety warnings for approval, order, and execution-like requests
+  - Telegram ordinary text to Conversation Runtime to Telegram response flow
+  - no external AI SDK, API key, market data, calendar, stock analysis, or backtest executor connection
+
 ## Telegram Production Connection
 
 - Unit tests: Passed

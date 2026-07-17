@@ -99,3 +99,20 @@ Private text messages are passed to Conversation Runtime. The current supported 
 - `/approvals`
 
 Unsupported updates such as edited messages, channel posts, callback queries, group messages, missing text, and malformed update IDs are ignored or rejected without sending arbitrary responses.
+
+## Conversational Assistant
+
+Sprint 13 adds deterministic Korean natural-language handling. The same Telegram path now supports examples such as:
+
+- `안녕`
+- `가온`
+- `도움말`
+- `상태 알려줘`
+- `오늘 뭐부터 할까?`
+- `오늘 시장 어때?`
+- `삼성전자 분석해줘`
+- `오늘 일정 알려줘`
+- `백테스트 돌려줘`
+- `지난 연구 알려줘`
+
+The assistant explains disconnected capabilities instead of pretending to execute them. Real LLM providers, market data, schedules, stock analysis, and Telegram-triggered backtest execution remain separate future connections.

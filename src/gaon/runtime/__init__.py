@@ -1,6 +1,7 @@
 """Gaon runtime and collaboration contracts."""
 
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
+from gaon.runtime.assistant_provider import AssistantProvider, AssistantProviderResponse, AssistantRequest
 from gaon.runtime.conversation import ConversationInput, ConversationResponse, ConversationRuntime
 from gaon.runtime.event_bus import InMemoryEventBus
 from gaon.runtime.events import EventType, RuntimeEvent
@@ -12,6 +13,9 @@ __all__ = [
     "ConversationInput",
     "ConversationResponse",
     "ConversationRuntime",
+    "AssistantProvider",
+    "AssistantProviderResponse",
+    "AssistantRequest",
     "DailyReport",
     "EventType",
     "GaonRuntimeConfig",

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from gaon.runtime.assistant_provider import AssistantProvider, AssistantRequest
 from gaon.runtime.events import EventType, RuntimeEvent
 from gaon.runtime.event_bus import InMemoryEventBus
 from gaon.runtime.intents import Intent, parse_intent
-from gaon.runtime.responses import ResponseAction, fallback_text, help_text, intent_text
+from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
+from gaon.runtime.responses import ResponseAction
 
 
 @dataclass(frozen=True)
@@ -33,38 +35,55 @@ class ConversationResponse:
     actions: tuple[ResponseAction, ...]
     approval_required: bool
     generated_at: str
+    route: str = RULE_BASED_ROUTE
 
 
 class ConversationRuntime:
     """Rule-based runtime that never performs destructive actions."""
 
-    def __init__(self, event_bus: InMemoryEventBus | None = None) -> None:
+    def __init__(self, event_bus: InMemoryEventBus | None = None, assistant_provider: AssistantProvider | None = None) -> None:
         self._event_bus = event_bus or InMemoryEventBus()
+        self._assistant_provider = assistant_provider
 
     def handle(self, message: ConversationInput) -> ConversationResponse:
         intent = parse_intent(message.text)
         warnings: tuple[str, ...] = ()
-        approval_required = False
-        if intent is Intent.HELP:
-            text = help_text()
-        elif intent is Intent.UNKNOWN:
-            text = fallback_text()
-            warnings = ("unknown intent",)
+        approval_required = _requires_approval_boundary(message.text)
+        if self._assistant_provider is None:
+            text = persona_text(intent)
+            route = RULE_BASED_ROUTE
+            references: tuple[str, ...] = ()
         else:
-            text = intent_text(intent)
-        if "approve" in message.text.casefold() or "승인" in message.text:
+            provider_response = self._assistant_provider.respond(
+                AssistantRequest(
+                    text=message.text,
+                    intent=intent,
+                    user_id=message.user_id,
+                    conversation_id=message.conversation_id,
+                    received_at=message.received_at,
+                )
+            )
+            text = provider_response.text
+            route = provider_response.route
+            references = provider_response.references
+            warnings = provider_response.warnings
+        if intent is Intent.UNKNOWN:
+            warnings = (*warnings, "unknown intent")
+        warning = safety_warning(message.text)
+        if warning is not None:
             approval_required = True
-            warnings = (*warnings, "approval commands require a separate approval runtime")
+            warnings = (*warnings, warning)
         response = ConversationResponse(
             response_id=f"response:{message.message_id}",
             conversation_id=message.conversation_id,
             text=text,
             intent=intent,
-            references=(),
+            references=references,
             warnings=warnings,
             actions=(ResponseAction(intent.value),),
             approval_required=approval_required,
             generated_at=message.received_at,
+            route=route,
         )
         self._event_bus.publish(
             RuntimeEvent(
@@ -78,7 +97,12 @@ class ConversationRuntime:
                 project="StrategyLab",
                 strategy="N/A",
                 market="N/A",
-                payload={"intent": intent.value, "approval_required": approval_required},
+                payload={"intent": intent.value, "approval_required": approval_required, "route": route},
             )
         )
         return response
+
+
+def _requires_approval_boundary(text: str) -> bool:
+    normalized = text.casefold()
+    return any(token in normalized for token in ("approve", "승인", "매수", "매도", "주문", "실거래", "자동 승인", "buy", "sell", "order"))

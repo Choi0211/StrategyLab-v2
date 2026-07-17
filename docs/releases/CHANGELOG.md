@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 13 Conversational Assistant Foundation
+
+- Added deterministic Korean natural-language intent routing for greetings, Gaon calls, help, status, market status, stock analysis, schedules, backtests, recent research, and memory search requests.
+- Added Gaon persona responses that address the user as `영하님` and avoid claiming disconnected work was executed.
+- Added `AssistantProvider` request/response contracts for future OpenAI or local LLM integrations without adding any network provider or SDK dependency.
+- Updated Conversation Runtime to record the response route and preserve event bus publication and approval/order safety boundaries.
+- Added Telegram ordinary text end-to-end tests through the existing safe production smoke path.
+- Documented that market data, schedule, stock analysis, and backtest execution are future provider/adapter connections.
+
 ## Telegram Production Connection
 
 - Added a standard-library Telegram Bot API client with injectable HTTP transport.

@@ -50,6 +50,16 @@ class TelegramProductionConnectionFlowTest(unittest.TestCase):
         self.assertEqual(client.sent[0].chat_id, "100")
         self.assertIn("dry-run", client.sent[0].text)
 
+    def test_korean_natural_text_to_telegram_response_flow(self) -> None:
+        client = FakeTelegramClient(({"update_id": 25, "message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 200}, "text": "안녕"}},))
+
+        results = poll_once(client, self.config(), offset=25, received_at="2026-07-17T00:00:00Z")
+
+        self.assertEqual(results[0].status, "sent")
+        self.assertEqual(results[0].next_offset, 26)
+        self.assertEqual(client.sent[0].chat_id, "100")
+        self.assertIn("영하님", client.sent[0].text)
+
     def test_unauthorized_update_does_not_send_message_flow(self) -> None:
         client = FakeTelegramClient(({"update_id": 30, "message": {"message_id": 1, "chat": {"id": 999}, "from": {"id": 200}, "text": "/status"}},))
 

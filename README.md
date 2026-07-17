@@ -20,7 +20,7 @@ Included foundations:
 - Sprint 12-A Learning Memory domain contracts
 - Sprint 12-B in-memory Learning Repository, duplicate/conflict detection, audit workflow, UTC timestamp guard, and golden JSON fixtures
 - Sprint 12 Runtime related-memory retrieval, repository JSON export/import, migration fixtures, and Research Brain preparation workflow
-- Gaon Runtime collaboration contracts: Event Bus, Conversation Runtime, Telegram production smoke client, Notion dry-run mapper, notifications, reports, scheduler, and safe CLI
+- Gaon Runtime collaboration contracts: Event Bus, deterministic Korean Conversation Runtime, Assistant Provider interface, Telegram production smoke client, Notion dry-run mapper, notifications, reports, scheduler, and safe CLI
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -135,6 +135,12 @@ py -3.11 -m gaon.runtime.cli telegram-poll-once --execute
 
 See `docs/operations/TelegramSetup.md` for the full safe setup flow. The project does not auto-load `.env`, and automated tests never call the real Telegram network.
 
+## Conversational Assistant
+
+Sprint 13 adds a deterministic conversational assistant foundation. Telegram can now send ordinary Korean text such as `안녕`, `가온`, `오늘 시장 어때?`, `삼성전자 분석해줘`, and `백테스트 돌려줘` through the same safe Conversation Runtime.
+
+This is not an LLM integration. No OpenAI SDK, local LLM, API key, market data feed, calendar provider, stock analysis engine, or backtest executor is connected in this sprint. Unsupported or unconnected tasks are acknowledged without pretending that data was queried or work was executed.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -142,7 +148,7 @@ See `docs/operations/TelegramSetup.md` for the full safe setup flow. The project
 - `gaon.learning.detection`: duplicate and conflict candidate detection without automatic merge or resolution
 - `gaon.learning.retrieval`: deterministic related-memory ranking with score breakdown
 - `gaon.learning.integration`: Research Brain to Learning Memory candidate preparation without automatic save
-- `gaon.runtime`: configuration, event bus, conversation runtime, notifications, reports, scheduler, safe CLI
+- `gaon.runtime`: configuration, event bus, deterministic Korean conversation runtime, assistant provider boundary, notifications, reports, scheduler, safe CLI
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts
