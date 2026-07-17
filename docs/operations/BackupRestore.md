@@ -1,13 +1,15 @@
 # Backup and Restore
 
-Status: Sprint 21 runtime state guide
+Status: Sprint 22 runtime state guide
 
 Runtime SQLite stores operational state only. It must not store secrets.
 
 ## Backup
 
-- stop writes or use SQLite backup API
+- use the runtime SQLite backup API
 - run `python -m gaon.runtime.cli backup --db <runtime.sqlite> --destination <backup.sqlite>`
+- backup writes to a temporary destination and atomically replaces the final file
+- restored backups must pass `db-check`
 - record checksum
 - keep Learning Memory JSON export separate
 

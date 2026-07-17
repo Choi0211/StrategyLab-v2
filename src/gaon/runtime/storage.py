@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import shutil
 import sqlite3
+import os
 
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
 from gaon.runtime.repositories import SQLiteAuditEventRepository, SQLiteTelegramStateRepository
@@ -53,5 +53,19 @@ class RuntimeStateStore:
         dest = Path(destination)
         dest.parent.mkdir(parents=True, exist_ok=True)
         self._connection.commit()
-        shutil.copyfile(self.path, dest)
+        tmp = dest.with_name(f".{dest.name}.tmp")
+        if tmp.exists():
+            tmp.unlink()
+        target = sqlite3.connect(str(tmp))
+        try:
+            self._connection.backup(target)
+            target.commit()
+        finally:
+            target.close()
+        restored = sqlite3.connect(str(tmp))
+        try:
+            migrate(restored)
+        finally:
+            restored.close()
+        os.replace(tmp, dest)
         return str(dest)
