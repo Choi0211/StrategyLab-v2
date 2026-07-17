@@ -145,6 +145,10 @@ This is not an LLM integration. No OpenAI SDK, local LLM, API key, market data f
 
 Sprint 14 adds read-only Learning Memory context for research and memory intents. Gaon can summarize related records, warnings, evidence references, conflict state, and revalidation state without mutating the repository or treating confidence as approval.
 
+## Assistant Provider
+
+Sprint 15 adds a guarded provider boundary. The default deterministic provider needs no network. The OpenAI-compatible provider uses injectable standard-library HTTP plumbing for future execute-mode use, with fake transports in tests. Provider output is validated and falls back to rule-based responses on failure.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -154,6 +158,7 @@ Sprint 14 adds read-only Learning Memory context for research and memory intents
 - `gaon.learning.integration`: Research Brain to Learning Memory candidate preparation without automatic save
 - `gaon.runtime`: configuration, event bus, deterministic Korean conversation runtime, assistant provider boundary, notifications, reports, scheduler, safe CLI
 - `gaon.runtime.memory_context`: read-only Learning Memory context builder for conversation
+- `gaon.runtime.providers`: deterministic and OpenAI-compatible guarded assistant providers
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts

@@ -2,6 +2,28 @@
 
 Status: Passed
 
+## Sprint 15 Guarded Assistant Provider Integration
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 158 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 13 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - provider contracts and metadata
+  - deterministic fallback provider
+  - OpenAI-compatible fake HTTP provider
+  - prompt injection separation
+  - provider timeout/malformed response fallback
+  - provider safety validation
+  - no real network calls
+
 ## Sprint 14 Memory-Aware Conversation
 
 - Unit tests: Passed

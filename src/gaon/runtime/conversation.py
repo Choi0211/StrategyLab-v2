@@ -1,15 +1,16 @@
-"""Deterministic conversation runtime."""
+"""Deterministic conversation runtime with guarded provider fallback."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gaon.runtime.assistant_provider import AssistantProvider, AssistantRequest
+from gaon.runtime.assistant_provider import AssistantProvider, AssistantRequest, ProviderError, validate_provider_response
 from gaon.runtime.events import EventType, RuntimeEvent
 from gaon.runtime.event_bus import InMemoryEventBus
 from gaon.runtime.intents import Intent, parse_intent
 from gaon.runtime.memory_context import summarize_context
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
+from gaon.runtime.prompt_builder import PromptBuildInput, build_assistant_prompt
 from gaon.runtime.responses import ResponseAction
 
 
@@ -37,10 +38,11 @@ class ConversationResponse:
     approval_required: bool
     generated_at: str
     route: str = RULE_BASED_ROUTE
+    provider_metadata: dict[str, str] | None = None
 
 
 class ConversationRuntime:
-    """Rule-based runtime that never performs destructive actions."""
+    """Runtime that can use a provider but always falls back safely."""
 
     def __init__(self, event_bus: InMemoryEventBus | None = None, assistant_provider: AssistantProvider | None = None, context_builder=None) -> None:
         self._event_bus = event_bus or InMemoryEventBus()
@@ -51,33 +53,23 @@ class ConversationRuntime:
         intent = parse_intent(message.text)
         warnings: tuple[str, ...] = ()
         approval_required = _requires_approval_boundary(message.text)
-        if self._assistant_provider is None:
-            text = persona_text(intent)
-            route = RULE_BASED_ROUTE
-            references: tuple[str, ...] = ()
-        else:
-            provider_response = self._assistant_provider.respond(
-                AssistantRequest(
-                    text=message.text,
-                    intent=intent,
-                    user_id=message.user_id,
-                    conversation_id=message.conversation_id,
-                    received_at=message.received_at,
-                )
-            )
-            text = provider_response.text
-            route = provider_response.route
-            references = provider_response.references
-            warnings = provider_response.warnings
-        if intent is Intent.UNKNOWN:
-            warnings = (*warnings, "unknown intent")
         context_result = None
+        references: tuple[str, ...] = ()
         if self._context_builder is not None and self._context_builder.should_build(intent):
             context_result = self._context_builder.build(message, intent)
-            text = f"{text}\n\n{summarize_context(context_result.context)}"
-            route = f"{route}+{context_result.route_suffix}"
-            references = (*references, *(reference.reference_id for reference in context_result.context.references))
+            references = tuple(reference.reference_id for reference in context_result.context.references)
             warnings = (*warnings, *context_result.context.warnings)
+
+        prompt = build_assistant_prompt(PromptBuildInput(message.text, intent, context_result.context if context_result else None))
+        text, route, provider_metadata, provider_warnings, response_references = self._respond(message, intent, prompt, references, approval_required)
+        references = response_references
+        warnings = (*warnings, *provider_warnings)
+        if context_result is not None and route.startswith(RULE_BASED_ROUTE):
+            text = f"{text}\n\n{summarize_context(context_result.context)}"
+        if context_result is not None:
+            route = f"{route}+{context_result.route_suffix}"
+        if intent is Intent.UNKNOWN:
+            warnings = (*warnings, "unknown intent")
         warning = safety_warning(message.text)
         if warning is not None:
             approval_required = True
@@ -88,11 +80,12 @@ class ConversationRuntime:
             text=text,
             intent=intent,
             references=references,
-            warnings=warnings,
+            warnings=_dedupe(warnings),
             actions=(ResponseAction(intent.value),),
             approval_required=approval_required,
             generated_at=message.received_at,
             route=route,
+            provider_metadata=provider_metadata,
         )
         self._event_bus.publish(
             RuntimeEvent(
@@ -111,7 +104,38 @@ class ConversationRuntime:
         )
         return response
 
+    def _respond(self, message: ConversationInput, intent: Intent, prompt: str, references: tuple[str, ...], approval_required: bool) -> tuple[str, str, dict[str, str] | None, tuple[str, ...], tuple[str, ...]]:
+        if self._assistant_provider is None or approval_required:
+            warnings = ("provider bypassed for safety boundary",) if approval_required and self._assistant_provider is not None else ()
+            return persona_text(intent), RULE_BASED_ROUTE, None, warnings, references
+        try:
+            provider_response = validate_provider_response(
+                self._assistant_provider.respond(
+                    AssistantRequest(
+                        text=message.text,
+                        intent=intent,
+                        user_id=message.user_id,
+                        conversation_id=message.conversation_id,
+                        received_at=message.received_at,
+                        prompt=prompt,
+                        references=references,
+                    )
+                )
+            )
+            metadata = {
+                "provider": provider_response.provider_name,
+                "model": provider_response.model or "",
+                "latency_ms": str(provider_response.latency_ms) if provider_response.latency_ms is not None else "",
+            }
+            return provider_response.text, provider_response.route, metadata, provider_response.warnings, provider_response.references
+        except ProviderError as exc:
+            return persona_text(intent), "fallback", None, (f"provider fallback: {exc}",), references
+
 
 def _requires_approval_boundary(text: str) -> bool:
     normalized = text.casefold()
     return any(token in normalized for token in ("approve", "승인", "매수", "매도", "주문", "실거래", "자동 승인", "buy", "sell", "order"))
+
+
+def _dedupe(values: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(value for value in values if value))

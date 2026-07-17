@@ -8,6 +8,14 @@
 - Connected memory context to selected research and memory intents without mutating repositories.
 - Added Telegram memory query end-to-end coverage with fake runtime flow.
 
+## Sprint 15 Guarded Assistant Provider Integration
+
+- Expanded Assistant Provider contracts with capabilities, health, metadata, and provider error classes.
+- Added deterministic fallback provider and OpenAI-compatible HTTP provider with injectable transport.
+- Added prompt builder that separates instructions from user text and retrieved memory data.
+- Added provider response validation, secret masking, timeout/malformed response fallback, and safety bypass for order/approval requests.
+- Added fake Telegram/provider end-to-end coverage without real network calls.
+
 ## Sprint 13 Conversational Assistant Foundation
 
 - Added deterministic Korean natural-language intent routing for greetings, Gaon calls, help, status, market status, stock analysis, schedules, backtests, recent research, and memory search requests.
