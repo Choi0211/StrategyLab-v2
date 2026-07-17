@@ -8,6 +8,7 @@ from gaon.runtime.assistant_provider import AssistantProvider, AssistantRequest
 from gaon.runtime.events import EventType, RuntimeEvent
 from gaon.runtime.event_bus import InMemoryEventBus
 from gaon.runtime.intents import Intent, parse_intent
+from gaon.runtime.memory_context import summarize_context
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.responses import ResponseAction
 
@@ -41,9 +42,10 @@ class ConversationResponse:
 class ConversationRuntime:
     """Rule-based runtime that never performs destructive actions."""
 
-    def __init__(self, event_bus: InMemoryEventBus | None = None, assistant_provider: AssistantProvider | None = None) -> None:
+    def __init__(self, event_bus: InMemoryEventBus | None = None, assistant_provider: AssistantProvider | None = None, context_builder=None) -> None:
         self._event_bus = event_bus or InMemoryEventBus()
         self._assistant_provider = assistant_provider
+        self._context_builder = context_builder
 
     def handle(self, message: ConversationInput) -> ConversationResponse:
         intent = parse_intent(message.text)
@@ -69,6 +71,13 @@ class ConversationRuntime:
             warnings = provider_response.warnings
         if intent is Intent.UNKNOWN:
             warnings = (*warnings, "unknown intent")
+        context_result = None
+        if self._context_builder is not None and self._context_builder.should_build(intent):
+            context_result = self._context_builder.build(message, intent)
+            text = f"{text}\n\n{summarize_context(context_result.context)}"
+            route = f"{route}+{context_result.route_suffix}"
+            references = (*references, *(reference.reference_id for reference in context_result.context.references))
+            warnings = (*warnings, *context_result.context.warnings)
         warning = safety_warning(message.text)
         if warning is not None:
             approval_required = True

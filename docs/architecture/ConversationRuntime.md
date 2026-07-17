@@ -44,6 +44,12 @@ Specific intents are checked before broad intents. For example, `오늘 시장 �
 
 Responses include a `route` field so callers can distinguish `rule_based` and future `provider` responses without breaking existing response fields.
 
+## Memory Context
+
+Sprint 14 adds optional memory context. Conversation Runtime calls the context builder only for research and memory intents, then appends a read-only summary to the persona response. The route records this as `rule_based+context`.
+
+The context layer uses Learning Memory retrieval only. It does not save records, validate claims, resolve conflicts, or treat confidence as approval.
+
 ## Current Limitations
 
 - No real LLM connection.

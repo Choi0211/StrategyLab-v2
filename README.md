@@ -141,6 +141,10 @@ Sprint 13 adds a deterministic conversational assistant foundation. Telegram can
 
 This is not an LLM integration. No OpenAI SDK, local LLM, API key, market data feed, calendar provider, stock analysis engine, or backtest executor is connected in this sprint. Unsupported or unconnected tasks are acknowledged without pretending that data was queried or work was executed.
 
+## Memory-Aware Conversation
+
+Sprint 14 adds read-only Learning Memory context for research and memory intents. Gaon can summarize related records, warnings, evidence references, conflict state, and revalidation state without mutating the repository or treating confidence as approval.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -149,6 +153,7 @@ This is not an LLM integration. No OpenAI SDK, local LLM, API key, market data f
 - `gaon.learning.retrieval`: deterministic related-memory ranking with score breakdown
 - `gaon.learning.integration`: Research Brain to Learning Memory candidate preparation without automatic save
 - `gaon.runtime`: configuration, event bus, deterministic Korean conversation runtime, assistant provider boundary, notifications, reports, scheduler, safe CLI
+- `gaon.runtime.memory_context`: read-only Learning Memory context builder for conversation
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts

@@ -2,6 +2,27 @@
 
 Status: Passed
 
+## Sprint 14 Memory-Aware Conversation
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 152 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 12 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Scope:
+  - read-only Learning Memory context builder
+  - STRICT/BROAD/GLOBAL retrieval fallback
+  - conflict and revalidation warnings
+  - confidence used only as ranking signal
+  - Telegram memory query fake flow
+  - no repository mutation
+
 ## Sprint 13 Conversational Assistant Foundation
 
 - Unit tests: Passed

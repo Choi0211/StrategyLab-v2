@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 14 Memory-Aware Conversation
+
+- Added read-only conversation context contracts for retrieved memory, research context, references, and build results.
+- Added deterministic Learning Memory context builder with STRICT/BROAD/GLOBAL fallback.
+- Added duplicate record removal, warning propagation, conflict and revalidation state summaries, and confidence-as-ranking-signal messaging.
+- Connected memory context to selected research and memory intents without mutating repositories.
+- Added Telegram memory query end-to-end coverage with fake runtime flow.
+
 ## Sprint 13 Conversational Assistant Foundation
 
 - Added deterministic Korean natural-language intent routing for greetings, Gaon calls, help, status, market status, stock analysis, schedules, backtests, recent research, and memory search requests.
