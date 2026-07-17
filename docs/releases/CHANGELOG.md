@@ -28,6 +28,13 @@
 - Added dry-run replay with side effects suppressed by default and checkpoint advancement only during non-dry-run successful projection processing.
 - Added projection failure isolation and replay failure recording.
 
+## Sprint 28 Long-Term Memory Foundation
+
+- Added schema v5 long-term memory table and deterministic SQLite repository.
+- Added `MemoryNamespace`, `MemoryLifecycle`, `MemoryRecord`, retention policy, conflict flags, and revalidation flags.
+- Enforced proposal-first writes, trusted-workflow validation, system namespace authorization, and secret marker rejection.
+- Added deterministic read-only context retrieval and backup/restore coverage without vector DB or automatic LLM validation.
+
 ## Sprint 23 v2 Release Candidate and Trading Adapter Contract
 
 - Added broker-free `gaon.adapters.TradingAdapter` protocol and fake adapter contract tests.

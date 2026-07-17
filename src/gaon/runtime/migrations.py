@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -16,18 +16,25 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v1_to_v2(connection)
         _upgrade_v2_to_v3(connection)
         _upgrade_v3_to_v4(connection)
+        _upgrade_v4_to_v5(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
         _upgrade_v2_to_v3(connection)
         _upgrade_v3_to_v4(connection)
+        _upgrade_v4_to_v5(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 2:
         _upgrade_v2_to_v3(connection)
         _upgrade_v3_to_v4(connection)
+        _upgrade_v4_to_v5(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 3:
         _upgrade_v3_to_v4(connection)
+        _upgrade_v4_to_v5(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 4:
+        _upgrade_v4_to_v5(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -161,6 +168,30 @@ def _upgrade_v3_to_v4(connection: sqlite3.Connection) -> None:
             error_type TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        """
+    )
+
+
+def _upgrade_v4_to_v5(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS long_term_memory (
+            memory_id TEXT PRIMARY KEY,
+            namespace TEXT NOT NULL,
+            lifecycle TEXT NOT NULL,
+            content TEXT NOT NULL,
+            source_refs_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            validation_ref TEXT,
+            conflict_flag INTEGER NOT NULL DEFAULT 0,
+            revalidation_flag INTEGER NOT NULL DEFAULT 0,
+            retention_until TEXT,
+            archived_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_long_memory_namespace_lifecycle ON long_term_memory(namespace, lifecycle);
+        CREATE INDEX IF NOT EXISTS idx_long_memory_retention ON long_term_memory(retention_until);
         """
     )
 
