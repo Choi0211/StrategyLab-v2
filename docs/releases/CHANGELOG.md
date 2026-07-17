@@ -1,5 +1,47 @@
 # Changelog
 
+## Sprint 24 Provider Registry and Routing
+
+- Added explicit assistant provider registry with stable-name lookup, duplicate registration protection, and unknown provider fail-fast behavior.
+- Added configuration-based deterministic and OpenAI-compatible provider selection.
+- Added health-based deterministic fallback with structured fallback reason.
+- Added routing tests with fake OpenAI-compatible transport only; no real provider network calls are required.
+
+## Sprint 25 Explicit Plugin Lifecycle
+
+- Added explicit plugin metadata, capability, health, registry, and manager contracts.
+- Added allowlist-only lifecycle for configure, start, health, and reverse-order stop.
+- Added duplicate plugin ID rejection, disabled-plugin guard, failure isolation, and redacted failure records.
+- Added fake Telegram, Notion, and Trading plugin tests without live network calls.
+
+## Sprint 26 Runtime Metrics and Observability
+
+- Added standard-library internal metrics collector for counters, gauges, and timing observations.
+- Added immutable metrics snapshot/export model and CLI `metrics` output.
+- Added bounded component and label validation to prevent prompt, message, chat ID, token, API key, secret, or arbitrary payload leakage.
+- Added concurrency and CLI tests without external observability dependencies.
+
+## Sprint 27 Durable Event Store and Safe Replay
+
+- Added schema v4 durable append-only event store and replay checkpoint tables.
+- Added deterministic event append/read, duplicate protection, bounded replay batches, oversized payload rejection, and v3-to-v4 migration coverage.
+- Added dry-run replay with side effects suppressed by default and checkpoint advancement only during non-dry-run successful projection processing.
+- Added projection failure isolation and replay failure recording.
+
+## Sprint 28 Long-Term Memory Foundation
+
+- Added schema v5 long-term memory table and deterministic SQLite repository.
+- Added `MemoryNamespace`, `MemoryLifecycle`, `MemoryRecord`, retention policy, conflict flags, and revalidation flags.
+- Enforced proposal-first writes, trusted-workflow validation, system namespace authorization, and secret marker rejection.
+- Added deterministic read-only context retrieval and backup/restore coverage without vector DB or automatic LLM validation.
+
+## Sprint 29 Phase A Integration and v2.1 RC
+
+- Integrated metrics and explicit plugin lifecycle into the controlled runtime service.
+- Added event replay dry-run CLI diagnostic.
+- Added Gaon Phase A architecture document, provider/plugin/event/memory ADRs, and project vision document.
+- Updated README, release notes, operations guidance, and test results for v2.1 Release Candidate status.
+
 ## Sprint 23 v2 Release Candidate and Trading Adapter Contract
 
 - Added broker-free `gaon.adapters.TradingAdapter` protocol and fake adapter contract tests.

@@ -15,7 +15,9 @@ from gaon.integrations.telegram.transport import discover_private_chats, parse_u
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.conversation import ConversationRuntime
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
+from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.health import readiness
+from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
@@ -41,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
+    sub.add_parser("metrics")
+    replay = sub.add_parser("event-replay-dry-run")
+    replay.add_argument("--db", default=":memory:")
     sub.add_parser("telegram-check")
     sub.add_parser("assistant-check")
     sub.add_parser("notion-check")
@@ -93,6 +98,18 @@ def _run(args: argparse.Namespace) -> int:
         store = RuntimeStateStore(args.db)
         try:
             print(store.backup(args.destination))
+        finally:
+            store.close()
+    elif args.command == "metrics":
+        collector = MetricsCollector()
+        collector.increment("runtime_loops", component="cli")
+        collector.gauge("queue_depth", 0, component="runtime")
+        print(collector.snapshot().to_text())
+    elif args.command == "event-replay-dry-run":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = SQLiteEventStore(store._connection).replay(_NoopProjection(), dry_run=True)
+            print(f"event-replay-dry-run: processed={result.processed} failed={result.failed} checkpoint={result.last_event_id or ''}")
         finally:
             store.close()
     elif args.command in {"telegram-check", "assistant-check", "notion-check"}:
@@ -205,6 +222,14 @@ def _add_dry_run_flags(parser: argparse.ArgumentParser) -> None:
     mode.add_argument("--dry-run", dest="dry_run", action="store_true", help="prepare output without external side effects")
     mode.add_argument("--execute", dest="dry_run", action="store_false", help="request execution after all production gates pass")
     parser.set_defaults(dry_run=True)
+
+
+class _NoopProjection:
+    projection_id = "cli:dry-run"
+
+    def apply(self, event: DurableEvent, *, dry_run: bool) -> None:
+        if not dry_run:
+            raise RuntimeError("CLI replay diagnostic must remain dry-run")
 
 
 if __name__ == "__main__":

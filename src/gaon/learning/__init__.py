@@ -24,6 +24,7 @@ from gaon.learning.detection import ConflictCandidate, ConflictDetector, Duplica
 from gaon.learning.evidence.models import EvidenceRecord, EvidenceType
 from gaon.learning.experience.models import ExperiencePattern, ExperienceType
 from gaon.learning.knowledge.models import KnowledgeItem, KnowledgeStatus, transition_knowledge
+from gaon.learning.long_term_memory import MemoryLifecycle, MemoryNamespace, MemoryRecord, RetentionPolicy, SQLiteLongTermMemoryRepository
 from gaon.learning.memory.models import LearningMemoryKind, LearningMemoryRecord, LearningMemoryStore
 from gaon.learning.policy.models import AutonomousAction, PolicyUpdateCandidate
 from gaon.learning.repository import InMemoryLearningRepository, LearningRepository
@@ -55,6 +56,9 @@ __all__ = [
     "LearningMemoryStore",
     "LearningRecord",
     "LearningRecordType",
+    "MemoryLifecycle",
+    "MemoryNamespace",
+    "MemoryRecord",
     "InMemoryLearningRepository",
     "LearningRepository",
     "PolicyApproval",
@@ -63,6 +67,7 @@ __all__ = [
     "PreferenceApproval",
     "PreparedMemory",
     "ResearchOutcome",
+    "RetentionPolicy",
     "RelatedMemoryQuery",
     "RelatedMemoryMode",
     "RelatedMemoryResult",
@@ -70,6 +75,7 @@ __all__ = [
     "RevalidationSchedule",
     "RevalidationStatus",
     "ScoreBreakdown",
+    "SQLiteLongTermMemoryRepository",
     "SuccessPattern",
     "UserPreference",
     "parse_iso8601_utc",

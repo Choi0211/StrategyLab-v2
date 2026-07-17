@@ -1,7 +1,20 @@
-# StrategyLab v2 Completion Release Candidate Notes
+# StrategyLab v2.1 Release Candidate Notes
 
-Status: v2 Completion Release Candidate  
+Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
+
+## Gaon Phase A v2.1
+
+Included:
+
+- assistant provider registry and deterministic fallback routing
+- explicit plugin lifecycle management
+- internal metrics and observability
+- durable event store and safe replay
+- long-term memory namespace/lifecycle foundation
+- runtime service integration and event replay dry-run CLI
+
+This release candidate is not production trading ready.
 
 ## Sprint 18-23 Production Hardening
 

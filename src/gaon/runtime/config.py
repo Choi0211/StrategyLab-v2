@@ -30,6 +30,13 @@ class GaonRuntimeConfig:
     weekly_report_time: str = "09:00"
     dry_run: bool = True
     approval_signing_secret: str | None = None
+    assistant_enabled: bool = False
+    assistant_provider: str = "deterministic"
+    assistant_api_key: str | None = None
+    assistant_base_url: str | None = None
+    assistant_model: str | None = None
+    assistant_timeout_seconds: float = 10.0
+    assistant_max_output_tokens: int = 500
 
     def __post_init__(self) -> None:
         validate_mode(self.mode)
@@ -61,7 +68,9 @@ class GaonRuntimeConfig:
             f"telegram_allowed_chat_ids={self.telegram_allowed_chat_ids!r}, "
             f"notion_enabled={self.notion_enabled!r}, notion_token={mask_secret(self.notion_token)!r}, "
             f"timezone={self.timezone!r}, dry_run={self.dry_run!r}, "
-            f"approval_signing_secret={mask_secret(self.approval_signing_secret)!r})"
+            f"approval_signing_secret={mask_secret(self.approval_signing_secret)!r}, "
+            f"assistant_enabled={self.assistant_enabled!r}, assistant_provider={self.assistant_provider!r}, "
+            f"assistant_api_key={mask_secret(self.assistant_api_key)!r})"
         )
 
 
@@ -82,6 +91,13 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         weekly_report_time=env.get("GAON_WEEKLY_REPORT_TIME", "09:00"),
         dry_run=parse_bool(env.get("GAON_DRY_RUN"), "GAON_DRY_RUN", default=True),
         approval_signing_secret=env.get("GAON_APPROVAL_SIGNING_SECRET"),
+        assistant_enabled=parse_bool(env.get("GAON_ASSISTANT_ENABLED"), "GAON_ASSISTANT_ENABLED", default=False),
+        assistant_provider=env.get("GAON_ASSISTANT_PROVIDER", "deterministic"),
+        assistant_api_key=env.get("GAON_ASSISTANT_API_KEY"),
+        assistant_base_url=env.get("GAON_ASSISTANT_BASE_URL"),
+        assistant_model=env.get("GAON_ASSISTANT_MODEL"),
+        assistant_timeout_seconds=float(env.get("GAON_ASSISTANT_TIMEOUT_SECONDS", "10")),
+        assistant_max_output_tokens=int(env.get("GAON_ASSISTANT_MAX_OUTPUT_TOKENS", "500")),
     )
 
 

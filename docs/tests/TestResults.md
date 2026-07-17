@@ -2,6 +2,35 @@
 
 Status: Passed
 
+## Gaon Phase A v2.1 Release Candidate
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 207 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 17 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- CLI smoke: Passed
+  - `config-check`
+  - `health`
+  - `db-check`
+  - `status`
+  - `metrics`
+  - `event-replay-dry-run`
+- Scope:
+  - provider registry and routing
+  - explicit plugin lifecycle
+  - internal metrics and observability
+  - durable event store and replay
+  - long-term memory foundation
+  - runtime integration
+  - no live Telegram/OpenAI/Notion/Broker/VPS validation
+
 ## Sprint 18-23 v2 Completion Release Candidate
 
 - Unit tests: Passed
