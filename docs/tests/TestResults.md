@@ -2,6 +2,37 @@
 
 Status: Passed
 
+## Hotfix Telegram Runtime Worker and systemd Service
+
+- Unit tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Full result: `Ran 273 tests`
+  - Targeted command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest tests.unit.test_runtime_service`
+  - Result: `Ran 6 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Full result: `Ran 42 tests`
+  - Targeted command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest tests.integration.test_runtime_service_flow`
+  - Result: `Ran 3 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- CLI smoke: Passed
+  - `gaon.runtime.cli run --once --db :memory:`
+- systemd validation: Passed
+  - `ExecStart` points to persistent `gaon.runtime.cli run --db /var/lib/strategylab/gaon-runtime.sqlite`
+- Scope:
+  - `GaonRuntimeService` can run a bounded Telegram polling tick
+  - persisted Telegram offset is reused
+  - duplicate updates do not resend
+  - disabled and dry-run runtime does not call the live Telegram network
+  - transient Telegram failures are recorded without terminating the runtime
+  - `run --once` performs one bounded tick
+  - systemd runs persistent `gaon.runtime.cli run --db /var/lib/strategylab/gaon-runtime.sqlite`
+  - no live KIS, real trading, automatic approval, MyMoneyGuard dependency, or paid provider fallback
+
 ## Hotfix Telegram Poll Offset Persistence
 
 - Unit tests: Passed

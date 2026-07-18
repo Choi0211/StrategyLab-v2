@@ -74,3 +74,12 @@ py -3.11 -m gaon.runtime.cli health --db runtime.sqlite
 py -3.11 -m gaon.runtime.cli readiness --db runtime.sqlite
 py -3.11 -m gaon.runtime.cli db-check --db runtime.sqlite
 ```
+
+Persistent runtime:
+
+```powershell
+py -3.11 -m gaon.runtime.cli run --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli run --once --db runtime.sqlite
+```
+
+`run --once` executes one bounded service tick and exits. Without `--once`, `run` starts `GaonRuntimeService.run_forever()`. Telegram polling is active only when `GAON_RUNTIME_MODE=execute`, `GAON_DRY_RUN=false`, and `GAON_TELEGRAM_ENABLED=true`; dry-run mode does not call the live Telegram network.

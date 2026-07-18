@@ -28,6 +28,7 @@ from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
+from gaon.runtime.telegram_worker import TelegramPollingWorker
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
@@ -46,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     ready.add_argument("--db", default=":memory:")
     run = sub.add_parser("run")
     run.add_argument("--db", default=":memory:")
-    run.add_argument("--once", action="store_true", default=True)
+    run.add_argument("--once", action="store_true", default=False)
     status_cmd = sub.add_parser("status")
     status_cmd.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
@@ -217,9 +218,17 @@ def _run(args: argparse.Namespace) -> int:
     elif args.command in {"run", "status"}:
         store = RuntimeStateStore(args.db)
         try:
-            service = GaonRuntimeService(load_runtime_config(os.environ), store)
-            status = service.run_once() if args.command == "run" else service.status()
+            config = load_runtime_config(os.environ)
+            metrics = MetricsCollector()
+            tick = _runtime_tick(config, store, metrics)
+            service = GaonRuntimeService(config, store, tick=tick, metrics=metrics)
+            if args.command == "run":
+                status = service.run_once() if args.once else service.run_forever()
+            else:
+                status = service.status()
             print(f"running={status.running} ticks={status.ticks} active_workers={status.active_workers}")
+        except KeyboardInterrupt:
+            print("runtime service stopped")
         finally:
             store.close()
     elif args.command == "backup":
@@ -601,9 +610,11 @@ def poll_once(
     offset: int | None,
     received_at: str,
     state: TelegramStateRepository | None = None,
+    timeout: int = 0,
+    limit: int = 100,
 ) -> tuple[TelegramPollResult, ...]:
     effective_offset = offset if offset is not None else state.get_offset(TELEGRAM_POLL_OFFSET_KEY) if state is not None else None
-    updates = client.get_updates(offset=effective_offset, timeout=0, limit=100)
+    updates = client.get_updates(offset=effective_offset, timeout=timeout, limit=limit)
     runtime = TelegramRuntime(ConversationRuntime(), allowed_chat_ids=config.telegram_allowed_chat_ids)
     results: list[TelegramPollResult] = []
     for payload in updates:
@@ -672,6 +683,11 @@ def _save_poll_offset(state: TelegramStateRepository, next_offset: int, updated_
     current = state.get_offset(TELEGRAM_POLL_OFFSET_KEY)
     if current is None or next_offset > current:
         state.save_offset(TELEGRAM_POLL_OFFSET_KEY, next_offset, updated_at)
+
+
+def _runtime_tick(config: GaonRuntimeConfig, store: RuntimeStateStore, metrics: MetricsCollector):
+    worker = TelegramPollingWorker(config, store, client_factory=_telegram_client, metrics=metrics)
+    return worker.tick
 
 
 def _utc_now() -> str:
