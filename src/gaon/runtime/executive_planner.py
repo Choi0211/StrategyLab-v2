@@ -32,6 +32,7 @@ class RoutingDecision(str, Enum):
 
 class AgentSelection(str, Enum):
     RESEARCH_BRAIN = "research_brain"
+    CODING_ASSISTANT = "coding_assistant"
     LEARNING_MEMORY = "learning_memory"
     RUNTIME_OPERATOR = "runtime_operator"
     HUMAN_REVIEWER = "human_reviewer"

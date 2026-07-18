@@ -12,11 +12,12 @@ from gaon.integrations.telegram.client import TelegramBotApiClient
 from gaon.integrations.telegram.contracts import TelegramClient, TelegramDiscoveredChat, TelegramPollResult
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import discover_private_chats, parse_update_result
+from gaon.runtime.agents import AgentDispatcher, AgentRequest, default_agent_registry
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.conversation import ConversationRuntime
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
-from gaon.runtime.executive_planner import DeterministicExecutivePlanner, ExecutiveRequest, executive_plan_event
+from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutiveRequest, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.health import readiness
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.reports import build_daily_report, build_weekly_review
@@ -52,6 +53,11 @@ def main(argv: list[str] | None = None) -> int:
     executive_plan.add_argument("--request", required=True)
     executive_plan.add_argument("--db", default=":memory:")
     executive_plan.add_argument("--json", action="store_true")
+    agent_run = sub.add_parser("agent-run")
+    agent_run.add_argument("--agent", choices=("research", "coding", "memory"), required=True)
+    agent_run.add_argument("--request", required=True)
+    agent_run.add_argument("--db", default=":memory:")
+    agent_run.add_argument("--json", action="store_true")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -156,6 +162,25 @@ def _run(args: argparse.Namespace) -> int:
                     f"tools={','.join(tool.value for tool in plan.tools)} "
                     f"approval_required={plan.approval_required}"
                 )
+        finally:
+            store.close()
+    elif args.command == "agent-run":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            plan = _agent_run_plan(args.agent, now)
+            request = AgentRequest("cli-agent-request", args.request, "actor:redacted", now)
+            result = AgentDispatcher(default_agent_registry(), load_runtime_config(os.environ), event_store=SQLiteEventStore(store._connection)).dispatch(plan, request)
+            if args.json:
+                print(
+                    "{"
+                    f"\"agent_name\":\"{result.agent_name}\","
+                    f"\"status\":\"{result.status.value}\","
+                    f"\"output\":\"{result.output}\""
+                    "}"
+                )
+            else:
+                print(f"agent-run: agent={result.agent_name} status={result.status.value} output={result.output}")
         finally:
             store.close()
     elif args.command == "research-proposals-list":
@@ -280,6 +305,31 @@ def _print_poll_results(results: tuple[TelegramPollResult, ...]) -> None:
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _agent_run_plan(agent: str, now: str) -> ExecutivePlan:
+    mapping = {
+        "research": (RoutingDecision.RESEARCH, AgentSelection.RESEARCH_BRAIN, (ToolSelection.RESEARCH_PLANNER, ToolSelection.EVIDENCE_SEARCH, ToolSelection.KNOWLEDGE_PROPOSAL)),
+        "coding": (RoutingDecision.RUNTIME, AgentSelection.CODING_ASSISTANT, (ToolSelection.NOOP,)),
+        "memory": (RoutingDecision.MEMORY, AgentSelection.LEARNING_MEMORY, (ToolSelection.MEMORY_RETRIEVAL,)),
+    }
+    decision, selected_agent, tools = mapping[agent]
+    return ExecutivePlan(
+        plan_id="exec-plan:cli-agent-request",
+        request_id="cli-agent-request",
+        routing_decision=decision,
+        agents=(selected_agent,),
+        tools=tools,
+        approval_required=False,
+        reason="CLI deterministic agent smoke plan",
+        provider="deterministic",
+        route="agent_run",
+        created_at=now,
+        scope="agent",
+        project="StrategyLab",
+        strategy="N/A",
+        market="N/A",
+    )
 
 
 def _add_dry_run_flags(parser: argparse.ArgumentParser) -> None:
