@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -38,6 +38,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         17: _upgrade_v17_to_v18,
         18: _upgrade_v18_to_v19,
         19: _upgrade_v19_to_v20,
+        20: _upgrade_v20_to_v21,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -681,6 +682,35 @@ def _upgrade_v19_to_v20(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_strategy_deployment_backups_package
             ON strategy_deployment_backups(package_id, created_at);
+        """
+    )
+
+
+def _upgrade_v20_to_v21(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS gaon_v5_pipeline_runs (
+            run_id TEXT PRIMARY KEY,
+            correlation_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            current_stage TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_gaon_v5_pipeline_runs_status
+            ON gaon_v5_pipeline_runs(status, updated_at);
+        CREATE TABLE IF NOT EXISTS gaon_v5_pipeline_checkpoints (
+            checkpoint_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_refs_json TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_gaon_v5_pipeline_checkpoints_run
+            ON gaon_v5_pipeline_checkpoints(run_id, created_at, stage);
         """
     )
 

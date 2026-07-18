@@ -35,6 +35,18 @@ def main() -> int:
             print(tests.stdout)
             print(tests.stderr)
             return tests.returncode
+    cli = subprocess.run(
+        [sys.executable, "-m", "gaon.runtime.cli", "v5-status", "--db", ":memory:"],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    if cli.returncode != 0:
+        print("CLI importability check failed")
+        print(cli.stdout)
+        print(cli.stderr)
+        return cli.returncode
     required = [
         "docs/architecture/GaonPlatformMasterSpecification.md",
         "docs/architecture/GaonDevelopmentContract.md",
@@ -70,6 +82,11 @@ def main() -> int:
         "docs/operations/TelegramSetup.md",
         "docs/operations/NotionSetup.md",
         "docs/operations/DailyWeeklyJobs.md",
+        "docs/architecture/strategy-handoff.md",
+        "docs/architecture/strategy-deployment-workflow.md",
+        "docs/operations/StrategyHandoff.md",
+        "docs/operations/StrategyDeployment.md",
+        "docs/releases/gaon-v5.0-rc.md",
         "docs/tests/GaonRuntime_TestPlan.md",
         "tests/fixtures/learning_memory/valid_repository_v1.json",
         "tests/fixtures/learning_memory/legacy_repository_v0.json",
@@ -89,6 +106,7 @@ def main() -> int:
     print("StrategyLab v2 release verification passed.")
     print("Unit tests: PASS")
     print("Integration tests: PASS")
+    print("CLI importability: PASS")
     print("Required files: PASS")
     return 0
 

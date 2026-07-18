@@ -372,3 +372,10 @@
 - Added approval-gated strategy deployment workflow.
 - Added fake and local-safe deployment adapters.
 - Added v20 runtime schema tables for deployment requests, runs, and backups.
+
+# Sprint 50
+
+- Added Gaon v5.0 Release Candidate pipeline orchestration.
+- Added v21 pipeline run/checkpoint persistence and resume-safe approval waits.
+- Added v5 CLI inspection and release-check commands.
+- Added release, recovery, and VPS upgrade documentation.

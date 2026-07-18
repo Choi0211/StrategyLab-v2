@@ -37,6 +37,7 @@ from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutom
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_worker import TelegramPollingWorker
+from gaon.runtime.v5_pipeline import GaonV5PipelineOrchestrator, GaonV5PipelineRequest, SQLiteGaonV5PipelineRepository
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
@@ -315,6 +316,21 @@ def main(argv: list[str] | None = None) -> int:
     deployment_history.add_argument("--db", default="runtime.sqlite")
     deployment_backups = sub.add_parser("deployment-backups")
     deployment_backups.add_argument("--db", default="runtime.sqlite")
+    v5_status = sub.add_parser("v5-status")
+    v5_status.add_argument("--db", default="runtime.sqlite")
+    v5_show = sub.add_parser("v5-pipeline-show")
+    v5_show.add_argument("--db", default="runtime.sqlite")
+    v5_show.add_argument("run_id")
+    v5_history = sub.add_parser("v5-pipeline-history")
+    v5_history.add_argument("--db", default="runtime.sqlite")
+    v5_check = sub.add_parser("v5-release-check")
+    v5_check.add_argument("--db", default=":memory:")
+    v5_demo = sub.add_parser("v5-demo")
+    v5_demo.add_argument("--db", default=":memory:")
+    v5_demo.add_argument("--approve-promotion", action="store_true")
+    v5_demo.add_argument("--approve-deployment", action="store_true")
+    v5_demo.add_argument("--scenario", choices=("success", "validation_fail", "keep_champion", "promotion_rejected", "paper_hold", "paper_kill"), default="success")
+    _add_dry_run_flags(v5_demo)
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -1086,6 +1102,50 @@ def _run(args: argparse.Namespace) -> int:
                 print("deployment-backups: none")
         finally:
             store.close()
+    elif args.command == "v5-status":
+        store = RuntimeStateStore(args.db)
+        try:
+            runs = SQLiteGaonV5PipelineRepository(store._connection).list_runs()
+            print(f"v5-status: runs={len(runs)} schema_version={store.status().schema_version}")
+        finally:
+            store.close()
+    elif args.command == "v5-pipeline-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(SQLiteGaonV5PipelineRepository(store._connection).get_run(args.run_id).to_json())
+        finally:
+            store.close()
+    elif args.command == "v5-pipeline-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            runs = SQLiteGaonV5PipelineRepository(store._connection).list_runs()
+            for run in runs:
+                print(f"{run.run_id} status={run.status.value} stage={run.current_stage.value} message={run.message}")
+            if not runs:
+                print("v5-pipeline-history: none")
+        finally:
+            store.close()
+    elif args.command == "v5-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            request = GaonV5PipelineRequest("v5-release-check", "v5-release-check", "actor:redacted", _utc_now(), approve_promotion=True, approve_deployment=True)
+            report = GaonV5PipelineOrchestrator(store._connection, event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector()).run_demo(request)
+            print(f"v5-release-check: status={report.status.value} stage={report.current_stage.value} message={report.message}")
+            return 0 if report.status.value == "completed" else 1
+        finally:
+            store.close()
+    elif args.command == "v5-demo":
+        if args.dry_run:
+            store = RuntimeStateStore(args.db)
+            try:
+                request = GaonV5PipelineRequest("v5-demo", "v5-demo", "actor:redacted", _utc_now(), approve_promotion=args.approve_promotion, approve_deployment=args.approve_deployment, scenario=args.scenario)
+                report = GaonV5PipelineOrchestrator(store._connection, event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector()).run_demo(request)
+                print(report.to_json())
+            finally:
+                store.close()
+        else:
+            print("v5-demo: execute mode is intentionally unsupported; deterministic demo remains dry-run")
+            return 1
     elif args.command == "research-proposals-list":
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
