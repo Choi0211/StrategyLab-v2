@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 36 Executive Planner
+
+- Added immutable ExecutiveRequest, ExecutivePlan, RoutingDecision, AgentSelection, ToolSelection, and ExecutivePlanner contracts.
+- Added deterministic routing for research, memory, runtime status, human review, and unsupported requests.
+- Added provider-backed planning through the existing Assistant Provider Registry with free-only and paid-provider guardrails.
+- Added approval-required flag propagation for execution-capable or policy-changing requests.
+- Added ExecutivePlanCreated durable event helper, runtime metrics integration, and CLI plan inspection.
+- Did not add multi-agent execution, scheduler execution, trading adapter execution, or Telegram integration.
+
 ## Sprint 35 Research Brain Orchestration
 
 - Added schema v8 Research Brain run and checkpoint tables.

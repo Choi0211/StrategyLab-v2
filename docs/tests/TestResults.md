@@ -2,6 +2,29 @@
 
 Status: Passed
 
+## Sprint 36 Executive Planner
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 231 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 22 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- CLI smoke: Passed
+  - `executive-plan --request`
+  - `executive-plan --request --json`
+- Scope:
+  - ExecutiveRequest, ExecutivePlan, RoutingDecision, AgentSelection, ToolSelection, and ExecutivePlanner contracts
+  - deterministic and provider-backed planning through the existing Provider Registry
+  - free-only enforcement and approval-required flag support
+  - durable event helper and runtime metrics integration
+  - no multi-agent execution, scheduler execution, trading adapter execution, or Telegram integration
+
 ## Gaon Phase B v3.0 Research Brain Release Candidate
 
 - Unit tests: Passed

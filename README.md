@@ -168,6 +168,17 @@ The pipeline plans research, collects bounded deterministic evidence, builds cit
 
 See `docs/architecture/research-brain.md`, `docs/operations/research-runtime.md`, `docs/operations/free-only-mode.md`, and `docs/releases/gaon-phase-b-v3.0-rc.md`.
 
+## Executive Planner
+
+Sprint 36 adds Executive Planner routing inspection:
+
+```powershell
+py -3.11 -m gaon.runtime.cli executive-plan --request "ORB 전략 연구해줘"
+py -3.11 -m gaon.runtime.cli executive-plan --request "상태 알려줘" --json
+```
+
+Executive Planner produces a routing plan only. It does not execute multi-agent work, scheduler jobs, trades, Telegram actions, or external tools. Execution-capable or policy-changing requests are flagged with `approval_required=true`.
+
 ## Conversational Assistant
 
 Sprint 13 adds a deterministic conversational assistant foundation. Telegram can now send ordinary Korean text such as `안녕`, `가온`, `오늘 시장 어때?`, `삼성전자 분석해줘`, and `백테스트 돌려줘` through the same safe Conversation Runtime.
@@ -211,6 +222,7 @@ Sprint 23 adds `gaon.adapters.TradingAdapter` as a broker-free public contract. 
 - `gaon.runtime.plugins`: explicit allowlist plugin lifecycle
 - `gaon.runtime.metrics`: internal metrics collector and snapshot export
 - `gaon.runtime.event_store`: durable append-only event store and safe replay
+- `gaon.runtime.executive_planner`: Executive Planner request, plan, routing, provider-backed planning, event, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
 - `gaon.adapters`: broker-free TradingAdapter protocol, risk-gate contracts, and fake adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
@@ -264,6 +276,7 @@ Do not commit `.env`, token files, account files, real trade state, production l
 - `docs/architecture/GaonRuntimeArchitecture.md`: Runtime architecture
 - `docs/architecture/ConversationRuntime.md`: Conversation Runtime contract
 - `docs/architecture/CollaborationIntegrations.md`: Telegram and Notion dry-run integration contracts
+- `docs/architecture/executive-planner.md`: Sprint 36 Executive Planner architecture
 - `docs/architecture/research-brain.md`: Phase B Research Brain v3 architecture
 - `docs/operations/research-runtime.md`: Research runtime smoke commands
 - `docs/operations/free-only-mode.md`: free-only mode and paid-provider guardrails

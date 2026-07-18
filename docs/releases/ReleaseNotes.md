@@ -3,6 +3,25 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 36 Executive Planner
+
+Included:
+
+- immutable executive request and plan contracts
+- deterministic routing for research, memory, runtime status, human review, and unsupported requests
+- provider-backed routing through the existing Assistant Provider Registry
+- free-only and paid-provider guardrails
+- approval-required flag support
+- durable event helper, runtime metrics, CLI plan inspection, unit tests, and integration tests
+
+Not included:
+
+- multi-agent execution
+- scheduler execution
+- trading adapter execution
+- Telegram integration
+- automatic approval
+
 ## Gaon Phase B v3.0 Research Brain RC
 
 Included:
