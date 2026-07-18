@@ -9,6 +9,7 @@ import sys
 from typing import Any
 
 from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, SQLiteBacktestRepository, build_backtest_request
+from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionChallengerPolicy, SQLiteChampionChallengerRepository, build_champion_challenger_request
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, ValidationPolicy, build_validation_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
@@ -166,6 +167,18 @@ def main(argv: list[str] | None = None) -> int:
     validation_history.add_argument("--db", default="runtime.sqlite")
     validation_policy = sub.add_parser("validation-policy-show")
     validation_policy.add_argument("--json", action="store_true")
+    champion_policy = sub.add_parser("champion-policy-show")
+    champion_policy.add_argument("--json", action="store_true")
+    champion_evaluate = sub.add_parser("champion-evaluate")
+    champion_evaluate.add_argument("--db", default="runtime.sqlite")
+    champion_evaluate.add_argument("--champion-backtest-id", required=True)
+    champion_evaluate.add_argument("--challenger-backtest-id", required=True)
+    champion_evaluate.add_argument("--validation-id", required=True)
+    champion_show = sub.add_parser("champion-evaluation-show")
+    champion_show.add_argument("--db", default="runtime.sqlite")
+    champion_show.add_argument("evaluation_id")
+    champion_history = sub.add_parser("champion-evaluation-history")
+    champion_history.add_argument("--db", default="runtime.sqlite")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -584,6 +597,44 @@ def _run(args: argparse.Namespace) -> int:
             print(json.dumps(policy.__dict__, sort_keys=True, separators=(",", ":"), default=lambda value: value.value if hasattr(value, "value") else str(value)))
         else:
             print(f"validation-policy-show: policy_version={policy.policy_version} min_trade_count={policy.min_trade_count} max_drawdown={policy.max_drawdown:.2f} min_sample_days={policy.min_sample_days}")
+    elif args.command == "champion-policy-show":
+        policy = ChampionChallengerPolicy()
+        if args.json:
+            import json
+
+            print(json.dumps(policy.__dict__, sort_keys=True, separators=(",", ":")))
+        else:
+            print(f"champion-policy-show: policy_version={policy.policy_version} minimum_return_improvement={policy.minimum_return_improvement:.2f} maximum_mdd_degradation={policy.maximum_mdd_degradation:.2f}")
+    elif args.command == "champion-evaluate":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            backtest_repo = SQLiteBacktestRepository(store._connection)
+            validation_repo = SQLiteValidationRepository(store._connection)
+            champion = backtest_repo.get_result(args.champion_backtest_id)
+            challenger = backtest_repo.get_result(args.challenger_backtest_id)
+            validation = validation_repo.get_report(args.validation_id)
+            request = build_champion_challenger_request(f"champion-evaluation:{champion.result_id}:{challenger.result_id}:{validation.validation_id}", champion=champion, challenger=challenger, validation=validation, actor_ref="actor:redacted", requested_at=now)
+            report = ChampionChallengerEvaluationEngine(repository=SQLiteChampionChallengerRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector()).evaluate(request, champion=champion, challenger=challenger, validation=validation, generated_at=now)
+            print(f"champion-evaluate: evaluation_id={report.evaluation_id} decision={report.decision.value} score={report.evaluation_score}")
+        finally:
+            store.close()
+    elif args.command == "champion-evaluation-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(SQLiteChampionChallengerRepository(store._connection).get_report(args.evaluation_id).to_json())
+        finally:
+            store.close()
+    elif args.command == "champion-evaluation-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            reports = SQLiteChampionChallengerRepository(store._connection).list_reports()
+            for report in reports:
+                print(f"{report.evaluation_id} decision={report.decision.value} score={report.evaluation_score}")
+            if not reports:
+                print("champion-evaluation-history: none")
+        finally:
+            store.close()
     elif args.command == "research-proposals-list":
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:

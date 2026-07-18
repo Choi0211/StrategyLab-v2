@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 43 Champion / Challenger Evaluation Engine
+
+- Added deterministic Champion / Challenger Evaluation Engine.
+- Added `StrategyRole`, `ChampionChallengerDecision`, request, policy, comparison, report, repository, event, and metric contracts.
+- Added `champion_challenger_policy_v1` with validation, fingerprint, return improvement, MDD degradation, profit factor, sample period, and trade count comparisons.
+- Added runtime schema v14 with Champion / Challenger evaluation request and report tables.
+- Added CLI commands for policy display, evaluation, report show, and history.
+- Documented that `PROMOTION_CANDIDATE` is not `PROMOTED` and cannot trigger trading or active strategy switching.
+
 ## Sprint 42 Strategy Validation Engine
 
 - Added deterministic Strategy Validation Engine for normalized Sprint 41 `BacktestResult` records.

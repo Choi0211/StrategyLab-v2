@@ -27,6 +27,7 @@ class AgentCapability(str, Enum):
     TRADING_SIMULATION = "trading_simulation"
     BACKTEST = "backtest"
     VALIDATION = "validation"
+    CHAMPION_EVALUATION = "champion_evaluation"
 
 
 class AgentStatus(str, Enum):
@@ -182,9 +183,19 @@ class AgentDispatcher:
 
 class ResearchAgent:
     name = AgentSelection.RESEARCH_BRAIN.value
-    capabilities = (AgentCapability.RESEARCH, AgentCapability.REPORT_GENERATION, AgentCapability.BACKTEST, AgentCapability.VALIDATION)
+    capabilities = (AgentCapability.RESEARCH, AgentCapability.REPORT_GENERATION, AgentCapability.BACKTEST, AgentCapability.VALIDATION, AgentCapability.CHAMPION_EVALUATION)
 
     def execute(self, context: AgentExecutionContext) -> AgentResult:
+        if ToolSelection.CHAMPION_EVALUATION in context.plan.tools:
+            return _result(
+                agent_name=self.name,
+                status=AgentStatus.SUCCEEDED,
+                output="Champion/Challenger evaluation boundary is available; explicit champion backtest id, challenger backtest id, and validation id are required",
+                error=None,
+                started_at=context.request.created_at,
+                completed_at=context.request.created_at,
+                metadata={"mode": "champion_evaluation_boundary", "automatic_promotion": "false"},
+            )
         if ToolSelection.BACKTEST_ADAPTER in context.plan.tools:
             request = build_backtest_request(
                 f"agent-backtest:{context.request.request_id}",
@@ -364,6 +375,7 @@ def _required_capabilities(plan: ExecutivePlan, request: AgentRequest) -> tuple[
         ToolSelection.TRADING_SIMULATION: AgentCapability.TRADING_SIMULATION,
         ToolSelection.BACKTEST_ADAPTER: AgentCapability.BACKTEST,
         ToolSelection.VALIDATION_ENGINE: AgentCapability.VALIDATION,
+        ToolSelection.CHAMPION_EVALUATION: AgentCapability.CHAMPION_EVALUATION,
         ToolSelection.APPROVAL_WORKFLOW: AgentCapability.APPROVAL_REVIEW,
     }
     for tool in plan.tools:

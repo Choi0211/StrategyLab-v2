@@ -49,6 +49,7 @@ class ToolSelection(str, Enum):
     TRADING_SIMULATION = "trading_simulation"
     BACKTEST_ADAPTER = "backtest_adapter"
     VALIDATION_ENGINE = "validation_engine"
+    CHAMPION_EVALUATION = "champion_evaluation"
     APPROVAL_WORKFLOW = "approval_workflow"
     NOOP = "noop"
 
@@ -224,7 +225,12 @@ def executive_plan_event(plan: ExecutivePlan, *, actor_ref: str, appended_at: st
 def _deterministic_plan(request: ExecutiveRequest, *, provider: str, route: str) -> ExecutivePlan:
     text = request.text.lower()
     approval_required = _requires_approval(text)
-    if _is_validation_request(text):
+    if _is_champion_evaluation_request(text):
+        decision = RoutingDecision.RESEARCH
+        agents = (AgentSelection.RESEARCH_BRAIN,)
+        tools = (ToolSelection.BACKTEST_ADAPTER, ToolSelection.VALIDATION_ENGINE, ToolSelection.CHAMPION_EVALUATION)
+        reason = "route to bounded Champion/Challenger evaluation boundary"
+    elif _is_validation_request(text):
         decision = RoutingDecision.RESEARCH
         agents = (AgentSelection.RESEARCH_BRAIN,)
         tools = (ToolSelection.BACKTEST_ADAPTER, ToolSelection.VALIDATION_ENGINE)
@@ -334,6 +340,10 @@ def _is_backtest_request(text: str) -> bool:
 
 def _is_validation_request(text: str) -> bool:
     return any(token in text for token in ("validate", "validation", "robust", "robustness", "검증", "validation report"))
+
+
+def _is_champion_evaluation_request(text: str) -> bool:
+    return any(token in text for token in ("champion", "challenger", "promotion candidate", "챔피언", "챌린저", "승격 후보"))
 
 
 def _append_unique(items: tuple, item):
