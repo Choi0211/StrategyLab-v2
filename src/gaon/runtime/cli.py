@@ -15,6 +15,7 @@ from gaon.integrations.telegram.transport import discover_private_chats, parse_u
 from gaon.runtime.agents import AgentDispatcher, AgentRequest, default_agent_registry
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.conversation import ConversationRuntime
+from gaon.runtime.daily_research import DailyResearchPipeline, DailyResearchProfile, DailyResearchRepository, record_daily_research_profile_metric, daily_research_event
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutiveRequest, RoutingDecision, ToolSelection, executive_plan_event
@@ -81,6 +82,36 @@ def main(argv: list[str] | None = None) -> int:
     schedule_run_due = sub.add_parser("schedule-run-due")
     schedule_run_due.add_argument("--db", default="runtime.sqlite")
     schedule_run_due.add_argument("--now", required=False)
+    daily_research_create = sub.add_parser("daily-research-create")
+    daily_research_create.add_argument("--db", default="runtime.sqlite")
+    daily_research_create.add_argument("--profile-id", required=True)
+    daily_research_create.add_argument("--topic", required=True)
+    daily_research_create.add_argument("--query", required=True)
+    daily_research_create.add_argument("--next-run-at", required=True)
+    daily_research_create.add_argument("--priority", type=int, default=50)
+    daily_research_create.add_argument("--source", action="append", default=None)
+    daily_research_create.add_argument("--time-range", default="daily")
+    daily_research_create.add_argument("--language", default="ko-KR")
+    daily_research_list = sub.add_parser("daily-research-list")
+    daily_research_list.add_argument("--db", default="runtime.sqlite")
+    daily_research_show = sub.add_parser("daily-research-show")
+    daily_research_show.add_argument("--db", default="runtime.sqlite")
+    daily_research_show.add_argument("profile_id")
+    daily_research_enable = sub.add_parser("daily-research-enable")
+    daily_research_enable.add_argument("--db", default="runtime.sqlite")
+    daily_research_enable.add_argument("profile_id")
+    daily_research_disable = sub.add_parser("daily-research-disable")
+    daily_research_disable.add_argument("--db", default="runtime.sqlite")
+    daily_research_disable.add_argument("profile_id")
+    daily_research_run = sub.add_parser("daily-research-run")
+    daily_research_run.add_argument("--db", default="runtime.sqlite")
+    daily_research_run.add_argument("--profile-id", required=False)
+    daily_research_run.add_argument("--due", action="store_true")
+    daily_research_run.add_argument("--now", required=False)
+    daily_research_report = sub.add_parser("daily-research-report")
+    daily_research_report.add_argument("--db", default="runtime.sqlite")
+    daily_research_report.add_argument("profile_id")
+    daily_research_report.add_argument("--format", choices=("markdown", "json"), default="markdown")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -269,6 +300,91 @@ def _run(args: argparse.Namespace) -> int:
                 print(f"schedule-run-due: run_id={run.run_id} job_id={run.job_id} status={run.status.value}")
             if not runs:
                 print("schedule-run-due: none")
+        finally:
+            store.close()
+    elif args.command == "daily-research-create":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            daily_repo = DailyResearchRepository(store._connection)
+            scheduled_repo = ScheduledJobRepository(store._connection)
+            profile = DailyResearchProfile(
+                args.profile_id,
+                args.topic,
+                args.query,
+                True,
+                args.priority,
+                tuple(args.source or ("fake",)),
+                args.time_range,
+                args.language,
+                now,
+                now,
+                {"created_by": "cli"},
+            )
+            daily_repo.create_profile(profile)
+            DailyResearchPipeline(daily_repo, scheduled_repo, load_runtime_config(os.environ), event_store=SQLiteEventStore(store._connection)).schedule_profile(profile, next_run_at=args.next_run_at)
+            SQLiteEventStore(store._connection).append(daily_research_event("DailyResearchProfileCreated", profile, None, now))
+            metrics = MetricsCollector()
+            record_daily_research_profile_metric(metrics, daily_repo)
+            print(f"daily-research-create: profile_id={profile.profile_id} enabled={profile.enabled} scheduled=daily-research:{profile.profile_id}")
+        finally:
+            store.close()
+    elif args.command == "daily-research-list":
+        store = RuntimeStateStore(args.db)
+        try:
+            profiles = DailyResearchRepository(store._connection).list_profiles()
+            for profile in profiles:
+                print(f"{profile.profile_id} enabled={profile.enabled} priority={profile.priority} topic={profile.topic}")
+            if not profiles:
+                print("daily-research-list: none")
+        finally:
+            store.close()
+    elif args.command == "daily-research-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            profile = DailyResearchRepository(store._connection).get_profile(args.profile_id)
+            print(f"daily-research-show: profile_id={profile.profile_id} enabled={profile.enabled} priority={profile.priority} topic={profile.topic} query={profile.query}")
+        finally:
+            store.close()
+    elif args.command in {"daily-research-enable", "daily-research-disable"}:
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            repo = DailyResearchRepository(store._connection)
+            enabled = args.command == "daily-research-enable"
+            profile = repo.set_enabled(args.profile_id, enabled, updated_at=now)
+            SQLiteEventStore(store._connection).append(daily_research_event("DailyResearchProfileEnabled" if enabled else "DailyResearchProfileDisabled", profile, None, now))
+            print(f"{args.command}: profile_id={profile.profile_id} enabled={profile.enabled}")
+        finally:
+            store.close()
+    elif args.command == "daily-research-run":
+        if not args.due and not args.profile_id:
+            raise ConfigurationError("daily-research-run requires --due or --profile-id")
+        store = RuntimeStateStore(args.db)
+        try:
+            now = args.now or _utc_now()
+            pipeline = DailyResearchPipeline(
+                DailyResearchRepository(store._connection),
+                ScheduledJobRepository(store._connection),
+                load_runtime_config(os.environ),
+                event_store=SQLiteEventStore(store._connection),
+            )
+            runs = pipeline.run_due(now=now) if args.due else (pipeline.run_profile(args.profile_id, now=now),)
+            for run in runs:
+                print(f"daily-research-run: run_id={run.run_id} profile_id={run.profile_id} status={run.status.value}")
+            if not runs:
+                print("daily-research-run: none")
+        finally:
+            store.close()
+    elif args.command == "daily-research-report":
+        store = RuntimeStateStore(args.db)
+        try:
+            runs = tuple(run for run in DailyResearchRepository(store._connection).list_runs(args.profile_id) if run.result is not None)
+            if not runs:
+                raise ConfigurationError("daily-research-report requires a completed run with a report")
+            result = runs[-1].result
+            assert result is not None
+            print(result.to_json() if args.format == "json" else result.to_markdown())
         finally:
             store.close()
     elif args.command == "research-proposals-list":

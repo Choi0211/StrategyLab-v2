@@ -3,6 +3,34 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 39 Daily Research Pipeline
+
+Included:
+
+- runtime schema v10 for daily research profiles and runs
+- daily research profile creation, enable, disable, list, and show workflows
+- Sprint 38 scheduler integration without adding a second scheduler
+- due execution with disabled profile skip, duplicate run protection, bounded failure isolation, durable state, events, and metrics
+- deterministic ResearchRequest to planner to bounded evidence search to context builder to synthesis to report flow
+- markdown and json report output
+- pending-review KnowledgeProposal persistence without trusted knowledge promotion
+- CLI commands for `daily-research-create`, `daily-research-list`, `daily-research-show`, `daily-research-enable`, `daily-research-disable`, `daily-research-run`, and `daily-research-report`
+
+Not included:
+
+- Telegram delivery
+- email delivery
+- Notion synchronization
+- GitHub polling
+- live market data
+- Trading Adapter execution
+- broker, KIS, or MyMoneyGuard access
+- external AI provider calls
+- vector DB or embeddings
+- automatic knowledge approval
+- automatic policy change
+- shell or plugin execution
+
 ## Sprint 38 Scheduler Automation
 
 Included:

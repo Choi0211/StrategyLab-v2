@@ -1,5 +1,15 @@
 # Changelog
 
+## Sprint 39 Daily Research Pipeline
+
+- Added runtime schema v10 for daily research profiles and runs.
+- Added DailyResearchTopic, DailyResearchProfile, DailyResearchRun, DailyResearchRunStatus, and DailyResearchResult contracts.
+- Added DailyResearchRepository with duplicate profile rejection, deterministic listing, enable/disable workflow, durable run storage, and duplicate run protection.
+- Added DailyResearchPipeline on top of the Sprint 38 ScheduledJobRepository; no second scheduler was introduced.
+- Added deterministic daily research execution through ResearchRequest, deterministic planner, bounded fake evidence search, context builder, markdown/json report generation, and pending-review knowledge proposal persistence.
+- Added durable events, runtime metrics, CLI commands, unit tests, integration tests, and v9-to-v10 migration coverage.
+- Did not add Telegram delivery, email, Notion sync, GitHub polling, live market data, Trading Adapter execution, broker/KIS/MyMoneyGuard access, external AI calls, vector DB, automatic approval, shell execution, or plugin execution.
+
 ## Sprint 38 Scheduler Automation
 
 - Added runtime schema v9 for durable scheduled automation jobs and runs.
