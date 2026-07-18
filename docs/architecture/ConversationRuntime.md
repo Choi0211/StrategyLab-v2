@@ -4,6 +4,8 @@ Status: Sprint 13 deterministic conversational foundation
 
 Conversation Runtime receives source messages and returns deterministic Korean responses. It supports slash commands and ordinary Korean text without requiring an LLM provider.
 
+Sprint 51-55 adds `LLMConversationBrain` for persistent sessions, bounded contextual memory orchestration, read-only safe tool calls, and Telegram conversation routing. The default route remains deterministic and free-only unless an explicitly configured provider passes the Provider Registry gates.
+
 ## Persona
 
 - Always address the user as `영하님`.

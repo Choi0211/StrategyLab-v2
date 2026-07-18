@@ -3,6 +3,12 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 51-55 Conversational Release
+
+Gaon now has a persistent conversational brain foundation for StrategyLab v5. It stores conversation history, builds bounded verified context, exposes read-only tools through a deny-by-default policy, and connects Telegram ordinary text to the persistent brain.
+
+This release does not add live trading, MyMoneyGuard access, broker orders, arbitrary shell or SQL tools, automatic approval, required Ollama, or required paid provider fallback.
+
 ## Sprint 47 Strategy Execution Runtime
 
 Included:

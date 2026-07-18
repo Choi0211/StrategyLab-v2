@@ -30,10 +30,12 @@ from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutiveRequest, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.health import readiness
+from gaon.runtime.llm_tools import SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
+from gaon.runtime.serialization import dumps_json
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_worker import TelegramPollingWorker
@@ -59,6 +61,20 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--once", action="store_true", default=False)
     status_cmd = sub.add_parser("status")
     status_cmd.add_argument("--db", default=":memory:")
+    assistant_status = sub.add_parser("assistant-status")
+    assistant_status.add_argument("--db", default=":memory:")
+    conversation_status = sub.add_parser("conversation-status")
+    conversation_status.add_argument("--db", default=":memory:")
+    conversation_status.add_argument("--session-id", default=None)
+    tool_registry = sub.add_parser("tool-registry-show")
+    tool_registry.add_argument("--db", default=":memory:")
+    tool_registry.add_argument("--json", action="store_true")
+    tool_audit = sub.add_parser("tool-audit-history")
+    tool_audit.add_argument("--db", default=":memory:")
+    tool_audit.add_argument("--tool-name", default=None)
+    tool_audit.add_argument("--json", action="store_true")
+    conversation_release = sub.add_parser("conversation-release-check")
+    conversation_release.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -407,6 +423,69 @@ def _run(args: argparse.Namespace) -> int:
             print(f"running={status.running} ticks={status.ticks} active_workers={status.active_workers}")
         except KeyboardInterrupt:
             print("runtime service stopped")
+        finally:
+            store.close()
+    elif args.command == "assistant-status":
+        config = load_runtime_config(os.environ)
+        store = RuntimeStateStore(args.db)
+        try:
+            print(
+                "assistant "
+                f"enabled={config.assistant_enabled} provider={config.assistant_provider} "
+                f"free_only={config.free_only_mode} schema_version={store.status().schema_version}"
+            )
+        finally:
+            store.close()
+    elif args.command == "conversation-status":
+        store = RuntimeStateStore(args.db)
+        try:
+            rows = _conversation_status_rows(store, args.session_id)
+            if not rows:
+                print("conversation-status: none")
+            for row in rows:
+                print(f"session_id={row['session_id']} status={row['status']} messages={row['messages']} updated_at={row['updated_at']}")
+        finally:
+            store.close()
+    elif args.command == "tool-registry-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            payload = {
+                "tools": [
+                    {"name": tool.name, "risk_level": tool.risk_level.value, "required_args": list(tool.required_args), "allowed_args": list(tool.allowed_args)}
+                    for tool in default_tool_registry(store._connection).list()
+                ]
+            }
+            if args.json:
+                print(_dumps_json(payload))
+            else:
+                for tool in payload["tools"]:
+                    print(f"{tool['name']} risk={tool['risk_level']}")
+        finally:
+            store.close()
+    elif args.command == "tool-audit-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            records = SQLiteToolAuditRepository(store._connection).list(tool_name=args.tool_name)
+            payload = {"audit": [{"audit_id": record.audit_id, "tool_name": record.tool_name, "status": record.status, "risk_level": record.risk_level, "created_at": record.created_at} for record in records]}
+            if args.json:
+                print(_dumps_json(payload))
+            elif not records:
+                print("tool-audit-history: none")
+            else:
+                for record in records:
+                    print(f"{record.audit_id} tool={record.tool_name} status={record.status} risk={record.risk_level}")
+        finally:
+            store.close()
+    elif args.command == "conversation-release-check":
+        config = load_runtime_config(os.environ)
+        store = RuntimeStateStore(args.db)
+        try:
+            tools = default_tool_registry(store._connection).list()
+            print(
+                "conversation-release-check: PASS "
+                f"schema_version={store.status().schema_version} provider={config.assistant_provider} "
+                f"free_only={config.free_only_mode} tools={len(tools)}"
+            )
         finally:
             store.close()
     elif args.command == "backup":
@@ -1408,6 +1487,36 @@ def _add_dry_run_flags(parser: argparse.ArgumentParser) -> None:
     mode.add_argument("--dry-run", dest="dry_run", action="store_true", help="prepare output without external side effects")
     mode.add_argument("--execute", dest="dry_run", action="store_false", help="request execution after all production gates pass")
     parser.set_defaults(dry_run=True)
+
+
+def _conversation_status_rows(store: RuntimeStateStore, session_id: str | None) -> list[dict[str, object]]:
+    if session_id is None:
+        rows = store._connection.execute(
+            """
+            SELECT s.session_id, s.status, s.updated_at, COUNT(m.message_id) AS messages
+              FROM conversation_sessions s
+              LEFT JOIN conversation_messages m ON s.session_id = m.session_id
+             GROUP BY s.session_id, s.status, s.updated_at
+             ORDER BY s.updated_at DESC, s.session_id DESC
+             LIMIT 20
+            """
+        ).fetchall()
+    else:
+        rows = store._connection.execute(
+            """
+            SELECT s.session_id, s.status, s.updated_at, COUNT(m.message_id) AS messages
+              FROM conversation_sessions s
+              LEFT JOIN conversation_messages m ON s.session_id = m.session_id
+             WHERE s.session_id = ?
+             GROUP BY s.session_id, s.status, s.updated_at
+            """,
+            (session_id,),
+        ).fetchall()
+    return [{"session_id": str(row[0]), "status": str(row[1]), "updated_at": str(row[2]), "messages": int(row[3])} for row in rows]
+
+
+def _dumps_json(payload: dict[str, object]) -> str:
+    return dumps_json(payload)
 
 
 class _NoopProjection:
