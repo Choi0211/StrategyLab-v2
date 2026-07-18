@@ -1,5 +1,24 @@
 # Changelog
 
+## Sprint 45 Paper Trading Forward Test
+
+- Added paper-only Champion forward-test sessions.
+- Reused existing `PaperTradingAdapter`, `TradingExecutionService`, `TradingRiskPolicy`, and `SQLiteTradingRepository`.
+- Added session lifecycle commands for create, start, pause, resume, complete, cancel, show, list, simulated order, and summary.
+- Added runtime schema v16 with paper trading session, observation, and summary tables.
+- Added events and metrics for paper session lifecycle and simulated orders.
+- Added unit and integration coverage for active-Champion-only creation, stale Champion rejection, lifecycle transitions, summary generation, persistence, CLI smoke, and v15-to-v16 migration.
+- Preserved safety boundaries: no live KIS, no broker credentials, no real orders, no paper-to-live promotion, no automatic trading, and no MyMoneyGuard dependency.
+
+## Sprint 44 Champion Registry and Approval Promotion
+
+- Added approval-gated Champion Registry for the stable `default` slot.
+- Added explicit bootstrap, promotion request, approve, reject, history, registry show, and rollback CLI commands.
+- Added runtime schema v15 with Champion registry, version history, promotion request, and promotion decision tables.
+- Added events and metrics for bootstrap, promotion request, approval, rejection, activation, and rollback.
+- Added unit and integration coverage for idempotent promotion requests, approval, rejection, rollback, persistence, and migration.
+- Preserved safety boundaries: no direct `PROMOTION_CANDIDATE` activation, no live KIS, no broker orders, no automatic trading, no automatic approval, and no MyMoneyGuard dependency.
+
 ## Sprint 43 Champion / Challenger Evaluation Engine
 
 - Added deterministic Champion / Challenger Evaluation Engine.
