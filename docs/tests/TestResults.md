@@ -918,3 +918,16 @@ Final local verification:
 - migration tests: PASS, v20 to v21 and fresh DB schema v21
 - git diff --check: PASS
 - security audit: PASS, no `shell=True`, private MyMoneyGuard path hardcoding, subprocess use, or secret markers in new v5 files
+
+# Sprint 50 Hotfix
+
+Final local verification:
+
+- repeated `v5-demo --dry-run` on the same persistent DB: PASS, 3 consecutive runs after `v5-release-check`
+- full unit tests: PASS, 320 tests
+- full integration tests: PASS, 67 tests
+- Sprint 50 E2E tests: PASS, 7 tests
+- `scripts/verify_release.py`: PASS
+- CLI smoke: PASS, `v5-release-check`, 3 repeated `v5-demo --dry-run`, and `v5-pipeline-history`
+- migration tests: PASS via Sprint 50 E2E v20 to v21 and fresh DB schema checks
+- git diff --check: PASS

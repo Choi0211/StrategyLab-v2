@@ -532,3 +532,9 @@ private production integration remains outside this repository.
 Gaon v5.0 RC completes the first bounded end-to-end StrategyLab system pipeline.
 It remains approval-gated, broker-free in public tests, and independent of any
 private repository.
+
+# Sprint 50 Hotfix
+
+`v5-demo --dry-run` now creates a unique default pipeline run id and namespaces
+demo fixture entities so repeated runs against the same persistent DB do not
+collide with `v5-release-check` or prior demos.

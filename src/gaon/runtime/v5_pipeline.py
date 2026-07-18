@@ -167,12 +167,20 @@ class GaonV5PipelineOrchestrator:
         self._record("GaonV5PipelineStarted", run, request.actor_ref)
         try:
             run = self._research(run, request)
-            champion, challenger = _fixture_backtests(request.scenario, request.requested_at)
+            active_before = SQLiteChampionRegistryRepository(self._connection).get_active()
+            active_backtest = None
+            if active_before is not None:
+                try:
+                    active_backtest = SQLiteBacktestRepository(self._connection).get_result(active_before.source_backtest_id)
+                except KeyError:
+                    active_backtest = None
+            champion, challenger = _fixture_backtests(request.scenario, request.requested_at, request.run_id, active_backtest)
             SQLiteBacktestRepository(self._connection).add_result(champion)
             SQLiteBacktestRepository(self._connection).add_result(challenger)
             run = self._complete(run, GaonV5PipelineStage.BACKTEST, request.requested_at, {"champion_backtest_id": champion.result_id, "challenger_backtest_id": challenger.result_id})
 
-            validation = StrategyValidationEngine(_validation_policy(request.scenario), repository=SQLiteValidationRepository(self._connection), event_store=self._event_store, metrics=self._metrics).validate(build_validation_request("v5-validation", (challenger,), actor_ref=request.actor_ref, requested_at=request.requested_at), (challenger,), generated_at=request.requested_at)
+            validation_id = f"{request.run_id}:validation"
+            validation = StrategyValidationEngine(_validation_policy(request.scenario), repository=SQLiteValidationRepository(self._connection), event_store=self._event_store, metrics=self._metrics).validate(build_validation_request(validation_id, (challenger,), actor_ref=request.actor_ref, requested_at=request.requested_at), (challenger,), generated_at=request.requested_at)
             if validation.overall_status != ValidationStatus.PASS:
                 return self._blocked(run, GaonV5PipelineStage.VALIDATION, request, "validation did not pass", {"validation_id": validation.validation_id})
             run = self._complete(run, GaonV5PipelineStage.VALIDATION, request.requested_at, {"validation_id": validation.validation_id})
@@ -180,12 +188,13 @@ class GaonV5PipelineOrchestrator:
             registry_service = ChampionRegistryService(SQLiteChampionRegistryRepository(self._connection), SQLiteChampionChallengerRepository(self._connection), event_store=self._event_store, metrics=self._metrics)
             if SQLiteChampionRegistryRepository(self._connection).get_active() is None:
                 registry_service.bootstrap(strategy_ref=champion.strategy.strategy_id, fingerprint=champion.fingerprint, backtest_id=champion.result_id, actor_ref=request.actor_ref, activated_at=request.requested_at)
-            evaluation = ChampionChallengerEvaluationEngine(_champion_policy(request.scenario), repository=SQLiteChampionChallengerRepository(self._connection), event_store=self._event_store, metrics=self._metrics).evaluate(build_champion_challenger_request("v5-evaluation", champion=champion, challenger=challenger, validation=validation, actor_ref=request.actor_ref, requested_at=request.requested_at), champion=champion, challenger=challenger, validation=validation, generated_at=request.requested_at)
+            evaluation_id = f"{request.run_id}:evaluation"
+            evaluation = ChampionChallengerEvaluationEngine(_champion_policy(request.scenario), repository=SQLiteChampionChallengerRepository(self._connection), event_store=self._event_store, metrics=self._metrics).evaluate(build_champion_challenger_request(evaluation_id, champion=champion, challenger=challenger, validation=validation, actor_ref=request.actor_ref, requested_at=request.requested_at), champion=champion, challenger=challenger, validation=validation, generated_at=request.requested_at)
             if evaluation.decision != ChampionChallengerDecision.PROMOTION_CANDIDATE:
                 return self._blocked(run, GaonV5PipelineStage.CHAMPION_EVALUATION, request, "Champion evaluation did not create a promotion candidate", {"evaluation_id": evaluation.evaluation_id})
             run = self._complete(run, GaonV5PipelineStage.CHAMPION_EVALUATION, request.requested_at, {"evaluation_id": evaluation.evaluation_id})
 
-            promotion = registry_service.request_promotion("v5-promotion", evaluation.evaluation_id, actor_ref=request.actor_ref, requested_at=request.requested_at)
+            promotion = registry_service.request_promotion(f"{request.run_id}:promotion", evaluation.evaluation_id, actor_ref=request.actor_ref, requested_at=request.requested_at)
             if request.scenario == "promotion_rejected":
                 registry_service.reject(promotion.promotion_id, actor_ref=request.actor_ref, decided_at=request.requested_at)
                 return self._blocked(run, GaonV5PipelineStage.PROMOTION_APPROVAL, request, "promotion rejected", {"promotion_id": promotion.promotion_id})
@@ -196,7 +205,7 @@ class GaonV5PipelineOrchestrator:
             run = self._complete(run, GaonV5PipelineStage.CHAMPION_ACTIVATION, request.requested_at, {"champion_version_id": active.active_version_id})
 
             paper = PaperTradingForwardTestService(SQLitePaperTradingSessionRepository(self._connection), SQLiteChampionRegistryRepository(self._connection), trading_repository=SQLiteTradingRepository(self._connection), event_store=self._event_store, metrics=self._metrics)
-            session = paper.create_session("v5-paper-session", actor_ref=request.actor_ref, created_at=request.requested_at)
+            session = paper.create_session(f"{request.run_id}:paper-session", actor_ref=request.actor_ref, created_at=request.requested_at)
             paper.start(session.session_id, actor_ref=request.actor_ref, at=request.requested_at)
             for index in range(20):
                 paper.simulate_order(session.session_id, symbol=f"PAPER{index}", quantity=1, price=100 + index, side="buy", actor_ref=request.actor_ref, at=request.requested_at)
@@ -207,13 +216,13 @@ class GaonV5PipelineOrchestrator:
                 summary = replace(summary, failed_simulated_orders=1, errors=("fixture critical paper failure",))
             run = self._complete(run, GaonV5PipelineStage.PAPER_FORWARD_TEST, request.requested_at, {"paper_session_id": session.session_id})
 
-            revalidation = PaperRevalidationEngine(_paper_policy(request.scenario), repository=SQLitePaperRevalidationRepository(self._connection), event_store=self._event_store, metrics=self._metrics).revalidate(build_paper_revalidation_request("v5-paper-revalidation", session=session, actor_ref=request.actor_ref, requested_at=request.requested_at), active=active, session=session, summary=summary, generated_at=request.requested_at)
+            revalidation = PaperRevalidationEngine(_paper_policy(request.scenario), repository=SQLitePaperRevalidationRepository(self._connection), event_store=self._event_store, metrics=self._metrics).revalidate(build_paper_revalidation_request(f"{request.run_id}:paper-revalidation", session=session, actor_ref=request.actor_ref, requested_at=request.requested_at), active=active, session=session, summary=summary, generated_at=request.requested_at)
             if revalidation.status != PaperRevalidationStatus.LIVE_ELIGIBLE:
                 return self._blocked(run, GaonV5PipelineStage.PAPER_REVALIDATION, request, f"paper revalidation {revalidation.status.value}", {"paper_revalidation_id": revalidation.revalidation_id})
             run = self._complete(run, GaonV5PipelineStage.PAPER_REVALIDATION, request.requested_at, {"paper_revalidation_id": revalidation.revalidation_id})
 
             handoff_service = StrategyHandoffService(SQLiteStrategyHandoffRepository(self._connection), SQLiteChampionRegistryRepository(self._connection), SQLitePaperRevalidationRepository(self._connection), SQLiteBacktestRepository(self._connection), event_store=self._event_store, metrics=self._metrics)
-            package = handoff_service.create(build_strategy_handoff_request("v5-handoff", revalidation_id=revalidation.revalidation_id, actor_ref=request.actor_ref, requested_at=request.requested_at))
+            package = handoff_service.create(build_strategy_handoff_request(f"{request.run_id}:handoff", revalidation_id=revalidation.revalidation_id, actor_ref=request.actor_ref, requested_at=request.requested_at))
             run = self._complete(run, GaonV5PipelineStage.HANDOFF_PACKAGE, request.requested_at, {"handoff_package_id": package.package_id})
             if not request.approve_deployment:
                 return self._waiting(run, GaonV5PipelineStage.DEPLOYMENT_APPROVAL, request, {"handoff_package_id": package.package_id})
@@ -223,7 +232,7 @@ class GaonV5PipelineOrchestrator:
             run = self._complete(run, GaonV5PipelineStage.DEPLOYMENT_APPROVAL, request.requested_at, {"handoff_package_id": package.package_id})
 
             deployment = StrategyDeploymentService(SQLiteStrategyDeploymentRepository(self._connection), SQLiteStrategyHandoffRepository(self._connection), SQLiteChampionRegistryRepository(self._connection), self._adapter, event_store=self._event_store, metrics=self._metrics)
-            plan = deployment.plan(build_strategy_deployment_request("v5-deployment", package_id=package.package_id, actor_ref=request.actor_ref, requested_at=request.requested_at))
+            plan = deployment.plan(build_strategy_deployment_request(f"{request.run_id}:deployment", package_id=package.package_id, actor_ref=request.actor_ref, requested_at=request.requested_at))
             deployed = deployment.run(plan.plan_id, actor_ref=request.actor_ref, at=request.requested_at)
             if deployed.status != StrategyDeploymentStatus.SUCCEEDED:
                 return self._blocked(run, GaonV5PipelineStage.DEPLOYMENT, request, f"deployment {deployed.status.value}", {"deployment_run_id": deployed.run_id})
@@ -305,10 +314,12 @@ def run_from_json(value: str) -> GaonV5PipelineRun:
     )
 
 
-def _fixture_backtests(scenario: str, at: str) -> tuple[BacktestResult, BacktestResult]:
-    champion = _backtest("v5-champion-backtest", "v5-champion-request", "turtle_v5", "fp-v5-champion", 0.08, 1.2, 40, at)
-    challenger_return = 0.07 if scenario == "keep_champion" else 0.18
-    challenger = _backtest("v5-challenger-backtest", "v5-challenger-request", "turtle_v5", "fp-v5-challenger", challenger_return, 1.8, 50, at)
+def _fixture_backtests(scenario: str, at: str, run_id: str, active_champion: BacktestResult | None = None) -> tuple[BacktestResult, BacktestResult]:
+    champion = active_champion or _backtest(f"{run_id}:champion-backtest", f"{run_id}:champion-request", "turtle_v5", f"fp-{_safe_id(run_id)}-champion", 0.08, 1.2, 40, at)
+    champion_return = champion.metrics.total_return if champion.metrics.total_return is not None else 0.08
+    champion_profit_factor = champion.metrics.profit_factor if champion.metrics.profit_factor is not None else 1.2
+    challenger_return = champion_return - 0.01 if scenario == "keep_champion" else champion_return + 0.10
+    challenger = _backtest(f"{run_id}:challenger-backtest", f"{run_id}:challenger-request", "turtle_v5", f"fp-{_safe_id(run_id)}-challenger", challenger_return, champion_profit_factor + 0.50, 50, at)
     return champion, challenger
 
 
@@ -347,3 +358,7 @@ def _increment(metrics: MetricsCollector | None, name: str) -> None:
 
 def _dumps(payload: dict[str, object]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _safe_id(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.:-]+", "-", value)[:96]

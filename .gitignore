@@ -228,3 +228,4 @@ kis_token.json
 *trade_state*.json
 *.secret
 *.secrets
+.tmp-v5-*/
