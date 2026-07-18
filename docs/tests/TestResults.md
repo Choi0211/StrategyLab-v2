@@ -2,6 +2,53 @@
 
 Status: Passed
 
+## Sprint 43 Champion / Challenger Evaluation Engine
+
+- Unit tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Full result: `Ran 286 tests`
+  - Targeted command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest tests.unit.test_champion_challenger`
+  - Result: `Ran 5 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Full result: `Ran 49 tests`
+  - Targeted command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest tests.integration.test_champion_challenger_flow`
+  - Result: `Ran 3 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Import smoke: Passed
+  - `import gaon.adapters.champion`
+- CLI smoke: Passed
+  - `champion-policy-show`
+  - `db-check --db :memory:`
+  - backtest persistence -> validation persistence -> champion-evaluate -> champion-evaluation-show -> champion-evaluation-history
+- Coverage:
+  - Validation PASS Challenger evaluation
+  - Validation FAIL -> KEEP_CHAMPION
+  - Validation REVIEW -> REVIEW
+  - identical fingerprint blocking
+  - return improvement threshold
+  - MDD degradation threshold
+  - profit factor comparison
+  - missing optional metric handling
+  - score cannot override hard gates
+  - deterministic repeated evaluation
+  - persistence, event emission, metrics, CLI smoke, planner route, and v13-to-v14 migration
+- Safety:
+  - no automatic Champion promotion
+  - no active strategy switching
+  - no live KIS
+  - no broker credentials
+  - no real orders
+  - no automatic trading
+  - no automatic approval
+  - no MyMoneyGuard dependency
+  - no arbitrary shell execution
+  - no paid-provider fallback
+
 ## Sprint 42 Strategy Validation Engine
 
 - Unit tests: Passed

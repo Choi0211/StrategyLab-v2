@@ -3,6 +3,36 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 43 Champion / Challenger Evaluation Engine
+
+Included:
+
+- runtime schema v14 for Champion / Challenger evaluation requests and reports
+- deterministic `champion_challenger_policy_v1`
+- structured request, policy, comparison, report, decision, and role contracts
+- validation status hard gate using Sprint 42 `ValidationReport`
+- fingerprint existence and difference gates
+- return improvement gate using percentage-point improvement
+- MDD degradation gate using Sprint 42 positive-fraction convention
+- profit factor comparison when both values exist
+- sample period and trade count explainability
+- persistence, events, metrics, CLI inspection, and bounded Executive Planner / Research Agent route
+
+Not included:
+
+- automatic Champion promotion
+- active strategy switching
+- live KIS
+- broker credentials
+- real orders
+- automatic trading
+- automatic approval
+- MyMoneyGuard integration
+- arbitrary shell execution
+- paid-provider fallback
+
+`PROMOTION_CANDIDATE` is not `PROMOTED`.
+
 ## Sprint 42 Strategy Validation Engine
 
 Included:

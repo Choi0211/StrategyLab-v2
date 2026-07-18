@@ -29,6 +29,7 @@ Included foundations:
 - Sprint 40 safe Trading Adapter foundation with paper-only simulation, risk guardrails, events, metrics, persistence, and CLI inspection
 - Sprint 41 safe v1 Backtest Adapter foundation with normalized results, reproducibility fingerprints, fake/local process boundary, events, metrics, persistence, and CLI inspection
 - Sprint 42 deterministic Strategy Validation Engine with PASS/FAIL/REVIEW reports, conservative policy v1, schema v13 persistence, events, metrics, and CLI inspection
+- Sprint 43 Champion / Challenger Evaluation Engine with deterministic promotion-candidate reports, schema v14 persistence, events, metrics, and CLI inspection
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -294,6 +295,19 @@ Validation outputs `PASS`, `FAIL`, or `REVIEW`. `validation_policy_v1` requires 
 
 Validation PASS does not automatically promote or deploy a strategy. Sprint 42 does not implement Champion ranking, Challenger ranking, active strategy switching, automatic paper trading promotion, live KIS, broker orders, automatic trading, automatic approval, MyMoneyGuard integration, network access, or paid-provider fallback. See `docs/architecture/StrategyValidationEngine.md` and `docs/operations/ValidationPolicy.md`.
 
+## Champion / Challenger Evaluation
+
+Sprint 43 compares a current Champion backtest result with a Challenger backtest result and the Challenger's persisted Sprint 42 validation report.
+
+```powershell
+py -3.11 -m gaon.runtime.cli champion-policy-show
+py -3.11 -m gaon.runtime.cli champion-evaluate --db runtime.sqlite --champion-backtest-id <id> --challenger-backtest-id <id> --validation-id <id>
+py -3.11 -m gaon.runtime.cli champion-evaluation-show --db runtime.sqlite <evaluation_id>
+py -3.11 -m gaon.runtime.cli champion-evaluation-history --db runtime.sqlite
+```
+
+Possible decisions are `KEEP_CHAMPION`, `PROMOTION_CANDIDATE`, and `REVIEW`. `PROMOTION_CANDIDATE` is not `PROMOTED`; Sprint 43 does not switch active strategies, promote automatically, trade, approve, connect to live KIS, place broker orders, or access MyMoneyGuard. See `docs/architecture/champion-challenger-evaluation.md` and `docs/operations/ChampionChallengerEvaluation.md`.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -315,7 +329,7 @@ Validation PASS does not automatically promote or deploy a strategy. Sprint 42 d
 - `gaon.runtime.agents`: bounded agent contracts, explicit registry, dispatcher, deterministic initial agents, event, and metrics contracts
 - `gaon.runtime.scheduled_automation`: durable scheduled jobs, scheduled runs, safe due execution, events, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
-- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, deterministic Strategy Validation Engine, fake/paper adapters, and deterministic adapter tests
+- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, deterministic Strategy Validation Engine, Champion/Challenger Evaluation Engine, fake/paper adapters, and deterministic adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, Journal, validated planning, evidence search, evidence context, knowledge proposals, approval workflow, and Research Brain v3 orchestration contracts
