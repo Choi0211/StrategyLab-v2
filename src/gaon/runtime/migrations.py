@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -20,6 +20,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v5_to_v6(connection)
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
+        _upgrade_v8_to_v9(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
@@ -29,6 +30,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v5_to_v6(connection)
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
+        _upgrade_v8_to_v9(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 2:
         _upgrade_v2_to_v3(connection)
@@ -37,6 +39,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v5_to_v6(connection)
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
+        _upgrade_v8_to_v9(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 3:
         _upgrade_v3_to_v4(connection)
@@ -44,24 +47,32 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v5_to_v6(connection)
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
+        _upgrade_v8_to_v9(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 4:
         _upgrade_v4_to_v5(connection)
         _upgrade_v5_to_v6(connection)
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
+        _upgrade_v8_to_v9(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 5:
         _upgrade_v5_to_v6(connection)
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
+        _upgrade_v8_to_v9(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 6:
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
+        _upgrade_v8_to_v9(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 7:
         _upgrade_v7_to_v8(connection)
+        _upgrade_v8_to_v9(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 8:
+        _upgrade_v8_to_v9(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -293,6 +304,43 @@ def _upgrade_v7_to_v8(connection: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_research_brain_runs_status ON research_brain_runs(status, updated_at);
+        """
+    )
+
+
+def _upgrade_v8_to_v9(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_automation_jobs (
+            job_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            request_text TEXT NOT NULL,
+            schedule_json TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            approval_required INTEGER NOT NULL,
+            agent_selection TEXT,
+            tools_json TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            next_run_at TEXT NOT NULL,
+            max_attempts INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_scheduled_automation_due
+            ON scheduled_automation_jobs(enabled, next_run_at, job_id);
+        CREATE TABLE IF NOT EXISTS scheduled_automation_runs (
+            run_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            result_json TEXT NOT NULL,
+            error TEXT,
+            UNIQUE(job_id, started_at)
+        );
+        CREATE INDEX IF NOT EXISTS idx_scheduled_automation_runs_job
+            ON scheduled_automation_runs(job_id, started_at);
         """
     )
 
