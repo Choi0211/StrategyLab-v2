@@ -1,5 +1,15 @@
 # Changelog
 
+## Sprint 40 Trading Adapter Foundation
+
+- Added runtime schema v11 for trading requests and structured simulation results.
+- Added structured trading models for intents, actions, sides, order types, requests, decisions, execution context, results, statuses, account snapshots, and position snapshots.
+- Added TradingRiskPolicy, TradingExecutionService, SQLiteTradingRepository, and deterministic PaperTradingAdapter.
+- Extended Executive Planner and Agent Dispatcher with a safe trading simulation route.
+- Added durable trading lifecycle events, runtime metrics, deterministic trading CLI commands, unit tests, integration tests, and v10-to-v11 migration coverage.
+- Live trading is not implemented.
+- Did not add KIS REST, KIS WebSocket, broker authentication, real account access, real order execution, automatic trading, automatic approval, MyMoneyGuard integration, live market data, Telegram trading commands, paid-provider fallback, or unrestricted shell execution.
+
 ## Sprint 39 Daily Research Pipeline
 
 - Added runtime schema v10 for daily research profiles and runs.

@@ -26,6 +26,7 @@ class RoutingDecision(str, Enum):
     RESEARCH = "research"
     MEMORY = "memory"
     RUNTIME = "runtime"
+    TRADING = "trading"
     HUMAN_REVIEW = "human_review"
     UNSUPPORTED = "unsupported"
 
@@ -35,6 +36,7 @@ class AgentSelection(str, Enum):
     CODING_ASSISTANT = "coding_assistant"
     LEARNING_MEMORY = "learning_memory"
     RUNTIME_OPERATOR = "runtime_operator"
+    TRADING_AGENT = "trading_agent"
     HUMAN_REVIEWER = "human_reviewer"
 
 
@@ -44,6 +46,7 @@ class ToolSelection(str, Enum):
     KNOWLEDGE_PROPOSAL = "knowledge_proposal"
     MEMORY_RETRIEVAL = "memory_retrieval"
     RUNTIME_STATUS = "runtime_status"
+    TRADING_SIMULATION = "trading_simulation"
     APPROVAL_WORKFLOW = "approval_workflow"
     NOOP = "noop"
 
@@ -219,7 +222,12 @@ def executive_plan_event(plan: ExecutivePlan, *, actor_ref: str, appended_at: st
 def _deterministic_plan(request: ExecutiveRequest, *, provider: str, route: str) -> ExecutivePlan:
     text = request.text.lower()
     approval_required = _requires_approval(text)
-    if any(token in text for token in ("기억", "memory", "지난 연구", "검색")):
+    if _is_trading_simulation(text):
+        decision = RoutingDecision.TRADING
+        agents = (AgentSelection.TRADING_AGENT,)
+        tools = (ToolSelection.TRADING_SIMULATION,)
+        reason = "route to paper trading simulation boundary"
+    elif any(token in text for token in ("기억", "memory", "지난 연구", "검색")):
         decision = RoutingDecision.MEMORY
         agents = (AgentSelection.LEARNING_MEMORY,)
         tools = (ToolSelection.MEMORY_RETRIEVAL,)
@@ -296,8 +304,16 @@ def _plan_from_provider_json(request: ExecutiveRequest, value: str, *, provider:
 
 
 def _requires_approval(text: str) -> bool:
-    risky = ("매수", "매도", "주문", "실행", "approve", "approval", "trade", "trading", "execute", "delete", "policy")
+    if _is_trading_simulation(text):
+        return False
+    risky = ("매수", "매도", "주문", "실행", "approve", "approval", "trade", "trading", "execute", "delete", "policy", "live buy", "live sell", "real order")
     return any(token in text for token in risky)
+
+
+def _is_trading_simulation(text: str) -> bool:
+    simulation_tokens = ("simulate", "simulation", "paper", "paper-trade", "paper trade", "모의", "시뮬")
+    trading_tokens = ("buy", "sell", "trade", "trading", "order", "portfolio", "position", "account", "cancel", "매수", "매도", "주문", "계좌", "포지션")
+    return any(token in text for token in simulation_tokens) and any(token in text for token in trading_tokens)
 
 
 def _append_unique(items: tuple, item):

@@ -3,6 +3,35 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 40 Trading Adapter Foundation
+
+Included:
+
+- runtime schema v11 for trading requests and simulation results
+- structured TradingIntent, TradingAction, OrderSide, OrderType, TradingRequest, TradingDecision, TradingExecutionContext, TradingResult, TradingStatus, AccountSnapshot, and PositionSnapshot models
+- TradingRiskPolicy guardrails for quantity, symbol format, max notional, max position, duplicate request, unsupported order type, disabled adapter, and live execution blocking
+- FakeTradingAdapter compatibility and deterministic PaperTradingAdapter
+- TradingExecutionService with structured errors, no-crash failure isolation, durable events, metrics, and persistence
+- Executive Planner and Agent Dispatcher route for paper trading simulation
+- CLI commands for `trading-status`, `trading-account`, `trading-positions`, `trading-simulate-buy`, `trading-simulate-sell`, `trading-cancel-simulated-order`, and `trading-history`
+
+Not included:
+
+- live trading
+- KIS REST
+- KIS WebSocket
+- broker authentication
+- real account access
+- real balance query
+- real order execution
+- automatic trading
+- automatic approval
+- MyMoneyGuard integration
+- live market data
+- Telegram trading commands
+- paid-provider fallback
+- unrestricted shell execution
+
 ## Sprint 39 Daily Research Pipeline
 
 Included:

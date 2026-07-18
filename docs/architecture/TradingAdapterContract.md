@@ -1,8 +1,29 @@
 # Trading Adapter Contract
 
-Status: Sprint 23 v2 release candidate contract
+Status: Sprint 40 safe trading adapter foundation
 
 The public repository defines broker-free adapter contracts only. It does not connect to a live broker, private account, KIS API, or MyMoneyGuard runtime.
+
+Live trading is not implemented.
+
+## Sprint 40 Structured Boundary
+
+Sprint 40 adds structured non-live trading models:
+
+- `TradingIntent`
+- `TradingAction`
+- `OrderSide`
+- `OrderType`
+- `TradingRequest`
+- `TradingDecision`
+- `TradingExecutionContext`
+- `TradingResult`
+- `TradingStatus`
+- `AccountSnapshot`
+- `PositionSnapshot`
+- `TradingRiskPolicy`
+
+Only fake and paper adapters are implemented. Live broker adapters remain disabled and unimplemented.
 
 ## Read-Only Methods
 
@@ -39,6 +60,9 @@ Not included:
 - live broker connection
 - broker credentials
 - account IDs
+- KIS REST or WebSocket
+- real account access
+- real order execution
 - private MyMoneyGuard imports
 - automatic order approval
 - Telegram-triggered order execution

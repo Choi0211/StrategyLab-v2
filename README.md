@@ -26,6 +26,7 @@ Included foundations:
 - Phase A v2.1 provider registry, plugin lifecycle, metrics, durable event store, safe replay, and long-term memory foundation
 - Phase B v3.0 Research Brain: validated planning, safe evidence providers, evidence context, knowledge proposals, approval workflow, durable orchestration, checkpoints, reports, and free-only defaults
 - Sprint 39 Daily Research Pipeline on top of the Sprint 38 scheduler, with deterministic evidence, reports, pending-review proposals, events, metrics, and CLI inspection
+- Sprint 40 safe Trading Adapter foundation with paper-only simulation, risk guardrails, events, metrics, persistence, and CLI inspection
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -249,6 +250,19 @@ Sprint 17-22 add SQLite-backed runtime state, health/readiness checks, bounded r
 ## Trading Adapter Contract
 
 Sprint 23 adds `gaon.adapters.TradingAdapter` as a broker-free public contract. It defines read-only account, position, market, and runtime status methods plus an approval-gated order command lifecycle. Execution is disabled by default, and no live broker, KIS API, account ID, or MyMoneyGuard private code is connected.
+
+Sprint 40 extends this into a safe paper-only trading foundation:
+
+```powershell
+py -3.11 -m gaon.runtime.cli trading-status --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli trading-account --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli trading-positions --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli trading-simulate-buy --db runtime.sqlite --symbol 005930 --quantity 1 --price 70000
+py -3.11 -m gaon.runtime.cli trading-simulate-sell --db runtime.sqlite --symbol 005930 --quantity 1 --price 70000
+py -3.11 -m gaon.runtime.cli trading-history --db runtime.sqlite
+```
+
+Live trading is not implemented. The public repository still has no KIS REST, KIS WebSocket, broker authentication, real account access, real balance query, real order execution, automatic trading, automatic approval, MyMoneyGuard integration, live market data, or Telegram trading command support. See `docs/architecture/trading-adapter-foundation.md` and `docs/operations/PaperTrading.md`.
 
 ## Module Structure
 

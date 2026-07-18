@@ -2,6 +2,28 @@
 
 Status: Passed
 
+## Sprint 40 Trading Adapter Foundation
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 259 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 36 tests`
+  - Status: `OK`
+- Targeted Sprint 40 tests: Passed
+  - Unit: `Ran 7 tests`
+  - Integration: `Ran 4 tests`
+- Scope:
+  - schema v11 migration from v10
+  - structured trading request/result contracts
+  - fake and paper adapter behavior
+  - risk guardrails
+  - Executive Planner to Trading Agent to PaperTradingAdapter flow
+  - durable events, metrics, persistence, duplicate request protection, CLI smoke, live intent blocking, approval-required blocking, and adapter failure isolation
+  - no live KIS, broker credentials, real account access, real orders, automatic trading, automatic approval, MyMoneyGuard dependency, live market data, Telegram trading commands, paid-provider fallback, or unrestricted shell execution
+
 ## Sprint 39 Daily Research Pipeline
 
 - Unit tests: Passed
