@@ -12,6 +12,8 @@ from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionSe
 from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionChallengerPolicy, SQLiteChampionChallengerRepository, build_champion_challenger_request
 from gaon.adapters.champion_registry import ChampionRegistryService, ChampionRollbackRequest, SQLiteChampionRegistryRepository
 from gaon.adapters.paper_forward import PaperTradingForwardTestService, SQLitePaperTradingSessionRepository
+from gaon.adapters.paper_revalidation import PaperRevalidationEngine, PaperRevalidationPolicy, SQLitePaperRevalidationRepository, build_paper_revalidation_request
+from gaon.adapters.strategy_execution import SQLiteStrategyExecutionRepository, StrategyExecutionMode, StrategyExecutionPolicy, StrategyExecutionRuntime, build_strategy_execution_request
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, ValidationPolicy, build_validation_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
@@ -244,6 +246,34 @@ def main(argv: list[str] | None = None) -> int:
     paper_summary = sub.add_parser("paper-session-summary")
     paper_summary.add_argument("--db", default="runtime.sqlite")
     paper_summary.add_argument("session_id")
+    paper_revalidation_policy = sub.add_parser("paper-revalidation-policy-show")
+    paper_revalidation_policy.add_argument("--json", action="store_true")
+    paper_revalidate = sub.add_parser("paper-revalidate")
+    paper_revalidate.add_argument("--db", default="runtime.sqlite")
+    paper_revalidate.add_argument("--session-id", required=True)
+    paper_revalidate.add_argument("--revalidation-id", required=False)
+    paper_revalidation_show = sub.add_parser("paper-revalidation-show")
+    paper_revalidation_show.add_argument("--db", default="runtime.sqlite")
+    paper_revalidation_show.add_argument("revalidation_id")
+    paper_revalidation_history = sub.add_parser("paper-revalidation-history")
+    paper_revalidation_history.add_argument("--db", default="runtime.sqlite")
+    execution_policy = sub.add_parser("execution-policy-show")
+    execution_policy.add_argument("--json", action="store_true")
+    execution_status = sub.add_parser("execution-status")
+    execution_status.add_argument("--db", default="runtime.sqlite")
+    execution_plan = sub.add_parser("execution-plan")
+    execution_plan.add_argument("--db", default="runtime.sqlite")
+    execution_plan.add_argument("--mode", choices=("disabled", "paper", "live"), required=True)
+    execution_plan.add_argument("--plan-id", required=False)
+    execution_plan.add_argument("--revalidation-id", required=False)
+    execution_run = sub.add_parser("execution-run")
+    execution_run.add_argument("--db", default="runtime.sqlite")
+    execution_run.add_argument("--plan-id", required=True)
+    execution_show = sub.add_parser("execution-show")
+    execution_show.add_argument("--db", default="runtime.sqlite")
+    execution_show.add_argument("run_id")
+    execution_history = sub.add_parser("execution-history")
+    execution_history.add_argument("--db", default="runtime.sqlite")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -825,6 +855,95 @@ def _run(args: argparse.Namespace) -> int:
             print(f"paper-session-summary: session_id={summary.session_id} status={summary.status.value} simulated_orders={summary.simulated_orders} fills={summary.fills} rejected={summary.rejected_simulated_orders} failed={summary.failed_simulated_orders}")
         finally:
             store.close()
+    elif args.command == "paper-revalidation-policy-show":
+        policy = PaperRevalidationPolicy()
+        if args.json:
+            import json
+
+            print(json.dumps(policy.__dict__, sort_keys=True, separators=(",", ":")))
+        else:
+            print(f"paper-revalidation-policy-show: policy_version={policy.policy_version} minimum_simulated_trades={policy.minimum_simulated_trades} maximum_paper_drawdown={policy.maximum_paper_drawdown:.2f} hard_kill_paper_drawdown={policy.hard_kill_paper_drawdown:.2f}")
+    elif args.command == "paper-revalidate":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            sessions = SQLitePaperTradingSessionRepository(store._connection)
+            session = sessions.get_session(args.session_id)
+            summary = sessions.get_summary(args.session_id)
+            active = SQLiteChampionRegistryRepository(store._connection).get_active(session.slot)
+            if active is None:
+                raise ValueError("active champion is required")
+            revalidation_id = args.revalidation_id or f"paper-revalidation:{args.session_id}"
+            request = build_paper_revalidation_request(revalidation_id, session=session, actor_ref="actor:redacted", requested_at=now)
+            report = PaperRevalidationEngine(repository=SQLitePaperRevalidationRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector()).revalidate(request, active=active, session=session, summary=summary, generated_at=now)
+            print(f"paper-revalidate: revalidation_id={report.revalidation_id} status={report.status.value} session_id={report.session_id}")
+        finally:
+            store.close()
+    elif args.command == "paper-revalidation-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(SQLitePaperRevalidationRepository(store._connection).get_report(args.revalidation_id).to_json())
+        finally:
+            store.close()
+    elif args.command == "paper-revalidation-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            reports = SQLitePaperRevalidationRepository(store._connection).list_reports()
+            for report in reports:
+                print(f"{report.revalidation_id} status={report.status.value} session_id={report.session_id}")
+            if not reports:
+                print("paper-revalidation-history: none")
+        finally:
+            store.close()
+    elif args.command == "execution-policy-show":
+        policy = StrategyExecutionPolicy()
+        if args.json:
+            import json
+
+            print(json.dumps({"policy_version": policy.policy_version, "default_mode": policy.default_mode.value, "live_trading_enabled": policy.live_trading_enabled, "broker_adapter_available": policy.broker_adapter_available}, sort_keys=True, separators=(",", ":")))
+        else:
+            print(f"execution-policy-show: policy_version={policy.policy_version} default_mode={policy.default_mode.value} live_trading_enabled={policy.live_trading_enabled} broker_adapter_available={policy.broker_adapter_available}")
+    elif args.command == "execution-status":
+        store = RuntimeStateStore(args.db)
+        try:
+            plans = SQLiteStrategyExecutionRepository(store._connection).list_plans()
+            runs = SQLiteStrategyExecutionRepository(store._connection).list_runs()
+            print(f"execution-status: plans={len(plans)} runs={len(runs)}")
+        finally:
+            store.close()
+    elif args.command == "execution-plan":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            request_id = args.plan_id or f"execution:{args.mode}:{now}"
+            request = build_strategy_execution_request(request_id, StrategyExecutionMode(args.mode), actor_ref="actor:redacted", requested_at=now, revalidation_id=args.revalidation_id)
+            plan = _execution_runtime(store).plan(request)
+            print(f"execution-plan: plan_id={plan.plan_id} mode={plan.mode.value} status={plan.status.value} reason={plan.decision.reason}")
+        finally:
+            store.close()
+    elif args.command == "execution-run":
+        store = RuntimeStateStore(args.db)
+        try:
+            run = _execution_runtime(store).run(args.plan_id, actor_ref="actor:redacted", at=_utc_now())
+            print(f"execution-run: run_id={run.run_id} mode={run.mode.value} status={run.status.value} reason={run.block_reason or ''} result_ref={run.result_ref or ''}")
+        finally:
+            store.close()
+    elif args.command == "execution-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(SQLiteStrategyExecutionRepository(store._connection).get_run(args.run_id).to_json())
+        finally:
+            store.close()
+    elif args.command == "execution-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            runs = SQLiteStrategyExecutionRepository(store._connection).list_runs()
+            for run in runs:
+                print(f"{run.run_id} mode={run.mode.value} status={run.status.value} reason={run.block_reason or ''}")
+            if not runs:
+                print("execution-history: none")
+        finally:
+            store.close()
     elif args.command == "research-proposals-list":
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
@@ -990,6 +1109,17 @@ def _paper_service(store: RuntimeStateStore) -> PaperTradingForwardTestService:
     return PaperTradingForwardTestService(
         SQLitePaperTradingSessionRepository(store._connection),
         SQLiteChampionRegistryRepository(store._connection),
+        trading_repository=SQLiteTradingRepository(store._connection),
+        event_store=SQLiteEventStore(store._connection),
+        metrics=MetricsCollector(),
+    )
+
+
+def _execution_runtime(store: RuntimeStateStore) -> StrategyExecutionRuntime:
+    return StrategyExecutionRuntime(
+        SQLiteStrategyExecutionRepository(store._connection),
+        SQLiteChampionRegistryRepository(store._connection),
+        revalidations=SQLitePaperRevalidationRepository(store._connection),
         trading_repository=SQLiteTradingRepository(store._connection),
         event_store=SQLiteEventStore(store._connection),
         metrics=MetricsCollector(),

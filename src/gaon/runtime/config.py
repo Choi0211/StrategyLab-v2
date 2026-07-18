@@ -11,6 +11,7 @@ from gaon.runtime.errors import ConfigurationError, mask_secret
 SUPPORTED_TIMEZONES = ("UTC", "Asia/Seoul")
 SUPPORTED_WEEKDAYS = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
 SUPPORTED_MODES = ("dry-run", "execute")
+SUPPORTED_EXECUTION_MODES = ("disabled", "paper", "live")
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ class GaonRuntimeConfig:
     assistant_max_output_tokens: int = 500
     free_only_mode: bool = True
     paid_provider_enabled: bool = False
+    execution_mode: str = "disabled"
+    live_trading_enabled: bool = False
 
     def __post_init__(self) -> None:
         validate_mode(self.mode)
@@ -63,6 +66,10 @@ class GaonRuntimeConfig:
             raise ConfigurationError("execute mode requires GAON_APPROVAL_SIGNING_SECRET")
         if self.free_only_mode and self.paid_provider_enabled:
             raise ConfigurationError("paid providers cannot be enabled while GAON_FREE_ONLY_MODE=true")
+        if self.execution_mode not in SUPPORTED_EXECUTION_MODES:
+            raise ConfigurationError("execution_mode must be disabled, paper, or live")
+        if self.live_trading_enabled and self.execution_mode != "live":
+            raise ConfigurationError("live trading can only be enabled when GAON_EXECUTION_MODE=live")
 
     def __repr__(self) -> str:
         return (
@@ -75,7 +82,8 @@ class GaonRuntimeConfig:
             f"approval_signing_secret={mask_secret(self.approval_signing_secret)!r}, "
             f"assistant_enabled={self.assistant_enabled!r}, assistant_provider={self.assistant_provider!r}, "
             f"assistant_api_key={mask_secret(self.assistant_api_key)!r}, "
-            f"free_only_mode={self.free_only_mode!r}, paid_provider_enabled={self.paid_provider_enabled!r})"
+            f"free_only_mode={self.free_only_mode!r}, paid_provider_enabled={self.paid_provider_enabled!r}, "
+            f"execution_mode={self.execution_mode!r}, live_trading_enabled={self.live_trading_enabled!r})"
         )
 
 
@@ -105,6 +113,8 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         assistant_max_output_tokens=int(env.get("GAON_ASSISTANT_MAX_OUTPUT_TOKENS", "500")),
         free_only_mode=parse_bool(env.get("GAON_FREE_ONLY_MODE"), "GAON_FREE_ONLY_MODE", default=True),
         paid_provider_enabled=parse_bool(env.get("GAON_PAID_PROVIDER_ENABLED"), "GAON_PAID_PROVIDER_ENABLED", default=False),
+        execution_mode=env.get("GAON_EXECUTION_MODE", "disabled"),
+        live_trading_enabled=parse_bool(env.get("GAON_LIVE_TRADING_ENABLED"), "GAON_LIVE_TRADING_ENABLED", default=False),
     )
 
 

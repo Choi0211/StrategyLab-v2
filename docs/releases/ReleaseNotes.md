@@ -3,6 +3,49 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 47 Strategy Execution Runtime
+
+Included:
+
+- `strategy_execution_policy_v1`
+- `DISABLED`, `PAPER`, and `LIVE` execution modes
+- default `DISABLED` mode
+- active Champion version and fingerprint binding
+- PAPER execution through the existing paper adapter stack
+- LIVE planning gates using Paper Revalidation status
+- runtime schema v18
+- events, metrics, CLI commands, unit tests, and integration tests
+
+Not included:
+
+- KIS adapter
+- live broker orders
+- live execution enablement
+- automatic Champion promotion
+- automatic rollback
+- automatic approval
+- MyMoneyGuard dependency
+
+## Sprint 46 Paper Revalidation and Kill/Rollback Gates
+
+Included:
+
+- `paper_revalidation_policy_v1`
+- `LIVE_ELIGIBLE`, `HOLD`, `KILL`, `ROLLBACK_RECOMMENDED`, and `REVIEW`
+- paper session, summary, active Champion fingerprint, and evidence consistency gates
+- runtime schema v17
+- events, metrics, CLI commands, unit tests, and integration tests
+
+Not included:
+
+- live trading enablement
+- KIS adapter
+- broker orders
+- automatic Champion rollback
+- automatic Champion Registry mutation
+- automatic approval
+- MyMoneyGuard dependency
+
 ## Sprint 45 Paper Trading Forward Test
 
 Included:
