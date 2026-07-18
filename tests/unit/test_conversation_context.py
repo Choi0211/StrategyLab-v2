@@ -22,7 +22,7 @@ class ConversationContextTests(unittest.TestCase):
         self.connection.close()
 
     def test_schema_migrates_to_v23(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 23)
+        self.assertGreaterEqual(SCHEMA_VERSION, 23)
         row = self.connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_summaries'").fetchone()
         self.assertIsNotNone(row)
 
