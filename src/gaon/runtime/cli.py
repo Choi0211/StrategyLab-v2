@@ -13,6 +13,7 @@ from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionC
 from gaon.adapters.champion_registry import ChampionRegistryService, ChampionRollbackRequest, SQLiteChampionRegistryRepository
 from gaon.adapters.paper_forward import PaperTradingForwardTestService, SQLitePaperTradingSessionRepository
 from gaon.adapters.paper_revalidation import PaperRevalidationEngine, PaperRevalidationPolicy, SQLitePaperRevalidationRepository, build_paper_revalidation_request
+from gaon.adapters.strategy_deployment import FakeStrategyDeploymentAdapter, LocalSafeStrategyDeploymentAdapter, SQLiteStrategyDeploymentRepository, StrategyDeploymentPolicy, StrategyDeploymentService, build_strategy_deployment_request
 from gaon.adapters.strategy_handoff import SQLiteStrategyHandoffRepository, StrategyHandoffService, build_strategy_handoff_request, safe_handoff_export_path
 from gaon.adapters.strategy_execution import SQLiteStrategyExecutionRepository, StrategyExecutionMode, StrategyExecutionPolicy, StrategyExecutionRuntime, build_strategy_execution_request
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
@@ -296,6 +297,24 @@ def main(argv: list[str] | None = None) -> int:
     handoff_reject.add_argument("--db", default="runtime.sqlite")
     handoff_reject.add_argument("package_id")
     handoff_reject.add_argument("--reason", default="rejected by explicit human review")
+    deployment_status = sub.add_parser("deployment-status")
+    deployment_status.add_argument("--db", default="runtime.sqlite")
+    deployment_plan = sub.add_parser("deployment-plan")
+    deployment_plan.add_argument("--db", default="runtime.sqlite")
+    deployment_plan.add_argument("--package-id", required=True)
+    deployment_plan.add_argument("--request-id", required=False)
+    deployment_plan.add_argument("--target-id", default="generic-runtime")
+    deployment_run = sub.add_parser("deployment-run")
+    deployment_run.add_argument("--db", default="runtime.sqlite")
+    deployment_run.add_argument("--plan-id", required=True)
+    deployment_run.add_argument("--target-dir", required=False)
+    deployment_show = sub.add_parser("deployment-show")
+    deployment_show.add_argument("--db", default="runtime.sqlite")
+    deployment_show.add_argument("run_id")
+    deployment_history = sub.add_parser("deployment-history")
+    deployment_history.add_argument("--db", default="runtime.sqlite")
+    deployment_backups = sub.add_parser("deployment-backups")
+    deployment_backups.add_argument("--db", default="runtime.sqlite")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -1016,6 +1035,57 @@ def _run(args: argparse.Namespace) -> int:
             print(f"handoff-reject: package_id={package.package_id} status={package.status.value}")
         finally:
             store.close()
+    elif args.command == "deployment-status":
+        store = RuntimeStateStore(args.db)
+        try:
+            repo = SQLiteStrategyDeploymentRepository(store._connection)
+            print(f"deployment-status: plans={len(repo.list_plans())} runs={len(repo.list_runs())} backups={len(repo.list_backups())}")
+        finally:
+            store.close()
+    elif args.command == "deployment-plan":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            request_id = args.request_id or f"deployment:{args.package_id}:{now}"
+            request = build_strategy_deployment_request(request_id, package_id=args.package_id, actor_ref="actor:redacted", requested_at=now, target_id=args.target_id)
+            plan = _deployment_service(store).plan(request)
+            print(f"deployment-plan: plan_id={plan.plan_id} status={plan.status.value} reason={plan.reason}")
+        finally:
+            store.close()
+    elif args.command == "deployment-run":
+        store = RuntimeStateStore(args.db)
+        try:
+            service = _deployment_service(store, target_dir=args.target_dir)
+            run = service.run(args.plan_id, actor_ref="actor:redacted", at=_utc_now())
+            print(f"deployment-run: run_id={run.run_id} status={run.status.value} backup_id={run.backup_id or ''} message={run.message}")
+        finally:
+            store.close()
+    elif args.command == "deployment-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(SQLiteStrategyDeploymentRepository(store._connection).get_run(args.run_id).to_json())
+        finally:
+            store.close()
+    elif args.command == "deployment-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            runs = SQLiteStrategyDeploymentRepository(store._connection).list_runs()
+            for run in runs:
+                print(f"{run.run_id} package_id={run.package_id} status={run.status.value} backup_id={run.backup_id or ''}")
+            if not runs:
+                print("deployment-history: none")
+        finally:
+            store.close()
+    elif args.command == "deployment-backups":
+        store = RuntimeStateStore(args.db)
+        try:
+            backups = SQLiteStrategyDeploymentRepository(store._connection).list_backups()
+            for backup in backups:
+                print(f"{backup.backup_id} package_id={backup.package_id} restore_ref={backup.restore_ref}")
+            if not backups:
+                print("deployment-backups: none")
+        finally:
+            store.close()
     elif args.command == "research-proposals-list":
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
@@ -1206,6 +1276,19 @@ def _handoff_service(store: RuntimeStateStore) -> StrategyHandoffService:
         SQLiteBacktestRepository(store._connection),
         event_store=SQLiteEventStore(store._connection),
         metrics=MetricsCollector(),
+    )
+
+
+def _deployment_service(store: RuntimeStateStore, target_dir: str | None = None) -> StrategyDeploymentService:
+    adapter = LocalSafeStrategyDeploymentAdapter(target_dir) if target_dir else FakeStrategyDeploymentAdapter()
+    return StrategyDeploymentService(
+        SQLiteStrategyDeploymentRepository(store._connection),
+        SQLiteStrategyHandoffRepository(store._connection),
+        SQLiteChampionRegistryRepository(store._connection),
+        adapter,
+        event_store=SQLiteEventStore(store._connection),
+        metrics=MetricsCollector(),
+        policy=StrategyDeploymentPolicy(target_id="generic-runtime"),
     )
 
 

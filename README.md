@@ -35,6 +35,7 @@ Included foundations:
 - Sprint 46 Paper Revalidation Engine with `LIVE_ELIGIBLE`, `HOLD`, `KILL`, `ROLLBACK_RECOMMENDED`, and `REVIEW` safety decisions, schema v17 persistence, events, metrics, and CLI inspection
 - Sprint 47 Strategy Execution Runtime with default `DISABLED` mode, active-Champion binding, paper execution, live blocked behavior, schema v18 persistence, events, metrics, and CLI inspection
 - Sprint 48 approved Champion Strategy Handoff Package generation with explicit deployment approval, deterministic JSON checksums, schema v19 persistence, events, metrics, and CLI inspection
+- Sprint 49 approval-gated Strategy Deployment Workflow with adapter contract, fake/local-safe adapters, preflight, backup, dry-run, verification, rollback, schema v20 persistence, events, metrics, and CLI inspection
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

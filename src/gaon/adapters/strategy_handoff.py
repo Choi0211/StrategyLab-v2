@@ -192,20 +192,22 @@ class StrategyHandoffPackage:
             "kind": "strategy_handoff_package",
             "schema_version": STRATEGY_HANDOFF_SCHEMA_VERSION,
             "package_id": self.package_id,
-            "status": self.status.value,
             "manifest": manifest,
             "parameters": self.parameters.as_dict(),
             "compatibility": self.compatibility.as_dict(),
             "created_by": self.created_by,
             "approval_required": self.approval_required,
+        }
+
+    def payload(self) -> dict[str, object]:
+        return self.payload_without_checksum() | {
+            "status": self.status.value,
+            "manifest": self.manifest.as_dict(),
             "approved_by": self.approved_by,
             "approved_at": self.approved_at,
             "rejected_by": self.rejected_by,
             "rejected_at": self.rejected_at,
         }
-
-    def payload(self) -> dict[str, object]:
-        return self.payload_without_checksum() | {"manifest": self.manifest.as_dict()}
 
     def to_json(self) -> str:
         return _dumps(self.payload())
@@ -270,8 +272,13 @@ class SQLiteStrategyHandoffRepository:
             )
 
     def latest_approval(self, package_id: str) -> StrategyDeploymentApproval | None:
-        row = self._connection.execute("SELECT payload_json FROM strategy_handoff_approvals WHERE package_id = ? ORDER BY decided_at DESC, approval_id DESC LIMIT 1", (package_id,)).fetchone()
-        return approval_from_json(str(row[0])) if row else None
+        row = self._connection.execute("SELECT package_checksum, payload_json FROM strategy_handoff_approvals WHERE package_id = ? ORDER BY decided_at DESC, approval_id DESC LIMIT 1", (package_id,)).fetchone()
+        if row is None:
+            return None
+        approval = approval_from_json(str(row[1]))
+        if approval.package_checksum != str(row[0]):
+            return replace(approval, package_checksum=str(row[0]))
+        return approval
 
 
 class StrategyHandoffService:

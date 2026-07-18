@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -37,6 +37,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         16: _upgrade_v16_to_v17,
         17: _upgrade_v17_to_v18,
         18: _upgrade_v18_to_v19,
+        19: _upgrade_v19_to_v20,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -637,6 +638,49 @@ def _upgrade_v18_to_v19(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_strategy_handoff_approvals_package
             ON strategy_handoff_approvals(package_id, decided_at);
+        """
+    )
+
+
+def _upgrade_v19_to_v20(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_deployment_requests (
+            request_id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_deployment_requests_package
+            ON strategy_deployment_requests(package_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_strategy_deployment_requests_status
+            ON strategy_deployment_requests(status, created_at);
+        CREATE TABLE IF NOT EXISTS strategy_deployment_runs (
+            run_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            package_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            backup_id TEXT,
+            payload_json TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_deployment_runs_package
+            ON strategy_deployment_runs(package_id, target_id, status);
+        CREATE INDEX IF NOT EXISTS idx_strategy_deployment_runs_plan
+            ON strategy_deployment_runs(plan_id, started_at);
+        CREATE TABLE IF NOT EXISTS strategy_deployment_backups (
+            backup_id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL,
+            restore_ref TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_deployment_backups_package
+            ON strategy_deployment_backups(package_id, created_at);
         """
     )
 

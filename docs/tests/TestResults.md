@@ -889,8 +889,18 @@ Status: Passed
   - No `.env`, `.env.*` except `.env.example`, `kis_token.json`, token JSON, account JSON, trade state JSON, secret files, log files, or private data dumps were detected.
 # Sprint 48
 
-Pending local verification:
+Local targeted verification:
 
 - unit tests
 - integration tests
 - `scripts/verify_release.py`
+
+# Sprint 49
+
+Final local verification:
+
+- full unit tests: PASS, 320 tests
+- full integration tests: PASS, 60 tests
+- `scripts/verify_release.py`: PASS
+- import smoke: PASS
+- CLI smoke: PASS, `deployment-status --db :memory:`
