@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -40,6 +40,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         19: _upgrade_v19_to_v20,
         20: _upgrade_v20_to_v21,
         21: _upgrade_v21_to_v22,
+        22: _upgrade_v22_to_v23,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -745,6 +746,23 @@ def _upgrade_v21_to_v22(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_conversation_messages_session
             ON conversation_messages(session_id, created_at, message_id);
+        """
+    )
+
+
+def _upgrade_v22_to_v23(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_summaries (
+            summary_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            source_refs_json TEXT NOT NULL,
+            summary_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES conversation_sessions(session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_summaries_session
+            ON conversation_summaries(session_id, created_at);
         """
     )
 

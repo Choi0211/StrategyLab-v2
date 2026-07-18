@@ -221,11 +221,13 @@ class LLMConversationBrain:
         config: GaonRuntimeConfig,
         repository: ConversationRepository,
         *,
+        context_orchestrator=None,
         event_store: SQLiteEventStore | None = None,
         metrics: MetricsCollector | None = None,
     ) -> None:
         self._config = config
         self._repository = repository
+        self._context_orchestrator = context_orchestrator
         self._event_store = event_store
         self._metrics = metrics or MetricsCollector()
 
@@ -243,7 +245,8 @@ class LLMConversationBrain:
         self._repository.add_message(
             LLMConversationMessage(user_message_id, session.session_id, "user", text, intent.value, "input", (), (), (), now)
         )
-        response_text, route, warnings, references, provider = self._generate(request, intent, approval_required)
+        context = self._context_orchestrator.build(request.session_id) if self._context_orchestrator is not None else None
+        response_text, route, warnings, references, provider = self._generate(request, intent, approval_required, context)
         generated_at = now
         response_id = f"conversation-assistant:{uuid4().hex}"
         response = LLMConversationResponse(
@@ -295,8 +298,11 @@ class LLMConversationBrain:
             self._repository.upsert_session(session)
             return session
 
-    def _generate(self, request: LLMConversationRequest, intent: Intent, approval_required: bool) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str]:
+    def _generate(self, request: LLMConversationRequest, intent: Intent, approval_required: bool, context) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str]:
         warnings: tuple[str, ...] = ()
+        references: tuple[str, ...] = tuple(context.references) if context is not None else ()
+        if context is not None:
+            warnings = (*warnings, *context.warnings)
         warning = safety_warning(request.text)
         if warning:
             approval_required = True
@@ -304,7 +310,7 @@ class LLMConversationBrain:
         if not self._config.assistant_enabled or approval_required:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
-            return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), (), "deterministic"
+            return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic"
         try:
             provider = build_assistant_provider(self._config)
             provider_response = validate_provider_response(
@@ -315,8 +321,8 @@ class LLMConversationBrain:
                         user_id=request.user_ref,
                         conversation_id=request.session_id,
                         received_at=request.received_at,
-                        prompt=_base_prompt(request.text),
-                        references=(),
+                        prompt=_base_prompt(request.text, context),
+                        references=references,
                     )
                 ),
                 max_chars=self._config.assistant_max_output_tokens * 8,
@@ -325,11 +331,11 @@ class LLMConversationBrain:
                 provider_response.text,
                 provider_response.route,
                 _dedupe((*warnings, *provider_response.warnings)),
-                provider_response.references,
+                _dedupe((*references, *provider_response.references)),
                 provider_response.provider_name,
             )
         except ProviderError as exc:
-            return persona_text(intent), "fallback", _dedupe((*warnings, f"provider fallback: {exc.__class__.__name__}")), (), "deterministic"
+            return persona_text(intent), "fallback", _dedupe((*warnings, f"provider fallback: {exc.__class__.__name__}")), references, "deterministic"
 
     def _append_event(self, response: LLMConversationResponse, request: LLMConversationRequest) -> None:
         if self._event_store is None:
@@ -382,11 +388,12 @@ def _tuple_of_str(value: object) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _base_prompt(text: str) -> str:
+def _base_prompt(text: str, context=None) -> str:
+    context_text = f"\n\n{context.to_prompt_context()}" if context is not None else ""
     return (
         "You are Gaon, a calm Korean AI Engineering Partner for Youngha. "
         "Do not claim live trading, automatic approval, private repo access, or unavailable integrations. "
-        f"User message: {text}"
+        f"User message: {text}{context_text}"
     )
 
 

@@ -3,6 +3,7 @@
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.assistant_provider import AssistantProvider, AssistantProviderResponse, AssistantRequest
 from gaon.runtime.conversation import ConversationInput, ConversationResponse, ConversationRuntime
+from gaon.runtime.conversation_context import ConversationContextBundle, ConversationContextOrchestrator, ContextItem, ContextSourceType
 from gaon.runtime.event_bus import InMemoryEventBus
 from gaon.runtime.events import EventType, RuntimeEvent
 from gaon.runtime.event_store import DurableEvent, ReplayResult, SQLiteEventStore
@@ -21,8 +22,12 @@ from gaon.runtime.worker import DurableQueueItem, DurableTaskQueue, QueueItemSta
 
 __all__ = [
     "ConversationInput",
+    "ConversationContextBundle",
+    "ConversationContextOrchestrator",
     "ConversationResponse",
     "ConversationRuntime",
+    "ContextItem",
+    "ContextSourceType",
     "AssistantProvider",
     "AssistantProviderResponse",
     "AssistantRequest",

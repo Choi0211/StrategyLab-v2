@@ -24,9 +24,9 @@ class LLMConversationBrainTests(unittest.TestCase):
         self.connection.close()
 
     def test_schema_migrates_to_v22(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 22)
+        self.assertEqual(SCHEMA_VERSION, 23)
         version = self.connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
-        self.assertEqual(version, 22)
+        self.assertEqual(version, 23)
 
     def test_deterministic_fallback_persists_session_and_messages(self) -> None:
         brain = LLMConversationBrain(GaonRuntimeConfig(), self.repository, event_store=SQLiteEventStore(self.connection))
