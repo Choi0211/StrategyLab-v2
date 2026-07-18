@@ -2,6 +2,61 @@
 
 Status: Passed
 
+## Sprint 36 Executive Planner
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 231 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 22 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- CLI smoke: Passed
+  - `executive-plan --request`
+  - `executive-plan --request --json`
+- Scope:
+  - ExecutiveRequest, ExecutivePlan, RoutingDecision, AgentSelection, ToolSelection, and ExecutivePlanner contracts
+  - deterministic and provider-backed planning through the existing Provider Registry
+  - free-only enforcement and approval-required flag support
+  - durable event helper and runtime metrics integration
+  - no multi-agent execution, scheduler execution, trading adapter execution, or Telegram integration
+
+## Gaon Phase B v3.0 Research Brain Release Candidate
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 224 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 21 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- CLI smoke: Passed
+  - `config-check`
+  - `health`
+  - `db-check`
+  - `status`
+  - `metrics`
+  - `event-replay-dry-run`
+  - `research-plan`
+  - `research-run --dry-run`
+  - `research-proposals-list`
+- Scope:
+  - validated research planning
+  - safe evidence providers
+  - evidence ranking and context building
+  - evidence-backed knowledge proposals
+  - auditable approval workflow
+  - Research Brain v3 orchestration, schema v8, checkpoints, reports, and free-only defaults
+  - no live Telegram/OpenAI/Notion/GitHub/Broker/KIS/MyMoneyGuard validation
+
 ## Gaon Phase A v2.1 Release Candidate
 
 - Unit tests: Passed

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 8
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -17,24 +17,51 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v2_to_v3(connection)
         _upgrade_v3_to_v4(connection)
         _upgrade_v4_to_v5(connection)
+        _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
+        _upgrade_v7_to_v8(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
         _upgrade_v2_to_v3(connection)
         _upgrade_v3_to_v4(connection)
         _upgrade_v4_to_v5(connection)
+        _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
+        _upgrade_v7_to_v8(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 2:
         _upgrade_v2_to_v3(connection)
         _upgrade_v3_to_v4(connection)
         _upgrade_v4_to_v5(connection)
+        _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
+        _upgrade_v7_to_v8(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 3:
         _upgrade_v3_to_v4(connection)
         _upgrade_v4_to_v5(connection)
+        _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
+        _upgrade_v7_to_v8(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 4:
         _upgrade_v4_to_v5(connection)
+        _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
+        _upgrade_v7_to_v8(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 5:
+        _upgrade_v5_to_v6(connection)
+        _upgrade_v6_to_v7(connection)
+        _upgrade_v7_to_v8(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 6:
+        _upgrade_v6_to_v7(connection)
+        _upgrade_v7_to_v8(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 7:
+        _upgrade_v7_to_v8(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -192,6 +219,80 @@ def _upgrade_v4_to_v5(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_long_memory_namespace_lifecycle ON long_term_memory(namespace, lifecycle);
         CREATE INDEX IF NOT EXISTS idx_long_memory_retention ON long_term_memory(retention_until);
+        """
+    )
+
+
+def _upgrade_v5_to_v6(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_proposals (
+            proposal_id TEXT PRIMARY KEY,
+            version INTEGER NOT NULL,
+            proposal_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            claims_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,
+            review_after TEXT,
+            expires_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_proposal_hash_version ON knowledge_proposals(proposal_hash, version);
+        CREATE TABLE IF NOT EXISTS trusted_knowledge (
+            knowledge_id TEXT PRIMARY KEY,
+            proposal_id TEXT NOT NULL,
+            proposal_hash TEXT NOT NULL,
+            approved_at TEXT NOT NULL,
+            claims_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL
+        );
+        """
+    )
+
+
+def _upgrade_v6_to_v7(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS research_approval_decisions (
+            decision_id TEXT PRIMARY KEY,
+            proposal_id TEXT NOT NULL,
+            proposal_hash TEXT NOT NULL,
+            proposal_version INTEGER NOT NULL,
+            actor_ref TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            decided_at TEXT NOT NULL,
+            consumed INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_approval_idempotency
+            ON research_approval_decisions(proposal_id, proposal_hash, proposal_version, actor_ref, decision);
+        """
+    )
+
+
+def _upgrade_v7_to_v8(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS research_brain_runs (
+            run_id TEXT PRIMARY KEY,
+            query TEXT NOT NULL,
+            status TEXT NOT NULL,
+            plan_hash TEXT,
+            report_json TEXT,
+            failure_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS research_brain_checkpoints (
+            run_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            checkpoint_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_brain_runs_status ON research_brain_runs(status, updated_at);
         """
     )
 

@@ -16,11 +16,13 @@ from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.conversation import ConversationRuntime
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
+from gaon.runtime.executive_planner import DeterministicExecutivePlanner, ExecutiveRequest, executive_plan_event
 from gaon.runtime.health import readiness
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
+from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 
@@ -46,6 +48,31 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("metrics")
     replay = sub.add_parser("event-replay-dry-run")
     replay.add_argument("--db", default=":memory:")
+    executive_plan = sub.add_parser("executive-plan")
+    executive_plan.add_argument("--request", required=True)
+    executive_plan.add_argument("--db", default=":memory:")
+    executive_plan.add_argument("--json", action="store_true")
+    sub.add_parser("research-proposals-list")
+    show = sub.add_parser("research-proposals-show")
+    show.add_argument("proposal_id")
+    approve = sub.add_parser("research-proposals-approve")
+    approve.add_argument("proposal_id")
+    reject = sub.add_parser("research-proposals-reject")
+    reject.add_argument("proposal_id")
+    revise = sub.add_parser("research-proposals-revise")
+    revise.add_argument("proposal_id")
+    research_plan = sub.add_parser("research-plan")
+    research_plan.add_argument("--query", required=True)
+    research_run = sub.add_parser("research-run")
+    research_run.add_argument("--query", required=True)
+    research_run.add_argument("--dry-run", action="store_true", default=True)
+    research_status = sub.add_parser("research-status")
+    research_status.add_argument("run_id")
+    research_report = sub.add_parser("research-report")
+    research_report.add_argument("run_id")
+    research_report.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    research_resume = sub.add_parser("research-resume")
+    research_resume.add_argument("run_id")
     sub.add_parser("telegram-check")
     sub.add_parser("assistant-check")
     sub.add_parser("notion-check")
@@ -112,6 +139,44 @@ def _run(args: argparse.Namespace) -> int:
             print(f"event-replay-dry-run: processed={result.processed} failed={result.failed} checkpoint={result.last_event_id or ''}")
         finally:
             store.close()
+    elif args.command == "executive-plan":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            request = ExecutiveRequest("cli-executive-request", args.request, "actor:redacted", now)
+            plan = DeterministicExecutivePlanner().plan(request)
+            SQLiteEventStore(store._connection).append(executive_plan_event(plan, actor_ref=request.actor_ref, appended_at=now))
+            if args.json:
+                print(plan.to_json())
+            else:
+                print(
+                    "executive-plan: "
+                    f"route={plan.routing_decision.value} "
+                    f"agents={','.join(agent.value for agent in plan.agents)} "
+                    f"tools={','.join(tool.value for tool in plan.tools)} "
+                    f"approval_required={plan.approval_required}"
+                )
+        finally:
+            store.close()
+    elif args.command == "research-proposals-list":
+        print("research-proposals: none")
+    elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
+        print(f"{args.command}: dry-run proposal_id={args.proposal_id}")
+    elif args.command == "research-plan":
+        print(f"research-plan: dry-run query={args.query}")
+    elif args.command == "research-run":
+        store = RuntimeStateStore(":memory:")
+        try:
+            run, report = ResearchOrchestratorV3(SQLiteResearchRunRepository(store._connection)).run(args.query, run_id="cli-run", dry_run=args.dry_run)
+            print(f"research-run: {run.status.value} report={report.title}")
+        finally:
+            store.close()
+    elif args.command == "research-status":
+        print(f"research-status: dry-run run_id={args.run_id}")
+    elif args.command == "research-report":
+        print(f"# Research Report\n\nrun_id={args.run_id}\nformat={args.format}")
+    elif args.command == "research-resume":
+        print(f"research-resume: dry-run run_id={args.run_id}")
     elif args.command in {"telegram-check", "assistant-check", "notion-check"}:
         print(f"{args.command}: dry-run readiness check")
     elif args.command == "daily-report":

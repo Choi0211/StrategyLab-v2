@@ -6,6 +6,7 @@ from gaon.runtime.conversation import ConversationInput, ConversationResponse, C
 from gaon.runtime.event_bus import InMemoryEventBus
 from gaon.runtime.events import EventType, RuntimeEvent
 from gaon.runtime.event_store import DurableEvent, ReplayResult, SQLiteEventStore
+from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutivePlanner, ExecutiveRequest, ProviderBackedExecutivePlanner, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.notifications import NotificationChannel, NotificationEngine, NotificationPriority, NotificationRequest
 from gaon.runtime.reports import DailyReport, WeeklyReview
 from gaon.runtime.scheduler import DurableScheduler, InMemoryScheduler, ScheduledJob, ScheduleSpec
@@ -23,13 +24,18 @@ __all__ = [
     "AssistantProviderResponse",
     "AssistantRequest",
     "AssistantProviderRegistry",
+    "AgentSelection",
     "DeterministicAssistantProvider",
+    "DeterministicExecutivePlanner",
     "DurableEvent",
     "DurableQueueItem",
     "DurableScheduler",
     "DurableTaskQueue",
     "DailyReport",
     "EventType",
+    "ExecutivePlan",
+    "ExecutivePlanner",
+    "ExecutiveRequest",
     "GaonRuntimeConfig",
     "InMemoryEventBus",
     "InMemoryScheduler",
@@ -47,14 +53,18 @@ __all__ = [
     "PluginMetadata",
     "PluginRegistry",
     "ProviderRegistration",
+    "ProviderBackedExecutivePlanner",
     "RoutingAssistantProvider",
+    "RoutingDecision",
     "QueueItemStatus",
     "ReplayResult",
     "RuntimeEvent",
     "SQLiteEventStore",
     "ScheduleSpec",
     "ScheduledJob",
+    "ToolSelection",
     "WeeklyReview",
     "build_assistant_provider",
+    "executive_plan_event",
     "load_runtime_config",
 ]

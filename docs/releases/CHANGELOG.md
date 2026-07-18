@@ -1,5 +1,58 @@
 # Changelog
 
+## Sprint 36 Executive Planner
+
+- Added immutable ExecutiveRequest, ExecutivePlan, RoutingDecision, AgentSelection, ToolSelection, and ExecutivePlanner contracts.
+- Added deterministic routing for research, memory, runtime status, human review, and unsupported requests.
+- Added provider-backed planning through the existing Assistant Provider Registry with free-only and paid-provider guardrails.
+- Added approval-required flag propagation for execution-capable or policy-changing requests.
+- Added ExecutivePlanCreated durable event helper, runtime metrics integration, and CLI plan inspection.
+- Did not add multi-agent execution, scheduler execution, trading adapter execution, or Telegram integration.
+
+## Sprint 35 Research Brain Orchestration
+
+- Added schema v8 Research Brain run and checkpoint tables.
+- Added deterministic ResearchOrchestratorV3 with run states, checkpoints, reports, resume, and metrics.
+- Added research CLI smoke commands for plan, run, status, report, and resume paths.
+- Added free-only runtime configuration defaults and paid-provider guardrails.
+- Added Phase B Research Brain architecture, runtime operations, free-only mode, and release candidate documentation.
+
+## Sprint 30 Validated Research Planning
+
+- Added bounded ResearchRequest, ResearchPlan, and ResearchStep contracts.
+- Added deterministic planner with stable plan hash and plan lifecycle event support.
+- Added allowlisted research step types, dependency validation, cycle rejection, and step limit enforcement.
+- Added optional provider-backed planner with free-only enforcement and structured output validation.
+- Added planner metrics coverage.
+
+## Sprint 31 Safe Evidence Search Providers
+
+- Added provider-neutral search contracts with normalized source metadata.
+- Added fake, local fixture, RSS/Atom, and optional disabled-by-default web search providers.
+- Added canonical URL normalization, domain allow/deny filtering, result limits, content-size limits, duplicate URL removal, timeout and bounded retry behavior.
+- Added search metrics and durable event helper coverage without live network tests.
+
+## Sprint 32 Evidence Ranking and Context Building
+
+- Added EvidenceItem, EvidenceBundle, citation, and evidence-to-context contracts.
+- Added canonical URL normalization reuse, content hashing, exact duplicate removal, conservative near-duplicate detection, stable ranking, and citation ID assignment.
+- Added memory/external evidence merge, context budget enforcement, truncation diagnostics, and contradiction preservation.
+- Added explicit source-quality rule hook with conservative defaults.
+
+## Sprint 33 Evidence-Backed Knowledge Proposals
+
+- Added schema v6 knowledge proposal and trusted knowledge tables.
+- Added evidence-linked research knowledge claims, proposal confidence, stable proposal hashes, explicit versions, provenance, review/expiration metadata, and insufficient-evidence status.
+- Added contradiction surfacing and proposal lifecycle event/metrics helpers.
+- Kept proposal persistence separate from trusted knowledge and disallowed direct trusted promotion.
+
+## Sprint 34 Auditable Research Approval Workflow
+
+- Added schema v7 research approval decision table and idempotency index.
+- Added proposal hash/version-bound approval requests and approve/reject/revise decision contracts.
+- Added stale proposal rejection, repeated decision idempotency, promotion replay protection, audit events, and approval/rejection metrics.
+- Added dry-run research proposal CLI smoke commands.
+
 ## Sprint 24 Provider Registry and Routing
 
 - Added explicit assistant provider registry with stable-name lookup, duplicate registration protection, and unknown provider fail-fast behavior.

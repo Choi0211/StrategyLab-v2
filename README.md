@@ -12,7 +12,7 @@ This project's purpose is not to write as much code as possible, but to build a 
 
 ## Release Candidate Status
 
-StrategyLab v2 is currently a v2.1 Release Candidate candidate branch with Gaon Phase A platform foundations.
+StrategyLab v2 is currently a Gaon Phase B v3.0 Research Brain Release Candidate branch built on the Phase A v2.1 platform foundations.
 
 Included foundations:
 
@@ -24,6 +24,7 @@ Included foundations:
 - Sprint 18-22 approval hardening, SQLite repositories, durable queue/scheduler, controlled runtime loop, backup hardening, and security/chaos coverage
 - Sprint 23 broker-free TradingAdapter contract and v1 rollout plan
 - Phase A v2.1 provider registry, plugin lifecycle, metrics, durable event store, safe replay, and long-term memory foundation
+- Phase B v3.0 Research Brain: validated planning, safe evidence providers, evidence context, knowledge proposals, approval workflow, durable orchestration, checkpoints, reports, and free-only defaults
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -151,6 +152,33 @@ These commands are deterministic and do not perform live Telegram, OpenAI, Notio
 
 See `docs/operations/TelegramSetup.md` for the full safe setup flow. The project does not auto-load `.env`, and automated tests never call the real Telegram network.
 
+## Research Brain v3
+
+Phase B v3.0 adds a deterministic Research Brain pipeline:
+
+```powershell
+py -3.11 -m gaon.runtime.cli research-plan --query "ORB evidence"
+py -3.11 -m gaon.runtime.cli research-run --query "ORB evidence" --dry-run
+py -3.11 -m gaon.runtime.cli research-status run-1
+py -3.11 -m gaon.runtime.cli research-report run-1 --format markdown
+py -3.11 -m gaon.runtime.cli research-resume run-1
+```
+
+The pipeline plans research, collects bounded deterministic evidence, builds cited context, creates review-only knowledge proposals, records approval workflow data, and stores Research Brain run/checkpoint state. It does not use live market data, paid AI providers, Telegram execution, Notion mutation, GitHub mutation, broker APIs, KIS, or MyMoneyGuard.
+
+See `docs/architecture/research-brain.md`, `docs/operations/research-runtime.md`, `docs/operations/free-only-mode.md`, and `docs/releases/gaon-phase-b-v3.0-rc.md`.
+
+## Executive Planner
+
+Sprint 36 adds Executive Planner routing inspection:
+
+```powershell
+py -3.11 -m gaon.runtime.cli executive-plan --request "ORB 전략 연구해줘"
+py -3.11 -m gaon.runtime.cli executive-plan --request "상태 알려줘" --json
+```
+
+Executive Planner produces a routing plan only. It does not execute multi-agent work, scheduler jobs, trades, Telegram actions, or external tools. Execution-capable or policy-changing requests are flagged with `approval_required=true`.
+
 ## Conversational Assistant
 
 Sprint 13 adds a deterministic conversational assistant foundation. Telegram can now send ordinary Korean text such as `안녕`, `가온`, `오늘 시장 어때?`, `삼성전자 분석해줘`, and `백테스트 돌려줘` through the same safe Conversation Runtime.
@@ -194,11 +222,12 @@ Sprint 23 adds `gaon.adapters.TradingAdapter` as a broker-free public contract. 
 - `gaon.runtime.plugins`: explicit allowlist plugin lifecycle
 - `gaon.runtime.metrics`: internal metrics collector and snapshot export
 - `gaon.runtime.event_store`: durable append-only event store and safe replay
+- `gaon.runtime.executive_planner`: Executive Planner request, plan, routing, provider-backed planning, event, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
 - `gaon.adapters`: broker-free TradingAdapter protocol, risk-gate contracts, and fake adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
-- `gaon.research`: Research Goal, Plan, Session, Interview, and Journal contracts
+- `gaon.research`: Research Goal, Plan, Session, Interview, Journal, validated planning, evidence search, evidence context, knowledge proposals, approval workflow, and Research Brain v3 orchestration contracts
 - `strategylab.core`: configuration, logging, module registry, plugin boundary
 - `strategylab.market`: market data contracts, validation, provenance
 - `strategylab.strategies`: strategy interface, parameters, registry, signals
@@ -247,4 +276,9 @@ Do not commit `.env`, token files, account files, real trade state, production l
 - `docs/architecture/GaonRuntimeArchitecture.md`: Runtime architecture
 - `docs/architecture/ConversationRuntime.md`: Conversation Runtime contract
 - `docs/architecture/CollaborationIntegrations.md`: Telegram and Notion dry-run integration contracts
+- `docs/architecture/executive-planner.md`: Sprint 36 Executive Planner architecture
+- `docs/architecture/research-brain.md`: Phase B Research Brain v3 architecture
+- `docs/operations/research-runtime.md`: Research runtime smoke commands
+- `docs/operations/free-only-mode.md`: free-only mode and paid-provider guardrails
+- `docs/releases/gaon-phase-b-v3.0-rc.md`: Phase B v3.0 release candidate notes
 - `docs/research/ResearchBrain.md`: Research Brain guide
