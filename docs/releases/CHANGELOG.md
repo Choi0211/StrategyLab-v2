@@ -1,5 +1,16 @@
 # Changelog
 
+## Sprint 47 Strategy Execution Runtime
+
+- Added Strategy Execution Runtime with `strategy_execution_policy_v1`.
+- Added explicit `DISABLED`, `PAPER`, and `LIVE` modes with default `DISABLED`.
+- Added active-Champion binding and stale Champion execution blocking.
+- Added PAPER execution orchestration using the existing paper adapter stack.
+- Added LIVE planning gates against paper revalidation, while keeping live execution blocked because the broker adapter is unavailable.
+- Added runtime schema v18 with strategy execution plan and run tables.
+- Added CLI commands for policy, status, plan, run, show, and history.
+- Preserved safety boundaries: no live KIS, no broker credentials, no real orders, no automatic approval, no automatic rollback, and no MyMoneyGuard dependency.
+
 ## Sprint 46 Paper Revalidation and Kill/Rollback Gates
 
 - Added deterministic Paper Revalidation Engine with `paper_revalidation_policy_v1`.

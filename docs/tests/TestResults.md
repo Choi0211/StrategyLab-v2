@@ -2,6 +2,58 @@
 
 Status: Passed
 
+## Sprint 47 Strategy Execution Runtime
+
+- Unit tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Full result: `Ran 308 tests`
+  - Targeted command: `PYTHONPATH=src python -m unittest tests.unit.test_strategy_execution tests.unit.test_runtime_service`
+  - Result: `Ran 11 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Full result: `Ran 57 tests`
+  - Targeted command: `PYTHONPATH=src python -m unittest tests.integration.test_strategy_execution_flow`
+  - Result: `Ran 2 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Import smoke: Passed
+  - `paper_revalidation_policy_v1`
+  - `strategy_execution_policy_v1`
+- CLI smoke: Passed
+  - `db-check --db <temp>`
+  - `paper-revalidation-policy-show`
+  - `paper-revalidate`
+  - `execution-policy-show`
+  - `execution-plan --mode paper`
+  - `execution-run`
+  - `execution-plan --mode live`
+- `git diff --check`: Passed
+- Coverage:
+  - default mode `DISABLED`
+  - missing Champion blocked
+  - stale Champion blocked
+  - PAPER plan allowed for active Champion
+  - PAPER execution reuses existing adapter stack
+  - HOLD blocks LIVE
+  - KILL blocks execution
+  - ROLLBACK_RECOMMENDED blocks LIVE
+  - LIVE_ELIGIBLE still blocked because broker adapter is unavailable
+  - persistence and restart recovery
+  - v17-to-v18 migration
+  - events, metrics, and CLI smoke
+- Safety:
+  - no live KIS
+  - no broker credentials
+  - no real orders
+  - live disabled by default
+  - no automatic Champion promotion
+  - no automatic rollback
+  - no automatic approval
+  - no MyMoneyGuard dependency
+
 ## Sprint 46 Paper Revalidation and Kill/Rollback Gates
 
 - Unit tests: Passed

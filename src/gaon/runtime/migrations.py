@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -29,6 +29,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
@@ -47,6 +48,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 2:
         _upgrade_v2_to_v3(connection)
@@ -64,6 +66,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 3:
         _upgrade_v3_to_v4(connection)
@@ -80,6 +83,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 4:
         _upgrade_v4_to_v5(connection)
@@ -95,6 +99,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 5:
         _upgrade_v5_to_v6(connection)
@@ -109,6 +114,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 6:
         _upgrade_v6_to_v7(connection)
@@ -122,6 +128,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 7:
         _upgrade_v7_to_v8(connection)
@@ -134,6 +141,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 8:
         _upgrade_v8_to_v9(connection)
@@ -145,6 +153,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 9:
         _upgrade_v9_to_v10(connection)
@@ -155,6 +164,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 10:
         _upgrade_v10_to_v11(connection)
@@ -164,6 +174,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 11:
         _upgrade_v11_to_v12(connection)
@@ -172,6 +183,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 12:
         _upgrade_v12_to_v13(connection)
@@ -179,24 +191,32 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 13:
         _upgrade_v13_to_v14(connection)
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 14:
         _upgrade_v14_to_v15(connection)
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 15:
         _upgrade_v15_to_v16(connection)
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 16:
         _upgrade_v16_to_v17(connection)
+        _upgrade_v17_to_v18(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 17:
+        _upgrade_v17_to_v18(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -735,6 +755,39 @@ def _upgrade_v16_to_v17(connection: sqlite3.Connection) -> None:
             ON paper_revalidation_reports(status, generated_at);
         CREATE INDEX IF NOT EXISTS idx_paper_revalidation_reports_session
             ON paper_revalidation_reports(session_id, generated_at);
+        """
+    )
+
+
+def _upgrade_v17_to_v18(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_execution_plans (
+            plan_id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL,
+            champion_version_id TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_execution_plans_status
+            ON strategy_execution_plans(status, created_at);
+        CREATE TABLE IF NOT EXISTS strategy_execution_runs (
+            run_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            champion_version_id TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_execution_runs_active
+            ON strategy_execution_runs(champion_version_id, mode, status);
+        CREATE INDEX IF NOT EXISTS idx_strategy_execution_runs_plan
+            ON strategy_execution_runs(plan_id, started_at);
         """
     )
 
