@@ -3,6 +3,26 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 46 Paper Revalidation and Kill/Rollback Gates
+
+Included:
+
+- `paper_revalidation_policy_v1`
+- `LIVE_ELIGIBLE`, `HOLD`, `KILL`, `ROLLBACK_RECOMMENDED`, and `REVIEW`
+- paper session, summary, active Champion fingerprint, and evidence consistency gates
+- runtime schema v17
+- events, metrics, CLI commands, unit tests, and integration tests
+
+Not included:
+
+- live trading enablement
+- KIS adapter
+- broker orders
+- automatic Champion rollback
+- automatic Champion Registry mutation
+- automatic approval
+- MyMoneyGuard dependency
+
 ## Sprint 45 Paper Trading Forward Test
 
 Included:

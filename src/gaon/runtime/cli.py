@@ -12,6 +12,7 @@ from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionSe
 from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionChallengerPolicy, SQLiteChampionChallengerRepository, build_champion_challenger_request
 from gaon.adapters.champion_registry import ChampionRegistryService, ChampionRollbackRequest, SQLiteChampionRegistryRepository
 from gaon.adapters.paper_forward import PaperTradingForwardTestService, SQLitePaperTradingSessionRepository
+from gaon.adapters.paper_revalidation import PaperRevalidationEngine, PaperRevalidationPolicy, SQLitePaperRevalidationRepository, build_paper_revalidation_request
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, ValidationPolicy, build_validation_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
@@ -244,6 +245,17 @@ def main(argv: list[str] | None = None) -> int:
     paper_summary = sub.add_parser("paper-session-summary")
     paper_summary.add_argument("--db", default="runtime.sqlite")
     paper_summary.add_argument("session_id")
+    paper_revalidation_policy = sub.add_parser("paper-revalidation-policy-show")
+    paper_revalidation_policy.add_argument("--json", action="store_true")
+    paper_revalidate = sub.add_parser("paper-revalidate")
+    paper_revalidate.add_argument("--db", default="runtime.sqlite")
+    paper_revalidate.add_argument("--session-id", required=True)
+    paper_revalidate.add_argument("--revalidation-id", required=False)
+    paper_revalidation_show = sub.add_parser("paper-revalidation-show")
+    paper_revalidation_show.add_argument("--db", default="runtime.sqlite")
+    paper_revalidation_show.add_argument("revalidation_id")
+    paper_revalidation_history = sub.add_parser("paper-revalidation-history")
+    paper_revalidation_history.add_argument("--db", default="runtime.sqlite")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -823,6 +835,46 @@ def _run(args: argparse.Namespace) -> int:
         try:
             summary = _paper_service(store).summary(args.session_id, generated_at=_utc_now())
             print(f"paper-session-summary: session_id={summary.session_id} status={summary.status.value} simulated_orders={summary.simulated_orders} fills={summary.fills} rejected={summary.rejected_simulated_orders} failed={summary.failed_simulated_orders}")
+        finally:
+            store.close()
+    elif args.command == "paper-revalidation-policy-show":
+        policy = PaperRevalidationPolicy()
+        if args.json:
+            import json
+
+            print(json.dumps(policy.__dict__, sort_keys=True, separators=(",", ":")))
+        else:
+            print(f"paper-revalidation-policy-show: policy_version={policy.policy_version} minimum_simulated_trades={policy.minimum_simulated_trades} maximum_paper_drawdown={policy.maximum_paper_drawdown:.2f} hard_kill_paper_drawdown={policy.hard_kill_paper_drawdown:.2f}")
+    elif args.command == "paper-revalidate":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            sessions = SQLitePaperTradingSessionRepository(store._connection)
+            session = sessions.get_session(args.session_id)
+            summary = sessions.get_summary(args.session_id)
+            active = SQLiteChampionRegistryRepository(store._connection).get_active(session.slot)
+            if active is None:
+                raise ValueError("active champion is required")
+            revalidation_id = args.revalidation_id or f"paper-revalidation:{args.session_id}"
+            request = build_paper_revalidation_request(revalidation_id, session=session, actor_ref="actor:redacted", requested_at=now)
+            report = PaperRevalidationEngine(repository=SQLitePaperRevalidationRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector()).revalidate(request, active=active, session=session, summary=summary, generated_at=now)
+            print(f"paper-revalidate: revalidation_id={report.revalidation_id} status={report.status.value} session_id={report.session_id}")
+        finally:
+            store.close()
+    elif args.command == "paper-revalidation-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(SQLitePaperRevalidationRepository(store._connection).get_report(args.revalidation_id).to_json())
+        finally:
+            store.close()
+    elif args.command == "paper-revalidation-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            reports = SQLitePaperRevalidationRepository(store._connection).list_reports()
+            for report in reports:
+                print(f"{report.revalidation_id} status={report.status.value} session_id={report.session_id}")
+            if not reports:
+                print("paper-revalidation-history: none")
         finally:
             store.close()
     elif args.command == "research-proposals-list":

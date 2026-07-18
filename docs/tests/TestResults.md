@@ -2,6 +2,38 @@
 
 Status: Passed
 
+## Sprint 46 Paper Revalidation and Kill/Rollback Gates
+
+- Unit tests: Passed
+  - Targeted command: `PYTHONPATH=src python -m unittest tests.unit.test_paper_revalidation tests.unit.test_runtime_service`
+  - Result: `Ran 12 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Targeted command: `PYTHONPATH=src python -m unittest tests.integration.test_paper_revalidation_flow`
+  - Result: `Ran 2 tests`
+  - Status: `OK`
+- Coverage:
+  - completed healthy paper session -> `LIVE_ELIGIBLE`
+  - incomplete session -> `HOLD`
+  - insufficient trades -> `HOLD`
+  - excessive drawdown -> `KILL`
+  - critical execution error -> `KILL`
+  - fingerprint mismatch -> `KILL`
+  - moderate drawdown deterioration -> `ROLLBACK_RECOMMENDED`
+  - missing optional metrics -> `REVIEW`
+  - deterministic repeated report
+  - events and metrics
+  - persistence and v16-to-v17 migration
+  - CLI smoke for policy, revalidate, show, and history
+- Safety:
+  - no live KIS
+  - no broker credentials
+  - no real orders
+  - no automatic rollback
+  - no automatic approval
+  - no Champion Registry mutation
+  - no MyMoneyGuard dependency
+
 ## Sprint 45 Paper Trading Forward Test
 
 - Unit tests: Passed

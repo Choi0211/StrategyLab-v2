@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 46 Paper Revalidation and Kill/Rollback Gates
+
+- Added deterministic Paper Revalidation Engine with `paper_revalidation_policy_v1`.
+- Added `LIVE_ELIGIBLE`, `HOLD`, `KILL`, `ROLLBACK_RECOMMENDED`, and `REVIEW` safety decisions.
+- Added runtime schema v17 with paper revalidation request and report tables.
+- Added CLI commands for policy display, revalidation, report show, and history.
+- Added events and metrics for live eligibility, hold, kill, rollback recommendation, and review outcomes.
+- Preserved safety boundaries: no live KIS, no broker credentials, no real orders, no automatic rollback, no automatic approval, and no registry mutation.
+
 ## Sprint 45 Paper Trading Forward Test
 
 - Added paper-only Champion forward-test sessions.

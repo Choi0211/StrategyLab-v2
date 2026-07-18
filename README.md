@@ -32,6 +32,7 @@ Included foundations:
 - Sprint 43 Champion / Challenger Evaluation Engine with deterministic promotion-candidate reports, schema v14 persistence, events, metrics, and CLI inspection
 - Sprint 44 Champion Registry with explicit approval-based promotion, schema v15 persistence, version history, rollback, events, metrics, and CLI inspection
 - Sprint 45 Paper Trading Forward Test with active-Champion-only paper sessions, schema v16 persistence, simulated order observations, summaries, events, metrics, and CLI inspection
+- Sprint 46 Paper Revalidation Engine with `LIVE_ELIGIBLE`, `HOLD`, `KILL`, `ROLLBACK_RECOMMENDED`, and `REVIEW` safety decisions, schema v17 persistence, events, metrics, and CLI inspection
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -339,6 +340,19 @@ python -m gaon.runtime.cli paper-session-complete --db runtime.sqlite paper1
 
 Only the currently active Champion version can create or run a paper session. Stale former Champions, unapproved Promotion Candidates, and fingerprint mismatches are rejected. Sprint 45 does not implement live KIS, real broker orders, paper-to-live promotion, automatic Champion modification from paper results, or MyMoneyGuard access. See `docs/architecture/paper-forward-test.md` and `docs/operations/PaperForwardTest.md`.
 
+## Paper Revalidation
+
+Sprint 46 evaluates paper forward-test summaries with `paper_revalidation_policy_v1`.
+
+```bash
+python -m gaon.runtime.cli paper-revalidation-policy-show
+python -m gaon.runtime.cli paper-revalidate --db runtime.sqlite --session-id paper1
+python -m gaon.runtime.cli paper-revalidation-show --db runtime.sqlite <revalidation_id>
+python -m gaon.runtime.cli paper-revalidation-history --db runtime.sqlite
+```
+
+`LIVE_ELIGIBLE` is a technical future-live consideration signal only. `KILL` and `ROLLBACK_RECOMMENDED` do not automatically trade, rollback, change the Champion Registry, or approve anything. See `docs/architecture/paper-revalidation.md` and `docs/operations/PaperRevalidation.md`.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -360,7 +374,7 @@ Only the currently active Champion version can create or run a paper session. St
 - `gaon.runtime.agents`: bounded agent contracts, explicit registry, dispatcher, deterministic initial agents, event, and metrics contracts
 - `gaon.runtime.scheduled_automation`: durable scheduled jobs, scheduled runs, safe due execution, events, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
-- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, deterministic Strategy Validation Engine, Champion/Challenger Evaluation Engine, Champion Registry, Paper Forward Test, fake/paper adapters, and deterministic adapter tests
+- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, deterministic Strategy Validation Engine, Champion/Challenger Evaluation Engine, Champion Registry, Paper Forward Test, Paper Revalidation, fake/paper adapters, and deterministic adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, Journal, validated planning, evidence search, evidence context, knowledge proposals, approval workflow, and Research Brain v3 orchestration contracts
