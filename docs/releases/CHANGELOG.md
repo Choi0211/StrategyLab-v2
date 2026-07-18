@@ -361,3 +361,14 @@
 - Added Dashboard view model foundation.
 - Added Broker Connector and Paper Trading foundation.
 - Added release verification script and documentation.
+# Sprint 48
+
+- Added deterministic approved Champion strategy handoff packages.
+- Added handoff approval/rejection persistence and CLI inspection commands.
+- Added v19 runtime schema tables for handoff packages and approvals.
+
+# Sprint 49
+
+- Added approval-gated strategy deployment workflow.
+- Added fake and local-safe deployment adapters.
+- Added v20 runtime schema tables for deployment requests, runs, and backups.

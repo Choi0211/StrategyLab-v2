@@ -55,7 +55,7 @@ class RuntimeServiceTest(unittest.TestCase):
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(cli_main(["db-check"]), 0)
-        self.assertIn("schema_version=18", output.getvalue())
+        self.assertIn("schema_version=20", output.getvalue())
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(cli_main(["run", "--once"]), 0)

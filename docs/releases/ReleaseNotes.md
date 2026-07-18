@@ -515,3 +515,14 @@ PYTHONPATH=src;tests/unit python -m unittest discover -s tests/unit
 PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration
 python scripts/verify_release.py
 ```
+# Sprint 48
+
+StrategyLab can now generate a portable handoff package from an active Champion
+and a LIVE_ELIGIBLE paper revalidation report. The generated package requires
+explicit human approval before deployment eligibility.
+
+# Sprint 49
+
+StrategyLab can now plan and run an approval-gated deployment workflow against
+generic deployment adapters. Public tests use fake and local-safe adapters only;
+private production integration remains outside this repository.
