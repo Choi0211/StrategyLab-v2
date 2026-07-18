@@ -8,6 +8,7 @@ import os
 import sys
 from typing import Any
 
+from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, SQLiteBacktestRepository, build_backtest_request
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
 from gaon.integrations.telegram.contracts import TelegramClient, TelegramDiscoveredChat, TelegramPollResult
@@ -134,6 +135,21 @@ def main(argv: list[str] | None = None) -> int:
     trading_cancel.add_argument("--request-id", required=True)
     trading_history = sub.add_parser("trading-history")
     trading_history.add_argument("--db", default="runtime.sqlite")
+    backtest_status = sub.add_parser("backtest-status")
+    backtest_status.add_argument("--db", default="runtime.sqlite")
+    backtest_strategies = sub.add_parser("backtest-list-strategies")
+    backtest_strategies.add_argument("--db", default="runtime.sqlite")
+    backtest_run = sub.add_parser("backtest-run")
+    backtest_run.add_argument("--db", default="runtime.sqlite")
+    backtest_run.add_argument("--strategy", required=True)
+    backtest_run.add_argument("--dataset", required=True)
+    backtest_run.add_argument("--start", required=True)
+    backtest_run.add_argument("--end", required=True)
+    backtest_show = sub.add_parser("backtest-show")
+    backtest_show.add_argument("--db", default="runtime.sqlite")
+    backtest_show.add_argument("result_id")
+    backtest_history = sub.add_parser("backtest-history")
+    backtest_history.add_argument("--db", default="runtime.sqlite")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -468,6 +484,44 @@ def _run(args: argparse.Namespace) -> int:
                 print(f"{result.result_id} request_id={result.request_id} status={result.status.value} notional={result.notional:.2f}")
             if not results:
                 print("trading-history: none")
+        finally:
+            store.close()
+    elif args.command in {"backtest-status", "backtest-list-strategies"}:
+        store = RuntimeStateStore(args.db)
+        try:
+            adapter = FakeBacktestAdapter()
+            ok, message = adapter.health_check()
+            if args.command == "backtest-status":
+                print(f"backtest-status: ready={ok} message={message}")
+            else:
+                for strategy in adapter.get_supported_strategies():
+                    print(strategy)
+        finally:
+            store.close()
+    elif args.command == "backtest-run":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            request = build_backtest_request(f"cli-backtest:{args.strategy}:{args.dataset}:{args.start}:{args.end}", args.strategy, args.dataset, args.start, args.end, actor_ref="actor:redacted", created_at=now)
+            result = BacktestExecutionService(FakeBacktestAdapter(), repository=SQLiteBacktestRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector()).run(request, BacktestExecutionContext(30, 64_000, now))
+            print(f"backtest-run: status={result.status.value} result_id={result.result_id} fingerprint={result.fingerprint}")
+        finally:
+            store.close()
+    elif args.command == "backtest-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = SQLiteBacktestRepository(store._connection).get_result(args.result_id)
+            print(result.to_json())
+        finally:
+            store.close()
+    elif args.command == "backtest-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            results = SQLiteBacktestRepository(store._connection).list_results()
+            for result in results:
+                print(f"{result.result_id} request_id={result.request_id} status={result.status.value} fingerprint={result.fingerprint}")
+            if not results:
+                print("backtest-history: none")
         finally:
             store.close()
     elif args.command == "research-proposals-list":

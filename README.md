@@ -27,6 +27,7 @@ Included foundations:
 - Phase B v3.0 Research Brain: validated planning, safe evidence providers, evidence context, knowledge proposals, approval workflow, durable orchestration, checkpoints, reports, and free-only defaults
 - Sprint 39 Daily Research Pipeline on top of the Sprint 38 scheduler, with deterministic evidence, reports, pending-review proposals, events, metrics, and CLI inspection
 - Sprint 40 safe Trading Adapter foundation with paper-only simulation, risk guardrails, events, metrics, persistence, and CLI inspection
+- Sprint 41 safe v1 Backtest Adapter foundation with normalized results, reproducibility fingerprints, fake/local process boundary, events, metrics, persistence, and CLI inspection
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -264,6 +265,19 @@ py -3.11 -m gaon.runtime.cli trading-history --db runtime.sqlite
 
 Live trading is not implemented. The public repository still has no KIS REST, KIS WebSocket, broker authentication, real account access, real balance query, real order execution, automatic trading, automatic approval, MyMoneyGuard integration, live market data, or Telegram trading command support. See `docs/architecture/trading-adapter-foundation.md` and `docs/operations/PaperTrading.md`.
 
+## v1 Backtest Adapter
+
+Sprint 41 adds a safe adapter boundary for future v1 backtest reuse. The real v1 backtest engine is not required for automated tests. Sprint 41 defines the safe adapter boundary and deterministic integration path.
+
+```powershell
+py -3.11 -m gaon.runtime.cli backtest-status --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli backtest-list-strategies --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli backtest-run --db runtime.sqlite --strategy turtle_v5 --dataset sample_krx --start 2024-01-01 --end 2026-01-01
+py -3.11 -m gaon.runtime.cli backtest-history --db runtime.sqlite
+```
+
+This sprint does not implement Champion/Challenger ranking, strategy promotion, active strategy switching, paper trading promotion, live strategy deployment, KIS integration, MyMoneyGuard integration, automatic trading, automatic approval, arbitrary shell execution, network calls, or private repository dependency. See `docs/architecture/backtest-adapter-foundation.md` and `docs/operations/BacktestAdapter.md`.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -285,7 +299,7 @@ Live trading is not implemented. The public repository still has no KIS REST, KI
 - `gaon.runtime.agents`: bounded agent contracts, explicit registry, dispatcher, deterministic initial agents, event, and metrics contracts
 - `gaon.runtime.scheduled_automation`: durable scheduled jobs, scheduled runs, safe due execution, events, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
-- `gaon.adapters`: broker-free TradingAdapter protocol, risk-gate contracts, and fake adapter tests
+- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, fake/paper adapters, and deterministic adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, Journal, validated planning, evidence search, evidence context, knowledge proposals, approval workflow, and Research Brain v3 orchestration contracts

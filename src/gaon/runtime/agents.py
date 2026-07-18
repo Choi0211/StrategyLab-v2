@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, build_backtest_request
 from gaon.adapters.trading import PaperTradingAdapter, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.research.planning import ResearchRequest, deterministic_research_plan
 from gaon.runtime.config import GaonRuntimeConfig
@@ -23,6 +24,7 @@ class AgentCapability(str, Enum):
     REPORT_GENERATION = "report_generation"
     APPROVAL_REVIEW = "approval_review"
     TRADING_SIMULATION = "trading_simulation"
+    BACKTEST = "backtest"
 
 
 class AgentStatus(str, Enum):
@@ -178,9 +180,30 @@ class AgentDispatcher:
 
 class ResearchAgent:
     name = AgentSelection.RESEARCH_BRAIN.value
-    capabilities = (AgentCapability.RESEARCH, AgentCapability.REPORT_GENERATION)
+    capabilities = (AgentCapability.RESEARCH, AgentCapability.REPORT_GENERATION, AgentCapability.BACKTEST)
 
     def execute(self, context: AgentExecutionContext) -> AgentResult:
+        if ToolSelection.BACKTEST_ADAPTER in context.plan.tools:
+            request = build_backtest_request(
+                f"agent-backtest:{context.request.request_id}",
+                _backtest_strategy_from_text(context.request.text),
+                "sample_krx",
+                "2024-01-01",
+                "2026-01-01",
+                actor_ref=context.request.actor_ref,
+                created_at=context.request.created_at,
+            )
+            result = BacktestExecutionService(FakeBacktestAdapter()).run(request, BacktestExecutionContext(30, 64_000, context.request.created_at))
+            status = AgentStatus.SUCCEEDED if result.status.value == "completed" else AgentStatus.BLOCKED
+            return _result(
+                agent_name=self.name,
+                status=status,
+                output=f"normalized backtest result prepared: status={result.status.value} fingerprint={result.fingerprint}",
+                error=None,
+                started_at=context.request.created_at,
+                completed_at=context.request.created_at,
+                metadata={"mode": "fake_backtest_adapter", "fingerprint": result.fingerprint, "backtest_status": result.status.value},
+            )
         plan = deterministic_research_plan(
             ResearchRequest(
                 request_id=f"agent:{context.request.request_id}",
@@ -325,6 +348,7 @@ def _required_capabilities(plan: ExecutivePlan, request: AgentRequest) -> tuple[
         ToolSelection.MEMORY_RETRIEVAL: AgentCapability.MEMORY_READ,
         ToolSelection.RUNTIME_STATUS: AgentCapability.REPOSITORY_READ,
         ToolSelection.TRADING_SIMULATION: AgentCapability.TRADING_SIMULATION,
+        ToolSelection.BACKTEST_ADAPTER: AgentCapability.BACKTEST,
         ToolSelection.APPROVAL_WORKFLOW: AgentCapability.APPROVAL_REVIEW,
     }
     for tool in plan.tools:
@@ -388,3 +412,11 @@ def _trading_symbol_from_text(text: str) -> str:
         if cleaned.isalnum() and 2 <= len(cleaned) <= 12:
             return cleaned
     return "PAPER"
+
+
+def _backtest_strategy_from_text(text: str) -> str:
+    for token in text.replace(",", " ").split():
+        cleaned = token.strip()
+        if cleaned in {"turtle_v5", "turtle_v6_candidate"}:
+            return cleaned
+    return "turtle_v5"

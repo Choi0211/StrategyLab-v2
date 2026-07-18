@@ -1,5 +1,24 @@
 """Public adapter contracts for future private integrations."""
 
+from gaon.adapters.backtest import (
+    BacktestAdapter,
+    BacktestDatasetRef,
+    BacktestExecutionContext,
+    BacktestExecutionService,
+    BacktestMetrics,
+    BacktestPeriod,
+    BacktestRequest,
+    BacktestResult,
+    BacktestStatus,
+    BacktestStrategyRef,
+    BacktestTradeSummary,
+    FakeBacktestAdapter,
+    FixedBacktestInvoker,
+    LocalProcessBacktestAdapter,
+    LocalProcessResult,
+    SQLiteBacktestRepository,
+    build_backtest_request,
+)
 from gaon.adapters.trading import (
     AccountSummary,
     CommandStatus,
@@ -30,6 +49,22 @@ from gaon.adapters.trading import (
 )
 
 __all__ = [
+    "BacktestAdapter",
+    "BacktestDatasetRef",
+    "BacktestExecutionContext",
+    "BacktestExecutionService",
+    "BacktestMetrics",
+    "BacktestPeriod",
+    "BacktestRequest",
+    "BacktestResult",
+    "BacktestStatus",
+    "BacktestStrategyRef",
+    "BacktestTradeSummary",
+    "FakeBacktestAdapter",
+    "FixedBacktestInvoker",
+    "LocalProcessBacktestAdapter",
+    "LocalProcessResult",
+    "SQLiteBacktestRepository",
     "AccountSummary",
     "AccountSnapshot",
     "CommandStatus",
@@ -55,5 +90,6 @@ __all__ = [
     "TradingResult",
     "TradingRiskPolicy",
     "TradingStatus",
+    "build_backtest_request",
     "build_trading_request",
 ]

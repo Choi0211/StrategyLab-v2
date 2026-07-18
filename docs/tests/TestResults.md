@@ -2,6 +2,27 @@
 
 Status: Passed
 
+## Sprint 41 v1 Backtest Adapter Foundation
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 265 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 39 tests`
+  - Status: `OK`
+- Targeted Sprint 41 tests: Passed
+  - Unit: `Ran 6 tests`
+  - Integration: `Ran 3 tests`
+- Scope:
+  - schema v12 migration from v11
+  - safe BacktestAdapter contract
+  - deterministic fake adapter
+  - local process boundary tests for timeout, non-zero exit, invalid JSON, and bounded output
+  - normalized result contract, optional metric handling, fingerprint reproducibility, persistence, duplicate request protection, lifecycle events, metrics, Executive Planner to Research Agent flow, and CLI smoke
+  - no Champion promotion, active strategy switching, live KIS, broker credentials, real orders, MyMoneyGuard dependency, arbitrary shell execution, network access, paid AI APIs, or private repository dependency
+
 ## Sprint 40 Trading Adapter Foundation
 
 - Unit tests: Passed

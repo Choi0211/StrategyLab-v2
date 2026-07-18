@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -23,6 +23,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v8_to_v9(connection)
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
@@ -35,6 +36,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v8_to_v9(connection)
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 2:
         _upgrade_v2_to_v3(connection)
@@ -46,6 +48,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v8_to_v9(connection)
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 3:
         _upgrade_v3_to_v4(connection)
@@ -56,6 +59,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v8_to_v9(connection)
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 4:
         _upgrade_v4_to_v5(connection)
@@ -65,6 +69,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v8_to_v9(connection)
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 5:
         _upgrade_v5_to_v6(connection)
@@ -73,6 +78,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v8_to_v9(connection)
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 6:
         _upgrade_v6_to_v7(connection)
@@ -80,12 +86,14 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v8_to_v9(connection)
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 7:
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 8:
         _upgrade_v8_to_v9(connection)
@@ -95,9 +103,14 @@ def migrate(connection: sqlite3.Connection) -> None:
     elif int(current[0]) == 9:
         _upgrade_v9_to_v10(connection)
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 10:
         _upgrade_v10_to_v11(connection)
+        _upgrade_v11_to_v12(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 11:
+        _upgrade_v11_to_v12(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -433,6 +446,35 @@ def _upgrade_v10_to_v11(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_trading_results_request
             ON trading_results(request_id, created_at);
+        """
+    )
+
+
+def _upgrade_v11_to_v12(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS backtest_requests (
+            request_id TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            dataset_id TEXT NOT NULL,
+            period_start TEXT NOT NULL,
+            period_end TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_backtest_requests_fingerprint
+            ON backtest_requests(fingerprint);
+        CREATE TABLE IF NOT EXISTS backtest_results (
+            result_id TEXT PRIMARY KEY,
+            request_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_backtest_results_request
+            ON backtest_results(request_id, generated_at);
         """
     )
 

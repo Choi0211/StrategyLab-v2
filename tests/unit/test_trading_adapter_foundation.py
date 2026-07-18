@@ -105,7 +105,7 @@ class TradingAdapterFoundationTest(unittest.TestCase):
         self.assertEqual(result.status, TradingStatus.FAILED)
         self.assertEqual(result.decision.reasons, ("RuntimeError",))
 
-    def test_schema_v10_migrates_to_v11(self) -> None:
+    def test_schema_v10_migrates_to_current_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db = os.path.join(tmp, "runtime.sqlite")
             connection = sqlite3.connect(db)

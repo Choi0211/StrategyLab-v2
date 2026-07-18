@@ -1,5 +1,15 @@
 # Changelog
 
+## Sprint 41 v1 Backtest Adapter Foundation
+
+- Added runtime schema v12 for backtest requests and normalized backtest results.
+- Added BacktestRequest, BacktestStrategyRef, BacktestDatasetRef, BacktestPeriod, BacktestExecutionContext, BacktestResult, BacktestMetrics, BacktestTradeSummary, and BacktestStatus contracts.
+- Added BacktestAdapter, FakeBacktestAdapter, LocalProcessBacktestAdapter, SQLiteBacktestRepository, and BacktestExecutionService.
+- Added v1 result normalization, optional metric preservation, stable reproducibility fingerprints, bounded local-process invocation handling, lifecycle events, runtime metrics, CLI commands, and v11-to-v12 migration coverage.
+- Exposed the adapter through the existing Executive Planner and Research Agent in a bounded fake-adapter path.
+- The real v1 backtest engine is not required for automated tests.
+- Did not add Champion/Challenger ranking, strategy promotion, active strategy switching, paper trading promotion, live strategy deployment, KIS integration, MyMoneyGuard integration, automatic trading, automatic approval, arbitrary shell execution, network calls, or private repository dependencies.
+
 ## Sprint 40 Trading Adapter Foundation
 
 - Added runtime schema v11 for trading requests and structured simulation results.
