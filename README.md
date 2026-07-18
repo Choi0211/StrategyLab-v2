@@ -30,6 +30,7 @@ Included foundations:
 - Sprint 41 safe v1 Backtest Adapter foundation with normalized results, reproducibility fingerprints, fake/local process boundary, events, metrics, persistence, and CLI inspection
 - Sprint 42 deterministic Strategy Validation Engine with PASS/FAIL/REVIEW reports, conservative policy v1, schema v13 persistence, events, metrics, and CLI inspection
 - Sprint 43 Champion / Challenger Evaluation Engine with deterministic promotion-candidate reports, schema v14 persistence, events, metrics, and CLI inspection
+- Sprint 44 Champion Registry with explicit approval-based promotion, schema v15 persistence, version history, rollback, events, metrics, and CLI inspection
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -308,6 +309,21 @@ py -3.11 -m gaon.runtime.cli champion-evaluation-history --db runtime.sqlite
 
 Possible decisions are `KEEP_CHAMPION`, `PROMOTION_CANDIDATE`, and `REVIEW`. `PROMOTION_CANDIDATE` is not `PROMOTED`; Sprint 43 does not switch active strategies, promote automatically, trade, approve, connect to live KIS, place broker orders, or access MyMoneyGuard. See `docs/architecture/champion-challenger-evaluation.md` and `docs/operations/ChampionChallengerEvaluation.md`.
 
+## Champion Registry
+
+Sprint 44 records the active Champion only after explicit approval. The required sequence is `PROMOTION_CANDIDATE -> Promotion Request -> Explicit Approval -> Champion Registry`.
+
+```bash
+python -m gaon.runtime.cli champion-bootstrap --db runtime.sqlite --strategy turtle_v5 --fingerprint <fingerprint> --backtest-id <backtest_id>
+python -m gaon.runtime.cli champion-promotion-request --db runtime.sqlite --evaluation-id <evaluation_id>
+python -m gaon.runtime.cli champion-promotion-approve --db runtime.sqlite <promotion_id>
+python -m gaon.runtime.cli champion-registry-show --db runtime.sqlite
+python -m gaon.runtime.cli champion-history --db runtime.sqlite
+python -m gaon.runtime.cli champion-rollback --db runtime.sqlite
+```
+
+Rejected promotion requests never change the active Champion. Rollback creates a new auditable history version and never deletes prior records. Sprint 44 does not connect to live KIS, broker orders, active trading, automatic approval, or MyMoneyGuard. See `docs/architecture/champion-registry.md` and `docs/operations/ChampionRegistry.md`.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -329,7 +345,7 @@ Possible decisions are `KEEP_CHAMPION`, `PROMOTION_CANDIDATE`, and `REVIEW`. `PR
 - `gaon.runtime.agents`: bounded agent contracts, explicit registry, dispatcher, deterministic initial agents, event, and metrics contracts
 - `gaon.runtime.scheduled_automation`: durable scheduled jobs, scheduled runs, safe due execution, events, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
-- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, deterministic Strategy Validation Engine, Champion/Challenger Evaluation Engine, fake/paper adapters, and deterministic adapter tests
+- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, deterministic Strategy Validation Engine, Champion/Challenger Evaluation Engine, Champion Registry, fake/paper adapters, and deterministic adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, Journal, validated planning, evidence search, evidence context, knowledge proposals, approval workflow, and Research Brain v3 orchestration contracts

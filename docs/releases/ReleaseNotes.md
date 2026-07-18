@@ -3,6 +3,31 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 44 Champion Registry and Approval Promotion
+
+Included:
+
+- runtime schema v15 for Champion registry, history, promotion requests, and promotion decisions
+- explicit first Champion bootstrap
+- promotion request creation only from Sprint 43 `promotion_candidate` evaluations
+- explicit approval and rejection workflow
+- active Champion registry update after approval only
+- immediate previous Champion rollback with preserved history
+- events, metrics, CLI inspection, unit tests, and integration tests
+
+Not included:
+
+- automatic Champion promotion
+- direct `PROMOTION_CANDIDATE` activation
+- active strategy switching
+- Paper Trading forward-test sessions
+- live KIS
+- broker credentials
+- real orders
+- automatic trading
+- automatic approval
+- MyMoneyGuard integration
+
 ## Sprint 43 Champion / Challenger Evaluation Engine
 
 Included:

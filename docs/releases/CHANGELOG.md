@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 44 Champion Registry and Approval Promotion
+
+- Added approval-gated Champion Registry for the stable `default` slot.
+- Added explicit bootstrap, promotion request, approve, reject, history, registry show, and rollback CLI commands.
+- Added runtime schema v15 with Champion registry, version history, promotion request, and promotion decision tables.
+- Added events and metrics for bootstrap, promotion request, approval, rejection, activation, and rollback.
+- Added unit and integration coverage for idempotent promotion requests, approval, rejection, rollback, persistence, and migration.
+- Preserved safety boundaries: no direct `PROMOTION_CANDIDATE` activation, no live KIS, no broker orders, no automatic trading, no automatic approval, and no MyMoneyGuard dependency.
+
 ## Sprint 43 Champion / Challenger Evaluation Engine
 
 - Added deterministic Champion / Challenger Evaluation Engine.

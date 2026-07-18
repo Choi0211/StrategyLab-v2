@@ -10,6 +10,7 @@ from typing import Any
 
 from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, SQLiteBacktestRepository, build_backtest_request
 from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionChallengerPolicy, SQLiteChampionChallengerRepository, build_champion_challenger_request
+from gaon.adapters.champion_registry import ChampionRegistryService, ChampionRollbackRequest, SQLiteChampionRegistryRepository
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, ValidationPolicy, build_validation_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
@@ -179,6 +180,33 @@ def main(argv: list[str] | None = None) -> int:
     champion_show.add_argument("evaluation_id")
     champion_history = sub.add_parser("champion-evaluation-history")
     champion_history.add_argument("--db", default="runtime.sqlite")
+    registry_show = sub.add_parser("champion-registry-show")
+    registry_show.add_argument("--db", default="runtime.sqlite")
+    registry_show.add_argument("--slot", default="default")
+    registry_history = sub.add_parser("champion-history")
+    registry_history.add_argument("--db", default="runtime.sqlite")
+    registry_history.add_argument("--slot", default="default")
+    bootstrap = sub.add_parser("champion-bootstrap")
+    bootstrap.add_argument("--db", default="runtime.sqlite")
+    bootstrap.add_argument("--strategy", required=True)
+    bootstrap.add_argument("--fingerprint", required=True)
+    bootstrap.add_argument("--backtest-id", required=True)
+    bootstrap.add_argument("--slot", default="default")
+    promotion_request = sub.add_parser("champion-promotion-request")
+    promotion_request.add_argument("--db", default="runtime.sqlite")
+    promotion_request.add_argument("--evaluation-id", required=True)
+    promotion_request.add_argument("--promotion-id", required=False)
+    promotion_request.add_argument("--slot", default="default")
+    promotion_approve = sub.add_parser("champion-promotion-approve")
+    promotion_approve.add_argument("--db", default="runtime.sqlite")
+    promotion_approve.add_argument("promotion_id")
+    promotion_reject = sub.add_parser("champion-promotion-reject")
+    promotion_reject.add_argument("--db", default="runtime.sqlite")
+    promotion_reject.add_argument("promotion_id")
+    rollback = sub.add_parser("champion-rollback")
+    rollback.add_argument("--db", default="runtime.sqlite")
+    rollback.add_argument("--slot", default="default")
+    rollback.add_argument("--rollback-id", required=False)
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -633,6 +661,73 @@ def _run(args: argparse.Namespace) -> int:
                 print(f"{report.evaluation_id} decision={report.decision.value} score={report.evaluation_score}")
             if not reports:
                 print("champion-evaluation-history: none")
+        finally:
+            store.close()
+    elif args.command == "champion-registry-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            entry = SQLiteChampionRegistryRepository(store._connection).get_active(args.slot)
+            if entry is None:
+                print(f"champion-registry-show: slot={args.slot} none")
+            else:
+                print(f"champion-registry-show: slot={entry.slot} version={entry.active_version_id} strategy={entry.strategy_ref} fingerprint={entry.fingerprint} revision={entry.revision}")
+        finally:
+            store.close()
+    elif args.command == "champion-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            versions = SQLiteChampionRegistryRepository(store._connection).list_history(args.slot)
+            for version in versions:
+                print(f"{version.version_id} slot={version.slot} revision={version.revision} strategy={version.strategy_ref} fingerprint={version.fingerprint} activation_type={version.activation_type}")
+            if not versions:
+                print("champion-history: none")
+        finally:
+            store.close()
+    elif args.command == "champion-bootstrap":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            service = ChampionRegistryService(SQLiteChampionRegistryRepository(store._connection), SQLiteChampionChallengerRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector())
+            entry = service.bootstrap(strategy_ref=args.strategy, fingerprint=args.fingerprint, backtest_id=args.backtest_id, actor_ref="actor:redacted", activated_at=now, slot=args.slot)
+            print(f"champion-bootstrap: slot={entry.slot} version={entry.active_version_id} fingerprint={entry.fingerprint}")
+        finally:
+            store.close()
+    elif args.command == "champion-promotion-request":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            promotion_id = args.promotion_id or f"promotion:{args.evaluation_id}"
+            service = ChampionRegistryService(SQLiteChampionRegistryRepository(store._connection), SQLiteChampionChallengerRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector())
+            request = service.request_promotion(promotion_id, args.evaluation_id, actor_ref="actor:redacted", requested_at=now, slot=args.slot)
+            print(f"champion-promotion-request: promotion_id={request.promotion_id} status={request.status.value} evaluation_id={request.evaluation_id}")
+        finally:
+            store.close()
+    elif args.command == "champion-promotion-approve":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            service = ChampionRegistryService(SQLiteChampionRegistryRepository(store._connection), SQLiteChampionChallengerRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector())
+            entry = service.approve(args.promotion_id, actor_ref="actor:redacted", decided_at=now)
+            print(f"champion-promotion-approve: promotion_id={args.promotion_id} active_version={entry.active_version_id} fingerprint={entry.fingerprint}")
+        finally:
+            store.close()
+    elif args.command == "champion-promotion-reject":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            service = ChampionRegistryService(SQLiteChampionRegistryRepository(store._connection), SQLiteChampionChallengerRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector())
+            request = service.reject(args.promotion_id, actor_ref="actor:redacted", decided_at=now)
+            print(f"champion-promotion-reject: promotion_id={request.promotion_id} status={request.status.value}")
+        finally:
+            store.close()
+    elif args.command == "champion-rollback":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            rollback_id = args.rollback_id or f"rollback:{args.slot}:{now}"
+            service = ChampionRegistryService(SQLiteChampionRegistryRepository(store._connection), SQLiteChampionChallengerRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector())
+            result = service.rollback(ChampionRollbackRequest(rollback_id, args.slot, "actor:redacted", now))
+            print(f"champion-rollback: rollback_id={result.rollback_id} restored={result.restored_version_id} active={result.new_version_id}")
         finally:
             store.close()
     elif args.command == "research-proposals-list":

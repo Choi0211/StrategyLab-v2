@@ -2,6 +2,47 @@
 
 Status: Passed
 
+## Sprint 44 Champion Registry and Approval Promotion
+
+- Unit tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Full result: `Ran 292 tests`
+  - Targeted command: `PYTHONPATH=src python -m unittest tests.unit.test_champion_registry tests.unit.test_champion_challenger tests.unit.test_runtime_service`
+  - Result: `Ran 17 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Full result: `Ran 51 tests`
+  - Targeted command: `PYTHONPATH=src python -m unittest tests.integration.test_champion_registry_flow tests.integration.test_champion_challenger_flow`
+  - Result: `Ran 5 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Coverage:
+  - explicit first Champion bootstrap
+  - duplicate bootstrap rejection
+  - valid promotion request from `promotion_candidate`
+  - `keep_champion`, `review`, and missing evaluations rejected
+  - approval updates active Champion
+  - rejection leaves Champion unchanged
+  - duplicate approval idempotency
+  - history preservation
+  - rollback to previous Champion
+  - rollback without previous Champion rejected
+  - persistence round trip
+  - v14-to-v15 migration
+  - events, metrics, and CLI smoke
+- Safety:
+  - no automatic Champion promotion
+  - no direct `PROMOTION_CANDIDATE` activation
+  - no active strategy switching
+  - no live KIS
+  - no broker orders
+  - no automatic trading
+  - no automatic approval
+  - no MyMoneyGuard dependency
+
 ## Sprint 43 Champion / Challenger Evaluation Engine
 
 - Unit tests: Passed
