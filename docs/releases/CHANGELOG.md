@@ -379,3 +379,8 @@
 - Added v21 pipeline run/checkpoint persistence and resume-safe approval waits.
 - Added v5 CLI inspection and release-check commands.
 - Added release, recovery, and VPS upgrade documentation.
+
+# Sprint 50 Hotfix
+
+- Made `v5-demo --dry-run` repeatable on persistent SQLite runtime databases.
+- Namespaced demo-created IDs by run id without weakening existing uniqueness constraints.

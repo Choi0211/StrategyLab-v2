@@ -329,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     v5_demo.add_argument("--db", default=":memory:")
     v5_demo.add_argument("--approve-promotion", action="store_true")
     v5_demo.add_argument("--approve-deployment", action="store_true")
+    v5_demo.add_argument("--run-id", required=False)
     v5_demo.add_argument("--scenario", choices=("success", "validation_fail", "keep_champion", "promotion_rejected", "paper_hold", "paper_kill"), default="success")
     _add_dry_run_flags(v5_demo)
     sub.add_parser("research-proposals-list")
@@ -1138,7 +1139,9 @@ def _run(args: argparse.Namespace) -> int:
         if args.dry_run:
             store = RuntimeStateStore(args.db)
             try:
-                request = GaonV5PipelineRequest("v5-demo", "v5-demo", "actor:redacted", _utc_now(), approve_promotion=args.approve_promotion, approve_deployment=args.approve_deployment, scenario=args.scenario)
+                now = _utc_now()
+                run_id = args.run_id or f"v5-demo:{now}"
+                request = GaonV5PipelineRequest(run_id, run_id, "actor:redacted", now, approve_promotion=args.approve_promotion, approve_deployment=args.approve_deployment, scenario=args.scenario)
                 report = GaonV5PipelineOrchestrator(store._connection, event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector()).run_demo(request)
                 print(report.to_json())
             finally:

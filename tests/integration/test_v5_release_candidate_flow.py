@@ -1,10 +1,14 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 
+from gaon.runtime.cli import main as cli_main
 from gaon.adapters.strategy_deployment import FakeStrategyDeploymentAdapter, SQLiteStrategyDeploymentRepository, StrategyDeploymentService, StrategyDeploymentStatus, build_strategy_deployment_request
 from gaon.adapters.strategy_handoff import SQLiteStrategyHandoffRepository
 from gaon.runtime.event_store import SQLiteEventStore
+from gaon.runtime.event_store import DurableEvent
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
 from gaon.runtime.storage import RuntimeStateStore
@@ -117,6 +121,39 @@ class V5ReleaseCandidateFlowTest(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0], SCHEMA_VERSION)
             self.assertIsNotNone(connection.execute("SELECT name FROM sqlite_master WHERE name = 'gaon_v5_pipeline_runs'").fetchone())
             connection.close()
+
+    def test_v5_demo_is_repeatable_on_persistent_database_after_release_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = f"{tmp}/runtime.sqlite"
+            self.assertEqual(cli_main(["v5-release-check", "--db", db]), 0)
+            outputs = []
+            for _ in range(3):
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    rc = cli_main(["v5-demo", "--dry-run", "--db", db])
+                self.assertEqual(rc, 0)
+                combined = stdout.getvalue() + stderr.getvalue()
+                self.assertNotIn("IntegrityError", combined)
+                outputs.append(combined)
+
+            history = StringIO()
+            with redirect_stdout(history):
+                self.assertEqual(cli_main(["v5-pipeline-history", "--db", db]), 0)
+            lines = [line for line in history.getvalue().splitlines() if line.startswith("v5-demo:")]
+            self.assertEqual(len(lines), 3)
+            self.assertEqual(len({line.split()[0] for line in lines}), 3)
+            self.assertTrue(all("status=waiting_for_approval" in line for line in lines))
+
+    def test_production_uniqueness_constraints_remain_enforced(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            event = DurableEvent("event:test:unique", "TestEvent", NOW, "actor:redacted", "corr", None, "test", "StrategyLab", "N/A", "N/A", {}, (), (), NOW)
+            SQLiteEventStore(store._connection).append(event)
+            with self.assertRaises(sqlite3.IntegrityError):
+                SQLiteEventStore(store._connection).append(event)
+        finally:
+            store.close()
 
 
 if __name__ == "__main__":
