@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -39,6 +39,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         18: _upgrade_v18_to_v19,
         19: _upgrade_v19_to_v20,
         20: _upgrade_v20_to_v21,
+        21: _upgrade_v21_to_v22,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -711,6 +712,39 @@ def _upgrade_v20_to_v21(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_gaon_v5_pipeline_checkpoints_run
             ON gaon_v5_pipeline_checkpoints(run_id, created_at, stage);
+        """
+    )
+
+
+def _upgrade_v21_to_v22(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_ref TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_sessions_user
+            ON conversation_sessions(user_ref, updated_at);
+        CREATE TABLE IF NOT EXISTS conversation_messages (
+            message_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            intent TEXT NOT NULL,
+            route TEXT NOT NULL,
+            references_json TEXT NOT NULL,
+            warnings_json TEXT NOT NULL,
+            tool_calls_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES conversation_sessions(session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_messages_session
+            ON conversation_messages(session_id, created_at, message_id);
         """
     )
 
