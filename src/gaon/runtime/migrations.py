@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -13,213 +13,35 @@ def migrate(connection: sqlite3.Connection) -> None:
     current = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
     if current is None:
         _create_v1(connection)
-        _upgrade_v1_to_v2(connection)
-        _upgrade_v2_to_v3(connection)
-        _upgrade_v3_to_v4(connection)
-        _upgrade_v4_to_v5(connection)
-        _upgrade_v5_to_v6(connection)
-        _upgrade_v6_to_v7(connection)
-        _upgrade_v7_to_v8(connection)
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 1:
-        _upgrade_v1_to_v2(connection)
-        _upgrade_v2_to_v3(connection)
-        _upgrade_v3_to_v4(connection)
-        _upgrade_v4_to_v5(connection)
-        _upgrade_v5_to_v6(connection)
-        _upgrade_v6_to_v7(connection)
-        _upgrade_v7_to_v8(connection)
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 2:
-        _upgrade_v2_to_v3(connection)
-        _upgrade_v3_to_v4(connection)
-        _upgrade_v4_to_v5(connection)
-        _upgrade_v5_to_v6(connection)
-        _upgrade_v6_to_v7(connection)
-        _upgrade_v7_to_v8(connection)
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 3:
-        _upgrade_v3_to_v4(connection)
-        _upgrade_v4_to_v5(connection)
-        _upgrade_v5_to_v6(connection)
-        _upgrade_v6_to_v7(connection)
-        _upgrade_v7_to_v8(connection)
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 4:
-        _upgrade_v4_to_v5(connection)
-        _upgrade_v5_to_v6(connection)
-        _upgrade_v6_to_v7(connection)
-        _upgrade_v7_to_v8(connection)
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 5:
-        _upgrade_v5_to_v6(connection)
-        _upgrade_v6_to_v7(connection)
-        _upgrade_v7_to_v8(connection)
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 6:
-        _upgrade_v6_to_v7(connection)
-        _upgrade_v7_to_v8(connection)
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 7:
-        _upgrade_v7_to_v8(connection)
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 8:
-        _upgrade_v8_to_v9(connection)
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 9:
-        _upgrade_v9_to_v10(connection)
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 10:
-        _upgrade_v10_to_v11(connection)
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 11:
-        _upgrade_v11_to_v12(connection)
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 12:
-        _upgrade_v12_to_v13(connection)
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 13:
-        _upgrade_v13_to_v14(connection)
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 14:
-        _upgrade_v14_to_v15(connection)
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 15:
-        _upgrade_v15_to_v16(connection)
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 16:
-        _upgrade_v16_to_v17(connection)
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) == 17:
-        _upgrade_v17_to_v18(connection)
-        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif int(current[0]) != SCHEMA_VERSION:
+        current_version = 1
+    else:
+        current_version = int(current[0])
+    if current_version > SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
+    upgrades = {
+        1: _upgrade_v1_to_v2,
+        2: _upgrade_v2_to_v3,
+        3: _upgrade_v3_to_v4,
+        4: _upgrade_v4_to_v5,
+        5: _upgrade_v5_to_v6,
+        6: _upgrade_v6_to_v7,
+        7: _upgrade_v7_to_v8,
+        8: _upgrade_v8_to_v9,
+        9: _upgrade_v9_to_v10,
+        10: _upgrade_v10_to_v11,
+        11: _upgrade_v11_to_v12,
+        12: _upgrade_v12_to_v13,
+        13: _upgrade_v13_to_v14,
+        14: _upgrade_v14_to_v15,
+        15: _upgrade_v15_to_v16,
+        16: _upgrade_v16_to_v17,
+        17: _upgrade_v17_to_v18,
+        18: _upgrade_v18_to_v19,
+    }
+    for version in range(current_version, SCHEMA_VERSION):
+        upgrades[version](connection)
+    if current_version != SCHEMA_VERSION:
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     connection.commit()
 
 
@@ -788,6 +610,33 @@ def _upgrade_v17_to_v18(connection: sqlite3.Connection) -> None:
             ON strategy_execution_runs(champion_version_id, mode, status);
         CREATE INDEX IF NOT EXISTS idx_strategy_execution_runs_plan
             ON strategy_execution_runs(plan_id, started_at);
+        """
+    )
+
+
+def _upgrade_v18_to_v19(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_handoff_packages (
+            package_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            checksum TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_handoff_packages_status
+            ON strategy_handoff_packages(status, created_at);
+        CREATE TABLE IF NOT EXISTS strategy_handoff_approvals (
+            approval_id TEXT PRIMARY KEY,
+            package_id TEXT NOT NULL,
+            approved INTEGER NOT NULL,
+            package_checksum TEXT NOT NULL,
+            approver_ref TEXT NOT NULL,
+            decided_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_handoff_approvals_package
+            ON strategy_handoff_approvals(package_id, decided_at);
         """
     )
 

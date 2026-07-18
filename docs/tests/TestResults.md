@@ -887,3 +887,10 @@ Status: Passed
 - Secret check: Passed
   - Checked tracked and staged candidate files for forbidden secret patterns.
   - No `.env`, `.env.*` except `.env.example`, `kis_token.json`, token JSON, account JSON, trade state JSON, secret files, log files, or private data dumps were detected.
+# Sprint 48
+
+Pending local verification:
+
+- unit tests
+- integration tests
+- `scripts/verify_release.py`

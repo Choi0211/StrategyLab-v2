@@ -13,6 +13,7 @@ from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionC
 from gaon.adapters.champion_registry import ChampionRegistryService, ChampionRollbackRequest, SQLiteChampionRegistryRepository
 from gaon.adapters.paper_forward import PaperTradingForwardTestService, SQLitePaperTradingSessionRepository
 from gaon.adapters.paper_revalidation import PaperRevalidationEngine, PaperRevalidationPolicy, SQLitePaperRevalidationRepository, build_paper_revalidation_request
+from gaon.adapters.strategy_handoff import SQLiteStrategyHandoffRepository, StrategyHandoffService, build_strategy_handoff_request, safe_handoff_export_path
 from gaon.adapters.strategy_execution import SQLiteStrategyExecutionRepository, StrategyExecutionMode, StrategyExecutionPolicy, StrategyExecutionRuntime, build_strategy_execution_request
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, ValidationPolicy, build_validation_request
@@ -274,6 +275,27 @@ def main(argv: list[str] | None = None) -> int:
     execution_show.add_argument("run_id")
     execution_history = sub.add_parser("execution-history")
     execution_history.add_argument("--db", default="runtime.sqlite")
+    handoff_create = sub.add_parser("handoff-create")
+    handoff_create.add_argument("--db", default="runtime.sqlite")
+    handoff_create.add_argument("--champion-slot", default="default")
+    handoff_create.add_argument("--revalidation-id", required=True)
+    handoff_create.add_argument("--request-id", required=False)
+    handoff_show = sub.add_parser("handoff-show")
+    handoff_show.add_argument("--db", default="runtime.sqlite")
+    handoff_show.add_argument("package_id")
+    handoff_history = sub.add_parser("handoff-history")
+    handoff_history.add_argument("--db", default="runtime.sqlite")
+    handoff_export = sub.add_parser("handoff-export")
+    handoff_export.add_argument("--db", default="runtime.sqlite")
+    handoff_export.add_argument("--package-id", required=True)
+    handoff_export.add_argument("--output", required=True)
+    handoff_approve = sub.add_parser("handoff-approve")
+    handoff_approve.add_argument("--db", default="runtime.sqlite")
+    handoff_approve.add_argument("package_id")
+    handoff_reject = sub.add_parser("handoff-reject")
+    handoff_reject.add_argument("--db", default="runtime.sqlite")
+    handoff_reject.add_argument("package_id")
+    handoff_reject.add_argument("--reason", default="rejected by explicit human review")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -944,6 +966,56 @@ def _run(args: argparse.Namespace) -> int:
                 print("execution-history: none")
         finally:
             store.close()
+    elif args.command == "handoff-create":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            request_id = args.request_id or f"handoff:{args.revalidation_id}:{now}"
+            request = build_strategy_handoff_request(request_id, revalidation_id=args.revalidation_id, actor_ref="actor:redacted", requested_at=now, champion_slot=args.champion_slot)
+            package = _handoff_service(store).create(request)
+            print(f"handoff-create: package_id={package.package_id} status={package.status.value} checksum={package.checksum}")
+        finally:
+            store.close()
+    elif args.command == "handoff-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(SQLiteStrategyHandoffRepository(store._connection).get_package(args.package_id).to_json())
+        finally:
+            store.close()
+    elif args.command == "handoff-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            packages = SQLiteStrategyHandoffRepository(store._connection).list_packages()
+            for package in packages:
+                print(f"{package.package_id} status={package.status.value} checksum={package.checksum} revalidation={package.manifest.paper_revalidation_id}")
+            if not packages:
+                print("handoff-history: none")
+        finally:
+            store.close()
+    elif args.command == "handoff-export":
+        store = RuntimeStateStore(args.db)
+        try:
+            package = SQLiteStrategyHandoffRepository(store._connection).get_package(args.package_id)
+            output = safe_handoff_export_path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(package.to_json(), encoding="utf-8")
+            print(f"handoff-export: package_id={package.package_id} output={output}")
+        finally:
+            store.close()
+    elif args.command == "handoff-approve":
+        store = RuntimeStateStore(args.db)
+        try:
+            package = _handoff_service(store).approve(args.package_id, approver_ref="actor:redacted", decided_at=_utc_now())
+            print(f"handoff-approve: package_id={package.package_id} status={package.status.value} checksum={package.checksum}")
+        finally:
+            store.close()
+    elif args.command == "handoff-reject":
+        store = RuntimeStateStore(args.db)
+        try:
+            package = _handoff_service(store).reject(args.package_id, actor_ref="actor:redacted", decided_at=_utc_now(), reason=args.reason)
+            print(f"handoff-reject: package_id={package.package_id} status={package.status.value}")
+        finally:
+            store.close()
     elif args.command == "research-proposals-list":
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
@@ -1121,6 +1193,17 @@ def _execution_runtime(store: RuntimeStateStore) -> StrategyExecutionRuntime:
         SQLiteChampionRegistryRepository(store._connection),
         revalidations=SQLitePaperRevalidationRepository(store._connection),
         trading_repository=SQLiteTradingRepository(store._connection),
+        event_store=SQLiteEventStore(store._connection),
+        metrics=MetricsCollector(),
+    )
+
+
+def _handoff_service(store: RuntimeStateStore) -> StrategyHandoffService:
+    return StrategyHandoffService(
+        SQLiteStrategyHandoffRepository(store._connection),
+        SQLiteChampionRegistryRepository(store._connection),
+        SQLitePaperRevalidationRepository(store._connection),
+        SQLiteBacktestRepository(store._connection),
         event_store=SQLiteEventStore(store._connection),
         metrics=MetricsCollector(),
     )
