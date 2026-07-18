@@ -8,6 +8,7 @@ from typing import Protocol
 
 from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, build_backtest_request
 from gaon.adapters.trading import PaperTradingAdapter, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
+from gaon.adapters.validation import StrategyValidationEngine, build_validation_request
 from gaon.research.planning import ResearchRequest, deterministic_research_plan
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.errors import ConfigurationError
@@ -25,6 +26,7 @@ class AgentCapability(str, Enum):
     APPROVAL_REVIEW = "approval_review"
     TRADING_SIMULATION = "trading_simulation"
     BACKTEST = "backtest"
+    VALIDATION = "validation"
 
 
 class AgentStatus(str, Enum):
@@ -180,7 +182,7 @@ class AgentDispatcher:
 
 class ResearchAgent:
     name = AgentSelection.RESEARCH_BRAIN.value
-    capabilities = (AgentCapability.RESEARCH, AgentCapability.REPORT_GENERATION, AgentCapability.BACKTEST)
+    capabilities = (AgentCapability.RESEARCH, AgentCapability.REPORT_GENERATION, AgentCapability.BACKTEST, AgentCapability.VALIDATION)
 
     def execute(self, context: AgentExecutionContext) -> AgentResult:
         if ToolSelection.BACKTEST_ADAPTER in context.plan.tools:
@@ -194,6 +196,18 @@ class ResearchAgent:
                 created_at=context.request.created_at,
             )
             result = BacktestExecutionService(FakeBacktestAdapter()).run(request, BacktestExecutionContext(30, 64_000, context.request.created_at))
+            if ToolSelection.VALIDATION_ENGINE in context.plan.tools:
+                validation_request = build_validation_request(f"validation:{context.request.request_id}", (result,), actor_ref=context.request.actor_ref, requested_at=context.request.created_at)
+                report = StrategyValidationEngine().validate(validation_request, (result,), generated_at=context.request.created_at)
+                return _result(
+                    agent_name=self.name,
+                    status=AgentStatus.SUCCEEDED,
+                    output=f"validation report prepared: status={report.overall_status.value} score={report.score} fingerprint={report.fingerprint}",
+                    error=None,
+                    started_at=context.request.created_at,
+                    completed_at=context.request.created_at,
+                    metadata={"mode": "fake_backtest_validation", "fingerprint": result.fingerprint, "validation_status": report.overall_status.value, "score": str(report.score)},
+                )
             status = AgentStatus.SUCCEEDED if result.status.value == "completed" else AgentStatus.BLOCKED
             return _result(
                 agent_name=self.name,
@@ -349,6 +363,7 @@ def _required_capabilities(plan: ExecutivePlan, request: AgentRequest) -> tuple[
         ToolSelection.RUNTIME_STATUS: AgentCapability.REPOSITORY_READ,
         ToolSelection.TRADING_SIMULATION: AgentCapability.TRADING_SIMULATION,
         ToolSelection.BACKTEST_ADAPTER: AgentCapability.BACKTEST,
+        ToolSelection.VALIDATION_ENGINE: AgentCapability.VALIDATION,
         ToolSelection.APPROVAL_WORKFLOW: AgentCapability.APPROVAL_REVIEW,
     }
     for tool in plan.tools:

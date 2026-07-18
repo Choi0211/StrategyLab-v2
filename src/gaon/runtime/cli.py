@@ -10,6 +10,7 @@ from typing import Any
 
 from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, SQLiteBacktestRepository, build_backtest_request
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
+from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, ValidationPolicy, build_validation_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
 from gaon.integrations.telegram.contracts import TelegramClient, TelegramDiscoveredChat, TelegramPollResult
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
@@ -153,6 +154,18 @@ def main(argv: list[str] | None = None) -> int:
     backtest_show.add_argument("result_id")
     backtest_history = sub.add_parser("backtest-history")
     backtest_history.add_argument("--db", default="runtime.sqlite")
+    validation_run = sub.add_parser("validation-run")
+    validation_run.add_argument("--db", default="runtime.sqlite")
+    validation_source = validation_run.add_mutually_exclusive_group(required=True)
+    validation_source.add_argument("--backtest-id")
+    validation_source.add_argument("--fingerprint")
+    validation_show = sub.add_parser("validation-show")
+    validation_show.add_argument("--db", default="runtime.sqlite")
+    validation_show.add_argument("validation_id")
+    validation_history = sub.add_parser("validation-history")
+    validation_history.add_argument("--db", default="runtime.sqlite")
+    validation_policy = sub.add_parser("validation-policy-show")
+    validation_policy.add_argument("--json", action="store_true")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -536,6 +549,41 @@ def _run(args: argparse.Namespace) -> int:
                 print("backtest-history: none")
         finally:
             store.close()
+    elif args.command == "validation-run":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            backtest_repo = SQLiteBacktestRepository(store._connection)
+            result = backtest_repo.get_result(args.backtest_id) if args.backtest_id else _find_backtest_by_fingerprint(backtest_repo, args.fingerprint)
+            request = build_validation_request(f"validation:{result.result_id}", (result,), actor_ref="actor:redacted", requested_at=now)
+            report = StrategyValidationEngine(repository=SQLiteValidationRepository(store._connection), event_store=SQLiteEventStore(store._connection), metrics=MetricsCollector()).validate(request, (result,), generated_at=now)
+            print(f"validation-run: validation_id={report.validation_id} status={report.overall_status.value} score={report.score} fingerprint={report.fingerprint}")
+        finally:
+            store.close()
+    elif args.command == "validation-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            print(SQLiteValidationRepository(store._connection).get_report(args.validation_id).to_json())
+        finally:
+            store.close()
+    elif args.command == "validation-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            reports = SQLiteValidationRepository(store._connection).list_reports()
+            for report in reports:
+                print(f"{report.validation_id} status={report.overall_status.value} score={report.score} fingerprint={report.fingerprint}")
+            if not reports:
+                print("validation-history: none")
+        finally:
+            store.close()
+    elif args.command == "validation-policy-show":
+        policy = ValidationPolicy()
+        if args.json:
+            import json
+
+            print(json.dumps(policy.__dict__, sort_keys=True, separators=(",", ":"), default=lambda value: value.value if hasattr(value, "value") else str(value)))
+        else:
+            print(f"validation-policy-show: policy_version={policy.policy_version} min_trade_count={policy.min_trade_count} max_drawdown={policy.max_drawdown:.2f} min_sample_days={policy.min_sample_days}")
     elif args.command == "research-proposals-list":
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
@@ -683,6 +731,13 @@ def _save_poll_offset(state: TelegramStateRepository, next_offset: int, updated_
     current = state.get_offset(TELEGRAM_POLL_OFFSET_KEY)
     if current is None or next_offset > current:
         state.save_offset(TELEGRAM_POLL_OFFSET_KEY, next_offset, updated_at)
+
+
+def _find_backtest_by_fingerprint(repository: SQLiteBacktestRepository, fingerprint: str):
+    matches = tuple(result for result in repository.list_results() if result.fingerprint == fingerprint)
+    if not matches:
+        raise KeyError(fingerprint)
+    return matches[0]
 
 
 def _runtime_tick(config: GaonRuntimeConfig, store: RuntimeStateStore, metrics: MetricsCollector):

@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 42 Strategy Validation Engine
+
+- Added deterministic Strategy Validation Engine for normalized Sprint 41 `BacktestResult` records.
+- Added `ValidationRequest`, `ValidationPolicy`, `ValidationRule`, `ValidationRuleResult`, `ValidationReport`, status, severity, and evidence contracts.
+- Added conservative `validation_policy_v1` with MDD, trade count, sample period, profit factor, fingerprint, multi-run, and overfitting heuristic checks.
+- Added runtime schema v13 with `validation_requests` and `validation_reports`.
+- Added validation lifecycle events, runtime metrics, Research Agent validation routing, Executive Planner validation capability, and CLI commands.
+- Documented that Validation PASS does not automatically promote, deploy, trade, approve, or switch strategies.
+
 ## Hotfix Telegram Runtime Worker and systemd Service
 
 - Wired persistent Telegram polling into `GaonRuntimeService` through a bounded runtime worker.

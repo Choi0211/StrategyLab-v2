@@ -2,6 +2,52 @@
 
 Status: Passed
 
+## Sprint 42 Strategy Validation Engine
+
+- Unit tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Full result: `Ran 281 tests`
+  - Targeted command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest tests.unit.test_strategy_validation_engine`
+  - Result: `Ran 8 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Full command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Full result: `Ran 46 tests`
+  - Targeted command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest tests.integration.test_strategy_validation_flow`
+  - Result: `Ran 4 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Import smoke: Passed
+  - `import gaon.adapters.validation`
+- CLI smoke: Passed
+  - `validation-policy-show`
+  - `db-check --db :memory:`
+  - backtest-run -> validation-run -> validation-show -> validation-history
+- Coverage:
+  - strong result PASS
+  - excessive MDD FAIL
+  - insufficient trade count FAIL
+  - missing optional metric REVIEW
+  - missing fingerprint FAIL
+  - short sample period REVIEW
+  - deterministic score
+  - hard-fail overrides high score
+  - overfitting heuristic warning
+  - invalid drawdown range rejection
+  - multi-run aggregation and catastrophic window detection
+  - event emission, metrics, persistence round trip, CLI smoke, Research Agent route, and v12-to-v13 migration
+- Safety:
+  - no Champion promotion
+  - no active strategy switching
+  - no live KIS
+  - no broker orders
+  - no automatic trading
+  - no automatic approval
+  - no MyMoneyGuard dependency
+  - no paid-provider fallback
+
 ## Hotfix Telegram Runtime Worker and systemd Service
 
 - Unit tests: Passed

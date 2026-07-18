@@ -28,6 +28,7 @@ Included foundations:
 - Sprint 39 Daily Research Pipeline on top of the Sprint 38 scheduler, with deterministic evidence, reports, pending-review proposals, events, metrics, and CLI inspection
 - Sprint 40 safe Trading Adapter foundation with paper-only simulation, risk guardrails, events, metrics, persistence, and CLI inspection
 - Sprint 41 safe v1 Backtest Adapter foundation with normalized results, reproducibility fingerprints, fake/local process boundary, events, metrics, persistence, and CLI inspection
+- Sprint 42 deterministic Strategy Validation Engine with PASS/FAIL/REVIEW reports, conservative policy v1, schema v13 persistence, events, metrics, and CLI inspection
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -278,6 +279,21 @@ py -3.11 -m gaon.runtime.cli backtest-history --db runtime.sqlite
 
 This sprint does not implement Champion/Challenger ranking, strategy promotion, active strategy switching, paper trading promotion, live strategy deployment, KIS integration, MyMoneyGuard integration, automatic trading, automatic approval, arbitrary shell execution, network calls, or private repository dependency. See `docs/architecture/backtest-adapter-foundation.md` and `docs/operations/BacktestAdapter.md`.
 
+## Strategy Validation Engine
+
+Sprint 42 validates normalized Sprint 41 `BacktestResult` records with a deterministic, versioned policy.
+
+```powershell
+py -3.11 -m gaon.runtime.cli validation-policy-show
+py -3.11 -m gaon.runtime.cli validation-run --db runtime.sqlite --backtest-id backtest-result:<fingerprint>
+py -3.11 -m gaon.runtime.cli validation-show --db runtime.sqlite validation:backtest-result:<fingerprint>
+py -3.11 -m gaon.runtime.cli validation-history --db runtime.sqlite
+```
+
+Validation outputs `PASS`, `FAIL`, or `REVIEW`. `validation_policy_v1` requires reproducibility metadata, a sufficient sample period, a minimum trade count, bounded MDD, and available optional metrics according to policy. MDD is normalized internally as a positive fraction, so `-0.20`, `0.20`, and `20.0` all mean 20%.
+
+Validation PASS does not automatically promote or deploy a strategy. Sprint 42 does not implement Champion ranking, Challenger ranking, active strategy switching, automatic paper trading promotion, live KIS, broker orders, automatic trading, automatic approval, MyMoneyGuard integration, network access, or paid-provider fallback. See `docs/architecture/StrategyValidationEngine.md` and `docs/operations/ValidationPolicy.md`.
+
 ## Module Structure
 
 - `gaon.learning`: Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -299,7 +315,7 @@ This sprint does not implement Champion/Challenger ranking, strategy promotion, 
 - `gaon.runtime.agents`: bounded agent contracts, explicit registry, dispatcher, deterministic initial agents, event, and metrics contracts
 - `gaon.runtime.scheduled_automation`: durable scheduled jobs, scheduled runs, safe due execution, events, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
-- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, fake/paper adapters, and deterministic adapter tests
+- `gaon.adapters`: broker-free TradingAdapter protocol, safe v1 BacktestAdapter protocol, deterministic Strategy Validation Engine, fake/paper adapters, and deterministic adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
 - `gaon.integrations.notion`: Notion dry-run mapper and sync contracts
 - `gaon.research`: Research Goal, Plan, Session, Interview, Journal, validated planning, evidence search, evidence context, knowledge proposals, approval workflow, and Research Brain v3 orchestration contracts
