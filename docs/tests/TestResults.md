@@ -2,6 +2,32 @@
 
 Status: Passed
 
+## Sprint 38 Scheduler Automation
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 246 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 30 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Import smoke: Passed
+  - `from gaon.runtime import ScheduledAutomationRunner, ScheduledJobRepository, ScheduledRunStatus`
+- CLI smoke: Passed
+  - `schedule-create`
+  - `schedule-list`
+  - `schedule-show`
+  - `schedule-run-due`
+- Migration tests: Passed
+  - schema v8 to v9
+- Scope:
+  - durable scheduled job management, due execution through Executive Planner and Agent Dispatcher, approval blocking, bounded retry, duplicate run protection, lifecycle events, and metrics
+  - no Daily Research business logic, Telegram delivery, live Trading/KIS, automatic approval, paid-provider fallback, or private repository dependency
+
 ## Sprint 37 Multi-Agent Execution Framework
 
 - Unit tests: Passed

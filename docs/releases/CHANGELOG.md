@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 38 Scheduler Automation
+
+- Added runtime schema v9 for durable scheduled automation jobs and runs.
+- Added ScheduleDefinition, ScheduledJob, ScheduledRun, ScheduledRunStatus, and ScheduledExecutionRequest contracts.
+- Added ScheduledJobRepository with explicit creation, enable/disable, lookup, deterministic listing, due lookup, bounded attempts, and duplicate run protection.
+- Added ScheduledAutomationRunner that routes due jobs through Executive Planner and Agent Dispatcher without bypassing approval or capability boundaries.
+- Added scheduled lifecycle durable events, runtime metrics, and schedule CLI smoke commands.
+- Did not add Daily Research business logic, Telegram delivery, live Trading/KIS execution, automatic approval, paid-provider fallback, or private repository dependencies.
+
 ## Sprint 37 Multi-Agent Execution Framework
 
 - Added Agent, AgentRequest, AgentExecutionContext, AgentResult, AgentCapability, and AgentStatus contracts.

@@ -3,6 +3,33 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 38 Scheduler Automation
+
+Included:
+
+- runtime schema v9 for scheduled automation jobs and runs
+- durable scheduled job creation, enable, disable, lookup, list, and due detection
+- bounded scheduled execution through Executive Planner and Agent Dispatcher
+- disabled-job skip, duplicate run protection, bounded retry, blocked approval-required flow, and failure isolation
+- scheduled lifecycle durable events and runtime metrics
+- deterministic schedule CLI smoke commands
+
+Not included:
+
+- Daily Research topic logic
+- morning market report business logic
+- Telegram delivery
+- GitHub polling automation
+- Notion synchronization
+- Trading Adapter execution
+- KIS connection
+- broker orders
+- automatic trading
+- automatic approval
+- unrestricted shell execution
+- unrestricted filesystem mutation
+- arbitrary plugin loading
+
 ## Sprint 37 Multi-Agent Execution Framework
 
 Included:

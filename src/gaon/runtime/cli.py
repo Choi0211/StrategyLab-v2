@@ -21,6 +21,7 @@ from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutiv
 from gaon.runtime.health import readiness
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.reports import build_daily_report, build_weekly_review
+from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
@@ -58,6 +59,28 @@ def main(argv: list[str] | None = None) -> int:
     agent_run.add_argument("--request", required=True)
     agent_run.add_argument("--db", default=":memory:")
     agent_run.add_argument("--json", action="store_true")
+    schedule_create = sub.add_parser("schedule-create")
+    schedule_create.add_argument("--db", default="runtime.sqlite")
+    schedule_create.add_argument("--job-id", required=True)
+    schedule_create.add_argument("--name", required=True)
+    schedule_create.add_argument("--request", required=True)
+    schedule_create.add_argument("--next-run-at", required=True)
+    schedule_create.add_argument("--agent", choices=("research", "memory", "coding"), required=False)
+    schedule_create.add_argument("--approval-required", action="store_true")
+    schedule_list = sub.add_parser("schedule-list")
+    schedule_list.add_argument("--db", default="runtime.sqlite")
+    schedule_show = sub.add_parser("schedule-show")
+    schedule_show.add_argument("--db", default="runtime.sqlite")
+    schedule_show.add_argument("job_id")
+    schedule_enable = sub.add_parser("schedule-enable")
+    schedule_enable.add_argument("--db", default="runtime.sqlite")
+    schedule_enable.add_argument("job_id")
+    schedule_disable = sub.add_parser("schedule-disable")
+    schedule_disable.add_argument("--db", default="runtime.sqlite")
+    schedule_disable.add_argument("job_id")
+    schedule_run_due = sub.add_parser("schedule-run-due")
+    schedule_run_due.add_argument("--db", default="runtime.sqlite")
+    schedule_run_due.add_argument("--now", required=False)
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -181,6 +204,71 @@ def _run(args: argparse.Namespace) -> int:
                 )
             else:
                 print(f"agent-run: agent={result.agent_name} status={result.status.value} output={result.output}")
+        finally:
+            store.close()
+    elif args.command == "schedule-create":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            repo = ScheduledJobRepository(store._connection)
+            agent_selection, tools = _schedule_agent_constraints(args.agent)
+            job = ScheduledJob(
+                args.job_id,
+                args.name,
+                args.request,
+                ScheduleDefinition("UTC", args.next_run_at),
+                True,
+                now,
+                now,
+                approval_required=args.approval_required,
+                agent_selection=agent_selection,
+                tool_constraints=tools,
+            )
+            repo.create(job)
+            SQLiteEventStore(store._connection).append(scheduled_event("ScheduledJobCreated", job, None, now))
+            metrics = MetricsCollector()
+            record_scheduled_job_metric(metrics, repo)
+            print(f"schedule-create: job_id={job.job_id} enabled={job.enabled}")
+        finally:
+            store.close()
+    elif args.command == "schedule-list":
+        store = RuntimeStateStore(args.db)
+        try:
+            jobs = ScheduledJobRepository(store._connection).list()
+            for job in jobs:
+                print(f"{job.job_id} enabled={job.enabled} next_run_at={job.schedule.next_run_at} name={job.name}")
+            if not jobs:
+                print("schedule-list: none")
+        finally:
+            store.close()
+    elif args.command == "schedule-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            job = ScheduledJobRepository(store._connection).get(args.job_id)
+            print(f"schedule-show: job_id={job.job_id} enabled={job.enabled} approval_required={job.approval_required} request={job.request_text}")
+        finally:
+            store.close()
+    elif args.command in {"schedule-enable", "schedule-disable"}:
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            repo = ScheduledJobRepository(store._connection)
+            enabled = args.command == "schedule-enable"
+            job = repo.set_enabled(args.job_id, enabled, updated_at=now)
+            SQLiteEventStore(store._connection).append(scheduled_event("ScheduledJobEnabled" if enabled else "ScheduledJobDisabled", job, None, now))
+            print(f"{args.command}: job_id={job.job_id} enabled={job.enabled}")
+        finally:
+            store.close()
+    elif args.command == "schedule-run-due":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = args.now or _utc_now()
+            runner = ScheduledAutomationRunner(ScheduledJobRepository(store._connection), load_runtime_config(os.environ), event_store=SQLiteEventStore(store._connection))
+            runs = runner.run_due(now=now)
+            for run in runs:
+                print(f"schedule-run-due: run_id={run.run_id} job_id={run.job_id} status={run.status.value}")
+            if not runs:
+                print("schedule-run-due: none")
         finally:
             store.close()
     elif args.command == "research-proposals-list":
@@ -330,6 +418,16 @@ def _agent_run_plan(agent: str, now: str) -> ExecutivePlan:
         strategy="N/A",
         market="N/A",
     )
+
+
+def _schedule_agent_constraints(agent: str | None):
+    if agent == "research":
+        return AgentSelection.RESEARCH_BRAIN, (ToolSelection.RESEARCH_PLANNER,)
+    if agent == "memory":
+        return AgentSelection.LEARNING_MEMORY, (ToolSelection.MEMORY_RETRIEVAL,)
+    if agent == "coding":
+        return AgentSelection.CODING_ASSISTANT, (ToolSelection.NOOP,)
+    return None, ()
 
 
 def _add_dry_run_flags(parser: argparse.ArgumentParser) -> None:

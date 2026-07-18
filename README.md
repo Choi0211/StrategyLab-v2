@@ -191,6 +191,21 @@ py -3.11 -m gaon.runtime.cli agent-run --agent memory --request "memory lookup"
 
 The dispatcher consumes an `ExecutivePlan`, invokes one explicitly registered agent, validates declared capabilities, isolates failures, emits lifecycle events, and records metrics. It does not add Scheduler execution, daily research automation, Telegram-triggered execution, broker/KIS execution, automatic approval, arbitrary shell execution, or unrestricted filesystem mutation.
 
+## Scheduler Automation
+
+Sprint 38 adds durable scheduled execution smoke:
+
+```powershell
+py -3.11 -m gaon.runtime.cli schedule-create --db runtime.sqlite --job-id smoke --name Smoke --request "research evidence" --next-run-at "2026-07-18T00:00:00Z" --agent research
+py -3.11 -m gaon.runtime.cli schedule-list --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli schedule-show --db runtime.sqlite smoke
+py -3.11 -m gaon.runtime.cli schedule-enable --db runtime.sqlite smoke
+py -3.11 -m gaon.runtime.cli schedule-disable --db runtime.sqlite smoke
+py -3.11 -m gaon.runtime.cli schedule-run-due --db runtime.sqlite --now "2026-07-18T00:00:00Z"
+```
+
+Scheduled execution always goes through Executive Planner and Agent Dispatcher. It does not add Daily Research business logic, Telegram delivery, live Trading/KIS execution, automatic approval, paid-provider fallback, or private repository dependencies.
+
 ## Conversational Assistant
 
 Sprint 13 adds a deterministic conversational assistant foundation. Telegram can now send ordinary Korean text such as `안녕`, `가온`, `오늘 시장 어때?`, `삼성전자 분석해줘`, and `백테스트 돌려줘` through the same safe Conversation Runtime.
@@ -236,6 +251,7 @@ Sprint 23 adds `gaon.adapters.TradingAdapter` as a broker-free public contract. 
 - `gaon.runtime.event_store`: durable append-only event store and safe replay
 - `gaon.runtime.executive_planner`: Executive Planner request, plan, routing, provider-backed planning, event, and metrics contracts
 - `gaon.runtime.agents`: bounded agent contracts, explicit registry, dispatcher, deterministic initial agents, event, and metrics contracts
+- `gaon.runtime.scheduled_automation`: durable scheduled jobs, scheduled runs, safe due execution, events, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
 - `gaon.adapters`: broker-free TradingAdapter protocol, risk-gate contracts, and fake adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
@@ -291,6 +307,7 @@ Do not commit `.env`, token files, account files, real trade state, production l
 - `docs/architecture/CollaborationIntegrations.md`: Telegram and Notion dry-run integration contracts
 - `docs/architecture/executive-planner.md`: Sprint 36 Executive Planner architecture
 - `docs/architecture/multi-agent-framework.md`: Sprint 37 Multi-Agent Execution Framework architecture
+- `docs/architecture/scheduler-automation.md`: Sprint 38 Scheduler Automation architecture
 - `docs/architecture/research-brain.md`: Phase B Research Brain v3 architecture
 - `docs/operations/research-runtime.md`: Research runtime smoke commands
 - `docs/operations/free-only-mode.md`: free-only mode and paid-provider guardrails

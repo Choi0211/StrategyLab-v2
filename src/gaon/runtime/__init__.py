@@ -10,6 +10,7 @@ from gaon.runtime.agents import Agent, AgentCapability, AgentDispatcher, AgentEx
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutivePlanner, ExecutiveRequest, ProviderBackedExecutivePlanner, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.notifications import NotificationChannel, NotificationEngine, NotificationPriority, NotificationRequest
 from gaon.runtime.reports import DailyReport, WeeklyReview
+from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledExecutionRequest, ScheduledJobRepository, ScheduledRun, ScheduledRunStatus, record_scheduled_job_metric
 from gaon.runtime.scheduler import DurableScheduler, InMemoryScheduler, ScheduledJob, ScheduleSpec
 from gaon.runtime.providers import DeterministicAssistantProvider, OpenAICompatibleAssistantProvider
 from gaon.runtime.provider_registry import AssistantProviderRegistry, ProviderRegistration, RoutingAssistantProvider, build_assistant_provider
@@ -71,9 +72,15 @@ __all__ = [
     "QueueItemStatus",
     "ReplayResult",
     "RuntimeEvent",
+    "ScheduleDefinition",
+    "ScheduledAutomationRunner",
+    "ScheduledExecutionRequest",
     "SQLiteEventStore",
     "ScheduleSpec",
     "ScheduledJob",
+    "ScheduledJobRepository",
+    "ScheduledRun",
+    "ScheduledRunStatus",
     "ToolSelection",
     "TradingAgentPlaceholder",
     "WeeklyReview",
@@ -81,4 +88,5 @@ __all__ = [
     "default_agent_registry",
     "executive_plan_event",
     "load_runtime_config",
+    "record_scheduled_job_metric",
 ]
