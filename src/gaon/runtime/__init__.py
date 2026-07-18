@@ -6,6 +6,7 @@ from gaon.runtime.conversation import ConversationInput, ConversationResponse, C
 from gaon.runtime.event_bus import InMemoryEventBus
 from gaon.runtime.events import EventType, RuntimeEvent
 from gaon.runtime.event_store import DurableEvent, ReplayResult, SQLiteEventStore
+from gaon.runtime.agents import Agent, AgentCapability, AgentDispatcher, AgentExecutionContext, AgentRegistry, AgentRequest, AgentResult, AgentStatus, CodingAgent, MemoryAgent, ResearchAgent, TradingAgentPlaceholder, default_agent_registry
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutivePlanner, ExecutiveRequest, ProviderBackedExecutivePlanner, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.notifications import NotificationChannel, NotificationEngine, NotificationPriority, NotificationRequest
 from gaon.runtime.reports import DailyReport, WeeklyReview
@@ -24,7 +25,16 @@ __all__ = [
     "AssistantProviderResponse",
     "AssistantRequest",
     "AssistantProviderRegistry",
+    "Agent",
+    "AgentCapability",
+    "AgentDispatcher",
+    "AgentExecutionContext",
+    "AgentRegistry",
+    "AgentRequest",
+    "AgentResult",
     "AgentSelection",
+    "AgentStatus",
+    "CodingAgent",
     "DeterministicAssistantProvider",
     "DeterministicExecutivePlanner",
     "DurableEvent",
@@ -42,6 +52,7 @@ __all__ = [
     "MetricPoint",
     "MetricsCollector",
     "MetricsSnapshot",
+    "MemoryAgent",
     "NotificationChannel",
     "NotificationEngine",
     "NotificationPriority",
@@ -54,6 +65,7 @@ __all__ = [
     "PluginRegistry",
     "ProviderRegistration",
     "ProviderBackedExecutivePlanner",
+    "ResearchAgent",
     "RoutingAssistantProvider",
     "RoutingDecision",
     "QueueItemStatus",
@@ -63,8 +75,10 @@ __all__ = [
     "ScheduleSpec",
     "ScheduledJob",
     "ToolSelection",
+    "TradingAgentPlaceholder",
     "WeeklyReview",
     "build_assistant_provider",
+    "default_agent_registry",
     "executive_plan_event",
     "load_runtime_config",
 ]

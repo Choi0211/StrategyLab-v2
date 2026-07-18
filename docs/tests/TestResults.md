@@ -2,6 +2,29 @@
 
 Status: Passed
 
+## Sprint 37 Multi-Agent Execution Framework
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 239 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 27 tests`
+  - Status: `OK`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- Import smoke: Passed
+  - `from gaon.runtime import AgentDispatcher, AgentRegistry, AgentRequest, AgentStatus, default_agent_registry`
+- CLI smoke: Passed
+  - `agent-run --agent research --request`
+  - `agent-run --agent coding --request --json`
+  - `agent-run --agent memory --request`
+- Scope:
+  - Agent contracts, registry, dispatcher, deterministic initial agents, capability validation, approval blocking, event emission, and metrics
+  - no scheduler execution, daily research automation, Telegram-triggered execution, broker/KIS execution, automatic approval, arbitrary shell execution, or dynamic plugin loading
+
 ## Sprint 36 Executive Planner
 
 - Unit tests: Passed

@@ -179,6 +179,18 @@ py -3.11 -m gaon.runtime.cli executive-plan --request "상태 알려줘" --json
 
 Executive Planner produces a routing plan only. It does not execute multi-agent work, scheduler jobs, trades, Telegram actions, or external tools. Execution-capable or policy-changing requests are flagged with `approval_required=true`.
 
+## Multi-Agent Framework
+
+Sprint 37 adds bounded agent execution smoke:
+
+```powershell
+py -3.11 -m gaon.runtime.cli agent-run --agent research --request "research context"
+py -3.11 -m gaon.runtime.cli agent-run --agent coding --request "inspect code" --json
+py -3.11 -m gaon.runtime.cli agent-run --agent memory --request "memory lookup"
+```
+
+The dispatcher consumes an `ExecutivePlan`, invokes one explicitly registered agent, validates declared capabilities, isolates failures, emits lifecycle events, and records metrics. It does not add Scheduler execution, daily research automation, Telegram-triggered execution, broker/KIS execution, automatic approval, arbitrary shell execution, or unrestricted filesystem mutation.
+
 ## Conversational Assistant
 
 Sprint 13 adds a deterministic conversational assistant foundation. Telegram can now send ordinary Korean text such as `안녕`, `가온`, `오늘 시장 어때?`, `삼성전자 분석해줘`, and `백테스트 돌려줘` through the same safe Conversation Runtime.
@@ -223,6 +235,7 @@ Sprint 23 adds `gaon.adapters.TradingAdapter` as a broker-free public contract. 
 - `gaon.runtime.metrics`: internal metrics collector and snapshot export
 - `gaon.runtime.event_store`: durable append-only event store and safe replay
 - `gaon.runtime.executive_planner`: Executive Planner request, plan, routing, provider-backed planning, event, and metrics contracts
+- `gaon.runtime.agents`: bounded agent contracts, explicit registry, dispatcher, deterministic initial agents, event, and metrics contracts
 - `gaon.learning.long_term_memory`: namespace/lifecycle long-term memory foundation
 - `gaon.adapters`: broker-free TradingAdapter protocol, risk-gate contracts, and fake adapter tests
 - `gaon.integrations.telegram`: Telegram Bot API smoke client, dry-run contracts, update parsing, and conversation bridge
@@ -277,6 +290,7 @@ Do not commit `.env`, token files, account files, real trade state, production l
 - `docs/architecture/ConversationRuntime.md`: Conversation Runtime contract
 - `docs/architecture/CollaborationIntegrations.md`: Telegram and Notion dry-run integration contracts
 - `docs/architecture/executive-planner.md`: Sprint 36 Executive Planner architecture
+- `docs/architecture/multi-agent-framework.md`: Sprint 37 Multi-Agent Execution Framework architecture
 - `docs/architecture/research-brain.md`: Phase B Research Brain v3 architecture
 - `docs/operations/research-runtime.md`: Research runtime smoke commands
 - `docs/operations/free-only-mode.md`: free-only mode and paid-provider guardrails

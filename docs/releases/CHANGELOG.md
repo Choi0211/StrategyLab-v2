@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 37 Multi-Agent Execution Framework
+
+- Added Agent, AgentRequest, AgentExecutionContext, AgentResult, AgentCapability, and AgentStatus contracts.
+- Added explicit AgentRegistry with duplicate registration rejection, unknown-agent rejection, stable lookup, capability inspection, and deterministic ordering.
+- Added AgentDispatcher that consumes ExecutivePlan, validates capabilities, invokes one agent safely, isolates failures, and blocks approval-required plans.
+- Added deterministic ResearchAgent, CodingAgent, MemoryAgent, and non-executing TradingAgentPlaceholder.
+- Added agent lifecycle durable events, runtime metrics, and `agent-run` CLI smoke path.
+- Did not add scheduler execution, daily research automation, Telegram-triggered execution, broker/KIS execution, automatic approval, arbitrary shell execution, or dynamic plugin loading.
+
 ## Sprint 36 Executive Planner
 
 - Added immutable ExecutiveRequest, ExecutivePlan, RoutingDecision, AgentSelection, ToolSelection, and ExecutivePlanner contracts.

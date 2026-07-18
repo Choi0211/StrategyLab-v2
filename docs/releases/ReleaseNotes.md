@@ -3,6 +3,34 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 37 Multi-Agent Execution Framework
+
+Included:
+
+- common bounded agent contracts
+- explicit agent registry
+- ExecutivePlan-consuming dispatcher
+- deterministic ResearchAgent, CodingAgent, and MemoryAgent
+- non-executing TradingAgent placeholder
+- capability validation
+- approval-required blocking
+- failure isolation
+- durable lifecycle events
+- runtime metrics
+- deterministic `agent-run` CLI smoke
+
+Not included:
+
+- scheduler execution
+- cron or daily research automation
+- Telegram-triggered agent execution
+- broker or KIS execution
+- automatic trading
+- automatic approval
+- arbitrary shell execution
+- unrestricted filesystem mutation
+- arbitrary plugin loading
+
 ## Sprint 36 Executive Planner
 
 Included:
