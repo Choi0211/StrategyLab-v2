@@ -24,12 +24,14 @@ from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutiv
 from gaon.runtime.health import readiness
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.reports import build_daily_report, build_weekly_review
+from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
+TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -177,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_dry_run_flags(sub.add_parser("telegram-get-me"))
     _add_dry_run_flags(sub.add_parser("telegram-discover-chat"))
     poll = sub.add_parser("telegram-poll-once")
+    poll.add_argument("--db", default="runtime.sqlite")
     poll.add_argument("--offset", type=int, required=False)
     _add_dry_run_flags(poll)
     smoke = sub.add_parser("telegram-send-smoke")
@@ -574,8 +577,12 @@ def _run(args: argparse.Namespace) -> int:
             print("telegram-poll-once: dry-run")
         else:
             config = _load_execute_config(require_allowed_chat_ids=True)
-            results = poll_once(_telegram_client(config), config, offset=args.offset, received_at=_utc_now())
-            _print_poll_results(results)
+            store = RuntimeStateStore(args.db)
+            try:
+                results = poll_once(_telegram_client(config), config, offset=args.offset, received_at=_utc_now(), state=store.telegram)
+                _print_poll_results(results)
+            finally:
+                store.close()
     else:
         mode = "dry-run" if getattr(args, "dry_run", True) else "execute requested but not implemented"
         print(f"{args.command}: {mode}")
@@ -587,13 +594,30 @@ def discover_chats(client: Any, *, received_at: str) -> tuple[TelegramDiscovered
     return discover_private_chats(updates, received_at=received_at)
 
 
-def poll_once(client: Any, config: GaonRuntimeConfig, *, offset: int | None, received_at: str) -> tuple[TelegramPollResult, ...]:
-    updates = client.get_updates(offset=offset, timeout=0, limit=100)
+def poll_once(
+    client: Any,
+    config: GaonRuntimeConfig,
+    *,
+    offset: int | None,
+    received_at: str,
+    state: TelegramStateRepository | None = None,
+) -> tuple[TelegramPollResult, ...]:
+    effective_offset = offset if offset is not None else state.get_offset(TELEGRAM_POLL_OFFSET_KEY) if state is not None else None
+    updates = client.get_updates(offset=effective_offset, timeout=0, limit=100)
     runtime = TelegramRuntime(ConversationRuntime(), allowed_chat_ids=config.telegram_allowed_chat_ids)
     results: list[TelegramPollResult] = []
     for payload in updates:
         update = parse_update_result(payload, received_at=received_at)
-        results.append(process_update(update, runtime, client))
+        if update.message is not None and state is not None:
+            processed_key = f"telegram:{update.message.chat.chat_id}:{update.message.message_id}"
+            if not state.mark_processed(processed_key, received_at):
+                results.append(TelegramPollResult(update.update_id, update.next_offset, "duplicate", chat_id=update.message.chat.chat_id))
+                _save_poll_offset(state, update.next_offset, received_at)
+                continue
+        result = process_update(update, runtime, client)
+        results.append(result)
+        if state is not None:
+            _save_poll_offset(state, update.next_offset, received_at)
     return tuple(results)
 
 
@@ -642,6 +666,12 @@ def _print_poll_results(results: tuple[TelegramPollResult, ...]) -> None:
         return
     for result in results:
         print(f"update_id={result.update_id} next_offset={result.next_offset} status={result.status} chat_id={result.chat_id or ''}")
+
+
+def _save_poll_offset(state: TelegramStateRepository, next_offset: int, updated_at: str) -> None:
+    current = state.get_offset(TELEGRAM_POLL_OFFSET_KEY)
+    if current is None or next_offset > current:
+        state.save_offset(TELEGRAM_POLL_OFFSET_KEY, next_offset, updated_at)
 
 
 def _utc_now() -> str:

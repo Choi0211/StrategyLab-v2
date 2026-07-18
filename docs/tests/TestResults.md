@@ -2,6 +2,32 @@
 
 Status: Passed
 
+## Hotfix Telegram Poll Offset Persistence
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 270 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 40 tests`
+  - Status: `OK`
+- Targeted Telegram tests: Passed
+  - Unit: `Ran 14 tests`
+  - Integration: `Ran 8 tests`
+- Release verification: Passed
+  - Command: `python scripts/verify_release.py`
+  - Result: `Unit tests: PASS`, `Integration tests: PASS`, `Required files: PASS`
+- CLI smoke: Passed
+  - `telegram-poll-once --dry-run --db runtime.sqlite`
+- Scope:
+  - existing SQLiteTelegramStateRepository reused
+  - saved offset used when explicit `--offset` is omitted
+  - explicit `--offset` has precedence
+  - processed message duplicate protection prevents repeated replies
+  - sent, duplicate, unauthorized, and ignored updates advance offset safely
+  - no MyMoneyGuard, private repository, live trading, or security gate changes
+
 ## Sprint 41 v1 Backtest Adapter Foundation
 
 - Unit tests: Passed

@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix Telegram Poll Offset Persistence
+
+- Connected `telegram-poll-once` execute path to the existing SQLite Telegram state repository.
+- Added saved offset loading when `--offset` is omitted and documented explicit `--offset` precedence.
+- Added processed message duplicate protection so repeated poll executions do not send duplicate replies.
+- Persisted highest safe `next_offset` for sent, duplicate, unauthorized, and ignored updates.
+- Added unit and integration coverage for offset persistence, duplicate skipping, restart preservation, explicit offsets, and unauthorized/ignored update progression.
+
 ## Sprint 41 v1 Backtest Adapter Foundation
 
 - Added runtime schema v12 for backtest requests and normalized backtest results.

@@ -9,6 +9,7 @@ from gaon.runtime import ConversationRuntime
 from gaon.runtime.assistant_provider import AssistantProviderResponse
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.memory_context import MemoryContextBuilder
+from gaon.runtime.storage import RuntimeStateStore
 
 
 class FakeTelegramClient:
@@ -74,6 +75,20 @@ class TelegramProductionConnectionFlowTest(unittest.TestCase):
         self.assertEqual(results[0].next_offset, 21)
         self.assertEqual(client.sent[0].chat_id, "100")
         self.assertIn("dry-run", client.sent[0].text)
+
+    def test_poll_response_once_then_repeated_poll_has_no_duplicate_response(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(({"update_id": 22, "message": {"message_id": 7, "chat": {"id": 100}, "from": {"id": 200}, "text": "/status"}},))
+        try:
+            first = poll_once(client, self.config(), offset=None, received_at="2026-07-17T00:00:00Z", state=store.telegram)
+            second = poll_once(client, self.config(), offset=None, received_at="2026-07-17T00:00:01Z", state=store.telegram)
+
+            self.assertEqual(first[0].status, "sent")
+            self.assertEqual(second[0].status, "duplicate")
+            self.assertEqual(len(client.sent), 1)
+            self.assertEqual(client.offset, 23)
+        finally:
+            store.close()
 
     def test_korean_natural_text_to_telegram_response_flow(self) -> None:
         client = FakeTelegramClient(({"update_id": 25, "message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 200}, "text": "안녕"}},))

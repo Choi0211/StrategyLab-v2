@@ -10,9 +10,10 @@ from gaon.integrations.telegram.contracts import TelegramChat, TelegramMessage, 
 from gaon.integrations.telegram.runtime import MAX_INPUT_TEXT_LENGTH
 from gaon.integrations.telegram.runtime import TelegramRuntime
 from gaon.integrations.telegram.transport import discover_private_chats, parse_update_result
-from gaon.runtime.cli import TELEGRAM_SMOKE_TEXT, discover_chats, poll_once, send_smoke
+from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, TELEGRAM_SMOKE_TEXT, discover_chats, poll_once, send_smoke
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.errors import AuthenticationError, AuthorizationError, ConfigurationError, ExternalServiceError, RateLimitError, TransportError
+from gaon.runtime.storage import RuntimeStateStore
 
 
 class FakeHttpResponse:
@@ -150,6 +151,83 @@ class TelegramProductionConnectionTest(unittest.TestCase):
         self.assertTrue(client.sent)
         self.assertEqual(client.sent[0][0], "100")
         self.assertNotEqual(client.sent[1][1], long_text)
+
+    def test_poll_once_persists_offset_and_skips_duplicate_on_second_poll(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        updates = ({"update_id": 10, "message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 1}, "text": "/status"}},)
+        client = FakeTelegramClient(updates)
+        try:
+            first = poll_once(client, self.config(), offset=None, received_at="2026-07-17T00:00:00Z", state=store.telegram)
+            second = poll_once(client, self.config(), offset=None, received_at="2026-07-17T00:00:01Z", state=store.telegram)
+
+            self.assertEqual(first[0].status, "sent")
+            self.assertEqual(second[0].status, "duplicate")
+            self.assertEqual(client.last_offset, 11)
+            self.assertEqual(store.telegram.get_offset(TELEGRAM_POLL_OFFSET_KEY), 11)
+            self.assertEqual(len(client.sent), 1)
+        finally:
+            store.close()
+
+    def test_processed_message_is_skipped_before_response(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        updates = ({"update_id": 20, "message": {"message_id": 2, "chat": {"id": 100}, "from": {"id": 1}, "text": "/status"}},)
+        client = FakeTelegramClient(updates)
+        try:
+            self.assertTrue(store.telegram.mark_processed("telegram:100:2", "2026-07-17T00:00:00Z"))
+            results = poll_once(client, self.config(), offset=None, received_at="2026-07-17T00:00:01Z", state=store.telegram)
+
+            self.assertEqual(results[0].status, "duplicate")
+            self.assertEqual(client.sent, [])
+            self.assertEqual(store.telegram.get_offset(TELEGRAM_POLL_OFFSET_KEY), 21)
+        finally:
+            store.close()
+
+    def test_restart_reopen_preserves_saved_offset(self) -> None:
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "runtime.sqlite")
+            store = RuntimeStateStore(db)
+            try:
+                poll_once(FakeTelegramClient(({"update_id": 30, "message": {"message_id": 3, "chat": {"id": 100}, "from": {"id": 1}, "text": "/status"}},)), self.config(), offset=None, received_at="2026-07-17T00:00:00Z", state=store.telegram)
+            finally:
+                store.close()
+            reopened = RuntimeStateStore(db)
+            client = FakeTelegramClient(())
+            try:
+                poll_once(client, self.config(), offset=None, received_at="2026-07-17T00:00:01Z", state=reopened.telegram)
+                self.assertEqual(client.last_offset, 31)
+            finally:
+                reopened.close()
+
+    def test_explicit_offset_takes_precedence_over_saved_offset(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            store.telegram.save_offset(TELEGRAM_POLL_OFFSET_KEY, 99, "2026-07-17T00:00:00Z")
+            poll_once(client, self.config(), offset=10, received_at="2026-07-17T00:00:01Z", state=store.telegram)
+
+            self.assertEqual(client.last_offset, 10)
+            self.assertEqual(store.telegram.get_offset(TELEGRAM_POLL_OFFSET_KEY), 99)
+        finally:
+            store.close()
+
+    def test_unauthorized_and_ignored_updates_advance_offset(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        updates = (
+            {"update_id": 40, "message": {"message_id": 4, "chat": {"id": 999}, "from": {"id": 1}, "text": "/status"}},
+            {"update_id": 41, "edited_message": {}},
+        )
+        client = FakeTelegramClient(updates)
+        try:
+            results = poll_once(client, self.config(), offset=None, received_at="2026-07-17T00:00:00Z", state=store.telegram)
+
+            self.assertEqual([result.status for result in results], ["unauthorized", "ignored"])
+            self.assertEqual(store.telegram.get_offset(TELEGRAM_POLL_OFFSET_KEY), 42)
+            self.assertEqual(client.sent, [])
+        finally:
+            store.close()
 
     def test_long_conversation_response_is_split_for_same_chat(self) -> None:
         class LongConversation:

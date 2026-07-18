@@ -11,7 +11,8 @@ This integration connects Gaon Runtime to the Telegram Bot API for research conv
 - Do not paste token values into docs, tests, logs, issues, or pull requests.
 - Unit and integration tests use fake HTTP clients and make no real Telegram network calls.
 - The repository does not auto-load `.env`; inject environment variables from PowerShell, bash, or a private operations script.
-- This phase supports one-shot commands only. It does not implement a daemon, webhook server, infinite polling loop, or offset persistence store.
+- This phase supports one-shot commands only. It does not implement a daemon, webhook server, or infinite polling loop.
+- `telegram-poll-once` persists the next Telegram offset and processed message IDs in the existing SQLite runtime store to prevent duplicate replies across repeated manual runs.
 
 ## Setup Flow
 
@@ -40,7 +41,7 @@ py -3.11 -m gaon.runtime.cli telegram-discover-chat --execute
 
 $env:GAON_TELEGRAM_ALLOWED_CHAT_IDS = "<discovered-chat-id>"
 py -3.11 -m gaon.runtime.cli telegram-send-smoke --execute --chat-id <discovered-chat-id>
-py -3.11 -m gaon.runtime.cli telegram-poll-once --execute
+py -3.11 -m gaon.runtime.cli telegram-poll-once --execute --db runtime.sqlite
 ```
 
 To continue from a known Telegram offset:
@@ -48,6 +49,8 @@ To continue from a known Telegram offset:
 ```powershell
 py -3.11 -m gaon.runtime.cli telegram-poll-once --execute --offset 123456
 ```
+
+When `--offset` is provided, it takes precedence over the saved SQLite offset for that poll. After processing, the highest safe `next_offset` is still persisted.
 
 Return to dry-run:
 
@@ -70,7 +73,7 @@ python3.11 -m gaon.runtime.cli telegram-discover-chat --execute
 
 export GAON_TELEGRAM_ALLOWED_CHAT_IDS="<discovered-chat-id>"
 python3.11 -m gaon.runtime.cli telegram-send-smoke --execute --chat-id <discovered-chat-id>
-python3.11 -m gaon.runtime.cli telegram-poll-once --execute
+python3.11 -m gaon.runtime.cli telegram-poll-once --execute --db runtime.sqlite
 ```
 
 ## CLI Commands
@@ -78,7 +81,7 @@ python3.11 -m gaon.runtime.cli telegram-poll-once --execute
 - `telegram-get-me --execute`: validates the bot token and prints bot metadata without exposing the token.
 - `telegram-discover-chat --execute`: reads recent updates and prints unique private `chat_id` values with a 30-character message preview.
 - `telegram-send-smoke --execute --chat-id <ID>`: sends the fixed smoke message only when `<ID>` is allowlisted.
-- `telegram-poll-once --execute [--offset N]`: processes pending private text messages once and prints `next_offset` for the next manual run.
+- `telegram-poll-once --execute [--db runtime.sqlite] [--offset N]`: processes pending private text messages once, skips already processed messages, persists the highest safe `next_offset`, and prints poll results. If `--offset` is omitted, the saved SQLite offset is used.
 
 `telegram-discover-chat` is allowed to run without `GAON_TELEGRAM_ALLOWED_CHAT_IDS` because its purpose is chat ID discovery. `telegram-send-smoke` and `telegram-poll-once` require an allowlist.
 
@@ -119,4 +122,4 @@ The assistant explains disconnected capabilities instead of pretending to execut
 
 ## Durable Offset State
 
-Sprint 17 adds SQLite runtime state for processed message IDs and Telegram update offsets. This prevents duplicate processing after restart when the production service uses the runtime store. The database must not store bot tokens or raw secret-bearing payloads.
+Sprint 17 adds SQLite runtime state for processed message IDs and Telegram update offsets. The hotfix poll path now uses the same store for `telegram-poll-once`, so repeated CLI executions do not reply to the same update twice. Ignored and unauthorized updates also advance offset safely when their Telegram update IDs are valid. The database must not store bot tokens or raw secret-bearing payloads.
