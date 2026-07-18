@@ -2,6 +2,12 @@
 
 Status: Passed
 
+## Sprint 51-55 LLM Brain
+
+- Unit: LLM conversation, contextual memory orchestration, safe tools, CLI hardening.
+- Integration: Telegram conversational agent, persistent offset reuse, duplicate protection, restart replay prevention.
+- Release verification: `python scripts/verify_release.py`
+
 ## Sprint 47 Strategy Execution Runtime
 
 - Unit tests: Passed

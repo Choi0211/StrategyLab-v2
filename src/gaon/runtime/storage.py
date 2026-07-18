@@ -8,6 +8,10 @@ import sqlite3
 import os
 
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
+from gaon.runtime.conversation_context import SQLiteConversationSummaryRepository
+from gaon.runtime.llm_conversation import SQLiteConversationRepository
+from gaon.runtime.llm_tools import SQLiteToolAuditRepository
+from gaon.runtime.telegram_agent import SQLiteTelegramConversationLinkRepository
 from gaon.runtime.repositories import SQLiteAuditEventRepository, SQLiteTelegramStateRepository
 from gaon.runtime.serialization import loads_json
 
@@ -26,6 +30,10 @@ class RuntimeStateStore:
         migrate(self._connection)
         self.telegram = SQLiteTelegramStateRepository(self._connection)
         self.audit = SQLiteAuditEventRepository(self._connection)
+        self.conversations = SQLiteConversationRepository(self._connection)
+        self.conversation_summaries = SQLiteConversationSummaryRepository(self._connection)
+        self.tool_audit = SQLiteToolAuditRepository(self._connection)
+        self.telegram_conversations = SQLiteTelegramConversationLinkRepository(self._connection)
 
     def close(self) -> None:
         self._connection.close()

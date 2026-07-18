@@ -7,6 +7,7 @@ from io import StringIO
 from gaon.runtime.cli import main as cli_main
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.health import readiness
+from gaon.runtime.migrations import SCHEMA_VERSION
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_worker import TelegramPollingWorker
@@ -55,7 +56,7 @@ class RuntimeServiceTest(unittest.TestCase):
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(cli_main(["db-check"]), 0)
-        self.assertIn("schema_version=21", output.getvalue())
+        self.assertIn(f"schema_version={SCHEMA_VERSION}", output.getvalue())
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(cli_main(["run", "--once"]), 0)

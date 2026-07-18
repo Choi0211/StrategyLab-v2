@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 51-55 - Gaon LLM Brain
+
+- Added persistent LLM conversation sessions and messages.
+- Added bounded contextual memory orchestration from read-only runtime state.
+- Added safe read-only tool registry, execution policy, and audit storage.
+- Added Telegram conversational agent routing while preserving offset and duplicate protection.
+- Added assistant/conversation/tool CLI inspection commands and release checks.
+
 ## Sprint 47 Strategy Execution Runtime
 
 - Added Strategy Execution Runtime with `strategy_execution_policy_v1`.

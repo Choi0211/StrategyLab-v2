@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 25
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -39,6 +39,10 @@ def migrate(connection: sqlite3.Connection) -> None:
         18: _upgrade_v18_to_v19,
         19: _upgrade_v19_to_v20,
         20: _upgrade_v20_to_v21,
+        21: _upgrade_v21_to_v22,
+        22: _upgrade_v22_to_v23,
+        23: _upgrade_v23_to_v24,
+        24: _upgrade_v24_to_v25,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -711,6 +715,92 @@ def _upgrade_v20_to_v21(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_gaon_v5_pipeline_checkpoints_run
             ON gaon_v5_pipeline_checkpoints(run_id, created_at, stage);
+        """
+    )
+
+
+def _upgrade_v21_to_v22(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_ref TEXT NOT NULL,
+            source TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_sessions_user
+            ON conversation_sessions(user_ref, updated_at);
+        CREATE TABLE IF NOT EXISTS conversation_messages (
+            message_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            intent TEXT NOT NULL,
+            route TEXT NOT NULL,
+            references_json TEXT NOT NULL,
+            warnings_json TEXT NOT NULL,
+            tool_calls_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES conversation_sessions(session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_messages_session
+            ON conversation_messages(session_id, created_at, message_id);
+        """
+    )
+
+
+def _upgrade_v22_to_v23(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_summaries (
+            summary_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            source_refs_json TEXT NOT NULL,
+            summary_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES conversation_sessions(session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_summaries_session
+            ON conversation_summaries(session_id, created_at);
+        """
+    )
+
+
+def _upgrade_v23_to_v24(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS llm_tool_audit (
+            audit_id TEXT PRIMARY KEY,
+            tool_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_llm_tool_audit_tool_created
+            ON llm_tool_audit(tool_name, created_at);
+        CREATE INDEX IF NOT EXISTS idx_llm_tool_audit_status
+            ON llm_tool_audit(status, created_at);
+        """
+    )
+
+
+def _upgrade_v24_to_v25(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS telegram_conversation_links (
+            chat_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES conversation_sessions(session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_telegram_conversation_links_session
+            ON telegram_conversation_links(session_id, updated_at);
         """
     )
 

@@ -67,6 +67,7 @@ class TelegramPollingWorker:
                 offset=None,
                 received_at=now,
                 state=self._store.telegram,
+                runtime_store=self._store,
                 timeout=self._poll_timeout_seconds,
                 limit=self._batch_limit,
             )

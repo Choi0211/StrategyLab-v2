@@ -10,7 +10,7 @@ from pathlib import Path
 
 def _test_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
-    paths = [str(root / "src"), str(root / "tests" / "unit"), str(root / "tests" / "integration")]
+    paths = [str(root / "src"), str(root / "tests" / "unit"), str(root / "tests" / "integration"), str(root / "tests" / "fixtures")]
     existing = env.get("PYTHONPATH")
     if existing:
         paths.append(existing)
@@ -56,6 +56,7 @@ def main() -> int:
         "docs/architecture/LearningMemoryArchitecture.md",
         "docs/architecture/GaonRuntimeArchitecture.md",
         "docs/architecture/ConversationRuntime.md",
+        "docs/architecture/LLMBrain.md",
         "docs/architecture/CollaborationIntegrations.md",
         "docs/architecture/SprintRoadmap.md",
         "docs/adr/ADR-0001-learning-memory-core.md",
@@ -80,6 +81,7 @@ def main() -> int:
         "docs/operations/Runbook.md",
         "docs/operations/RuntimeConfiguration.md",
         "docs/operations/TelegramSetup.md",
+        "docs/operations/LLMBrain.md",
         "docs/operations/NotionSetup.md",
         "docs/operations/DailyWeeklyJobs.md",
         "docs/architecture/strategy-handoff.md",
