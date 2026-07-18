@@ -482,6 +482,18 @@ def _run(args: argparse.Namespace) -> int:
         store = RuntimeStateStore(args.db)
         try:
             tools = default_tool_registry(store._connection).list()
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+            from gaon.runtime.llm_tools import SafeToolExecutor
+
+            check_config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+            brain = LLMConversationBrain(check_config, store.conversations, tool_executor=SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit))
+            checks = (
+                brain.respond(LLMConversationRequest("release-check:runtime", "cli", "cli", "가온 상태 알려줘", _utc_now(), "release-check:runtime")),
+                brain.respond(LLMConversationRequest("release-check:champion", "cli", "cli", "현재 챔피언 상태 알려줘", _utc_now(), "release-check:champion")),
+                brain.respond(LLMConversationRequest("release-check:v5", "cli", "cli", "v5 파이프라인 실행 이력 알려줘", _utc_now(), "release-check:v5")),
+            )
+            if {call for response in checks for call in response.tool_calls} != {"runtime_status", "champion_status", "v5_pipeline_history"}:
+                raise ConfigurationError("conversation release check failed to route deterministic read-only tools")
             print(
                 "conversation-release-check: PASS "
                 f"schema_version={store.status().schema_version} provider={config.assistant_provider} "

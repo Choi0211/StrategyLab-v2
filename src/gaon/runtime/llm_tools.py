@@ -165,10 +165,19 @@ def _runtime_status(connection: sqlite3.Connection) -> dict[str, object]:
 
 
 def _champion_status(connection: sqlite3.Connection, slot: str) -> dict[str, object]:
-    row = connection.execute("SELECT active_version_id, updated_at FROM champion_registry WHERE slot = ?", (slot,)).fetchone()
+    row = connection.execute("SELECT active_version_id, payload_json, updated_at FROM champion_registry WHERE slot = ?", (slot,)).fetchone()
     if row is None:
         return {"slot": slot, "active": False}
-    return {"slot": slot, "active": True, "active_version_id": str(row[0]), "updated_at": str(row[1])}
+    payload = loads_json(str(row[1]))
+    return {
+        "slot": slot,
+        "active": True,
+        "active_version_id": str(row[0]),
+        "strategy_ref": str(payload.get("strategy_ref", "")),
+        "fingerprint": str(payload.get("fingerprint", "")),
+        "revision": int(payload.get("revision", 0)),
+        "updated_at": str(row[2]),
+    }
 
 
 def _v5_pipeline_history(connection: sqlite3.Connection, limit: int) -> dict[str, object]:

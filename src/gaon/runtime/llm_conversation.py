@@ -1,4 +1,4 @@
-"""Gaon LLM conversation brain with deterministic fallback."""
+﻿"""Gaon LLM conversation brain with deterministic fallback."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
 from gaon.runtime.serialization import dumps_json, loads_json
+from gaon.runtime.llm_tool_routing import route_read_only_tool
+from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
 
 CONVERSATION_SCHEMA_VERSION = 1
 MAX_CONVERSATION_INPUT_CHARS = 4096
@@ -131,6 +133,7 @@ class LLMConversationResponse:
     approval_required: bool
     generated_at: str
     provider: str
+    tool_calls: tuple[str, ...] = ()
 
 
 class ConversationRepository(Protocol):
@@ -222,12 +225,14 @@ class LLMConversationBrain:
         repository: ConversationRepository,
         *,
         context_orchestrator=None,
+        tool_executor: SafeToolExecutor | None = None,
         event_store: SQLiteEventStore | None = None,
         metrics: MetricsCollector | None = None,
     ) -> None:
         self._config = config
         self._repository = repository
         self._context_orchestrator = context_orchestrator
+        self._tool_executor = tool_executor
         self._event_store = event_store
         self._metrics = metrics or MetricsCollector()
 
@@ -246,7 +251,7 @@ class LLMConversationBrain:
             LLMConversationMessage(user_message_id, session.session_id, "user", text, intent.value, "input", (), (), (), now)
         )
         context = self._context_orchestrator.build(request.session_id) if self._context_orchestrator is not None else None
-        response_text, route, warnings, references, provider = self._generate(request, intent, approval_required, context)
+        response_text, route, warnings, references, provider, tool_calls = self._generate(request, intent, approval_required, context)
         generated_at = now
         response_id = f"conversation-assistant:{uuid4().hex}"
         response = LLMConversationResponse(
@@ -260,6 +265,7 @@ class LLMConversationBrain:
             approval_required=approval_required,
             generated_at=generated_at,
             provider=provider,
+            tool_calls=tool_calls,
         )
         self._repository.add_message(
             LLMConversationMessage(
@@ -271,7 +277,7 @@ class LLMConversationBrain:
                 route,
                 response.references,
                 response.warnings,
-                (),
+                response.tool_calls,
                 generated_at,
             )
         )
@@ -298,7 +304,7 @@ class LLMConversationBrain:
             self._repository.upsert_session(session)
             return session
 
-    def _generate(self, request: LLMConversationRequest, intent: Intent, approval_required: bool, context) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str]:
+    def _generate(self, request: LLMConversationRequest, intent: Intent, approval_required: bool, context) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         warnings: tuple[str, ...] = ()
         references: tuple[str, ...] = tuple(context.references) if context is not None else ()
         if context is not None:
@@ -310,7 +316,10 @@ class LLMConversationBrain:
         if not self._config.assistant_enabled or approval_required:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
-            return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic"
+            return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
+        tool_response = self._try_deterministic_tool(request, warnings, references)
+        if tool_response is not None:
+            return tool_response
         try:
             provider = build_assistant_provider(self._config)
             provider_response = validate_provider_response(
@@ -333,9 +342,33 @@ class LLMConversationBrain:
                 _dedupe((*warnings, *provider_response.warnings)),
                 _dedupe((*references, *provider_response.references)),
                 provider_response.provider_name,
+                (),
             )
         except ProviderError as exc:
-            return persona_text(intent), "fallback", _dedupe((*warnings, f"provider fallback: {exc.__class__.__name__}")), references, "deterministic"
+            return persona_text(intent), "fallback", _dedupe((*warnings, f"provider fallback: {exc.__class__.__name__}")), references, "deterministic", ()
+
+    def _try_deterministic_tool(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        if self._tool_executor is None:
+            return None
+        tool_name = route_read_only_tool(request.text)
+        if tool_name is None:
+            return None
+        arguments: dict[str, object] = {}
+        if tool_name == "champion_status":
+            arguments = {"slot": "default"}
+        elif tool_name == "v5_pipeline_history":
+            arguments = {"limit": 5}
+        result = self._tool_executor.execute(
+            ToolRequest(
+                tool_name=tool_name,
+                arguments=arguments,
+                requested_by=request.user_ref,
+                requested_at=request.received_at,
+            )
+        )
+        if result.status != "success":
+            return persona_text(Intent.UNKNOWN), "tool_denied", _dedupe((*warnings, *result.warnings)), references, "deterministic", ()
+        return _format_tool_response(result.tool_name, result.output), "tool_read_only", _dedupe(warnings), _dedupe((*references, f"tool:{result.tool_name}")), "deterministic", (result.tool_name,)
 
     def _append_event(self, response: LLMConversationResponse, request: LLMConversationRequest) -> None:
         if self._event_store is None:
@@ -399,7 +432,26 @@ def _base_prompt(text: str, context=None) -> str:
 
 def _requires_manual_boundary(text: str) -> bool:
     normalized = text.casefold()
-    blocked = ("approve", "approval", "buy", "sell", "order", "kis", "broker", "secret", "매수", "매도", "주문", "승인", "실거래")
+    blocked = (
+        "approve",
+        "approval",
+        "buy",
+        "sell",
+        "order",
+        "kis",
+        "broker",
+        "secret",
+        "매수",
+        "매도",
+        "주문",
+        "승인",
+        "실거래",
+        "자동 배포",
+        "명령 실행",
+        "shell",
+        "powershell",
+        "cmd",
+    )
     return any(token in normalized for token in blocked)
 
 
@@ -409,3 +461,29 @@ def _metric_route(route: str) -> str:
 
 def _dedupe(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _format_tool_response(tool_name: str, output: dict[str, object]) -> str:
+    if tool_name == "champion_status":
+        if not output.get("active"):
+            return "현재 등록된 활성 Champion은 없습니다, 영하님."
+        strategy = output.get("strategy_ref") or "unknown"
+        version = output.get("active_version_id") or "unknown"
+        fingerprint = str(output.get("fingerprint") or "")
+        short_fingerprint = fingerprint[:12] if fingerprint else "unknown"
+        revision = output.get("revision") or "unknown"
+        return f"현재 활성 Champion은 {strategy}이며 버전은 {version}입니다, 영하님.\n상태: active revision={revision}\nFingerprint: {short_fingerprint}"
+    if tool_name == "runtime_status":
+        schema = output.get("schema_version") or "unknown"
+        ready = "정상 실행 중" if output.get("ready") else "확인 필요"
+        return f"가온 Runtime은 {ready}입니다, 영하님.\nAssistant: enabled\nProvider: deterministic\nSchema: v{schema}"
+    if tool_name == "v5_pipeline_history":
+        runs = output.get("runs")
+        if not isinstance(runs, list) or not runs:
+            return "최근 v5 파이프라인 실행 이력이 없습니다, 영하님."
+        lines = ["최근 v5 파이프라인 실행 이력입니다, 영하님."]
+        for item in runs[:5]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('run_id')} / {item.get('status')} / {item.get('current_stage')}")
+        return "\n".join(lines)
+    return "요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님."
