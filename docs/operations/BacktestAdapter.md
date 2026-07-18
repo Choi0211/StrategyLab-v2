@@ -21,6 +21,6 @@ py -3.11 -m gaon.runtime.cli backtest-show --db runtime.sqlite backtest-result:<
 
 ## Safety
 
-The CLI uses `FakeBacktestAdapter` and runtime schema v12 persistence. It does not require a private v1 repository, live KIS, broker credentials, live market data, MyMoneyGuard, network access, or paid AI APIs.
+The CLI uses `FakeBacktestAdapter` and runtime schema v13 persistence after Sprint 42. It does not require a private v1 repository, live KIS, broker credentials, live market data, MyMoneyGuard, network access, or paid AI APIs.
 
 The adapter boundary must not be used for Champion promotion, active strategy switching, paper-to-live promotion, live deployment, automatic trading, or automatic approval.

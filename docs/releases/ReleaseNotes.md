@@ -3,6 +3,38 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 42 Strategy Validation Engine
+
+Included:
+
+- runtime schema v13 for validation requests and validation reports
+- deterministic validation contracts: `ValidationRequest`, `ValidationPolicy`, `ValidationRule`, `ValidationRuleResult`, `ValidationReport`, `ValidationStatus`, `ValidationSeverity`, and `ValidationEvidence`
+- `validation_policy_v1` with conservative defaults for trade count, maximum drawdown, profit factor, sample duration, and fingerprint completeness
+- MDD normalization to a documented positive-fraction convention
+- optional metric handling without fabrication
+- multi-run aggregation for passing window ratio and catastrophic window detection
+- non-ML overfitting heuristic warnings
+- lifecycle events, metrics, persistence, CLI inspection, Research Agent integration, and Executive Planner validation routing
+
+Not included:
+
+- Champion ranking
+- Challenger ranking
+- Champion promotion
+- active strategy switching
+- parameter optimization
+- paper trading promotion
+- live KIS
+- broker orders
+- automatic trading
+- automatic approval
+- MyMoneyGuard integration
+- live market data
+- network calls
+- paid-provider fallback
+
+Validation PASS does not automatically promote or deploy a strategy.
+
 ## Sprint 41 v1 Backtest Adapter Foundation
 
 Included:

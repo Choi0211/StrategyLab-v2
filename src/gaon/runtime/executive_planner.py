@@ -48,6 +48,7 @@ class ToolSelection(str, Enum):
     RUNTIME_STATUS = "runtime_status"
     TRADING_SIMULATION = "trading_simulation"
     BACKTEST_ADAPTER = "backtest_adapter"
+    VALIDATION_ENGINE = "validation_engine"
     APPROVAL_WORKFLOW = "approval_workflow"
     NOOP = "noop"
 
@@ -223,7 +224,12 @@ def executive_plan_event(plan: ExecutivePlan, *, actor_ref: str, appended_at: st
 def _deterministic_plan(request: ExecutiveRequest, *, provider: str, route: str) -> ExecutivePlan:
     text = request.text.lower()
     approval_required = _requires_approval(text)
-    if _is_backtest_request(text):
+    if _is_validation_request(text):
+        decision = RoutingDecision.RESEARCH
+        agents = (AgentSelection.RESEARCH_BRAIN,)
+        tools = (ToolSelection.BACKTEST_ADAPTER, ToolSelection.VALIDATION_ENGINE)
+        reason = "route to deterministic validation engine boundary"
+    elif _is_backtest_request(text):
         decision = RoutingDecision.RESEARCH
         agents = (AgentSelection.RESEARCH_BRAIN,)
         tools = (ToolSelection.RESEARCH_PLANNER, ToolSelection.BACKTEST_ADAPTER)
@@ -324,6 +330,10 @@ def _is_trading_simulation(text: str) -> bool:
 
 def _is_backtest_request(text: str) -> bool:
     return any(token in text for token in ("backtest", "백테스트", "walk-forward", "simulation result"))
+
+
+def _is_validation_request(text: str) -> bool:
+    return any(token in text for token in ("validate", "validation", "robust", "robustness", "검증", "validation report"))
 
 
 def _append_unique(items: tuple, item):

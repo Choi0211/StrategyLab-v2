@@ -47,6 +47,20 @@ from gaon.adapters.trading import (
     SQLiteTradingRepository,
     build_trading_request,
 )
+from gaon.adapters.validation import (
+    SQLiteValidationRepository,
+    StrategyValidationEngine,
+    ValidationEvidence,
+    ValidationPolicy,
+    ValidationReport,
+    ValidationRequest,
+    ValidationRule,
+    ValidationRuleResult,
+    ValidationSeverity,
+    ValidationStatus,
+    build_validation_request,
+    normalize_drawdown,
+)
 
 __all__ = [
     "BacktestAdapter",
@@ -65,6 +79,8 @@ __all__ = [
     "LocalProcessBacktestAdapter",
     "LocalProcessResult",
     "SQLiteBacktestRepository",
+    "SQLiteValidationRepository",
+    "StrategyValidationEngine",
     "AccountSummary",
     "AccountSnapshot",
     "CommandStatus",
@@ -90,6 +106,16 @@ __all__ = [
     "TradingResult",
     "TradingRiskPolicy",
     "TradingStatus",
+    "ValidationEvidence",
+    "ValidationPolicy",
+    "ValidationReport",
+    "ValidationRequest",
+    "ValidationRule",
+    "ValidationRuleResult",
+    "ValidationSeverity",
+    "ValidationStatus",
     "build_backtest_request",
     "build_trading_request",
+    "build_validation_request",
+    "normalize_drawdown",
 ]
