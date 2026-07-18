@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -21,6 +21,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 1:
         _upgrade_v1_to_v2(connection)
@@ -31,6 +32,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 2:
         _upgrade_v2_to_v3(connection)
@@ -40,6 +42,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 3:
         _upgrade_v3_to_v4(connection)
@@ -48,6 +51,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 4:
         _upgrade_v4_to_v5(connection)
@@ -55,24 +59,32 @@ def migrate(connection: sqlite3.Connection) -> None:
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 5:
         _upgrade_v5_to_v6(connection)
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 6:
         _upgrade_v6_to_v7(connection)
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 7:
         _upgrade_v7_to_v8(connection)
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) == 8:
         _upgrade_v8_to_v9(connection)
+        _upgrade_v9_to_v10(connection)
+        connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+    elif int(current[0]) == 9:
+        _upgrade_v9_to_v10(connection)
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(current[0]) != SCHEMA_VERSION:
         raise RuntimeError("unsupported runtime database schema version")
@@ -341,6 +353,41 @@ def _upgrade_v8_to_v9(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_scheduled_automation_runs_job
             ON scheduled_automation_runs(job_id, started_at);
+        """
+    )
+
+
+def _upgrade_v9_to_v10(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS daily_research_profiles (
+            profile_id TEXT PRIMARY KEY,
+            topic TEXT NOT NULL,
+            query TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            priority INTEGER NOT NULL,
+            source_preferences_json TEXT NOT NULL,
+            time_range TEXT NOT NULL,
+            language TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_research_profiles_enabled_priority
+            ON daily_research_profiles(enabled, priority, profile_id);
+        CREATE TABLE IF NOT EXISTS daily_research_runs (
+            run_id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            report_json TEXT NOT NULL,
+            proposal_ids_json TEXT NOT NULL,
+            error TEXT,
+            UNIQUE(profile_id, started_at)
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_research_runs_profile
+            ON daily_research_runs(profile_id, started_at);
         """
     )
 

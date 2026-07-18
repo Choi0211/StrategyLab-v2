@@ -25,6 +25,7 @@ Included foundations:
 - Sprint 23 broker-free TradingAdapter contract and v1 rollout plan
 - Phase A v2.1 provider registry, plugin lifecycle, metrics, durable event store, safe replay, and long-term memory foundation
 - Phase B v3.0 Research Brain: validated planning, safe evidence providers, evidence context, knowledge proposals, approval workflow, durable orchestration, checkpoints, reports, and free-only defaults
+- Sprint 39 Daily Research Pipeline on top of the Sprint 38 scheduler, with deterministic evidence, reports, pending-review proposals, events, metrics, and CLI inspection
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -205,6 +206,23 @@ py -3.11 -m gaon.runtime.cli schedule-run-due --db runtime.sqlite --now "2026-07
 ```
 
 Scheduled execution always goes through Executive Planner and Agent Dispatcher. It does not add Daily Research business logic, Telegram delivery, live Trading/KIS execution, automatic approval, paid-provider fallback, or private repository dependencies.
+
+## Daily Research Pipeline
+
+Sprint 39 adds deterministic daily research profiles and runs on top of the existing Sprint 38 scheduler. It creates bounded cited reports and pending-review knowledge proposals only.
+
+```powershell
+py -3.11 -m gaon.runtime.cli daily-research-create --db runtime.sqlite --profile-id korea-open --topic "Korea Open" --query "KOSPI opening risk" --next-run-at "2026-07-18T00:00:00Z"
+py -3.11 -m gaon.runtime.cli daily-research-list --db runtime.sqlite
+py -3.11 -m gaon.runtime.cli daily-research-show --db runtime.sqlite korea-open
+py -3.11 -m gaon.runtime.cli daily-research-run --db runtime.sqlite --due --now "2026-07-18T00:00:00Z"
+py -3.11 -m gaon.runtime.cli daily-research-report --db runtime.sqlite korea-open --format markdown
+py -3.11 -m gaon.runtime.cli daily-research-report --db runtime.sqlite korea-open --format json
+py -3.11 -m gaon.runtime.cli daily-research-disable --db runtime.sqlite korea-open
+py -3.11 -m gaon.runtime.cli daily-research-enable --db runtime.sqlite korea-open
+```
+
+This sprint does not add live Telegram delivery, email, Notion sync, GitHub polling, live market data, Trading Adapter execution, broker/KIS/MyMoneyGuard access, external AI calls, vector DB, automatic approval, shell execution, or plugin execution. See `docs/architecture/daily-research-pipeline.md`.
 
 ## Conversational Assistant
 

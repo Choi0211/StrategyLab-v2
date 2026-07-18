@@ -2,6 +2,26 @@
 
 Status: Passed
 
+## Sprint 39 Daily Research Pipeline
+
+- Unit tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/unit`
+  - Result: `Ran 252 tests`
+  - Status: `OK`
+- Integration tests: Passed
+  - Command: `PYTHONPATH=src;tests/unit;tests/integration python -m unittest discover -s tests/integration`
+  - Result: `Ran 32 tests`
+  - Status: `OK`
+- Targeted Sprint 39 tests: Passed
+  - Unit: `Ran 6 tests`
+  - Integration: `Ran 2 tests`
+- Scope:
+  - schema v10 migration from v9
+  - durable profile/run storage
+  - Sprint 38 scheduler integration without a second scheduler
+  - deterministic bounded evidence, context, report, pending-review proposal, events, metrics, CLI smoke, duplicate run protection, disabled skip, and failure isolation
+  - no Telegram delivery, email, Notion sync, GitHub polling, live market data, Trading Adapter execution, broker/KIS/MyMoneyGuard access, external AI calls, vector DB, automatic approval, shell execution, or plugin execution
+
 ## Sprint 38 Scheduler Automation
 
 - Unit tests: Passed
