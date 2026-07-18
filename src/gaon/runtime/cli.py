@@ -11,6 +11,7 @@ from typing import Any
 from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, SQLiteBacktestRepository, build_backtest_request
 from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionChallengerPolicy, SQLiteChampionChallengerRepository, build_champion_challenger_request
 from gaon.adapters.champion_registry import ChampionRegistryService, ChampionRollbackRequest, SQLiteChampionRegistryRepository
+from gaon.adapters.paper_forward import PaperTradingForwardTestService, SQLitePaperTradingSessionRepository
 from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, ValidationPolicy, build_validation_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
@@ -207,6 +208,42 @@ def main(argv: list[str] | None = None) -> int:
     rollback.add_argument("--db", default="runtime.sqlite")
     rollback.add_argument("--slot", default="default")
     rollback.add_argument("--rollback-id", required=False)
+    paper_create = sub.add_parser("paper-session-create")
+    paper_create.add_argument("--db", default="runtime.sqlite")
+    paper_create.add_argument("--session-id", required=True)
+    paper_create.add_argument("--slot", default="default")
+    paper_create.add_argument("--champion-version-id", required=False)
+    paper_create.add_argument("--fingerprint", required=False)
+    paper_start = sub.add_parser("paper-session-start")
+    paper_start.add_argument("--db", default="runtime.sqlite")
+    paper_start.add_argument("session_id")
+    paper_show = sub.add_parser("paper-session-show")
+    paper_show.add_argument("--db", default="runtime.sqlite")
+    paper_show.add_argument("session_id")
+    paper_list = sub.add_parser("paper-session-list")
+    paper_list.add_argument("--db", default="runtime.sqlite")
+    paper_pause = sub.add_parser("paper-session-pause")
+    paper_pause.add_argument("--db", default="runtime.sqlite")
+    paper_pause.add_argument("session_id")
+    paper_resume = sub.add_parser("paper-session-resume")
+    paper_resume.add_argument("--db", default="runtime.sqlite")
+    paper_resume.add_argument("session_id")
+    paper_complete = sub.add_parser("paper-session-complete")
+    paper_complete.add_argument("--db", default="runtime.sqlite")
+    paper_complete.add_argument("session_id")
+    paper_cancel = sub.add_parser("paper-session-cancel")
+    paper_cancel.add_argument("--db", default="runtime.sqlite")
+    paper_cancel.add_argument("session_id")
+    paper_order = sub.add_parser("paper-session-simulate-order")
+    paper_order.add_argument("--db", default="runtime.sqlite")
+    paper_order.add_argument("--session-id", required=True)
+    paper_order.add_argument("--symbol", required=True)
+    paper_order.add_argument("--quantity", type=float, required=True)
+    paper_order.add_argument("--price", type=float, required=True)
+    paper_order.add_argument("--side", choices=("buy", "sell"), default="buy")
+    paper_summary = sub.add_parser("paper-session-summary")
+    paper_summary.add_argument("--db", default="runtime.sqlite")
+    paper_summary.add_argument("session_id")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -730,6 +767,64 @@ def _run(args: argparse.Namespace) -> int:
             print(f"champion-rollback: rollback_id={result.rollback_id} restored={result.restored_version_id} active={result.new_version_id}")
         finally:
             store.close()
+    elif args.command == "paper-session-create":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            session = _paper_service(store).create_session(args.session_id, slot=args.slot, champion_version_id=args.champion_version_id, fingerprint=args.fingerprint, actor_ref="actor:redacted", created_at=now)
+            print(f"paper-session-create: session_id={session.session_id} status={session.status.value} champion_version={session.champion_version_id}")
+        finally:
+            store.close()
+    elif args.command in {"paper-session-start", "paper-session-pause", "paper-session-resume", "paper-session-complete", "paper-session-cancel"}:
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            service = _paper_service(store)
+            if args.command == "paper-session-start":
+                session = service.start(args.session_id, actor_ref="actor:redacted", at=now)
+            elif args.command == "paper-session-pause":
+                session = service.pause(args.session_id, actor_ref="actor:redacted", at=now)
+            elif args.command == "paper-session-resume":
+                session = service.resume(args.session_id, actor_ref="actor:redacted", at=now)
+            elif args.command == "paper-session-complete":
+                session = service.complete(args.session_id, actor_ref="actor:redacted", at=now)
+            else:
+                session = service.cancel(args.session_id, actor_ref="actor:redacted", at=now)
+            print(f"{args.command}: session_id={session.session_id} status={session.status.value}")
+        finally:
+            store.close()
+    elif args.command == "paper-session-show":
+        store = RuntimeStateStore(args.db)
+        try:
+            session = SQLitePaperTradingSessionRepository(store._connection).get_session(args.session_id)
+            print(session.to_json())
+        finally:
+            store.close()
+    elif args.command == "paper-session-list":
+        store = RuntimeStateStore(args.db)
+        try:
+            sessions = SQLitePaperTradingSessionRepository(store._connection).list_sessions()
+            for session in sessions:
+                print(f"{session.session_id} status={session.status.value} champion_version={session.champion_version_id} fingerprint={session.fingerprint}")
+            if not sessions:
+                print("paper-session-list: none")
+        finally:
+            store.close()
+    elif args.command == "paper-session-simulate-order":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            result = _paper_service(store).simulate_order(args.session_id, symbol=args.symbol, quantity=args.quantity, price=args.price, side=args.side, actor_ref="actor:redacted", at=now)
+            print(f"paper-session-simulate-order: session_id={args.session_id} status={result.status.value} result_id={result.result_id} notional={result.notional:.2f}")
+        finally:
+            store.close()
+    elif args.command == "paper-session-summary":
+        store = RuntimeStateStore(args.db)
+        try:
+            summary = _paper_service(store).summary(args.session_id, generated_at=_utc_now())
+            print(f"paper-session-summary: session_id={summary.session_id} status={summary.status.value} simulated_orders={summary.simulated_orders} fills={summary.fills} rejected={summary.rejected_simulated_orders} failed={summary.failed_simulated_orders}")
+        finally:
+            store.close()
     elif args.command == "research-proposals-list":
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
@@ -889,6 +984,16 @@ def _find_backtest_by_fingerprint(repository: SQLiteBacktestRepository, fingerpr
 def _runtime_tick(config: GaonRuntimeConfig, store: RuntimeStateStore, metrics: MetricsCollector):
     worker = TelegramPollingWorker(config, store, client_factory=_telegram_client, metrics=metrics)
     return worker.tick
+
+
+def _paper_service(store: RuntimeStateStore) -> PaperTradingForwardTestService:
+    return PaperTradingForwardTestService(
+        SQLitePaperTradingSessionRepository(store._connection),
+        SQLiteChampionRegistryRepository(store._connection),
+        trading_repository=SQLiteTradingRepository(store._connection),
+        event_store=SQLiteEventStore(store._connection),
+        metrics=MetricsCollector(),
+    )
 
 
 def _utc_now() -> str:

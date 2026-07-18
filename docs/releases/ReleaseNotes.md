@@ -3,6 +3,28 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 45 Paper Trading Forward Test
+
+Included:
+
+- paper-only forward-test sessions for the active Champion
+- `paper_forward_test_policy_v1`
+- session lifecycle: pending, active, paused, completed, failed, cancelled
+- simulated paper order observations using the existing paper adapter stack
+- deterministic performance summaries without fabricated unavailable metrics
+- runtime schema v16
+- events, metrics, CLI commands, unit tests, and integration tests
+
+Not included:
+
+- live KIS
+- broker credentials
+- real orders
+- paper-to-live automatic promotion
+- automatic Champion changes from paper results
+- automatic approval
+- MyMoneyGuard dependency
+
 ## Sprint 44 Champion Registry and Approval Promotion
 
 Included:
