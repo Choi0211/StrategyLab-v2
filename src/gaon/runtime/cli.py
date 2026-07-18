@@ -1198,7 +1198,7 @@ def _run(args: argparse.Namespace) -> int:
             config = _load_execute_config(require_allowed_chat_ids=True)
             store = RuntimeStateStore(args.db)
             try:
-                results = poll_once(_telegram_client(config), config, offset=args.offset, received_at=_utc_now(), state=store.telegram)
+                results = poll_once(_telegram_client(config), config, offset=args.offset, received_at=_utc_now(), state=store.telegram, runtime_store=store)
                 _print_poll_results(results)
             finally:
                 store.close()
@@ -1220,12 +1220,13 @@ def poll_once(
     offset: int | None,
     received_at: str,
     state: TelegramStateRepository | None = None,
+    runtime_store: RuntimeStateStore | None = None,
     timeout: int = 0,
     limit: int = 100,
 ) -> tuple[TelegramPollResult, ...]:
     effective_offset = offset if offset is not None else state.get_offset(TELEGRAM_POLL_OFFSET_KEY) if state is not None else None
     updates = client.get_updates(offset=effective_offset, timeout=timeout, limit=limit)
-    runtime = TelegramRuntime(ConversationRuntime(), allowed_chat_ids=config.telegram_allowed_chat_ids)
+    runtime = _telegram_runtime(config, runtime_store)
     results: list[TelegramPollResult] = []
     for payload in updates:
         update = parse_update_result(payload, received_at=received_at)
@@ -1240,6 +1241,14 @@ def poll_once(
         if state is not None:
             _save_poll_offset(state, update.next_offset, received_at)
     return tuple(results)
+
+
+def _telegram_runtime(config: GaonRuntimeConfig, runtime_store: RuntimeStateStore | None) -> TelegramRuntime:
+    if runtime_store is None:
+        return TelegramRuntime(ConversationRuntime(), allowed_chat_ids=config.telegram_allowed_chat_ids)
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    return TelegramRuntime(TelegramConversationAgent(config, runtime_store._connection), allowed_chat_ids=config.telegram_allowed_chat_ids)
 
 
 def send_smoke(client: TelegramClient, config: GaonRuntimeConfig, chat_id: str):

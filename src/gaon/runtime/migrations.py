@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -42,6 +42,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         21: _upgrade_v21_to_v22,
         22: _upgrade_v22_to_v23,
         23: _upgrade_v23_to_v24,
+        24: _upgrade_v24_to_v25,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -784,6 +785,22 @@ def _upgrade_v23_to_v24(connection: sqlite3.Connection) -> None:
             ON llm_tool_audit(tool_name, created_at);
         CREATE INDEX IF NOT EXISTS idx_llm_tool_audit_status
             ON llm_tool_audit(status, created_at);
+        """
+    )
+
+
+def _upgrade_v24_to_v25(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS telegram_conversation_links (
+            chat_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES conversation_sessions(session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_telegram_conversation_links_session
+            ON telegram_conversation_links(session_id, updated_at);
         """
     )
 

@@ -23,7 +23,7 @@ class LLMToolFrameworkTests(unittest.TestCase):
         self.connection.close()
 
     def test_schema_migrates_to_v24(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 24)
+        self.assertGreaterEqual(SCHEMA_VERSION, 24)
         row = self.connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='llm_tool_audit'").fetchone()
         self.assertIsNotNone(row)
 
@@ -32,7 +32,7 @@ class LLMToolFrameworkTests(unittest.TestCase):
         result = executor.execute(_request("runtime_status"))
 
         self.assertEqual(result.status, "success")
-        self.assertEqual(result.output["schema_version"], 24)
+        self.assertEqual(result.output["schema_version"], SCHEMA_VERSION)
         self.assertEqual(self.audit.list()[0].tool_name, "runtime_status")
 
     def test_unknown_tool_is_denied_and_audited(self) -> None:
