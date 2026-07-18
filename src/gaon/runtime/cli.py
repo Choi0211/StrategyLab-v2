@@ -8,6 +8,7 @@ import os
 import sys
 from typing import Any
 
+from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
 from gaon.integrations.telegram.contracts import TelegramClient, TelegramDiscoveredChat, TelegramPollResult
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
@@ -56,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     executive_plan.add_argument("--db", default=":memory:")
     executive_plan.add_argument("--json", action="store_true")
     agent_run = sub.add_parser("agent-run")
-    agent_run.add_argument("--agent", choices=("research", "coding", "memory"), required=True)
+    agent_run.add_argument("--agent", choices=("research", "coding", "memory", "trading"), required=True)
     agent_run.add_argument("--request", required=True)
     agent_run.add_argument("--db", default=":memory:")
     agent_run.add_argument("--json", action="store_true")
@@ -66,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     schedule_create.add_argument("--name", required=True)
     schedule_create.add_argument("--request", required=True)
     schedule_create.add_argument("--next-run-at", required=True)
-    schedule_create.add_argument("--agent", choices=("research", "memory", "coding"), required=False)
+    schedule_create.add_argument("--agent", choices=("research", "memory", "coding", "trading"), required=False)
     schedule_create.add_argument("--approval-required", action="store_true")
     schedule_list = sub.add_parser("schedule-list")
     schedule_list.add_argument("--db", default="runtime.sqlite")
@@ -112,6 +113,27 @@ def main(argv: list[str] | None = None) -> int:
     daily_research_report.add_argument("--db", default="runtime.sqlite")
     daily_research_report.add_argument("profile_id")
     daily_research_report.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    trading_status = sub.add_parser("trading-status")
+    trading_status.add_argument("--db", default="runtime.sqlite")
+    trading_account = sub.add_parser("trading-account")
+    trading_account.add_argument("--db", default="runtime.sqlite")
+    trading_positions = sub.add_parser("trading-positions")
+    trading_positions.add_argument("--db", default="runtime.sqlite")
+    trading_buy = sub.add_parser("trading-simulate-buy")
+    trading_buy.add_argument("--db", default="runtime.sqlite")
+    trading_buy.add_argument("--symbol", required=True)
+    trading_buy.add_argument("--quantity", type=float, required=True)
+    trading_buy.add_argument("--price", type=float, required=True)
+    trading_sell = sub.add_parser("trading-simulate-sell")
+    trading_sell.add_argument("--db", default="runtime.sqlite")
+    trading_sell.add_argument("--symbol", required=True)
+    trading_sell.add_argument("--quantity", type=float, required=True)
+    trading_sell.add_argument("--price", type=float, required=True)
+    trading_cancel = sub.add_parser("trading-cancel-simulated-order")
+    trading_cancel.add_argument("--db", default="runtime.sqlite")
+    trading_cancel.add_argument("--request-id", required=True)
+    trading_history = sub.add_parser("trading-history")
+    trading_history.add_argument("--db", default="runtime.sqlite")
     sub.add_parser("research-proposals-list")
     show = sub.add_parser("research-proposals-show")
     show.add_argument("proposal_id")
@@ -387,6 +409,67 @@ def _run(args: argparse.Namespace) -> int:
             print(result.to_json() if args.format == "json" else result.to_markdown())
         finally:
             store.close()
+    elif args.command in {"trading-status", "trading-account", "trading-positions"}:
+        store = RuntimeStateStore(args.db)
+        try:
+            adapter = PaperTradingAdapter()
+            ok, message = adapter.health_check()
+            if args.command == "trading-status":
+                print(f"trading-status: ready={ok} message={message}")
+            elif args.command == "trading-account":
+                account = adapter.get_account_snapshot()
+                print(f"trading-account: account_ref={account.account_ref} cash={account.cash:.2f} equity={account.equity:.2f} currency={account.currency}")
+            else:
+                positions = adapter.get_positions()
+                for position in positions:
+                    print(f"{position.symbol} quantity={position.quantity} average_price={position.average_price} market_value={position.market_value}")
+                if not positions:
+                    print("trading-positions: none")
+        finally:
+            store.close()
+    elif args.command in {"trading-simulate-buy", "trading-simulate-sell"}:
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            intent = TradingIntent.SIMULATE_BUY if args.command == "trading-simulate-buy" else TradingIntent.SIMULATE_SELL
+            request = build_trading_request(
+                f"cli:{args.command}:{args.symbol}:{now}",
+                intent,
+                symbol=args.symbol,
+                quantity=args.quantity,
+                price=args.price,
+                actor_ref="actor:redacted",
+                created_at=now,
+                idempotency_key=f"{args.command}:{args.symbol}:{now}",
+            )
+            result = TradingExecutionService(
+                PaperTradingAdapter(),
+                TradingRiskPolicy(),
+                repository=SQLiteTradingRepository(store._connection),
+                event_store=SQLiteEventStore(store._connection),
+            ).execute(request)
+            print(f"{args.command}: status={result.status.value} result_id={result.result_id} message={result.message}")
+        finally:
+            store.close()
+    elif args.command == "trading-cancel-simulated-order":
+        store = RuntimeStateStore(args.db)
+        try:
+            now = _utc_now()
+            request = build_trading_request(f"cli:cancel:{args.request_id}:{now}", TradingIntent.CANCEL_SIMULATED_ORDER, symbol="PAPER", actor_ref="actor:redacted", created_at=now, idempotency_key=f"cancel:{args.request_id}:{now}")
+            result = TradingExecutionService(PaperTradingAdapter(), TradingRiskPolicy(), repository=SQLiteTradingRepository(store._connection), event_store=SQLiteEventStore(store._connection)).execute(request)
+            print(f"trading-cancel-simulated-order: status={result.status.value} result_id={result.result_id}")
+        finally:
+            store.close()
+    elif args.command == "trading-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            results = SQLiteTradingRepository(store._connection).list_results()
+            for result in results:
+                print(f"{result.result_id} request_id={result.request_id} status={result.status.value} notional={result.notional:.2f}")
+            if not results:
+                print("trading-history: none")
+        finally:
+            store.close()
     elif args.command == "research-proposals-list":
         print("research-proposals: none")
     elif args.command in {"research-proposals-show", "research-proposals-approve", "research-proposals-reject", "research-proposals-revise"}:
@@ -516,6 +599,7 @@ def _agent_run_plan(agent: str, now: str) -> ExecutivePlan:
         "research": (RoutingDecision.RESEARCH, AgentSelection.RESEARCH_BRAIN, (ToolSelection.RESEARCH_PLANNER, ToolSelection.EVIDENCE_SEARCH, ToolSelection.KNOWLEDGE_PROPOSAL)),
         "coding": (RoutingDecision.RUNTIME, AgentSelection.CODING_ASSISTANT, (ToolSelection.NOOP,)),
         "memory": (RoutingDecision.MEMORY, AgentSelection.LEARNING_MEMORY, (ToolSelection.MEMORY_RETRIEVAL,)),
+        "trading": (RoutingDecision.TRADING, AgentSelection.TRADING_AGENT, (ToolSelection.TRADING_SIMULATION,)),
     }
     decision, selected_agent, tools = mapping[agent]
     return ExecutivePlan(
@@ -543,6 +627,8 @@ def _schedule_agent_constraints(agent: str | None):
         return AgentSelection.LEARNING_MEMORY, (ToolSelection.MEMORY_RETRIEVAL,)
     if agent == "coding":
         return AgentSelection.CODING_ASSISTANT, (ToolSelection.NOOP,)
+    if agent == "trading":
+        return AgentSelection.TRADING_AGENT, (ToolSelection.TRADING_SIMULATION,)
     return None, ()
 
 

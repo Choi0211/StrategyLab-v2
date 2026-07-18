@@ -134,7 +134,7 @@ class DailyResearchTest(unittest.TestCase):
         finally:
             store.close()
 
-    def test_schema_v9_migrates_to_v10(self) -> None:
+    def test_schema_v9_migrates_to_current_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db = os.path.join(tmp, "runtime.sqlite")
             connection = sqlite3.connect(db)

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+from gaon.adapters.trading import PaperTradingAdapter, TradingExecutionService, TradingIntent, TradingRiskPolicy, build_trading_request
 from gaon.research.planning import ResearchRequest, deterministic_research_plan
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.errors import ConfigurationError
@@ -21,6 +22,7 @@ class AgentCapability(str, Enum):
     MEMORY_WRITE_PROPOSAL = "memory_write_proposal"
     REPORT_GENERATION = "report_generation"
     APPROVAL_REVIEW = "approval_review"
+    TRADING_SIMULATION = "trading_simulation"
 
 
 class AgentStatus(str, Enum):
@@ -231,18 +233,46 @@ class MemoryAgent:
 
 
 class TradingAgentPlaceholder:
-    name = "trading_placeholder"
-    capabilities = (AgentCapability.APPROVAL_REVIEW,)
+    name = AgentSelection.TRADING_AGENT.value
+    capabilities = (AgentCapability.TRADING_SIMULATION, AgentCapability.APPROVAL_REVIEW)
 
     def execute(self, context: AgentExecutionContext) -> AgentResult:
+        intent = _trading_intent_from_text(context.request.text)
+        if intent in {TradingIntent.LIVE_BUY, TradingIntent.LIVE_SELL}:
+            return _result(
+                agent_name=self.name,
+                status=AgentStatus.REQUIRES_APPROVAL,
+                output="live trading is not implemented in the public repository",
+                error=None,
+                started_at=context.request.created_at,
+                completed_at=context.request.created_at,
+                metadata={"mode": "live_trading_blocked", "intent": intent.value},
+            )
+        request = build_trading_request(
+            f"agent-trading:{context.request.request_id}",
+            intent,
+            symbol=_trading_symbol_from_text(context.request.text),
+            quantity=1.0 if intent in {TradingIntent.SIMULATE_BUY, TradingIntent.SIMULATE_SELL} else 0.0,
+            price=1000.0 if intent in {TradingIntent.SIMULATE_BUY, TradingIntent.SIMULATE_SELL} else None,
+            actor_ref=context.request.actor_ref,
+            created_at=context.request.created_at,
+            idempotency_key=context.request.request_id,
+        )
+        result = TradingExecutionService(PaperTradingAdapter(), TradingRiskPolicy()).execute(request)
+        if result.status.value in {"rejected", "blocked"}:
+            status = AgentStatus.BLOCKED
+        elif result.status.value == "failed":
+            status = AgentStatus.FAILED
+        else:
+            status = AgentStatus.SUCCEEDED
         return _result(
             agent_name=self.name,
-            status=AgentStatus.BLOCKED,
-            output="trading execution is not implemented in the public repository",
+            status=status,
+            output=result.message,
             error=None,
             started_at=context.request.created_at,
             completed_at=context.request.created_at,
-            metadata={"mode": "non_executing_placeholder"},
+            metadata={"mode": "paper_simulation_only", "intent": intent.value, "trading_status": result.status.value},
         )
 
 
@@ -294,6 +324,7 @@ def _required_capabilities(plan: ExecutivePlan, request: AgentRequest) -> tuple[
         ToolSelection.KNOWLEDGE_PROPOSAL: AgentCapability.REPORT_GENERATION,
         ToolSelection.MEMORY_RETRIEVAL: AgentCapability.MEMORY_READ,
         ToolSelection.RUNTIME_STATUS: AgentCapability.REPOSITORY_READ,
+        ToolSelection.TRADING_SIMULATION: AgentCapability.TRADING_SIMULATION,
         ToolSelection.APPROVAL_WORKFLOW: AgentCapability.APPROVAL_REVIEW,
     }
     for tool in plan.tools:
@@ -336,3 +367,24 @@ def _result(
 
 def _safe_metric_agent(value: str) -> str:
     return value.replace("-", "_")
+
+
+def _trading_intent_from_text(text: str) -> TradingIntent:
+    lower = text.lower()
+    if "live" in lower or "real order" in lower:
+        return TradingIntent.LIVE_BUY if "buy" in lower else TradingIntent.LIVE_SELL
+    if "cancel" in lower:
+        return TradingIntent.CANCEL_SIMULATED_ORDER
+    if "sell" in lower or "매도" in lower:
+        return TradingIntent.SIMULATE_SELL
+    if "buy" in lower or "매수" in lower:
+        return TradingIntent.SIMULATE_BUY
+    return TradingIntent.ANALYZE
+
+
+def _trading_symbol_from_text(text: str) -> str:
+    for token in text.replace(",", " ").split():
+        cleaned = token.strip().upper()
+        if cleaned.isalnum() and 2 <= len(cleaned) <= 12:
+            return cleaned
+    return "PAPER"
