@@ -3,6 +3,36 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 41 v1 Backtest Adapter Foundation
+
+Included:
+
+- runtime schema v12 for backtest requests and normalized results
+- structured BacktestRequest, BacktestStrategyRef, BacktestDatasetRef, BacktestPeriod, BacktestExecutionContext, BacktestResult, BacktestMetrics, BacktestTradeSummary, and BacktestStatus models
+- BacktestAdapter contract
+- deterministic FakeBacktestAdapter
+- LocalProcessBacktestAdapter boundary for a future fixed v1 entrypoint with JSON request/response
+- normalized v1 result conversion with optional metrics, warnings, errors, engine version, duration, parameters, dataset reference, and reproducibility metadata
+- stable fingerprint generation for future validation and Champion/Challenger comparison
+- SQLiteBacktestRepository, BacktestExecutionService, lifecycle events, metrics, CLI commands, and tests
+- bounded Executive Planner to Research Agent to BacktestAdapter flow
+
+Not included:
+
+- real v1 engine dependency in automated tests
+- Champion/Challenger ranking
+- strategy promotion
+- active strategy switching
+- paper trading promotion
+- live strategy deployment
+- KIS integration
+- MyMoneyGuard integration
+- automatic trading
+- automatic approval
+- arbitrary shell execution
+- network calls
+- private repository dependency
+
 ## Sprint 40 Trading Adapter Foundation
 
 Included:

@@ -47,6 +47,7 @@ class ToolSelection(str, Enum):
     MEMORY_RETRIEVAL = "memory_retrieval"
     RUNTIME_STATUS = "runtime_status"
     TRADING_SIMULATION = "trading_simulation"
+    BACKTEST_ADAPTER = "backtest_adapter"
     APPROVAL_WORKFLOW = "approval_workflow"
     NOOP = "noop"
 
@@ -222,7 +223,12 @@ def executive_plan_event(plan: ExecutivePlan, *, actor_ref: str, appended_at: st
 def _deterministic_plan(request: ExecutiveRequest, *, provider: str, route: str) -> ExecutivePlan:
     text = request.text.lower()
     approval_required = _requires_approval(text)
-    if _is_trading_simulation(text):
+    if _is_backtest_request(text):
+        decision = RoutingDecision.RESEARCH
+        agents = (AgentSelection.RESEARCH_BRAIN,)
+        tools = (ToolSelection.RESEARCH_PLANNER, ToolSelection.BACKTEST_ADAPTER)
+        reason = "route to safe v1 backtest adapter boundary"
+    elif _is_trading_simulation(text):
         decision = RoutingDecision.TRADING
         agents = (AgentSelection.TRADING_AGENT,)
         tools = (ToolSelection.TRADING_SIMULATION,)
@@ -314,6 +320,10 @@ def _is_trading_simulation(text: str) -> bool:
     simulation_tokens = ("simulate", "simulation", "paper", "paper-trade", "paper trade", "모의", "시뮬")
     trading_tokens = ("buy", "sell", "trade", "trading", "order", "portfolio", "position", "account", "cancel", "매수", "매도", "주문", "계좌", "포지션")
     return any(token in text for token in simulation_tokens) and any(token in text for token in trading_tokens)
+
+
+def _is_backtest_request(text: str) -> bool:
+    return any(token in text for token in ("backtest", "백테스트", "walk-forward", "simulation result"))
 
 
 def _append_unique(items: tuple, item):
