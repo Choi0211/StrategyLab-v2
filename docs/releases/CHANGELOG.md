@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix Telegram Runtime Worker and systemd Service
+
+- Wired persistent Telegram polling into `GaonRuntimeService` through a bounded runtime worker.
+- Updated CLI `run` so default execution is a persistent service loop and `run --once` performs exactly one tick.
+- Reused the existing `telegram-poll-once` logic, SQLite Telegram state repository, offset persistence, processed message duplicate guard, and execute/dry-run gates.
+- Isolated transient Telegram failures so the runtime can continue on later ticks, with durable runtime events and metrics.
+- Updated systemd service execution from one-shot `health` to persistent `run --db /var/lib/strategylab/gaon-runtime.sqlite`.
+
 ## Hotfix Telegram Poll Offset Persistence
 
 - Connected `telegram-poll-once` execute path to the existing SQLite Telegram state repository.

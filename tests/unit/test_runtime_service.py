@@ -9,6 +9,7 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.health import readiness
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
+from gaon.runtime.telegram_worker import TelegramPollingWorker
 from gaon.runtime.worker import DuplicateMessageGuard, RetryPolicy
 
 
@@ -57,12 +58,102 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertIn("schema_version=12", output.getvalue())
         output = StringIO()
         with redirect_stdout(output):
-            self.assertEqual(cli_main(["run"]), 0)
+            self.assertEqual(cli_main(["run", "--once"]), 0)
         self.assertIn("ticks=1", output.getvalue())
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(cli_main(["status"]), 0)
         self.assertIn("running=False", output.getvalue())
+
+    def test_telegram_runtime_tick_polls_and_reuses_persisted_offset(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = _FakeTelegramClient(({"update_id": 10, "message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 1}, "text": "/status"}},))
+        try:
+            worker = TelegramPollingWorker(_execute_telegram_config(), store, client_factory=lambda _: client, poll_timeout_seconds=3, batch_limit=7)
+
+            first = worker.tick()
+            second = worker.tick()
+
+            self.assertTrue(first.attempted)
+            self.assertEqual(first.results[0].status, "sent")
+            self.assertEqual(second.results[0].status, "duplicate")
+            self.assertEqual(client.calls, [(None, 3, 7), (11, 3, 7)])
+            self.assertEqual(len(client.sent), 1)
+        finally:
+            store.close()
+
+    def test_telegram_worker_skips_disabled_and_dry_run_without_network(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            disabled = TelegramPollingWorker(GaonRuntimeConfig(), store, client_factory=lambda _: _FailingTelegramClient())
+            dry_run = TelegramPollingWorker(GaonRuntimeConfig(telegram_enabled=True, telegram_bot_token="synthetic-token"), store, client_factory=lambda _: _FailingTelegramClient())
+
+            self.assertFalse(disabled.tick().attempted)
+            self.assertFalse(dry_run.tick().attempted)
+        finally:
+            store.close()
+
+    def test_telegram_transient_failure_does_not_terminate_runtime(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = _FlakyTelegramClient(({"update_id": 20, "message": {"message_id": 2, "chat": {"id": 100}, "from": {"id": 1}, "text": "/status"}},))
+        try:
+            worker = TelegramPollingWorker(_execute_telegram_config(), store, client_factory=lambda _: client)
+            service = GaonRuntimeService(_execute_telegram_config(), store, tick=worker.tick, poll_interval_seconds=0.0)
+
+            failed = service.run_once()
+            recovered = service.run_once()
+
+            self.assertEqual(failed.ticks, 1)
+            self.assertEqual(recovered.ticks, 2)
+            self.assertEqual(len(client.sent), 1)
+            self.assertEqual(store.telegram.get_offset("__telegram_poll__"), 21)
+        finally:
+            store.close()
+
+
+class _FakeTelegramClient:
+    def __init__(self, updates: tuple[dict, ...]) -> None:
+        self.updates = updates
+        self.sent: list[tuple[str, str]] = []
+        self.calls: list[tuple[int | None, int, int]] = []
+
+    def get_updates(self, *, offset=None, timeout=0, limit=100):
+        self.calls.append((offset, timeout, limit))
+        return self.updates
+
+    def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None):
+        from gaon.integrations.telegram.contracts import TelegramResponse
+
+        self.sent.append((chat_id, text))
+        return TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"sent:{len(self.sent)}", message_id=str(len(self.sent)))
+
+
+class _FailingTelegramClient:
+    def get_updates(self, *, offset=None, timeout=0, limit=100):
+        raise AssertionError("network should not be called")
+
+
+class _FlakyTelegramClient(_FakeTelegramClient):
+    def __init__(self, updates: tuple[dict, ...]) -> None:
+        super().__init__(updates)
+        self.fail_next = True
+
+    def get_updates(self, *, offset=None, timeout=0, limit=100):
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeError("temporary telegram failure")
+        return super().get_updates(offset=offset, timeout=timeout, limit=limit)
+
+
+def _execute_telegram_config() -> GaonRuntimeConfig:
+    return GaonRuntimeConfig(
+        mode="execute",
+        dry_run=False,
+        telegram_enabled=True,
+        telegram_bot_token="synthetic-token",
+        telegram_allowed_chat_ids=("100",),
+        approval_signing_secret="synthetic-approval-secret",
+    )
 
 
 if __name__ == "__main__":
