@@ -1,7 +1,7 @@
 """Gaon runtime and collaboration contracts."""
 
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
-from gaon.runtime.assistant_provider import AssistantProvider, AssistantProviderResponse, AssistantRequest
+from gaon.runtime.assistant_provider import AssistantProvider, AssistantProviderResponse, AssistantRequest, AssistantToolCall, AssistantToolDefinition, AssistantToolResult
 from gaon.runtime.conversation import ConversationInput, ConversationResponse, ConversationRuntime
 from gaon.runtime.conversation_context import ConversationContextBundle, ConversationContextOrchestrator, ContextItem, ContextSourceType
 from gaon.runtime.event_bus import InMemoryEventBus
@@ -33,6 +33,9 @@ __all__ = [
     "AssistantProvider",
     "AssistantProviderResponse",
     "AssistantRequest",
+    "AssistantToolCall",
+    "AssistantToolDefinition",
+    "AssistantToolResult",
     "AssistantProviderRegistry",
     "Agent",
     "AgentCapability",

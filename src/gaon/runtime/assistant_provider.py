@@ -42,6 +42,27 @@ class ProviderHealth:
 
 
 @dataclass(frozen=True)
+class AssistantToolDefinition:
+    name: str
+    description: str
+    parameters: dict[str, object]
+
+
+@dataclass(frozen=True)
+class AssistantToolCall:
+    call_id: str
+    name: str
+    arguments: dict[str, object]
+
+
+@dataclass(frozen=True)
+class AssistantToolResult:
+    call_id: str
+    name: str
+    result: dict[str, object]
+
+
+@dataclass(frozen=True)
 class AssistantRequest:
     text: str
     intent: Intent
@@ -51,6 +72,8 @@ class AssistantRequest:
     prompt: str | None = None
     references: tuple[str, ...] = ()
     locale: str = "ko-KR"
+    tools: tuple[AssistantToolDefinition, ...] = ()
+    tool_results: tuple[AssistantToolResult, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,6 +86,7 @@ class AssistantProviderResponse:
     model: str | None = None
     latency_ms: int | None = None
     usage: dict[str, int] | None = None
+    tool_calls: tuple[AssistantToolCall, ...] = ()
 
 
 AssistantResponse = AssistantProviderResponse
@@ -76,7 +100,7 @@ class AssistantProvider(Protocol):
 
 
 def validate_provider_response(response: AssistantProviderResponse, *, max_chars: int = 2000) -> AssistantProviderResponse:
-    if not response.text.strip():
+    if not response.text.strip() and not response.tool_calls:
         raise ProviderSafetyError("provider returned empty response")
     if len(response.text) > max_chars:
         raise ProviderSafetyError("provider response exceeded maximum length")

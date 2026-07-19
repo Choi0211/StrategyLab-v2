@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import os
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, SQLiteBacktestRepository, build_backtest_request
 from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionChallengerPolicy, SQLiteChampionChallengerRepository, build_champion_challenger_request
@@ -32,6 +33,7 @@ from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutiv
 from gaon.runtime.health import readiness
 from gaon.runtime.llm_tools import SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
+from gaon.runtime.provider_registry import build_assistant_provider
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
@@ -63,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     status_cmd.add_argument("--db", default=":memory:")
     assistant_status = sub.add_parser("assistant-status")
     assistant_status.add_argument("--db", default=":memory:")
+    assistant_provider_status = sub.add_parser("assistant-provider-status")
+    assistant_provider_status.add_argument("--db", default=":memory:")
     conversation_status = sub.add_parser("conversation-status")
     conversation_status.add_argument("--db", default=":memory:")
     conversation_status.add_argument("--session-id", default=None)
@@ -437,6 +441,16 @@ def _run(args: argparse.Namespace) -> int:
             )
         finally:
             store.close()
+    elif args.command == "assistant-provider-status":
+        config = load_runtime_config(os.environ)
+        provider = build_assistant_provider(config)
+        health = provider.health()
+        print(
+            "assistant-provider "
+            f"configured={config.assistant_provider} enabled={config.assistant_enabled} "
+            f"model={config.assistant_model or 'unset'} base_url={_sanitized_base_url(config.assistant_base_url)} "
+            f"health={'ready' if health.available else 'not-ready'} error={health.error or ''}"
+        )
     elif args.command == "conversation-status":
         store = RuntimeStateStore(args.db)
         try:
@@ -1520,6 +1534,15 @@ def _conversation_status_rows(store: RuntimeStateStore, session_id: str | None) 
 
 def _dumps_json(payload: dict[str, object]) -> str:
     return dumps_json(payload)
+
+
+def _sanitized_base_url(value: str | None) -> str:
+    if not value:
+        return "unset"
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return "configured"
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 class _NoopProjection:
