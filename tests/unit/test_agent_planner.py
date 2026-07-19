@@ -49,6 +49,14 @@ class AgentPlannerTests(unittest.TestCase):
 
         self.assertEqual(repository.list()[0].request_text, plan.request_text)
 
+    def test_repository_can_store_completed_plan_after_execution(self) -> None:
+        plan = AgentPlanner().plan("현재 챔피언과 최근 v5 결과를 비교해서 알려줘", created_at=NOW)
+        result = AgentPlanExecutor(self.executor).execute(plan, actor_ref="test", now=NOW)
+        repository = SQLiteAgentPlanRepository(self.connection)
+        repository.put(plan.with_status(result.status), updated_at=NOW)
+
+        self.assertEqual(repository.list()[0].status, AgentPlanStatus.COMPLETED)
+
 
 if __name__ == "__main__":
     unittest.main()

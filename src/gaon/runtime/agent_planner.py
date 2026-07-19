@@ -21,8 +21,10 @@ class AgentPlanStepType(str, Enum):
 
 class AgentPlanStatus(str, Enum):
     CREATED = "created"
+    RUNNING = "running"
     COMPLETED = "completed"
     DENIED = "denied"
+    FAILED = "failed"
     REQUIRES_HUMAN_APPROVAL = "requires_human_approval"
 
 
@@ -48,6 +50,9 @@ class AgentPlan:
 
     def to_json(self) -> dict[str, object]:
         return {"plan_id": self.plan_id, "request_text": self.request_text, "steps": [step.to_json() for step in self.steps], "status": self.status.value, "created_at": self.created_at}
+
+    def with_status(self, status: AgentPlanStatus) -> "AgentPlan":
+        return AgentPlan(self.plan_id, self.request_text, self.steps, status, self.created_at)
 
 
 @dataclass(frozen=True)
