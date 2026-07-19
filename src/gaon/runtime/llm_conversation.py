@@ -402,7 +402,7 @@ class LLMConversationBrain:
 
     def _execute_provider_tool_calls(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, provider_response, warnings: tuple[str, ...], references: tuple[str, ...], tools) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         assert self._tool_executor is not None
-        max_calls = 3
+        max_calls = self._config.assistant_max_tool_calls_per_turn
         selected = provider_response.tool_calls[:max_calls]
         results: list[AssistantToolResult] = []
         executed: list[str] = []

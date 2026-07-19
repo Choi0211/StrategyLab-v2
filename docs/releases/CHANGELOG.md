@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 56-60 - Gaon LLM Agent
+
+- Added generic OpenAI-compatible provider diagnostics and tool-call support.
+- Added native provider-requested safe read-only tool execution.
+- Added multi-turn follow-up handling with bounded tool-result memory.
+- Added safe conversational agent planner with approval-boundary stops.
+- Added LLM agent release hardening, CLI diagnostics, prompt-injection tests, and low-resource VPS limits.
+
 ## Sprint 51-55 - Gaon LLM Brain
 
 - Added persistent LLM conversation sessions and messages.

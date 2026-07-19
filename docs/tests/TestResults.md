@@ -2,6 +2,14 @@
 
 Status: Passed
 
+## Sprint 56-60 LLM Agent
+
+- Provider tests: fake OpenAI-compatible content and tool-call responses.
+- Tool calling tests: single tool, multi-tool, unknown tool, malformed/denied tool, tool limit.
+- Multi-turn tests: Champion, Runtime, v5 pipeline follow-ups and stale result refresh.
+- Planner tests: safe multi-step, overflow, approval boundary, repository round-trip.
+- Security tests: shell, SQL, secret, approval, deployment, broker-order prompt injection.
+
 ## Sprint 51-55 LLM Brain
 
 - Unit: LLM conversation, contextual memory orchestration, safe tools, CLI hardening.

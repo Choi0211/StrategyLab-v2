@@ -38,6 +38,10 @@ class GaonRuntimeConfig:
     assistant_model: str | None = None
     assistant_timeout_seconds: float = 10.0
     assistant_max_output_tokens: int = 500
+    assistant_max_tool_calls_per_turn: int = 3
+    assistant_max_planner_steps: int = 5
+    assistant_max_requests_per_minute: int = 12
+    assistant_max_context_chars: int = 4000
     free_only_mode: bool = True
     paid_provider_enabled: bool = False
     execution_mode: str = "disabled"
@@ -66,6 +70,14 @@ class GaonRuntimeConfig:
             raise ConfigurationError("execute mode requires GAON_APPROVAL_SIGNING_SECRET")
         if self.free_only_mode and self.paid_provider_enabled:
             raise ConfigurationError("paid providers cannot be enabled while GAON_FREE_ONLY_MODE=true")
+        if self.assistant_max_tool_calls_per_turn < 0 or self.assistant_max_tool_calls_per_turn > 5:
+            raise ConfigurationError("assistant_max_tool_calls_per_turn must be between 0 and 5")
+        if self.assistant_max_planner_steps < 1 or self.assistant_max_planner_steps > 8:
+            raise ConfigurationError("assistant_max_planner_steps must be between 1 and 8")
+        if self.assistant_max_requests_per_minute < 1 or self.assistant_max_requests_per_minute > 60:
+            raise ConfigurationError("assistant_max_requests_per_minute must be between 1 and 60")
+        if self.assistant_max_context_chars < 500 or self.assistant_max_context_chars > 12000:
+            raise ConfigurationError("assistant_max_context_chars must be between 500 and 12000")
         if self.execution_mode not in SUPPORTED_EXECUTION_MODES:
             raise ConfigurationError("execution_mode must be disabled, paper, or live")
         if self.live_trading_enabled and self.execution_mode != "live":
@@ -111,6 +123,10 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         assistant_model=env.get("GAON_ASSISTANT_MODEL"),
         assistant_timeout_seconds=float(env.get("GAON_ASSISTANT_TIMEOUT_SECONDS", "10")),
         assistant_max_output_tokens=int(env.get("GAON_ASSISTANT_MAX_OUTPUT_TOKENS", "500")),
+        assistant_max_tool_calls_per_turn=int(env.get("GAON_ASSISTANT_MAX_TOOL_CALLS_PER_TURN", "3")),
+        assistant_max_planner_steps=int(env.get("GAON_ASSISTANT_MAX_PLANNER_STEPS", "5")),
+        assistant_max_requests_per_minute=int(env.get("GAON_ASSISTANT_MAX_REQUESTS_PER_MINUTE", "12")),
+        assistant_max_context_chars=int(env.get("GAON_ASSISTANT_MAX_CONTEXT_CHARS", "4000")),
         free_only_mode=parse_bool(env.get("GAON_FREE_ONLY_MODE"), "GAON_FREE_ONLY_MODE", default=True),
         paid_provider_enabled=parse_bool(env.get("GAON_PAID_PROVIDER_ENABLED"), "GAON_PAID_PROVIDER_ENABLED", default=False),
         execution_mode=env.get("GAON_EXECUTION_MODE", "disabled"),
