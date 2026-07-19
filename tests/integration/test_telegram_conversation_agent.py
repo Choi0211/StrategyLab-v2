@@ -40,14 +40,16 @@ class TelegramConversationAgentTests(unittest.TestCase):
 
     def test_repeated_poll_does_not_duplicate_telegram_reply(self) -> None:
         store = RuntimeStateStore(":memory:")
-        client = FakeTelegramClient((_update(20, 2, "가온"),))
+        client = FakeTelegramClient((_update(20, 2, "가온 상태 알려줘"),))
         try:
-            first = poll_once(client, _config(), offset=None, received_at="2026-07-19T00:00:00Z", state=store.telegram, runtime_store=store)
-            second = poll_once(client, _config(), offset=None, received_at="2026-07-19T00:00:01Z", state=store.telegram, runtime_store=store)
+            config = _config(assistant_enabled=True)
+            first = poll_once(client, config, offset=None, received_at="2026-07-19T00:00:00Z", state=store.telegram, runtime_store=store)
+            second = poll_once(client, config, offset=None, received_at="2026-07-19T00:00:01Z", state=store.telegram, runtime_store=store)
 
             self.assertEqual(first[0].status, "sent")
             self.assertEqual(second[0].status, "duplicate")
             self.assertEqual(len(client.sent), 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="runtime_status")), 1)
         finally:
             store.close()
 
@@ -85,7 +87,7 @@ class TelegramConversationAgentTests(unittest.TestCase):
             store.close()
 
 
-def _config() -> GaonRuntimeConfig:
+def _config(*, assistant_enabled: bool = False) -> GaonRuntimeConfig:
     return GaonRuntimeConfig(
         mode="execute",
         dry_run=False,
@@ -93,6 +95,8 @@ def _config() -> GaonRuntimeConfig:
         telegram_bot_token="synthetic-token",
         telegram_allowed_chat_ids=("100",),
         approval_signing_secret="synthetic-approval-secret",
+        assistant_enabled=assistant_enabled,
+        assistant_provider="deterministic",
     )
 
 
