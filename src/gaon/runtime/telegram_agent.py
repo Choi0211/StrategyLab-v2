@@ -10,6 +10,7 @@ from gaon.runtime.conversation import ConversationInput, ConversationResponse
 from gaon.runtime.conversation_context import ConversationContextOrchestrator
 from gaon.runtime.event_store import SQLiteEventStore
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, LLMConversationResponse, SQLiteConversationRepository
+from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.responses import ResponseAction
 
@@ -55,6 +56,7 @@ class TelegramConversationAgent:
             config,
             repository,
             context_orchestrator=context,
+            tool_executor=SafeToolExecutor(default_tool_registry(connection), SQLiteToolAuditRepository(connection)),
             event_store=SQLiteEventStore(connection),
             metrics=metrics,
         )

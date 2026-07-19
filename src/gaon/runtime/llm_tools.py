@@ -9,6 +9,7 @@ import sqlite3
 from typing import Callable
 from uuid import uuid4
 
+from gaon.runtime.assistant_provider import AssistantToolDefinition
 from gaon.runtime.serialization import dumps_json, loads_json
 
 
@@ -122,6 +123,12 @@ class SafeToolExecutor:
         self._append_audit(request, result)
         return result
 
+    def definitions(self) -> tuple[ToolDefinition, ...]:
+        return self._registry.list()
+
+    def assistant_tool_definitions(self) -> tuple[AssistantToolDefinition, ...]:
+        return tuple(_assistant_tool_definition(definition) for definition in self._registry.list() if definition.risk_level is ToolRiskLevel.READ_ONLY)
+
     def _append_audit(self, request: ToolRequest, result: ToolResult) -> None:
         if self._audit is None:
             return
@@ -165,10 +172,19 @@ def _runtime_status(connection: sqlite3.Connection) -> dict[str, object]:
 
 
 def _champion_status(connection: sqlite3.Connection, slot: str) -> dict[str, object]:
-    row = connection.execute("SELECT active_version_id, updated_at FROM champion_registry WHERE slot = ?", (slot,)).fetchone()
+    row = connection.execute("SELECT active_version_id, payload_json, updated_at FROM champion_registry WHERE slot = ?", (slot,)).fetchone()
     if row is None:
         return {"slot": slot, "active": False}
-    return {"slot": slot, "active": True, "active_version_id": str(row[0]), "updated_at": str(row[1])}
+    payload = loads_json(str(row[1]))
+    return {
+        "slot": slot,
+        "active": True,
+        "active_version_id": str(row[0]),
+        "strategy_ref": str(payload.get("strategy_ref", "")),
+        "fingerprint": str(payload.get("fingerprint", "")),
+        "revision": int(payload.get("revision", 0)),
+        "updated_at": str(row[2]),
+    }
 
 
 def _v5_pipeline_history(connection: sqlite3.Connection, limit: int) -> dict[str, object]:
@@ -220,3 +236,13 @@ def _redact(payload: dict[str, object]) -> dict[str, object]:
 
 def _audit_from_row(row: tuple[object, ...]) -> ToolAuditRecord:
     return ToolAuditRecord(str(row[0]), str(row[1]), str(row[2]), str(row[3]), loads_json(str(row[4])), loads_json(str(row[5])), str(row[6]))
+
+
+def _assistant_tool_definition(definition: ToolDefinition) -> AssistantToolDefinition:
+    properties = {name: {"type": "string"} for name in definition.allowed_args + definition.required_args}
+    if definition.name == "v5_pipeline_history":
+        properties["limit"] = {"type": "integer", "minimum": 1, "maximum": 20}
+    parameters: dict[str, object] = {"type": "object", "properties": properties, "additionalProperties": False}
+    if definition.required_args:
+        parameters["required"] = list(definition.required_args)
+    return AssistantToolDefinition(definition.name, definition.description, parameters)
