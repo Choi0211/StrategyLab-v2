@@ -134,7 +134,7 @@ def default_provider_registry(opener: Callable[..., object] | None = None) -> As
                 timeout_seconds=config.assistant_timeout_seconds,
                 max_output_tokens=config.assistant_max_output_tokens,
                 enabled=config.assistant_enabled,
-                opener=opener or _no_network_opener,
+                **({"opener": opener} if opener is not None else {}),
             ),
             supports_network=True,
             deterministic=False,
@@ -163,7 +163,3 @@ def _deterministic_config(config: GaonRuntimeConfig) -> GaonRuntimeConfig:
         approval_signing_secret=config.approval_signing_secret,
         assistant_provider="deterministic",
     )
-
-
-def _no_network_opener(*_: object, **__: object) -> object:
-    raise RuntimeError("assistant provider network opener is not configured")

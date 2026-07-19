@@ -6,7 +6,7 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.errors import ConfigurationError
 from gaon.runtime.intents import Intent
 from gaon.runtime.provider_registry import AssistantProviderRegistry, ProviderRegistration, RoutingAssistantProvider, build_assistant_provider, default_provider_registry
-from gaon.runtime.providers import DeterministicAssistantProvider
+from gaon.runtime.providers import DeterministicAssistantProvider, OpenAICompatibleAssistantProvider
 
 
 class FakeResponse:
@@ -47,6 +47,23 @@ class ProviderRegistryTest(unittest.TestCase):
         self.assertEqual(response.provider_name, "openai-compatible")
         self.assertEqual(response.model, "fake-model")
         self.assertIn("fake provider", response.text)
+
+    def test_openai_compatible_production_construction_uses_network_transport(self) -> None:
+        config = GaonRuntimeConfig(
+            assistant_provider="openai-compatible",
+            assistant_enabled=True,
+            assistant_api_key="ollama-dummy-key",
+            assistant_base_url="http://100.94.255.73:11434/v1",
+            assistant_model="qwen3:8b",
+            assistant_timeout_seconds=120,
+        )
+        registry = default_provider_registry()
+
+        provider = registry.create("openai-compatible", config)
+
+        self.assertIsInstance(provider, OpenAICompatibleAssistantProvider)
+        self.assertEqual(provider.health().available, True)
+        self.assertEqual(provider._opener.__name__, "urlopen")
 
     def test_unknown_provider_and_duplicate_registration_fail_fast(self) -> None:
         registry = AssistantProviderRegistry()
