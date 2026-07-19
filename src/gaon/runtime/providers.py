@@ -86,17 +86,9 @@ class OpenAICompatibleAssistantProvider:
         started = time.perf_counter()
         body = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": "Follow the system instruction section in the user payload."},
-                {"role": "user", "content": request.prompt or request.text},
-            ],
+            "messages": _build_messages(request),
             "max_tokens": self._max_output_tokens,
         }
-        if request.tool_results:
-            body["messages"].extend(
-                {"role": "tool", "tool_call_id": result.call_id, "name": result.name, "content": json.dumps(result.result, sort_keys=True)}
-                for result in request.tool_results
-            )
         if request.tools:
             body["tools"] = [
                 {
@@ -142,6 +134,38 @@ class OpenAICompatibleAssistantProvider:
         )
 
 
+def _build_messages(request: AssistantRequest) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "Follow the system instruction section in the user payload."},
+        {"role": "user", "content": request.prompt or request.text},
+    ]
+    if request.tool_results:
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": result.call_id,
+                        "type": "function",
+                        "function": {"name": result.name, "arguments": "{}"},
+                    }
+                    for result in request.tool_results
+                ],
+            }
+        )
+        messages.extend(
+            {
+                "role": "tool",
+                "tool_call_id": result.call_id,
+                "name": result.name,
+                "content": json.dumps(result.result, ensure_ascii=False, sort_keys=True),
+            }
+            for result in request.tool_results
+        )
+    return messages
+
+
 def _extract_text(payload: dict[str, Any]) -> str:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -177,13 +201,21 @@ def _extract_tool_calls(payload: dict[str, Any]) -> tuple[AssistantToolCall, ...
         arguments = function.get("arguments", "{}")
         if not isinstance(name, str) or not name:
             raise ProviderUnavailableError("assistant provider returned unnamed tool call")
-        if not isinstance(arguments, str):
-            raise ProviderUnavailableError("assistant provider returned malformed tool arguments")
-        try:
-            parsed = json.loads(arguments or "{}")
-        except json.JSONDecodeError as exc:
-            raise ProviderUnavailableError("assistant provider returned malformed tool arguments") from exc
-        if not isinstance(parsed, dict):
-            raise ProviderUnavailableError("assistant provider returned non-object tool arguments")
+        parsed = _parse_tool_arguments(arguments)
         calls.append(AssistantToolCall(str(raw.get("id") or f"call_{index}"), name, parsed))
     return tuple(calls)
+
+
+def _parse_tool_arguments(value: object) -> dict[str, object]:
+    if value in (None, ""):
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value or "{}")
+        except json.JSONDecodeError as exc:
+            raise ProviderUnavailableError("assistant provider returned malformed tool arguments") from exc
+        if isinstance(parsed, dict):
+            return dict(parsed)
+    raise ProviderUnavailableError("assistant provider returned non-object tool arguments")

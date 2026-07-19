@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from gaon.integrations.telegram.contracts import TelegramResponse
+from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall
 from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, poll_once
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.storage import RuntimeStateStore
@@ -86,8 +87,72 @@ class TelegramConversationAgentTests(unittest.TestCase):
         finally:
             store.close()
 
+    def test_openai_compatible_tool_roundtrip_sends_telegram_response(self) -> None:
+        from gaon.runtime import llm_conversation
 
-def _config(*, assistant_enabled: bool = False) -> GaonRuntimeConfig:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(50, 5, "현재 챔피언 상태와 가온 상태를 같이 알려줘"),))
+        provider = _FakeOllamaToolProvider()
+        original = llm_conversation.build_assistant_provider
+        llm_conversation.build_assistant_provider = lambda _config: provider
+        try:
+            result = poll_once(client, _config(assistant_enabled=True, assistant_provider="openai-compatible"), offset=None, received_at="2026-07-19T00:00:00Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual(result[0].status, "sent")
+            self.assertEqual(client.sent[0][1], "챔피언과 런타임 상태를 확인했습니다, 영하님.")
+            self.assertEqual(provider.calls, 2)
+            self.assertEqual({record.tool_name for record in store.tool_audit.list()}, {"champion_status", "runtime_status"})
+        finally:
+            llm_conversation.build_assistant_provider = original
+            store.close()
+
+    def test_openai_compatible_normal_response_sends_telegram_response(self) -> None:
+        from gaon.runtime import llm_conversation
+
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(60, 6, "안녕하세요 가온"),))
+        provider = _FakeOllamaContentProvider()
+        original = llm_conversation.build_assistant_provider
+        llm_conversation.build_assistant_provider = lambda _config: provider
+        try:
+            result = poll_once(client, _config(assistant_enabled=True, assistant_provider="openai-compatible"), offset=None, received_at="2026-07-19T00:00:00Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual(result[0].status, "sent")
+            self.assertEqual(client.sent[0][1], "안녕하세요, 영하님. 가온입니다.")
+            self.assertEqual(provider.calls, 1)
+        finally:
+            llm_conversation.build_assistant_provider = original
+            store.close()
+
+
+class _FakeOllamaToolProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def respond(self, request):
+        self.calls += 1
+        if not request.tool_results:
+            return AssistantProviderResponse(
+                text="",
+                provider_name="openai-compatible",
+                tool_calls=(
+                    AssistantToolCall("call-champion", "champion_status", {"slot": "default"}),
+                    AssistantToolCall("call-runtime", "runtime_status", {}),
+                ),
+            )
+        return AssistantProviderResponse(text="챔피언과 런타임 상태를 확인했습니다, 영하님.", provider_name="openai-compatible")
+
+
+class _FakeOllamaContentProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def respond(self, request):
+        self.calls += 1
+        return AssistantProviderResponse(text="안녕하세요, 영하님. 가온입니다.", provider_name="openai-compatible")
+
+
+def _config(*, assistant_enabled: bool = False, assistant_provider: str = "deterministic") -> GaonRuntimeConfig:
     return GaonRuntimeConfig(
         mode="execute",
         dry_run=False,
@@ -96,7 +161,10 @@ def _config(*, assistant_enabled: bool = False) -> GaonRuntimeConfig:
         telegram_allowed_chat_ids=("100",),
         approval_signing_secret="synthetic-approval-secret",
         assistant_enabled=assistant_enabled,
-        assistant_provider="deterministic",
+        assistant_provider=assistant_provider,
+        assistant_api_key="ollama-dummy-key",
+        assistant_base_url="http://ollama.invalid/v1",
+        assistant_model="qwen3:8b",
     )
 
 

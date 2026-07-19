@@ -361,6 +361,8 @@ class LLMConversationBrain:
             if follow_up is not None:
                 return follow_up
         try:
+            self._metrics.increment("gaon_llm_provider_requests_total", provider=self._config.assistant_provider)
+            self._append_provider_event("LLMProviderRequestStarted", request, {"provider": self._config.assistant_provider})
             provider = self._assistant_provider or build_assistant_provider(self._config)
             tools = self._tool_executor.assistant_tool_definitions() if self._tool_executor is not None else ()
             provider_response = validate_provider_response(
@@ -378,10 +380,16 @@ class LLMConversationBrain:
                 ),
                 max_chars=self._config.assistant_max_output_tokens * 8,
             )
+            self._append_provider_event("LLMProviderRequestCompleted", request, {"provider": provider_response.provider_name, "tool_calls": len(provider_response.tool_calls)})
+            fallback_warning = next((warning for warning in provider_response.warnings if "provider error:" in warning or "provider fallback" in warning), None)
+            if fallback_warning is not None:
+                self._metrics.increment("gaon_llm_provider_fallbacks_total", reason="registry_fallback")
+                self._append_provider_event("LLMProviderFallbackUsed", request, {"provider": provider_response.provider_name, "reason": fallback_warning})
             if provider_response.tool_calls and self._tool_executor is not None:
                 return self._execute_provider_tool_calls(provider, request, intent, provider_response, warnings, references, tools)
             fallback = self._try_deterministic_tool(request, warnings, references)
             if fallback is not None:
+                self._metrics.increment("gaon_llm_provider_fallbacks_total", reason="deterministic_safe_tool")
                 return fallback
             follow_up = self._try_follow_up_tool(request, warnings, references)
             if follow_up is not None:
@@ -395,10 +403,18 @@ class LLMConversationBrain:
                 (),
             )
         except ProviderError as exc:
-            fallback = self._try_deterministic_tool(request, (*warnings, f"provider fallback: {exc.__class__.__name__}"), references)
+            reason = exc.__class__.__name__
+            if "Timeout" in reason:
+                self._metrics.increment("gaon_llm_provider_timeouts_total", provider=self._config.assistant_provider)
+                self._append_provider_event("LLMProviderRequestTimedOut", request, {"provider": self._config.assistant_provider, "error_type": reason})
+            else:
+                self._metrics.increment("gaon_llm_provider_parse_failures_total", provider=self._config.assistant_provider)
+                self._append_provider_event("LLMProviderRequestFailed", request, {"provider": self._config.assistant_provider, "error_type": reason})
+            fallback = self._try_deterministic_tool(request, (*warnings, f"provider fallback: {reason}"), references)
             if fallback is not None:
+                self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=reason)
                 return fallback
-            return persona_text(intent), "fallback", _dedupe((*warnings, f"provider fallback: {exc.__class__.__name__}")), references, "deterministic", ()
+            return _provider_unavailable_message(), "fallback", _dedupe((*warnings, f"provider fallback: {reason}")), references, "deterministic", ()
 
     def _execute_provider_tool_calls(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, provider_response, warnings: tuple[str, ...], references: tuple[str, ...], tools) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         assert self._tool_executor is not None
@@ -414,22 +430,31 @@ class LLMConversationBrain:
                 executed.append(call.name)
         if len(provider_response.tool_calls) > max_calls:
             warnings = (*warnings, "tool call limit reached")
-        final = validate_provider_response(
-            provider.respond(
-                AssistantRequest(
-                    text=request.text,
-                    intent=intent,
-                    user_id=request.user_ref,
-                    conversation_id=request.session_id,
-                    received_at=request.received_at,
-                    prompt=_base_prompt(request.text, None),
-                    references=_dedupe((*references, *(f"tool:{name}" for name in executed))),
-                    tools=tools,
-                    tool_results=tuple(results),
-                )
-            ),
-            max_chars=self._config.assistant_max_output_tokens * 8,
-        )
+        self._metrics.increment("gaon_llm_tool_roundtrips_total", amount=len(results), provider=provider_response.provider_name)
+        self._append_provider_event("LLMProviderToolRoundtripCompleted", request, {"provider": provider_response.provider_name, "tool_calls": len(results)})
+        try:
+            final = validate_provider_response(
+                provider.respond(
+                    AssistantRequest(
+                        text=request.text,
+                        intent=intent,
+                        user_id=request.user_ref,
+                        conversation_id=request.session_id,
+                        received_at=request.received_at,
+                        prompt=_base_prompt(request.text, None),
+                        references=_dedupe((*references, *(f"tool:{name}" for name in executed))),
+                        tools=tools,
+                        tool_results=tuple(results),
+                    )
+                ),
+                max_chars=self._config.assistant_max_output_tokens * 8,
+            )
+        except ProviderError as exc:
+            reason = exc.__class__.__name__
+            self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=f"tool_roundtrip_{reason}")
+            self._append_provider_event("LLMProviderToolRoundtripFailed", request, {"provider": provider_response.provider_name, "error_type": reason})
+            text = _format_multi_tool_response(tuple(results))
+            return text, "provider_tool_fallback", _dedupe((*warnings, f"provider fallback: {reason}")), _dedupe((*references, *(f"tool:{name}" for name in executed))), "deterministic", tuple(executed)
         text = final.text or _format_multi_tool_response(tuple(results))
         return text, "provider_tool_call", _dedupe((*warnings, *final.warnings)), _dedupe((*references, *final.references, *(f"tool:{name}" for name in executed))), final.provider_name, tuple(executed)
 
@@ -498,6 +523,28 @@ class LLMConversationBrain:
                 evidence_refs=response.references,
                 audit_refs=(),
                 appended_at=response.generated_at,
+            )
+        )
+
+    def _append_provider_event(self, event_type: str, request: LLMConversationRequest, payload: dict[str, object]) -> None:
+        if self._event_store is None:
+            return
+        self._event_store.append(
+            DurableEvent(
+                event_id=f"llm-provider:{uuid4().hex}",
+                event_type=event_type,
+                occurred_at=request.received_at,
+                actor_ref="gaon:llm-provider",
+                correlation_id=request.session_id,
+                causation_id=request.message_id,
+                scope="runtime",
+                project="StrategyLab",
+                strategy="N/A",
+                market="N/A",
+                payload=payload,
+                evidence_refs=(),
+                audit_refs=(),
+                appended_at=request.received_at,
             )
         )
 
@@ -600,8 +647,14 @@ def _format_tool_response(tool_name: str, output: dict[str, object]) -> str:
 
 
 def _format_multi_tool_response(results: tuple[AssistantToolResult, ...]) -> str:
-    names = ", ".join(result.name for result in results)
-    return f"요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님.\n실행 도구: {names}"
+    successful = [result.name for result in results if result.result.get("status") == "success"]
+    if successful:
+        return f"요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님.\n실행 도구: {', '.join(successful)}"
+    return "요청하신 도구 호출은 안전 검증을 통과하지 못했습니다, 영하님."
+
+
+def _provider_unavailable_message() -> str:
+    return "현재 로컬 LLM 응답이 지연되고 있습니다, 영하님. 잠시 후 다시 시도해 주세요."
 
 
 def _format_follow_up_response(tool_name: str, output: dict[str, object]) -> str:
