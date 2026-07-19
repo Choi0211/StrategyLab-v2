@@ -124,6 +124,41 @@ class TelegramConversationAgentTests(unittest.TestCase):
             llm_conversation.build_assistant_provider = original
             store.close()
 
+    def test_telegram_multi_turn_tool_result_synthesis_reuses_prior_results(self) -> None:
+        from gaon.runtime import llm_conversation
+
+        store = RuntimeStateStore(":memory:")
+        store._connection.execute(
+            "INSERT OR REPLACE INTO champion_registry(slot, active_version_id, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+            ("default", "champion-version:1", '{"strategy_ref":"turtle_v5","fingerprint":"abc123","revision":1}', "2026-07-19T00:00:00Z"),
+        )
+        store._connection.execute(
+            "INSERT INTO gaon_v5_pipeline_runs(run_id, correlation_id, status, current_stage, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("run-telegram", "corr", "completed", "promotion_approval", "{}", "2026-07-19T00:00:00Z", "2026-07-19T00:00:00Z"),
+        )
+        client = FakeTelegramClient(
+            (
+                _update(70, 7, "현재 챔피언 상태 알려줘"),
+                _update(71, 8, "최근 v5 파이프라인 이력 알려줘"),
+                _update(72, 9, "방금 내용 종합해서 쉽게 설명해줘"),
+            )
+        )
+        provider = _FakeSynthesisProvider()
+        original = llm_conversation.build_assistant_provider
+        llm_conversation.build_assistant_provider = lambda _config: provider
+        try:
+            result = poll_once(client, _config(assistant_enabled=True, assistant_provider="openai-compatible"), offset=None, received_at="2026-07-19T00:00:00Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual([item.status for item in result], ["sent", "sent", "sent"])
+            self.assertIn("종합", client.sent[-1][1])
+            self.assertEqual(len(store.tool_audit.list(tool_name="champion_status")), 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="v5_pipeline_history")), 1)
+            self.assertIn("[champion_status]", provider.prompts[-1])
+            self.assertIn("[v5_pipeline_history]", provider.prompts[-1])
+        finally:
+            llm_conversation.build_assistant_provider = original
+            store.close()
+
 
 class _FakeOllamaToolProvider:
     def __init__(self) -> None:
@@ -150,6 +185,14 @@ class _FakeOllamaContentProvider:
     def respond(self, request):
         self.calls += 1
         return AssistantProviderResponse(text="안녕하세요, 영하님. 가온입니다.", provider_name="openai-compatible")
+
+class _FakeSynthesisProvider:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def respond(self, request):
+        self.prompts.append(request.prompt or request.text)
+        return AssistantProviderResponse(text="챔피언과 v5 파이프라인 상태를 종합했습니다, 영하님.", provider_name="openai-compatible")
 
 
 def _config(*, assistant_enabled: bool = False, assistant_provider: str = "deterministic") -> GaonRuntimeConfig:

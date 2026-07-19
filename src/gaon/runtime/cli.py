@@ -564,7 +564,7 @@ def _run(args: argparse.Namespace) -> int:
             if status.value not in {"created", "requires_human_approval"}:
                 raise ConfigurationError("agent planner release check failed")
             result = AgentPlanExecutor(SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit), AgentPlanPolicy(max_steps=config.assistant_max_planner_steps)).execute(plan, actor_ref="cli", now=_utc_now())
-            store.agent_plans.put(plan, updated_at=_utc_now())
+            store.agent_plans.put(plan.with_status(result.status), updated_at=_utc_now())
             if result.status.value not in {"completed", "requires_human_approval"}:
                 raise ConfigurationError("agent executor release check failed")
             print(f"llm-agent-release-check: PASS schema_version={store.status().schema_version} plan_status={result.status.value}")
