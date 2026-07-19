@@ -10,6 +10,7 @@ from gaon.runtime.event_store import DurableEvent, ReplayResult, SQLiteEventStor
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, LLMConversationResponse, LLMConversationSession, LLMConversationMessage
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRequest, ToolResult, ToolRiskLevel, default_tool_registry
 from gaon.runtime.telegram_agent import TelegramConversationAgent, TelegramConversationLink
+from gaon.runtime.agent_planner import AgentPlan, AgentPlanExecutor, AgentPlanner, AgentPlanPolicy, AgentPlanStatus, AgentPlanStep, AgentPlanStepType
 from gaon.runtime.agents import Agent, AgentCapability, AgentDispatcher, AgentExecutionContext, AgentRegistry, AgentRequest, AgentResult, AgentStatus, CodingAgent, MemoryAgent, ResearchAgent, TradingAgentPlaceholder, default_agent_registry
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutivePlanner, ExecutiveRequest, ProviderBackedExecutivePlanner, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.notifications import NotificationChannel, NotificationEngine, NotificationPriority, NotificationRequest
@@ -38,6 +39,13 @@ __all__ = [
     "AssistantToolResult",
     "AssistantProviderRegistry",
     "Agent",
+    "AgentPlan",
+    "AgentPlanExecutor",
+    "AgentPlanner",
+    "AgentPlanPolicy",
+    "AgentPlanStatus",
+    "AgentPlanStep",
+    "AgentPlanStepType",
     "AgentCapability",
     "AgentDispatcher",
     "AgentExecutionContext",
