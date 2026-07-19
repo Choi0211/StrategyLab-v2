@@ -3,7 +3,7 @@ import socket
 import sqlite3
 import unittest
 
-from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantRequest, AssistantToolCall, AssistantToolResult, ProviderTimeoutError
+from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantRequest, AssistantToolCall, AssistantToolResult, ProviderTimeoutError, ProviderUnavailableError
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.intents import Intent
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository
@@ -140,6 +140,13 @@ class OllamaOpenAICompatibilityTests(unittest.TestCase):
             provider.respond(_assistant_request("안녕하세요"))
 
         self.assertEqual(opener.requests[0][1], 120)
+
+    def test_network_initialization_failure_becomes_provider_unavailable(self) -> None:
+        opener = SequenceOpener([RuntimeError("network opener is not configured")])
+        provider = _provider(opener)
+
+        with self.assertRaises(ProviderUnavailableError):
+            provider.respond(_assistant_request("안녕하세요"))
 
     def test_tool_result_request_uses_openai_tool_messages(self) -> None:
         opener = SequenceOpener([

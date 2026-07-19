@@ -113,7 +113,7 @@ class OpenAICompatibleAssistantProvider:
             payload = json.loads(response.read(1_000_000).decode("utf-8"))
         except (TimeoutError, socket.timeout) as exc:
             raise ProviderTimeoutError("assistant provider timed out") from exc
-        except (HTTPError, URLError, OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        except (HTTPError, URLError, OSError, RuntimeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ProviderUnavailableError("assistant provider request failed") from exc
         text = _extract_text(payload)
         tool_calls = _extract_tool_calls(payload)
