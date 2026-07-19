@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import sqlite3
 from typing import Protocol
@@ -23,6 +23,11 @@ from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
 
 CONVERSATION_SCHEMA_VERSION = 1
 MAX_CONVERSATION_INPUT_CHARS = 4096
+TOOL_RESULT_TTL_SECONDS = {
+    "runtime_status": 60,
+    "champion_status": 900,
+    "v5_pipeline_history": 900,
+}
 
 
 @dataclass(frozen=True)
@@ -249,6 +254,34 @@ class SQLiteConversationToolResultRepository:
             return None
         return ConversationToolResultRecord(str(row[0]), str(row[1]), str(row[2]), str(row[3]), loads_json(str(row[4])), str(row[5]), str(row[6]))
 
+    def list_recent(self, session_id: str, *, limit: int = 10, tool_names: tuple[str, ...] | None = None) -> tuple[ConversationToolResultRecord, ...]:
+        if limit < 1 or limit > 20:
+            raise ValueError("conversation tool result limit must be between 1 and 20")
+        if tool_names:
+            placeholders = ",".join("?" for _ in tool_names)
+            rows = self._connection.execute(
+                f"""
+                SELECT result_id, session_id, tool_name, status, output_json, created_at, expires_at
+                FROM conversation_tool_results
+                WHERE session_id = ? AND tool_name IN ({placeholders})
+                ORDER BY created_at DESC, result_id DESC
+                LIMIT ?
+                """,
+                (session_id, *tool_names, limit),
+            ).fetchall()
+        else:
+            rows = self._connection.execute(
+                """
+                SELECT result_id, session_id, tool_name, status, output_json, created_at, expires_at
+                FROM conversation_tool_results
+                WHERE session_id = ?
+                ORDER BY created_at DESC, result_id DESC
+                LIMIT ?
+                """,
+                (session_id, limit),
+            ).fetchall()
+        return tuple(ConversationToolResultRecord(str(row[0]), str(row[1]), str(row[2]), str(row[3]), loads_json(str(row[4])), str(row[5]), str(row[6])) for row in rows)
+
 
 class LLMConversationBrain:
     def __init__(
@@ -353,6 +386,9 @@ class LLMConversationBrain:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
             return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
+        synthesis = self._try_multi_result_synthesis(request, warnings, references)
+        if synthesis is not None:
+            return synthesis
         if self._config.assistant_provider == "deterministic":
             tool_response = self._try_deterministic_tool(request, warnings, references)
             if tool_response is not None:
@@ -489,6 +525,90 @@ class LLMConversationBrain:
             return None
         return _format_follow_up_response(latest.tool_name, result.output), "tool_follow_up", _dedupe(warnings), _dedupe((*references, f"tool:{latest.tool_name}")), "deterministic", (latest.tool_name,)
 
+    def _try_multi_result_synthesis(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        if self._tool_result_repository is None or self._tool_executor is None:
+            return None
+        if not _is_synthesis_request(request.text):
+            return None
+        required = _requested_synthesis_tools(request.text)
+        recent_tools = self._tool_result_repository.list_recent(request.session_id, limit=10, tool_names=("champion_status", "runtime_status", "v5_pipeline_history"))
+        if not required:
+            required = tuple(dict.fromkeys(record.tool_name for record in recent_tools if record.status == "success"))
+        if len(required) < 2 and not _is_explicit_reuse_request(request.text):
+            return None
+        if len(required) < 2:
+            return _clarification_response(request, warnings, references)
+        selected: dict[str, ConversationToolResultRecord] = {}
+        executed: list[str] = []
+        for tool_name in required[:3]:
+            record = _latest_success(recent_tools, tool_name)
+            if record is not None and _is_fresh(record, request.received_at):
+                selected[tool_name] = record
+                self._metrics.increment("gaon_llm_tool_result_reused_total", tool_name=tool_name)
+                self._append_provider_event("LLMToolResultReused", request, {"tool_name": tool_name, "result_id": record.result_id})
+                continue
+            args: dict[str, object] = {"slot": "default"} if tool_name == "champion_status" else {"limit": 5} if tool_name == "v5_pipeline_history" else {}
+            result = self._tool_executor.execute(ToolRequest(tool_name, args, request.user_ref, request.received_at))
+            self._record_tool_result(request.session_id, result, request.received_at)
+            if result.status != "success":
+                continue
+            executed.append(tool_name)
+            selected[tool_name] = ConversationToolResultRecord(
+                result_id=f"tool-result:live:{tool_name}",
+                session_id=request.session_id,
+                tool_name=tool_name,
+                status=result.status,
+                output=result.output,
+                created_at=request.received_at,
+                expires_at=_expires_at(tool_name, request.received_at),
+            )
+            self._metrics.increment("gaon_llm_tool_result_refreshed_total", tool_name=tool_name)
+            self._append_provider_event("LLMToolResultRefreshed", request, {"tool_name": tool_name})
+        if len(selected) < 2:
+            return _clarification_response(request, warnings, references)
+        ordered = tuple(selected[name] for name in required if name in selected)
+        self._metrics.increment("gaon_llm_multi_result_contexts_total", amount=len(ordered))
+        self._append_provider_event("LLMMultiResultContextBuilt", request, {"tools": [record.tool_name for record in ordered]})
+        text, provider_name, provider_warnings = self._synthesize_tool_results(request, ordered)
+        return (
+            text,
+            "tool_result_synthesis",
+            _dedupe((*warnings, *provider_warnings)),
+            _dedupe((*references, *(f"tool:{record.tool_name}" for record in ordered))),
+            provider_name,
+            tuple(executed),
+        )
+
+    def _synthesize_tool_results(self, request: LLMConversationRequest, records: tuple[ConversationToolResultRecord, ...]) -> tuple[str, str, tuple[str, ...]]:
+        context = _synthesis_prompt(request.text, records)
+        if self._config.assistant_provider == "deterministic":
+            return _deterministic_synthesis(records), "deterministic", ()
+        try:
+            provider = self._assistant_provider or build_assistant_provider(self._config)
+            self._metrics.increment("gaon_llm_synthesis_requests_total", provider=self._config.assistant_provider)
+            self._append_provider_event("LLMSynthesisStarted", request, {"tools": [record.tool_name for record in records]})
+            response = validate_provider_response(
+                provider.respond(
+                    AssistantRequest(
+                        text=request.text,
+                        intent=Intent.UNKNOWN,
+                        user_id=request.user_ref,
+                        conversation_id=request.session_id,
+                        received_at=request.received_at,
+                        prompt=context,
+                        references=tuple(f"tool:{record.tool_name}" for record in records),
+                    )
+                ),
+                max_chars=self._config.assistant_max_output_tokens * 8,
+            )
+            self._append_provider_event("LLMSynthesisCompleted", request, {"provider": response.provider_name})
+            return response.text, response.provider_name, response.warnings
+        except ProviderError as exc:
+            reason = exc.__class__.__name__
+            self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=f"synthesis_{reason}")
+            self._append_provider_event("LLMSynthesisFailed", request, {"error_type": reason})
+            return _deterministic_synthesis(records), "deterministic", (f"provider fallback: {reason}",)
+
     def _record_tool_result(self, session_id: str, result, created_at: str) -> None:
         if self._tool_result_repository is None:
             return
@@ -500,7 +620,7 @@ class LLMConversationBrain:
                 status=result.status,
                 output=result.output,
                 created_at=created_at,
-                expires_at=created_at,
+                expires_at=_expires_at(result.tool_name, created_at),
             )
         )
 
@@ -655,6 +775,126 @@ def _format_multi_tool_response(results: tuple[AssistantToolResult, ...]) -> str
 
 def _provider_unavailable_message() -> str:
     return "현재 로컬 LLM 응답이 지연되고 있습니다, 영하님. 잠시 후 다시 시도해 주세요."
+
+
+def _is_synthesis_request(text: str) -> bool:
+    normalized = text.casefold()
+    return any(
+        token in normalized
+        for token in (
+            "종합",
+            "비교",
+            "정리",
+            "설명",
+            "방금",
+            "내용",
+            "아까",
+            "앞에서",
+            "醫낇빀",
+            "媛숈씠",
+            "鍮꾧탳",
+            "諛⑷툑",
+            "?댁슜",
+            "?ㅻ챸",
+        )
+    )
+
+
+def _is_explicit_reuse_request(text: str) -> bool:
+    normalized = text.casefold()
+    return any(token in normalized for token in ("그거", "그건", "방금", "아까", "내용", "諛⑷툑", "洹", "?댁슜"))
+
+
+def _requested_synthesis_tools(text: str) -> tuple[str, ...]:
+    normalized = text.casefold()
+    tools: list[str] = []
+    if any(token in normalized for token in ("챔피언", "champion", "梨뷀뵾")):
+        tools.append("champion_status")
+    if any(token in normalized for token in ("v5", "파이프라인", "pipeline", "?뚯씠?꾨씪")):
+        tools.append("v5_pipeline_history")
+    if any(token in normalized for token in ("가온", "runtime", "런타임", "서버", "媛??", "?고??")):
+        tools.append("runtime_status")
+    return tuple(dict.fromkeys(tools))
+
+
+def _latest_success(records: tuple[ConversationToolResultRecord, ...], tool_name: str) -> ConversationToolResultRecord | None:
+    for record in records:
+        if record.tool_name == tool_name and record.status == "success":
+            return record
+    return None
+
+
+def _is_fresh(record: ConversationToolResultRecord, now: str) -> bool:
+    try:
+        return _parse_utc(record.expires_at) >= _parse_utc(now)
+    except ValueError:
+        return False
+
+
+def _expires_at(tool_name: str, created_at: str) -> str:
+    ttl = TOOL_RESULT_TTL_SECONDS.get(tool_name, 300)
+    return (_parse_utc(created_at) + timedelta(seconds=ttl)).isoformat().replace("+00:00", "Z")
+
+
+def _parse_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _clarification_response(request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+    return (
+        "영하님, 어떤 결과들을 함께 종합할지 조금 더 구체적으로 말씀해 주세요. 예를 들어 '챔피언과 v5 파이프라인을 같이 설명해줘'처럼 요청하시면 됩니다.",
+        "tool_result_clarification",
+        _dedupe(warnings),
+        references,
+        "deterministic",
+        (),
+    )
+
+
+def _synthesis_prompt(user_text: str, records: tuple[ConversationToolResultRecord, ...]) -> str:
+    lines = [
+        "You are Gaon, Youngha's Korean AI Engineering Partner.",
+        "Use only the verified tool facts below.",
+        "Do not expose hidden reasoning, raw JSON, secrets, or unsupported claims.",
+        "Explain concisely in natural Korean.",
+        "Distinguish active Champion state from v5 pipeline or pending promotion state.",
+        "",
+        "Recent verified tool results:",
+    ]
+    for record in records:
+        lines.append(f"[{record.tool_name}] created_at={record.created_at} expires_at={record.expires_at}")
+        lines.append(dumps_json(record.output))
+    lines.extend(("", f"User request: {user_text}"))
+    return "\n".join(lines)
+
+
+def _deterministic_synthesis(records: tuple[ConversationToolResultRecord, ...]) -> str:
+    by_tool = {record.tool_name: record.output for record in records}
+    lines = ["영하님, 방금 확인한 결과를 종합하면 다음과 같습니다."]
+    champion = by_tool.get("champion_status")
+    if champion:
+        if champion.get("active"):
+            lines.append(f"현재 활성 Champion은 {champion.get('strategy_ref') or 'unknown'}이며 버전은 {champion.get('active_version_id') or 'unknown'}입니다.")
+        else:
+            lines.append("현재 등록된 활성 Champion은 없습니다.")
+    pipeline = by_tool.get("v5_pipeline_history")
+    if pipeline:
+        runs = pipeline.get("runs")
+        if isinstance(runs, list) and runs:
+            first = runs[0]
+            if isinstance(first, dict):
+                lines.append(f"최근 v5 파이프라인은 {first.get('run_id')} 실행이 {first.get('status')} 상태이며 현재 단계는 {first.get('current_stage')}입니다.")
+        else:
+            lines.append("최근 v5 파이프라인 실행 이력은 없습니다.")
+    runtime = by_tool.get("runtime_status")
+    if runtime:
+        ready = "정상 실행 중" if runtime.get("ready") else "확인 필요"
+        lines.append(f"가온 Runtime은 {ready}이며 schema는 v{runtime.get('schema_version') or 'unknown'}입니다.")
+    lines.append("즉, 위 내용은 저장된 기억이 아니라 방금 검증된 읽기 전용 도구 결과를 기준으로 정리한 것입니다.")
+    return "\n".join(lines)
 
 
 def _format_follow_up_response(tool_name: str, output: dict[str, object]) -> str:
