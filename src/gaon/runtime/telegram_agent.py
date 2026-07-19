@@ -19,6 +19,7 @@ from gaon.runtime.llm_conversation import (
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.responses import ResponseAction
+from gaon.runtime.intents import Intent, parse_intent
 
 
 @dataclass(frozen=True)
@@ -68,19 +69,36 @@ class TelegramConversationAgent:
             metrics=metrics,
         )
         self._links = SQLiteTelegramConversationLinkRepository(connection)
+        self._metrics = metrics or MetricsCollector()
 
     def handle(self, message: ConversationInput) -> ConversationResponse:
         session_id = f"telegram:{message.conversation_id}"
-        response = self._brain.respond(
-            LLMConversationRequest(
-                session_id=session_id,
-                user_ref=f"telegram-user:{message.user_id}",
-                source="telegram",
-                text=message.text,
-                received_at=message.received_at,
-                message_id=f"telegram:{message.conversation_id}:{message.message_id}",
+        try:
+            response = self._brain.respond(
+                LLMConversationRequest(
+                    session_id=session_id,
+                    user_ref=f"telegram-user:{message.user_id}",
+                    source="telegram",
+                    text=message.text,
+                    received_at=message.received_at,
+                    message_id=f"telegram:{message.conversation_id}:{message.message_id}",
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001 - Telegram must return a visible fallback.
+            self._metrics.increment("gaon_telegram_conversation_failures_total", error_type=exc.__class__.__name__)
+            return ConversationResponse(
+                response_id=f"telegram-fallback:{message.message_id}",
+                conversation_id=message.conversation_id,
+                text="현재 로컬 LLM 응답이 지연되고 있습니다, 영하님. 잠시 후 다시 시도해 주세요.",
+                intent=parse_intent(message.text) if message.text else Intent.UNKNOWN,
+                references=(),
+                warnings=(f"conversation fallback: {exc.__class__.__name__}",),
+                actions=(ResponseAction("fallback"),),
+                approval_required=False,
+                generated_at=message.received_at,
+                route="fallback",
+                provider_metadata={"provider": "deterministic", "path": "telegram_conversation_fallback"},
+            )
         self._links.resolve(message.conversation_id, now=message.received_at)
         return _to_conversation_response(response, message)
 
