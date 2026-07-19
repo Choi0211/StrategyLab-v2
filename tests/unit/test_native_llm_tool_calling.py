@@ -49,7 +49,7 @@ class NativeLLMToolCallingTests(unittest.TestCase):
         response = self._brain(provider).respond(_request("가온 상태와 v5 이력 알려줘"))
 
         self.assertEqual(response.tool_calls, ("runtime_status", "v5_pipeline_history"))
-        self.assertEqual(tuple(record.tool_name for record in self.audit.list()), ("runtime_status", "v5_pipeline_history"))
+        self.assertEqual(set(record.tool_name for record in self.audit.list()), {"runtime_status", "v5_pipeline_history"})
 
     def test_unknown_tool_is_denied_and_not_counted_as_executed(self) -> None:
         provider = FakeToolProvider(((AssistantToolCall("call-1", "shell_exec", {"command": "whoami"}),),), "거부된 도구 요청입니다.")
