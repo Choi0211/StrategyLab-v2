@@ -9,7 +9,7 @@ import sqlite3
 from typing import Protocol
 from uuid import uuid4
 
-from gaon.runtime.assistant_provider import AssistantRequest, ProviderError, validate_provider_response
+from gaon.runtime.assistant_provider import AssistantProvider, AssistantRequest, AssistantToolResult, ProviderError, validate_provider_response
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.errors import ConfigurationError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
@@ -218,6 +218,38 @@ class SQLiteConversationRepository:
         return tuple(reversed(messages))
 
 
+@dataclass(frozen=True)
+class ConversationToolResultRecord:
+    result_id: str
+    session_id: str
+    tool_name: str
+    status: str
+    output: dict[str, object]
+    created_at: str
+    expires_at: str
+
+
+class SQLiteConversationToolResultRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def add(self, record: ConversationToolResultRecord) -> None:
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO conversation_tool_results(result_id, session_id, tool_name, status, output_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (record.result_id, record.session_id, record.tool_name, record.status, dumps_json(record.output), record.created_at, record.expires_at),
+            )
+
+    def latest(self, session_id: str) -> ConversationToolResultRecord | None:
+        row = self._connection.execute(
+            "SELECT result_id, session_id, tool_name, status, output_json, created_at, expires_at FROM conversation_tool_results WHERE session_id = ? ORDER BY created_at DESC, result_id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ConversationToolResultRecord(str(row[0]), str(row[1]), str(row[2]), str(row[3]), loads_json(str(row[4])), str(row[5]), str(row[6]))
+
+
 class LLMConversationBrain:
     def __init__(
         self,
@@ -226,6 +258,8 @@ class LLMConversationBrain:
         *,
         context_orchestrator=None,
         tool_executor: SafeToolExecutor | None = None,
+        tool_result_repository: SQLiteConversationToolResultRepository | None = None,
+        assistant_provider: AssistantProvider | None = None,
         event_store: SQLiteEventStore | None = None,
         metrics: MetricsCollector | None = None,
     ) -> None:
@@ -233,6 +267,8 @@ class LLMConversationBrain:
         self._repository = repository
         self._context_orchestrator = context_orchestrator
         self._tool_executor = tool_executor
+        self._tool_result_repository = tool_result_repository
+        self._assistant_provider = assistant_provider
         self._event_store = event_store
         self._metrics = metrics or MetricsCollector()
 
@@ -317,11 +353,16 @@ class LLMConversationBrain:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
             return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
-        tool_response = self._try_deterministic_tool(request, warnings, references)
-        if tool_response is not None:
-            return tool_response
+        if self._config.assistant_provider == "deterministic":
+            tool_response = self._try_deterministic_tool(request, warnings, references)
+            if tool_response is not None:
+                return tool_response
+            follow_up = self._try_follow_up_tool(request, warnings, references)
+            if follow_up is not None:
+                return follow_up
         try:
-            provider = build_assistant_provider(self._config)
+            provider = self._assistant_provider or build_assistant_provider(self._config)
+            tools = self._tool_executor.assistant_tool_definitions() if self._tool_executor is not None else ()
             provider_response = validate_provider_response(
                 provider.respond(
                     AssistantRequest(
@@ -332,10 +373,19 @@ class LLMConversationBrain:
                         received_at=request.received_at,
                         prompt=_base_prompt(request.text, context),
                         references=references,
+                        tools=tools,
                     )
                 ),
                 max_chars=self._config.assistant_max_output_tokens * 8,
             )
+            if provider_response.tool_calls and self._tool_executor is not None:
+                return self._execute_provider_tool_calls(provider, request, intent, provider_response, warnings, references, tools)
+            fallback = self._try_deterministic_tool(request, warnings, references)
+            if fallback is not None:
+                return fallback
+            follow_up = self._try_follow_up_tool(request, warnings, references)
+            if follow_up is not None:
+                return follow_up
             return (
                 provider_response.text,
                 provider_response.route,
@@ -345,7 +395,43 @@ class LLMConversationBrain:
                 (),
             )
         except ProviderError as exc:
+            fallback = self._try_deterministic_tool(request, (*warnings, f"provider fallback: {exc.__class__.__name__}"), references)
+            if fallback is not None:
+                return fallback
             return persona_text(intent), "fallback", _dedupe((*warnings, f"provider fallback: {exc.__class__.__name__}")), references, "deterministic", ()
+
+    def _execute_provider_tool_calls(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, provider_response, warnings: tuple[str, ...], references: tuple[str, ...], tools) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+        assert self._tool_executor is not None
+        max_calls = self._config.assistant_max_tool_calls_per_turn
+        selected = provider_response.tool_calls[:max_calls]
+        results: list[AssistantToolResult] = []
+        executed: list[str] = []
+        for call in selected:
+            result = self._tool_executor.execute(ToolRequest(call.name, call.arguments, request.user_ref, request.received_at))
+            self._record_tool_result(request.session_id, result, request.received_at)
+            results.append(AssistantToolResult(call.call_id, call.name, {"status": result.status, "output": result.output, "warnings": list(result.warnings)}))
+            if result.status == "success":
+                executed.append(call.name)
+        if len(provider_response.tool_calls) > max_calls:
+            warnings = (*warnings, "tool call limit reached")
+        final = validate_provider_response(
+            provider.respond(
+                AssistantRequest(
+                    text=request.text,
+                    intent=intent,
+                    user_id=request.user_ref,
+                    conversation_id=request.session_id,
+                    received_at=request.received_at,
+                    prompt=_base_prompt(request.text, None),
+                    references=_dedupe((*references, *(f"tool:{name}" for name in executed))),
+                    tools=tools,
+                    tool_results=tuple(results),
+                )
+            ),
+            max_chars=self._config.assistant_max_output_tokens * 8,
+        )
+        text = final.text or _format_multi_tool_response(tuple(results))
+        return text, "provider_tool_call", _dedupe((*warnings, *final.warnings)), _dedupe((*references, *final.references, *(f"tool:{name}" for name in executed))), final.provider_name, tuple(executed)
 
     def _try_deterministic_tool(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
@@ -353,22 +439,45 @@ class LLMConversationBrain:
         tool_name = route_read_only_tool(request.text)
         if tool_name is None:
             return None
-        arguments: dict[str, object] = {}
-        if tool_name == "champion_status":
-            arguments = {"slot": "default"}
-        elif tool_name == "v5_pipeline_history":
-            arguments = {"limit": 5}
-        result = self._tool_executor.execute(
-            ToolRequest(
-                tool_name=tool_name,
-                arguments=arguments,
-                requested_by=request.user_ref,
-                requested_at=request.received_at,
-            )
-        )
+        arguments: dict[str, object] = {"slot": "default"} if tool_name == "champion_status" else {"limit": 5} if tool_name == "v5_pipeline_history" else {}
+        result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
+        self._record_tool_result(request.session_id, result, request.received_at)
         if result.status != "success":
             return persona_text(Intent.UNKNOWN), "tool_denied", _dedupe((*warnings, *result.warnings)), references, "deterministic", ()
-        return _format_tool_response(result.tool_name, result.output), "tool_read_only", _dedupe(warnings), _dedupe((*references, f"tool:{result.tool_name}")), "deterministic", (result.tool_name,)
+        return _format_tool_response(tool_name, result.output), "tool_read_only", _dedupe(warnings), _dedupe((*references, f"tool:{tool_name}")), "deterministic", (tool_name,)
+
+    def _try_follow_up_tool(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        if self._tool_result_repository is None or self._tool_executor is None:
+            return None
+        normalized = request.text.casefold()
+        if not any(token in normalized for token in ("그", "그건", "그중", "최근", "언제", "자세히", "상세")):
+            return None
+        latest = self._tool_result_repository.latest(request.session_id)
+        if latest is None:
+            return None
+        if latest.tool_name not in {"champion_status", "runtime_status", "v5_pipeline_history"}:
+            return None
+        arguments: dict[str, object] = {"slot": "default"} if latest.tool_name == "champion_status" else {"limit": 5} if latest.tool_name == "v5_pipeline_history" else {}
+        result = self._tool_executor.execute(ToolRequest(latest.tool_name, arguments, request.user_ref, request.received_at))
+        self._record_tool_result(request.session_id, result, request.received_at)
+        if result.status != "success":
+            return None
+        return _format_follow_up_response(latest.tool_name, result.output), "tool_follow_up", _dedupe(warnings), _dedupe((*references, f"tool:{latest.tool_name}")), "deterministic", (latest.tool_name,)
+
+    def _record_tool_result(self, session_id: str, result, created_at: str) -> None:
+        if self._tool_result_repository is None:
+            return
+        self._tool_result_repository.add(
+            ConversationToolResultRecord(
+                result_id=f"tool-result:{uuid4().hex}",
+                session_id=session_id,
+                tool_name=result.tool_name,
+                status=result.status,
+                output=result.output,
+                created_at=created_at,
+                expires_at=created_at,
+            )
+        )
 
     def _append_event(self, response: LLMConversationResponse, request: LLMConversationRequest) -> None:
         if self._event_store is None:
@@ -451,6 +560,7 @@ def _requires_manual_boundary(text: str) -> bool:
         "shell",
         "powershell",
         "cmd",
+        "sql",
     )
     return any(token in normalized for token in blocked)
 
@@ -487,3 +597,25 @@ def _format_tool_response(tool_name: str, output: dict[str, object]) -> str:
                 lines.append(f"- {item.get('run_id')} / {item.get('status')} / {item.get('current_stage')}")
         return "\n".join(lines)
     return "요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님."
+
+
+def _format_multi_tool_response(results: tuple[AssistantToolResult, ...]) -> str:
+    names = ", ".join(result.name for result in results)
+    return f"요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님.\n실행 도구: {names}"
+
+
+def _format_follow_up_response(tool_name: str, output: dict[str, object]) -> str:
+    if tool_name == "champion_status":
+        if not output.get("active"):
+            return "그 Champion 상태를 다시 확인했지만 현재 활성 Champion은 없습니다, 영하님."
+        return f"그 Champion은 {output.get('updated_at', 'unknown')} 기준으로 확인된 최신 활성 상태입니다, 영하님.\n{_format_tool_response(tool_name, output)}"
+    if tool_name == "v5_pipeline_history":
+        runs = output.get("runs")
+        if isinstance(runs, list) and runs:
+            first = runs[0]
+            if isinstance(first, dict):
+                return f"그중 가장 최근 실행은 {first.get('run_id')}이며 상태는 {first.get('status')}, 단계는 {first.get('current_stage')}입니다, 영하님."
+        return _format_tool_response(tool_name, output)
+    if tool_name == "runtime_status":
+        return f"방금 다시 확인한 Runtime 상태입니다, 영하님.\n{_format_tool_response(tool_name, output)}"
+    return _format_tool_response(tool_name, output)

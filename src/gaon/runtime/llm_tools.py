@@ -9,6 +9,7 @@ import sqlite3
 from typing import Callable
 from uuid import uuid4
 
+from gaon.runtime.assistant_provider import AssistantToolDefinition
 from gaon.runtime.serialization import dumps_json, loads_json
 
 
@@ -122,6 +123,12 @@ class SafeToolExecutor:
         self._append_audit(request, result)
         return result
 
+    def definitions(self) -> tuple[ToolDefinition, ...]:
+        return self._registry.list()
+
+    def assistant_tool_definitions(self) -> tuple[AssistantToolDefinition, ...]:
+        return tuple(_assistant_tool_definition(definition) for definition in self._registry.list() if definition.risk_level is ToolRiskLevel.READ_ONLY)
+
     def _append_audit(self, request: ToolRequest, result: ToolResult) -> None:
         if self._audit is None:
             return
@@ -229,3 +236,13 @@ def _redact(payload: dict[str, object]) -> dict[str, object]:
 
 def _audit_from_row(row: tuple[object, ...]) -> ToolAuditRecord:
     return ToolAuditRecord(str(row[0]), str(row[1]), str(row[2]), str(row[3]), loads_json(str(row[4])), loads_json(str(row[5])), str(row[6]))
+
+
+def _assistant_tool_definition(definition: ToolDefinition) -> AssistantToolDefinition:
+    properties = {name: {"type": "string"} for name in definition.allowed_args + definition.required_args}
+    if definition.name == "v5_pipeline_history":
+        properties["limit"] = {"type": "integer", "minimum": 1, "maximum": 20}
+    parameters: dict[str, object] = {"type": "object", "properties": properties, "additionalProperties": False}
+    if definition.required_args:
+        parameters["required"] = list(definition.required_args)
+    return AssistantToolDefinition(definition.name, definition.description, parameters)

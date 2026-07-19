@@ -9,7 +9,26 @@ def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized:
         return None
-    if _contains_any(normalized, ("명령실행", "쉘실행", "shell", "cmd", "powershell", "broker", "kis", "매수", "매도", "주문", "승인", "자동배포")):
+    if _contains_any(
+        normalized,
+        (
+            "명령실행",
+            "쉘실행",
+            "shell",
+            "cmd",
+            "powershell",
+            "sql",
+            "broker",
+            "kis",
+            "매수",
+            "매도",
+            "주문",
+            "승인",
+            "자동배포",
+            "secret",
+            "apikey",
+        ),
+    ):
         return None
     if _champion_status(normalized):
         return "champion_status"

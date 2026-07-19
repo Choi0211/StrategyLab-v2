@@ -3,6 +3,10 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 56-60 LLM Agent Release
+
+Gaon now supports a generic OpenAI-compatible provider interface, native read-only tool calling, bounded multi-turn context, safe agent planning, and release diagnostics. The release remains independent of private repositories and does not add live KIS, broker orders, automatic approval, arbitrary shell, arbitrary SQL, secret access, mandatory Ollama, or paid-provider fallback.
+
 ## Sprint 51-55 Conversational Release
 
 Gaon now has a persistent conversational brain foundation for StrategyLab v5. It stores conversation history, builds bounded verified context, exposes read-only tools through a deny-by-default policy, and connects Telegram ordinary text to the persistent brain.

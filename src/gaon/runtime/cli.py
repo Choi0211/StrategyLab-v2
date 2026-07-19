@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import os
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, SQLiteBacktestRepository, build_backtest_request
 from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionChallengerPolicy, SQLiteChampionChallengerRepository, build_champion_challenger_request
@@ -23,6 +24,7 @@ from gaon.integrations.telegram.contracts import TelegramClient, TelegramDiscove
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import discover_private_chats, parse_update_result
 from gaon.runtime.agents import AgentDispatcher, AgentRequest, default_agent_registry
+from gaon.runtime.agent_planner import AgentPlanExecutor, AgentPlanner, AgentPlanPolicy
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.conversation import ConversationRuntime
 from gaon.runtime.daily_research import DailyResearchPipeline, DailyResearchProfile, DailyResearchRepository, record_daily_research_profile_metric, daily_research_event
@@ -30,8 +32,9 @@ from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutiveRequest, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.health import readiness
-from gaon.runtime.llm_tools import SQLiteToolAuditRepository, default_tool_registry
+from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
+from gaon.runtime.provider_registry import build_assistant_provider
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
@@ -63,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     status_cmd.add_argument("--db", default=":memory:")
     assistant_status = sub.add_parser("assistant-status")
     assistant_status.add_argument("--db", default=":memory:")
+    assistant_provider_status = sub.add_parser("assistant-provider-status")
+    assistant_provider_status.add_argument("--db", default=":memory:")
     conversation_status = sub.add_parser("conversation-status")
     conversation_status.add_argument("--db", default=":memory:")
     conversation_status.add_argument("--session-id", default=None)
@@ -75,6 +80,14 @@ def main(argv: list[str] | None = None) -> int:
     tool_audit.add_argument("--json", action="store_true")
     conversation_release = sub.add_parser("conversation-release-check")
     conversation_release.add_argument("--db", default=":memory:")
+    agent_status = sub.add_parser("agent-status")
+    agent_status.add_argument("--db", default=":memory:")
+    agent_plan_history = sub.add_parser("agent-plan-history")
+    agent_plan_history.add_argument("--db", default=":memory:")
+    tool_chain_history = sub.add_parser("tool-chain-history")
+    tool_chain_history.add_argument("--db", default=":memory:")
+    llm_agent_release = sub.add_parser("llm-agent-release-check")
+    llm_agent_release.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -437,6 +450,16 @@ def _run(args: argparse.Namespace) -> int:
             )
         finally:
             store.close()
+    elif args.command == "assistant-provider-status":
+        config = load_runtime_config(os.environ)
+        provider = build_assistant_provider(config)
+        health = provider.health()
+        print(
+            "assistant-provider "
+            f"configured={config.assistant_provider} enabled={config.assistant_enabled} "
+            f"model={config.assistant_model or 'unset'} base_url={_sanitized_base_url(config.assistant_base_url)} "
+            f"health={'ready' if health.available else 'not-ready'} error={health.error or ''}"
+        )
     elif args.command == "conversation-status":
         store = RuntimeStateStore(args.db)
         try:
@@ -483,7 +506,6 @@ def _run(args: argparse.Namespace) -> int:
         try:
             tools = default_tool_registry(store._connection).list()
             from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
-            from gaon.runtime.llm_tools import SafeToolExecutor
 
             check_config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
             brain = LLMConversationBrain(check_config, store.conversations, tool_executor=SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit))
@@ -499,6 +521,53 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} provider={config.assistant_provider} "
                 f"free_only={config.free_only_mode} tools={len(tools)}"
             )
+        finally:
+            store.close()
+    elif args.command == "agent-status":
+        config = load_runtime_config(os.environ)
+        store = RuntimeStateStore(args.db)
+        try:
+            print(
+                "agent "
+                f"schema_version={store.status().schema_version} max_steps={config.assistant_max_planner_steps} "
+                f"max_tool_calls={config.assistant_max_tool_calls_per_turn} max_rpm={config.assistant_max_requests_per_minute}"
+            )
+        finally:
+            store.close()
+    elif args.command == "agent-plan-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            plans = store.agent_plans.list()
+            if not plans:
+                print("agent-plan-history: none")
+            for plan in plans:
+                print(f"{plan.plan_id} status={plan.status.value} steps={len(plan.steps)}")
+        finally:
+            store.close()
+    elif args.command == "tool-chain-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            records = store.tool_audit.list()
+            if not records:
+                print("tool-chain-history: none")
+            for record in records:
+                print(f"{record.audit_id} tool={record.tool_name} status={record.status} risk={record.risk_level}")
+        finally:
+            store.close()
+    elif args.command == "llm-agent-release-check":
+        config = load_runtime_config(os.environ)
+        store = RuntimeStateStore(args.db)
+        try:
+            planner = AgentPlanner()
+            plan = planner.plan("현재 챔피언과 최근 v5 결과를 비교해서 알려줘", created_at=_utc_now())
+            status = AgentPlanPolicy(max_steps=config.assistant_max_planner_steps).validate(plan)
+            if status.value not in {"created", "requires_human_approval"}:
+                raise ConfigurationError("agent planner release check failed")
+            result = AgentPlanExecutor(SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit), AgentPlanPolicy(max_steps=config.assistant_max_planner_steps)).execute(plan, actor_ref="cli", now=_utc_now())
+            store.agent_plans.put(plan, updated_at=_utc_now())
+            if result.status.value not in {"completed", "requires_human_approval"}:
+                raise ConfigurationError("agent executor release check failed")
+            print(f"llm-agent-release-check: PASS schema_version={store.status().schema_version} plan_status={result.status.value}")
         finally:
             store.close()
     elif args.command == "backup":
@@ -1532,6 +1601,15 @@ def _conversation_status_rows(store: RuntimeStateStore, session_id: str | None) 
 
 def _dumps_json(payload: dict[str, object]) -> str:
     return dumps_json(payload)
+
+
+def _sanitized_base_url(value: str | None) -> str:
+    if not value:
+        return "unset"
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return "configured"
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 class _NoopProjection:

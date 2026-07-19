@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from gaon.runtime.assistant_provider import (
     AssistantProviderResponse,
     AssistantRequest,
+    AssistantToolCall,
     ProviderCapabilities,
     ProviderHealth,
     ProviderTimeoutError,
@@ -91,6 +92,24 @@ class OpenAICompatibleAssistantProvider:
             ],
             "max_tokens": self._max_output_tokens,
         }
+        if request.tool_results:
+            body["messages"].extend(
+                {"role": "tool", "tool_call_id": result.call_id, "name": result.name, "content": json.dumps(result.result, sort_keys=True)}
+                for result in request.tool_results
+            )
+        if request.tools:
+            body["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in request.tools
+            ]
+            body["tool_choice"] = "auto"
         request_obj = Request(
             f"{self._base_url}/chat/completions",
             data=json.dumps(body).encode("utf-8"),
@@ -105,6 +124,7 @@ class OpenAICompatibleAssistantProvider:
         except (HTTPError, URLError, OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ProviderUnavailableError("assistant provider request failed") from exc
         text = _extract_text(payload)
+        tool_calls = _extract_tool_calls(payload)
         latency_ms = int((time.perf_counter() - started) * 1000)
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else None
         return validate_provider_response(
@@ -116,6 +136,7 @@ class OpenAICompatibleAssistantProvider:
                 model=self._model,
                 latency_ms=latency_ms,
                 usage={key: int(value) for key, value in usage.items() if isinstance(value, int)} if usage else None,
+                tool_calls=tool_calls,
             ),
             max_chars=self._max_output_tokens * 8,
         )
@@ -128,5 +149,41 @@ def _extract_text(payload: dict[str, Any]) -> str:
     message = choices[0].get("message") if isinstance(choices[0], dict) else None
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str):
+        tool_calls = _extract_tool_calls(payload)
+        if tool_calls:
+            return ""
         raise ProviderUnavailableError("assistant provider returned malformed content")
     return content
+
+
+def _extract_tool_calls(payload: dict[str, Any]) -> tuple[AssistantToolCall, ...]:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ()
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    raw_calls = message.get("tool_calls") if isinstance(message, dict) else None
+    if raw_calls is None:
+        return ()
+    if not isinstance(raw_calls, list):
+        raise ProviderUnavailableError("assistant provider returned malformed tool calls")
+    calls: list[AssistantToolCall] = []
+    for index, raw in enumerate(raw_calls):
+        if not isinstance(raw, dict):
+            raise ProviderUnavailableError("assistant provider returned malformed tool call")
+        function = raw.get("function")
+        if not isinstance(function, dict):
+            raise ProviderUnavailableError("assistant provider returned malformed function tool call")
+        name = function.get("name")
+        arguments = function.get("arguments", "{}")
+        if not isinstance(name, str) or not name:
+            raise ProviderUnavailableError("assistant provider returned unnamed tool call")
+        if not isinstance(arguments, str):
+            raise ProviderUnavailableError("assistant provider returned malformed tool arguments")
+        try:
+            parsed = json.loads(arguments or "{}")
+        except json.JSONDecodeError as exc:
+            raise ProviderUnavailableError("assistant provider returned malformed tool arguments") from exc
+        if not isinstance(parsed, dict):
+            raise ProviderUnavailableError("assistant provider returned non-object tool arguments")
+        calls.append(AssistantToolCall(str(raw.get("id") or f"call_{index}"), name, parsed))
+    return tuple(calls)

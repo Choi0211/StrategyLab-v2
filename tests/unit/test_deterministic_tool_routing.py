@@ -5,7 +5,7 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
-from gaon.runtime.migrations import migrate
+from gaon.runtime.migrations import SCHEMA_VERSION, migrate
 
 
 NOW = "2026-07-19T00:00:00Z"
@@ -58,7 +58,7 @@ class DeterministicToolRoutingTests(unittest.TestCase):
         response = self.brain.respond(_request("가온 상태 알려줘"))
 
         self.assertEqual(response.tool_calls, ("runtime_status",))
-        self.assertIn("Schema: v25", response.text)
+        self.assertIn(f"Schema: v{SCHEMA_VERSION}", response.text)
 
     def test_pipeline_history_executes_tool(self) -> None:
         self.connection.execute(
