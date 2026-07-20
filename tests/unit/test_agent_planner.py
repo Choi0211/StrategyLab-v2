@@ -57,6 +57,25 @@ class AgentPlannerTests(unittest.TestCase):
 
         self.assertEqual(repository.list()[0].status, AgentPlanStatus.COMPLETED)
 
+    def test_repository_preserves_running_and_failed_lifecycle(self) -> None:
+        plan = AgentPlanner().plan("market research", created_at=NOW)
+        repository = SQLiteAgentPlanRepository(self.connection)
+
+        repository.put(plan, updated_at=NOW)
+        repository.put(plan.with_status(AgentPlanStatus.RUNNING), updated_at=NOW)
+        self.assertEqual(repository.list()[0].status, AgentPlanStatus.RUNNING)
+
+        repository.put(plan.with_status(AgentPlanStatus.FAILED), updated_at=NOW)
+        self.assertEqual(repository.list()[0].status, AgentPlanStatus.FAILED)
+
+    def test_approval_plan_lifecycle_remains_approval_required(self) -> None:
+        plan = AgentPlanner().plan("이 전략으로 배포 승인해줘", created_at=NOW)
+        result = AgentPlanExecutor(self.executor).execute(plan, actor_ref="test", now=NOW)
+        repository = SQLiteAgentPlanRepository(self.connection)
+        repository.put(plan.with_status(result.status), updated_at=NOW)
+
+        self.assertEqual(repository.list()[0].status, AgentPlanStatus.REQUIRES_HUMAN_APPROVAL)
+
 
 if __name__ == "__main__":
     unittest.main()
