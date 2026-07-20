@@ -31,6 +31,7 @@ from gaon.runtime.daily_research import DailyResearchPipeline, DailyResearchProf
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutiveRequest, RoutingDecision, ToolSelection, executive_plan_event
+from gaon.runtime.external_research import ExternalResearchError, ExternalResearchTool, validate_external_url
 from gaon.runtime.health import readiness
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
@@ -44,6 +45,7 @@ from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_worker import TelegramPollingWorker
 from gaon.runtime.v5_pipeline import GaonV5PipelineOrchestrator, GaonV5PipelineRequest, SQLiteGaonV5PipelineRepository
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
+from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
@@ -88,6 +90,14 @@ def main(argv: list[str] | None = None) -> int:
     tool_chain_history.add_argument("--db", default=":memory:")
     llm_agent_release = sub.add_parser("llm-agent-release-check")
     llm_agent_release.add_argument("--db", default=":memory:")
+    external_release = sub.add_parser("external-research-release-check")
+    external_release.add_argument("--db", default=":memory:")
+    strategy_research_demo = sub.add_parser("strategy-research-demo")
+    strategy_research_demo.add_argument("--db", default=":memory:")
+    strategy_research_demo.add_argument("--request", default="Research a safer Korean market breakout challenger")
+    strategy_research_demo.add_argument("--run-id", default="strategy-research-demo")
+    strategy_research_demo.add_argument("--timeframe", default="daily")
+    strategy_research_demo.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -568,6 +578,53 @@ def _run(args: argparse.Namespace) -> int:
             if result.status.value not in {"completed", "requires_human_approval"}:
                 raise ConfigurationError("agent executor release check failed")
             print(f"llm-agent-release-check: PASS schema_version={store.status().schema_version} plan_status={result.status.value}")
+        finally:
+            store.close()
+    elif args.command == "external-research-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            blocked = False
+            try:
+                validate_external_url("http://127.0.0.1/latest")
+            except ExternalResearchError:
+                blocked = True
+            if not blocked:
+                raise ConfigurationError("external research SSRF guard did not block loopback")
+            payload = ExternalResearchTool().search("Korea market breakout", max_results=2, retrieved_at=_utc_now())
+            tool_names = {tool.name for tool in default_tool_registry(store._connection).list()}
+            required = {"web_search", "news_search", "weather_current", "weather_forecast", "exchange_rate", "market_data"}
+            if not required.issubset(tool_names):
+                raise ConfigurationError("external research tools are not registered")
+            report = StrategyResearchOrchestrator(store._connection).run(
+                "Research a safer breakout challenger",
+                run_id="external-research-release-check",
+                actor_ref="cli",
+                requested_at=_utc_now(),
+            )
+            if report.champion_comparison.get("automatic_promotion") is not False:
+                raise ConfigurationError("strategy research attempted automatic promotion")
+            print(f"external-research-release-check: PASS schema_version={store.status().schema_version} results={len(payload['results'])} recommendation={report.recommendation.value}")
+        finally:
+            store.close()
+    elif args.command == "strategy-research-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            report = StrategyResearchOrchestrator(store._connection, repository=SQLiteStrategyResearchRepository(store._connection)).run(
+                args.request,
+                run_id=args.run_id,
+                actor_ref="cli",
+                requested_at=_utc_now(),
+                timeframe=args.timeframe,
+            )
+            if args.json:
+                print(_dumps_json(report.to_json()))
+            else:
+                print(
+                    "strategy-research-demo: "
+                    f"recommendation={report.recommendation.value} "
+                    f"backtest={report.backtest_result_id or 'none'} "
+                    f"validation={report.validation_id or 'none'}"
+                )
         finally:
             store.close()
     elif args.command == "backup":
