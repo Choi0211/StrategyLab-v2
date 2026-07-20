@@ -37,6 +37,7 @@ Included foundations:
 - Sprint 48 approved Champion Strategy Handoff Package generation with explicit deployment approval, deterministic JSON checksums, schema v19 persistence, events, metrics, and CLI inspection
 - Sprint 49 approval-gated Strategy Deployment Workflow with adapter contract, fake/local-safe adapters, preflight, backup, dry-run, verification, rollback, schema v20 persistence, events, metrics, and CLI inspection
 - Sprint 50 Gaon v5.0 Release Candidate with end-to-end pipeline orchestration, v21 checkpoints, resume-safe approval waits, release checks, recovery docs, and deterministic E2E coverage
+- Sprint 61-70 External Strategy Research foundation with read-only external research tools, citation/freshness metadata, SSRF guards, bounded research planning, challenger experiments, fixture backtests, validation, Champion comparison, and advisory reports
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -159,6 +160,17 @@ py -3.11 -m gaon.runtime.cli status
 py -3.11 -m gaon.runtime.cli metrics
 py -3.11 -m gaon.runtime.cli event-replay-dry-run
 ```
+
+## External Strategy Research
+
+Sprint 61-70 adds autonomous research, not autonomous trading. External content is treated as untrusted data and the default provider is fixture-only.
+
+```powershell
+py -3.11 -m gaon.runtime.cli external-research-release-check --db :memory:
+py -3.11 -m gaon.runtime.cli strategy-research-demo --db :memory: --json
+```
+
+The workflow may create a research plan, challenger experiment, fixture backtest, validation report, Champion comparison, and advisory recommendation. It cannot place broker orders, access MyMoneyGuard, approve promotion, or activate a Champion.
 
 These commands are deterministic and do not perform live Telegram, OpenAI, Notion, broker, KIS, VPS, or MyMoneyGuard calls.
 

@@ -400,3 +400,12 @@
 
 - Made `v5-demo --dry-run` repeatable on persistent SQLite runtime databases.
 - Namespaced demo-created IDs by run id without weakening existing uniqueness constraints.
+
+# Sprint 61-70
+
+- Added fixture-backed external web research foundation with normalized citations, freshness, trust metadata, and SSRF protections.
+- Added read-only structured data tools for weather, exchange rates, market data, news search, and web search.
+- Extended bounded agent planning to select external read-only research tools.
+- Added strategy research planning, challenger experiment creation, deterministic fixture backtest, validation, Champion comparison, and advisory report generation.
+- Added v28 runtime schema tables for strategy research plans, experiments, and reports.
+- Added `external-research-release-check` and `strategy-research-demo` CLI commands.
