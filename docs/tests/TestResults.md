@@ -945,3 +945,16 @@ Final local verification:
 - CLI smoke: PASS, `v5-release-check`, 3 repeated `v5-demo --dry-run`, and `v5-pipeline-history`
 - migration tests: PASS via Sprint 50 E2E v20 to v21 and fresh DB schema checks
 - git diff --check: PASS
+
+# Sprint 61-70
+
+Final local verification:
+
+- full unit tests: PASS, 398 tests
+- full integration tests: PASS, 75 tests
+- `scripts/verify_release.py`: PASS
+- `conversation-release-check`: PASS, schema v28, 9 safe tools
+- `llm-agent-release-check`: PASS, plan status completed
+- `external-research-release-check`: PASS, SSRF guard and strategy research advisory flow
+- `strategy-research-demo`: PASS, recommendation generated without automatic promotion
+- `git diff --check`: PASS

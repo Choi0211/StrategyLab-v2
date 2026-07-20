@@ -548,3 +548,16 @@ private repository.
 `v5-demo --dry-run` now creates a unique default pipeline run id and namespaces
 demo fixture entities so repeated runs against the same persistent DB do not
 collide with `v5-release-check` or prior demos.
+
+# Sprint 61-70
+
+Gaon now has a bounded External Intelligence and Autonomous Strategy Research
+foundation. The release adds read-only external research tools with citation and
+freshness metadata, safe URL validation, structured data tool contracts, and a
+strategy research workflow that can create challenger experiments, run fixture
+backtests, validate results, compare them with the Champion baseline, and write
+an advisory report.
+
+This is autonomous research, not autonomous trading. It does not place orders,
+promote Champions, bypass approvals, access secrets, or use private
+repositories. External content remains untrusted data.

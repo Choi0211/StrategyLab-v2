@@ -23,6 +23,7 @@ class AgentPlanStatus(str, Enum):
     CREATED = "created"
     RUNNING = "running"
     COMPLETED = "completed"
+    FAILED = "failed"
     DENIED = "denied"
     FAILED = "failed"
     REQUIRES_HUMAN_APPROVAL = "requires_human_approval"
@@ -64,6 +65,8 @@ class AgentPlanExecutionResult:
 
 
 class AgentPlanPolicy:
+    ALLOWED_TOOLS = {"runtime_status", "champion_status", "v5_pipeline_history", "web_search", "news_search", "market_data", "exchange_rate"}
+
     def __init__(self, *, max_steps: int = 5) -> None:
         self.max_steps = max_steps
 
@@ -73,7 +76,7 @@ class AgentPlanPolicy:
         for step in plan.steps:
             if step.step_type not in {AgentPlanStepType.READ_TOOL, AgentPlanStepType.CONTEXT_LOOKUP, AgentPlanStepType.SYNTHESIZE, AgentPlanStepType.REQUIRES_HUMAN_APPROVAL}:
                 return AgentPlanStatus.DENIED
-            if step.tool_name and step.tool_name not in {"runtime_status", "champion_status", "v5_pipeline_history"}:
+            if step.tool_name and step.tool_name not in self.ALLOWED_TOOLS:
                 return AgentPlanStatus.DENIED
         if any(step.step_type is AgentPlanStepType.REQUIRES_HUMAN_APPROVAL for step in plan.steps):
             return AgentPlanStatus.REQUIRES_HUMAN_APPROVAL
@@ -83,13 +86,17 @@ class AgentPlanPolicy:
 class AgentPlanner:
     def plan(self, request_text: str, *, created_at: str) -> AgentPlan:
         lowered = request_text.casefold()
-        if any(token in lowered for token in ("승인", "배포", "deploy", "approve")):
+        if any(token in lowered for token in ("deploy", "approve", "promotion", "order", "trade", "buy", "sell", "배포", "승인", "주문", "매수", "매도", "諛고룷", "?뱀씤")):
             return AgentPlan(f"agent-plan:{uuid4().hex}", request_text, (AgentPlanStep("step-1", AgentPlanStepType.REQUIRES_HUMAN_APPROVAL, reason="approval boundary"),), AgentPlanStatus.REQUIRES_HUMAN_APPROVAL, created_at)
         steps: list[AgentPlanStep] = []
-        if ("챔피언" in lowered or "champion" in lowered):
+        if any(token in lowered for token in ("champion", "챔피언")):
             steps.append(AgentPlanStep("step-1", AgentPlanStepType.READ_TOOL, "champion_status", {"slot": "default"}, "read champion state"))
-        if ("v5" in lowered or "파이프라인" in lowered or "pipeline" in lowered):
+        if any(token in lowered for token in ("v5", "pipeline", "파이프라인")):
             steps.append(AgentPlanStep(f"step-{len(steps)+1}", AgentPlanStepType.READ_TOOL, "v5_pipeline_history", {"limit": 5}, "read v5 pipeline history"))
+        if any(token in lowered for token in ("market", "news", "web", "research", "search", "external", "시장", "뉴스", "검색", "조사")):
+            steps.append(AgentPlanStep(f"step-{len(steps)+1}", AgentPlanStepType.READ_TOOL, "market_data", {"symbol": "KOSPI"}, "read configured market data"))
+            steps.append(AgentPlanStep(f"step-{len(steps)+1}", AgentPlanStepType.READ_TOOL, "exchange_rate", {"base": "USD", "quote": "KRW"}, "read configured FX data"))
+            steps.append(AgentPlanStep(f"step-{len(steps)+1}", AgentPlanStepType.READ_TOOL, "news_search", {"query": request_text, "max_results": 3}, "read external news citations"))
         if not steps:
             routed = route_read_only_tool(request_text)
             if routed:

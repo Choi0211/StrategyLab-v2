@@ -10,6 +10,7 @@ from typing import Callable
 from uuid import uuid4
 
 from gaon.runtime.assistant_provider import AssistantToolDefinition
+from gaon.runtime.external_research import ExternalResearchTool, structured_data
 from gaon.runtime.serialization import dumps_json, loads_json
 
 
@@ -162,6 +163,30 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry.register(
         ToolDefinition("v5_pipeline_history", "Read recent v5 pipeline runs.", ToolRiskLevel.READ_ONLY, allowed_args=("limit",)),
         lambda args: _v5_pipeline_history(connection, int(args.get("limit", 5))),
+    )
+    registry.register(
+        ToolDefinition("web_search", "Read normalized external web research fixture results with citations.", ToolRiskLevel.READ_ONLY, required_args=("query",), allowed_args=("max_results",)),
+        lambda args: ExternalResearchTool().search(str(args["query"]), max_results=int(args.get("max_results", 5))),
+    )
+    registry.register(
+        ToolDefinition("news_search", "Read normalized external news fixture results with citations.", ToolRiskLevel.READ_ONLY, required_args=("query",), allowed_args=("max_results",)),
+        lambda args: structured_data("news_search", args),
+    )
+    registry.register(
+        ToolDefinition("weather_current", "Read current weather from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("location",)),
+        lambda args: structured_data("weather_current", args),
+    )
+    registry.register(
+        ToolDefinition("weather_forecast", "Read weather forecast from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("location",)),
+        lambda args: structured_data("weather_forecast", args),
+    )
+    registry.register(
+        ToolDefinition("exchange_rate", "Read exchange-rate data from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("base", "quote")),
+        lambda args: structured_data("exchange_rate", args),
+    )
+    registry.register(
+        ToolDefinition("market_data", "Read market data from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol",)),
+        lambda args: structured_data("market_data", args),
     )
     return registry
 

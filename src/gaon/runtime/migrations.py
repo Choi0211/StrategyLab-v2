@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -45,6 +45,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         24: _upgrade_v24_to_v25,
         25: _upgrade_v25_to_v26,
         26: _upgrade_v26_to_v27,
+        27: _upgrade_v27_to_v28,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -839,6 +840,42 @@ def _upgrade_v26_to_v27(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_agent_plans_status
             ON agent_plans(status, updated_at);
+        """
+    )
+
+
+def _upgrade_v27_to_v28(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_research_plans (
+            plan_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            request_text TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_research_plans_status
+            ON strategy_research_plans(status, updated_at);
+        CREATE TABLE IF NOT EXISTS strategy_research_experiments (
+            experiment_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            parent_strategy TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_research_experiments_plan
+            ON strategy_research_experiments(plan_id, created_at);
+        CREATE TABLE IF NOT EXISTS strategy_research_reports (
+            report_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            recommendation TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_research_reports_recommendation
+            ON strategy_research_reports(recommendation, generated_at);
         """
     )
 
