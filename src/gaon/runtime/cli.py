@@ -46,6 +46,7 @@ from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_worker import TelegramPollingWorker
 from gaon.runtime.v5_pipeline import GaonV5PipelineOrchestrator, GaonV5PipelineRequest, SQLiteGaonV5PipelineRepository
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
+from gaon.research.quant_scientist import AIScientistOrchestrator, SQLiteAIScientistRepository, feature_discovery_payload
 from gaon.research.quant_research import QuantResearchOrchestrator, SQLiteQuantResearchRepository
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
 
@@ -108,6 +109,19 @@ def main(argv: list[str] | None = None) -> int:
     quant_research_demo.add_argument("--symbol", default="KOSPI")
     quant_research_demo.add_argument("--report-id", default="quant-research-demo")
     quant_research_demo.add_argument("--json", action="store_true")
+    feature_discovery_demo = sub.add_parser("feature-discovery-demo")
+    feature_discovery_demo.add_argument("--db", default=":memory:")
+    feature_discovery_demo.add_argument("--symbol", default="KOSPI")
+    feature_discovery_demo.add_argument("--json", action="store_true")
+    feature_discovery_release = sub.add_parser("feature-discovery-release-check")
+    feature_discovery_release.add_argument("--db", default=":memory:")
+    ai_scientist_demo = sub.add_parser("ai-scientist-demo")
+    ai_scientist_demo.add_argument("--db", default=":memory:")
+    ai_scientist_demo.add_argument("--symbol", default="KOSPI")
+    ai_scientist_demo.add_argument("--report-id", default="ai-scientist-demo")
+    ai_scientist_demo.add_argument("--json", action="store_true")
+    ai_scientist_release = sub.add_parser("ai-scientist-release-check")
+    ai_scientist_release.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -663,6 +677,67 @@ def _run(args: argparse.Namespace) -> int:
                 print(_dumps_json(report.to_json()))
             else:
                 print(f"quant-research-demo: candidates={len(report.candidates)} comparisons={len(report.comparisons)} winners={len(report.evolution_winners)}")
+        finally:
+            store.close()
+    elif args.command == "feature-discovery-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            tool_names = {tool.name for tool in default_tool_registry(store._connection).list()}
+            if "feature_discovery" not in tool_names:
+                raise ConfigurationError("feature discovery tool is not registered")
+            payload = feature_discovery_payload(symbol="KOSPI", days=60, retrieved_at=_utc_now())
+            names = {str(item["name"]) for item in payload["features"]}  # type: ignore[index]
+            required = {"volume_change", "volatility_5d", "vwap", "gap", "relative_strength"}
+            if names != required:
+                raise ConfigurationError("feature discovery did not produce the required feature set")
+            print(f"feature-discovery-release-check: PASS schema_version={store.status().schema_version} features={len(names)}")
+        finally:
+            store.close()
+    elif args.command == "feature-discovery-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            payload = feature_discovery_payload(symbol=args.symbol, days=60, retrieved_at=_utc_now())
+            if args.json:
+                print(_dumps_json(payload))
+            else:
+                features = ", ".join(str(item["name"]) for item in payload["features"])  # type: ignore[index]
+                print(f"feature-discovery-demo: symbol={args.symbol} features={features}")
+        finally:
+            store.close()
+    elif args.command == "ai-scientist-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            report = AIScientistOrchestrator().run(report_id="ai-scientist-release-check", generated_at=_utc_now())
+            SQLiteAIScientistRepository(store._connection).put_report(report)
+            if bool(report.champion_comparison["automatic_promotion"]):
+                raise ConfigurationError("AI Scientist attempted automatic Champion promotion")
+            saved = store._connection.execute("SELECT COUNT(*) FROM ai_scientist_reports WHERE report_id = ?", (report.report_id,)).fetchone()
+            if int(saved[0]) != 1:
+                raise ConfigurationError("AI Scientist report was not persisted")
+            print(
+                "ai-scientist-release-check: PASS "
+                f"schema_version={store.status().schema_version} "
+                f"selected_features={len(report.selected_features)} "
+                f"walk_forward={len(report.walk_forward)} "
+                f"robustness={report.monte_carlo.robustness_score:.3f}"
+            )
+        finally:
+            store.close()
+    elif args.command == "ai-scientist-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            report = AIScientistOrchestrator().run(symbol=args.symbol, report_id=args.report_id, generated_at=_utc_now())
+            SQLiteAIScientistRepository(store._connection).put_report(report)
+            if args.json:
+                print(_dumps_json(report.to_json()))
+            else:
+                print(
+                    "ai-scientist-demo: "
+                    f"regime={report.regime.regime.value} "
+                    f"strategy={report.meta_strategy.strategy_id} "
+                    f"signal={report.ensemble.signal.value} "
+                    f"robustness={report.monte_carlo.robustness_score:.3f}"
+                )
         finally:
             store.close()
     elif args.command == "backup":

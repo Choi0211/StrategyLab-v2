@@ -974,3 +974,22 @@ Final local verification:
 - `quant-research-demo`: PASS
 - deterministic/Telegram/LLM tool regression: PASS
 - `git diff --check`: PASS
+
+# Sprint 81-90
+
+Final local verification:
+
+- full unit tests: PASS, 413 tests
+- full integration tests: PASS, 77 tests
+- `scripts/verify_release.py`: PASS
+- `conversation-release-check`: PASS, schema v30, 11 safe tools
+- `llm-agent-release-check`: PASS
+- `external-research-release-check`: PASS
+- `strategy-research-demo`: PASS
+- `quant-research-release-check`: PASS
+- `quant-research-demo`: PASS
+- `feature-discovery-release-check`: PASS
+- `feature-discovery-demo`: PASS
+- `ai-scientist-release-check`: PASS
+- `ai-scientist-demo`: PASS
+- `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only
