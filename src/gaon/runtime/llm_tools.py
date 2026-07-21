@@ -12,6 +12,7 @@ from uuid import uuid4
 from gaon.runtime.assistant_provider import AssistantToolDefinition
 from gaon.runtime.external_research import ExternalResearchTool, structured_data
 from gaon.runtime.serialization import dumps_json, loads_json
+from gaon.research.quant_research import KRXMarketDataTool
 
 
 class ToolRiskLevel(str, Enum):
@@ -187,6 +188,10 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry.register(
         ToolDefinition("market_data", "Read market data from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol",)),
         lambda args: structured_data("market_data", args),
+    )
+    registry.register(
+        ToolDefinition("krx_market_data", "Read fixture-backed KRX OHLC, volume, value, market cap, investor flow, program and short-sale data.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol", "days")),
+        lambda args: KRXMarketDataTool().fetch(symbol=str(args.get("symbol", "KOSPI")), days=int(args.get("days", 20))),
     )
     return registry
 

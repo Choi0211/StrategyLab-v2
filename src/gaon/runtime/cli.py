@@ -46,6 +46,7 @@ from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_worker import TelegramPollingWorker
 from gaon.runtime.v5_pipeline import GaonV5PipelineOrchestrator, GaonV5PipelineRequest, SQLiteGaonV5PipelineRepository
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
+from gaon.research.quant_research import QuantResearchOrchestrator, SQLiteQuantResearchRepository
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
@@ -100,6 +101,13 @@ def main(argv: list[str] | None = None) -> int:
     strategy_research_demo.add_argument("--run-id", default="strategy-research-demo")
     strategy_research_demo.add_argument("--timeframe", default="daily")
     strategy_research_demo.add_argument("--json", action="store_true")
+    quant_research_release = sub.add_parser("quant-research-release-check")
+    quant_research_release.add_argument("--db", default=":memory:")
+    quant_research_demo = sub.add_parser("quant-research-demo")
+    quant_research_demo.add_argument("--db", default=":memory:")
+    quant_research_demo.add_argument("--symbol", default="KOSPI")
+    quant_research_demo.add_argument("--report-id", default="quant-research-demo")
+    quant_research_demo.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -628,6 +636,33 @@ def _run(args: argparse.Namespace) -> int:
                     f"backtest={report.backtest_result_id or 'none'} "
                     f"validation={report.validation_id or 'none'}"
                 )
+        finally:
+            store.close()
+    elif args.command == "quant-research-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            tool_names = {tool.name for tool in default_tool_registry(store._connection).list()}
+            if "krx_market_data" not in tool_names:
+                raise ConfigurationError("KRX market data tool is not registered")
+            report = QuantResearchOrchestrator().run(report_id="quant-research-release-check", generated_at=_utc_now())
+            SQLiteQuantResearchRepository(store._connection).put_report(report)
+            if any(comparison.automatic_promotion for comparison in report.comparisons):
+                raise ConfigurationError("quant research attempted automatic Champion promotion")
+            saved = store._connection.execute("SELECT COUNT(*) FROM quant_research_reports WHERE report_id = ?", (report.report_id,)).fetchone()
+            if int(saved[0]) != 1:
+                raise ConfigurationError("quant research report was not persisted")
+            print(f"quant-research-release-check: PASS schema_version={store.status().schema_version} candidates={len(report.candidates)} winners={len(report.evolution_winners)}")
+        finally:
+            store.close()
+    elif args.command == "quant-research-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            report = QuantResearchOrchestrator().run(symbol=args.symbol, report_id=args.report_id, generated_at=_utc_now())
+            SQLiteQuantResearchRepository(store._connection).put_report(report)
+            if args.json:
+                print(_dumps_json(report.to_json()))
+            else:
+                print(f"quant-research-demo: candidates={len(report.candidates)} comparisons={len(report.comparisons)} winners={len(report.evolution_winners)}")
         finally:
             store.close()
     elif args.command == "backup":
