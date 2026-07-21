@@ -25,7 +25,6 @@ class AgentPlanStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     DENIED = "denied"
-    FAILED = "failed"
     REQUIRES_HUMAN_APPROVAL = "requires_human_approval"
 
 
