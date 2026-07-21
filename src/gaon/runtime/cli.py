@@ -8,6 +8,7 @@ import os
 import sys
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from gaon.adapters.backtest import BacktestExecutionContext, BacktestExecutionService, FakeBacktestAdapter, SQLiteBacktestRepository, build_backtest_request
 from gaon.adapters.champion import ChampionChallengerEvaluationEngine, ChampionChallengerPolicy, SQLiteChampionChallengerRepository, build_champion_challenger_request
@@ -82,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     tool_audit.add_argument("--json", action="store_true")
     conversation_release = sub.add_parser("conversation-release-check")
     conversation_release.add_argument("--db", default=":memory:")
+    conversation_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -519,17 +521,18 @@ def _run(args: argparse.Namespace) -> int:
 
             check_config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
             brain = LLMConversationBrain(check_config, store.conversations, tool_executor=SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit))
+            run_id = args.run_id or f"conversation-release-check:{uuid4().hex}"
             checks = (
-                brain.respond(LLMConversationRequest("release-check:runtime", "cli", "cli", "가온 상태 알려줘", _utc_now(), "release-check:runtime")),
-                brain.respond(LLMConversationRequest("release-check:champion", "cli", "cli", "현재 챔피언 상태 알려줘", _utc_now(), "release-check:champion")),
-                brain.respond(LLMConversationRequest("release-check:v5", "cli", "cli", "v5 파이프라인 실행 이력 알려줘", _utc_now(), "release-check:v5")),
+                brain.respond(LLMConversationRequest(f"{run_id}:runtime", "cli", "cli", "가온 상태 알려줘", _utc_now(), f"{run_id}:message:runtime")),
+                brain.respond(LLMConversationRequest(f"{run_id}:champion", "cli", "cli", "현재 챔피언 상태 알려줘", _utc_now(), f"{run_id}:message:champion")),
+                brain.respond(LLMConversationRequest(f"{run_id}:v5", "cli", "cli", "v5 파이프라인 실행 이력 알려줘", _utc_now(), f"{run_id}:message:v5")),
             )
             if {call for response in checks for call in response.tool_calls} != {"runtime_status", "champion_status", "v5_pipeline_history"}:
                 raise ConfigurationError("conversation release check failed to route deterministic read-only tools")
             print(
                 "conversation-release-check: PASS "
                 f"schema_version={store.status().schema_version} provider={config.assistant_provider} "
-                f"free_only={config.free_only_mode} tools={len(tools)}"
+                f"free_only={config.free_only_mode} tools={len(tools)} run_id={run_id}"
             )
         finally:
             store.close()
