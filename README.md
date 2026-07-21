@@ -38,6 +38,8 @@ Included foundations:
 - Sprint 49 approval-gated Strategy Deployment Workflow with adapter contract, fake/local-safe adapters, preflight, backup, dry-run, verification, rollback, schema v20 persistence, events, metrics, and CLI inspection
 - Sprint 50 Gaon v5.0 Release Candidate with end-to-end pipeline orchestration, v21 checkpoints, resume-safe approval waits, release checks, recovery docs, and deterministic E2E coverage
 - Sprint 61-70 External Strategy Research foundation with read-only external research tools, citation/freshness metadata, SSRF guards, bounded research planning, challenger experiments, fixture backtests, validation, Champion comparison, and advisory reports
+- Sprint 71-80 AI Quant Researcher foundation with fixture-backed KRX data, news/theme/flow analysis, candidate strategies, bounded backtests, evolution, and advisory reports
+- Sprint 81-90 AI Quant Scientist foundation with feature discovery/selection, walk-forward validation, Monte Carlo robustness, regime detection, meta strategy, portfolio allocation, ensemble decisions, explainability, and scientist reports
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -173,6 +175,24 @@ py -3.11 -m gaon.runtime.cli strategy-research-demo --db :memory: --json
 The workflow may create a research plan, challenger experiment, fixture backtest, validation report, Champion comparison, and advisory recommendation. It cannot place broker orders, access MyMoneyGuard, approve promotion, or activate a Champion.
 
 These commands are deterministic and do not perform live Telegram, OpenAI, Notion, broker, KIS, VPS, or MyMoneyGuard calls.
+
+## AI Quant Scientist
+
+Sprint 81-90 adds an advisory AI Quant Scientist layer. It discovers KRX-backed
+features, ranks feature importance, runs walk-forward and Monte Carlo robustness
+checks, detects market regimes, selects a meta strategy, builds an advisory
+portfolio mix, combines ensemble votes, and writes an explainable report.
+
+```powershell
+py -3.11 -m gaon.runtime.cli quant-research-release-check --db :memory:
+py -3.11 -m gaon.runtime.cli feature-discovery-release-check --db :memory:
+py -3.11 -m gaon.runtime.cli ai-scientist-release-check --db :memory:
+py -3.11 -m gaon.runtime.cli ai-scientist-demo --db :memory: --symbol KOSPI
+```
+
+The scientist layer is research-only. It preserves source/trust/freshness
+metadata and cannot place orders, promote Champions, bypass approvals, or access
+MyMoneyGuard.
 
 See `docs/operations/TelegramSetup.md` for the full safe setup flow. The project does not auto-load `.env`, and automated tests never call the real Telegram network.
 

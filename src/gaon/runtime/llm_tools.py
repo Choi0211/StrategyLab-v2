@@ -12,6 +12,7 @@ from uuid import uuid4
 from gaon.runtime.assistant_provider import AssistantToolDefinition
 from gaon.runtime.external_research import ExternalResearchTool, structured_data
 from gaon.runtime.serialization import dumps_json, loads_json
+from gaon.research.quant_scientist import feature_discovery_payload
 from gaon.research.quant_research import KRXMarketDataTool
 
 
@@ -192,6 +193,10 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry.register(
         ToolDefinition("krx_market_data", "Read fixture-backed KRX OHLC, volume, value, market cap, investor flow, program and short-sale data.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol", "days")),
         lambda args: KRXMarketDataTool().fetch(symbol=str(args.get("symbol", "KOSPI")), days=int(args.get("days", 20))),
+    )
+    registry.register(
+        ToolDefinition("feature_discovery", "Read fixture-backed quant features with source, trust, and freshness metadata.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol", "days")),
+        lambda args: feature_discovery_payload(symbol=str(args.get("symbol", "KOSPI")), days=int(args.get("days", 60))),
     )
     return registry
 

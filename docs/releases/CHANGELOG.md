@@ -416,3 +416,11 @@
 - Added read-only `krx_market_data` Safe Tool.
 - Added v29 runtime schema table for quant research reports.
 - Added `quant-research-release-check` and `quant-research-demo` CLI commands.
+
+# Sprint 81-90
+
+- Added AI Quant Scientist foundation with feature discovery, feature selection, walk-forward validation, Monte Carlo robustness scoring, market regime detection, meta-strategy selection, portfolio allocation, ensemble decisions, explanations, and scientist reports.
+- Added read-only `feature_discovery` Safe Tool with source, trust, and freshness metadata.
+- Added v30 runtime schema tables for AI Scientist reports, feature importance, walk-forward windows, and Monte Carlo results.
+- Added `feature-discovery-demo`, `feature-discovery-release-check`, `ai-scientist-demo`, and `ai-scientist-release-check` CLI commands.
+- Preserved research-only safety boundaries: no orders, no automatic Champion promotion, no approval bypass, and no private repository dependency.

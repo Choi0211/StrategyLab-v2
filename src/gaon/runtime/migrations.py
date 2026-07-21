@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -47,6 +47,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         26: _upgrade_v26_to_v27,
         27: _upgrade_v27_to_v28,
         28: _upgrade_v28_to_v29,
+        29: _upgrade_v29_to_v30,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -891,6 +892,41 @@ def _upgrade_v28_to_v29(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_quant_research_reports_generated
             ON quant_research_reports(generated_at, report_id);
+        """
+    )
+
+
+def _upgrade_v29_to_v30(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ai_scientist_reports (
+            report_id TEXT PRIMARY KEY,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_scientist_reports_generated
+            ON ai_scientist_reports(generated_at, report_id);
+        CREATE TABLE IF NOT EXISTS ai_feature_importance (
+            report_id TEXT NOT NULL,
+            feature_name TEXT NOT NULL,
+            importance REAL NOT NULL,
+            payload_json TEXT NOT NULL,
+            PRIMARY KEY(report_id, feature_name)
+        );
+        CREATE TABLE IF NOT EXISTS ai_walk_forward_results (
+            report_id TEXT NOT NULL,
+            window_id TEXT NOT NULL,
+            passed INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            PRIMARY KEY(report_id, window_id)
+        );
+        CREATE TABLE IF NOT EXISTS ai_monte_carlo_results (
+            report_id TEXT NOT NULL,
+            simulation_id TEXT NOT NULL,
+            robustness_score REAL NOT NULL,
+            payload_json TEXT NOT NULL,
+            PRIMARY KEY(report_id, simulation_id)
+        );
         """
     )
 

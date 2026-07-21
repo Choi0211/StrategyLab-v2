@@ -573,3 +573,17 @@ an advisory research report.
 The release remains research-only. No broker order, automatic trading,
 automatic Champion promotion, approval bypass, secret access, or private
 repository dependency is introduced.
+
+# Sprint 81-90
+
+Gaon now has an AI Quant Scientist foundation. It can discover deterministic
+features from fixture-backed KRX market data, rank feature importance, run
+walk-forward validation, perform Monte Carlo robustness scoring, classify market
+regimes, select a meta strategy, optimize an advisory portfolio mix, combine
+votes through an ensemble decision, explain the recommendation, and persist an
+AI Scientist report.
+
+The release remains advisory. It does not place orders, promote Champions,
+bypass approvals, access secrets, or depend on a private repository. Feature
+source, trust, and freshness metadata are preserved from the underlying market
+fixture.
