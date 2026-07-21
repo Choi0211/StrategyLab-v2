@@ -561,3 +561,15 @@ an advisory report.
 This is autonomous research, not autonomous trading. It does not place orders,
 promote Champions, bypass approvals, access secrets, or use private
 repositories. External content remains untrusted data.
+
+# Sprint 71-80
+
+Gaon now has an AI Quant Researcher foundation. It can read fixture-backed KRX
+market data, score news, analyze themes and investor flow, generate candidate
+strategies, run bounded fixture backtests, compare performance against a
+Champion baseline, improve weaker candidates, evolve top candidates, and write
+an advisory research report.
+
+The release remains research-only. No broker order, automatic trading,
+automatic Champion promotion, approval bypass, secret access, or private
+repository dependency is introduced.

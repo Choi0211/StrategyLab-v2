@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -46,6 +46,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         25: _upgrade_v25_to_v26,
         26: _upgrade_v26_to_v27,
         27: _upgrade_v27_to_v28,
+        28: _upgrade_v28_to_v29,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -876,6 +877,20 @@ def _upgrade_v27_to_v28(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_strategy_research_reports_recommendation
             ON strategy_research_reports(recommendation, generated_at);
+        """
+    )
+
+
+def _upgrade_v28_to_v29(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS quant_research_reports (
+            report_id TEXT PRIMARY KEY,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_quant_research_reports_generated
+            ON quant_research_reports(generated_at, report_id);
         """
     )
 

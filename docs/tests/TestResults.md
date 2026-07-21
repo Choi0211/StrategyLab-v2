@@ -958,3 +958,19 @@ Final local verification:
 - `external-research-release-check`: PASS, SSRF guard and strategy research advisory flow
 - `strategy-research-demo`: PASS, recommendation generated without automatic promotion
 - `git diff --check`: PASS
+
+# Sprint 71-80
+
+Final local verification:
+
+- full unit tests: PASS, 407 tests
+- full integration tests: PASS, 76 tests
+- `scripts/verify_release.py`: PASS
+- `conversation-release-check`: PASS, schema v29, 10 safe tools
+- `llm-agent-release-check`: PASS
+- `external-research-release-check`: PASS
+- `strategy-research-demo`: PASS
+- `quant-research-release-check`: PASS
+- `quant-research-demo`: PASS
+- deterministic/Telegram/LLM tool regression: PASS
+- `git diff --check`: PASS

@@ -409,3 +409,10 @@
 - Added strategy research planning, challenger experiment creation, deterministic fixture backtest, validation, Champion comparison, and advisory report generation.
 - Added v28 runtime schema tables for strategy research plans, experiments, and reports.
 - Added `external-research-release-check` and `strategy-research-demo` CLI commands.
+
+# Sprint 71-80
+
+- Added AI Quant Researcher foundation with fixture-backed KRX market data, news scoring, theme strength, supply-demand analysis, candidate strategy generation, automated fixture backtests, performance comparison, strategy improvement, evolution, and research reports.
+- Added read-only `krx_market_data` Safe Tool.
+- Added v29 runtime schema table for quant research reports.
+- Added `quant-research-release-check` and `quant-research-demo` CLI commands.
