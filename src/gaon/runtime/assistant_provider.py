@@ -87,6 +87,8 @@ class AssistantProviderResponse:
     latency_ms: int | None = None
     usage: dict[str, int] | None = None
     tool_calls: tuple[AssistantToolCall, ...] = ()
+    finish_reason: str | None = None
+    truncated: bool = False
 
 
 AssistantResponse = AssistantProviderResponse

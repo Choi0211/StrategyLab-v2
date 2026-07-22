@@ -9,11 +9,12 @@ import sqlite3
 from typing import Protocol
 from uuid import uuid4
 
-from gaon.runtime.assistant_provider import AssistantProvider, AssistantRequest, AssistantToolResult, ProviderError, validate_provider_response
+from gaon.runtime.assistant_provider import AssistantProvider, AssistantProviderResponse, AssistantRequest, AssistantToolResult, ProviderError, validate_provider_response
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.errors import ConfigurationError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.intents import Intent, parse_intent
+from gaon.runtime.long_response import continuation_prompt, merge_response_parts
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
@@ -416,7 +417,11 @@ class LLMConversationBrain:
                 ),
                 max_chars=self._config.assistant_max_output_tokens * 8,
             )
-            self._append_provider_event("LLMProviderRequestCompleted", request, {"provider": provider_response.provider_name, "tool_calls": len(provider_response.tool_calls)})
+            self._append_provider_event(
+                "LLMProviderRequestCompleted",
+                request,
+                {"provider": provider_response.provider_name, "tool_calls": len(provider_response.tool_calls), "finish_reason": provider_response.finish_reason or "unknown", "truncated": provider_response.truncated},
+            )
             fallback_warning = next((warning for warning in provider_response.warnings if "provider error:" in warning or "provider fallback" in warning), None)
             if fallback_warning is not None:
                 self._metrics.increment("gaon_llm_provider_fallbacks_total", reason="registry_fallback")
@@ -430,6 +435,8 @@ class LLMConversationBrain:
             follow_up = self._try_follow_up_tool(request, warnings, references)
             if follow_up is not None:
                 return follow_up
+            if provider_response.truncated:
+                provider_response = self._continue_provider_response(provider, request, intent, provider_response, references)
             return (
                 provider_response.text,
                 provider_response.route,
@@ -491,8 +498,51 @@ class LLMConversationBrain:
             self._append_provider_event("LLMProviderToolRoundtripFailed", request, {"provider": provider_response.provider_name, "error_type": reason})
             text = _format_multi_tool_response(tuple(results))
             return text, "provider_tool_fallback", _dedupe((*warnings, f"provider fallback: {reason}")), _dedupe((*references, *(f"tool:{name}" for name in executed))), "deterministic", tuple(executed)
+        if final.truncated:
+            final = self._continue_provider_response(provider, request, intent, final, _dedupe((*references, *(f"tool:{name}" for name in executed))))
         text = final.text or _format_multi_tool_response(tuple(results))
         return text, "provider_tool_call", _dedupe((*warnings, *final.warnings)), _dedupe((*references, *final.references, *(f"tool:{name}" for name in executed))), final.provider_name, tuple(executed)
+
+    def _continue_provider_response(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, initial_response, references: tuple[str, ...]):
+        parts = [initial_response.text]
+        warnings = tuple(initial_response.warnings)
+        current = initial_response
+        count = 0
+        while current.truncated and count < self._config.assistant_max_continuations:
+            count += 1
+            self._metrics.increment("gaon_llm_continuations_total", provider=initial_response.provider_name)
+            self._append_provider_event("LLMProviderContinuationStarted", request, {"provider": initial_response.provider_name, "continuation": count})
+            try:
+                current = validate_provider_response(
+                    provider.respond(
+                        AssistantRequest(
+                            text=request.text,
+                            intent=intent,
+                            user_id=request.user_ref,
+                            conversation_id=request.session_id,
+                            received_at=request.received_at,
+                            prompt=continuation_prompt(request.text, merge_response_parts(tuple(parts))),
+                            references=references,
+                        )
+                    ),
+                    max_chars=self._config.assistant_max_output_tokens * 8,
+                )
+            except ProviderError as exc:
+                reason = exc.__class__.__name__
+                self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=f"continuation_{reason}")
+                self._append_provider_event("LLMProviderContinuationFailed", request, {"provider": initial_response.provider_name, "error_type": reason, "continuation": count})
+                return _replace_provider_response(initial_response, merge_response_parts(tuple(parts)), (*warnings, f"continuation failed: {reason}"), truncated=True)
+            parts.append(current.text)
+            warnings = _dedupe((*warnings, *current.warnings))
+            self._append_provider_event("LLMProviderContinuationCompleted", request, {"provider": current.provider_name, "finish_reason": current.finish_reason or "unknown", "truncated": current.truncated, "continuation": count})
+        merged = merge_response_parts(tuple(parts))
+        still_truncated = bool(current.truncated)
+        if still_truncated:
+            warnings = _dedupe((*warnings, "max continuations reached"))
+            self._metrics.increment("gaon_llm_truncation_unresolved_total", provider=initial_response.provider_name)
+        else:
+            self._metrics.increment("gaon_llm_truncation_resolved_total", provider=initial_response.provider_name)
+        return _replace_provider_response(initial_response, merged, warnings, truncated=still_truncated)
 
     def _try_deterministic_tool(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
@@ -912,3 +962,19 @@ def _format_follow_up_response(tool_name: str, output: dict[str, object]) -> str
     if tool_name == "runtime_status":
         return f"방금 다시 확인한 Runtime 상태입니다, 영하님.\n{_format_tool_response(tool_name, output)}"
     return _format_tool_response(tool_name, output)
+
+
+def _replace_provider_response(response: AssistantProviderResponse, text: str, warnings: tuple[str, ...], *, truncated: bool) -> AssistantProviderResponse:
+    return AssistantProviderResponse(
+        text=text,
+        route=response.route,
+        references=response.references,
+        warnings=_dedupe(warnings),
+        provider_name=response.provider_name,
+        model=response.model,
+        latency_ms=response.latency_ms,
+        usage=response.usage,
+        tool_calls=response.tool_calls,
+        finish_reason=response.finish_reason,
+        truncated=truncated,
+    )

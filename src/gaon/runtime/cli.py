@@ -22,8 +22,10 @@ from gaon.adapters.trading import PaperTradingAdapter, SQLiteTradingRepository, 
 from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, ValidationPolicy, build_validation_request
 from gaon.integrations.telegram.client import TelegramBotApiClient
 from gaon.integrations.telegram.contracts import TelegramClient, TelegramDiscoveredChat, TelegramPollResult
+from gaon.integrations.telegram.formatter import split_message
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import discover_private_chats, parse_update_result
+from gaon.runtime.assistant_provider import AssistantProviderResponse, ProviderCapabilities, ProviderHealth
 from gaon.runtime.agents import AgentDispatcher, AgentRequest, default_agent_registry
 from gaon.runtime.agent_planner import AgentPlanExecutor, AgentPlanner, AgentPlanPolicy
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
@@ -94,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
     tool_chain_history.add_argument("--db", default=":memory:")
     llm_agent_release = sub.add_parser("llm-agent-release-check")
     llm_agent_release.add_argument("--db", default=":memory:")
+    long_response_release = sub.add_parser("long-response-release-check")
+    long_response_release.add_argument("--db", default=":memory:")
     external_release = sub.add_parser("external-research-release-check")
     external_release.add_argument("--db", default=":memory:")
     strategy_research_demo = sub.add_parser("strategy-research-demo")
@@ -603,6 +607,31 @@ def _run(args: argparse.Namespace) -> int:
             if result.status.value not in {"completed", "requires_human_approval"}:
                 raise ConfigurationError("agent executor release check failed")
             print(f"llm-agent-release-check: PASS schema_version={store.status().schema_version} plan_status={result.status.value}")
+        finally:
+            store.close()
+    elif args.command == "long-response-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            long_text = "\n\n".join(f"문단 {index}: " + ("한국어 긴 응답 검증 " * 50) for index in range(1, 18))
+            chunks = split_message(long_text)
+            if len(long_text) < 10000 or len(chunks) < 3:
+                raise ConfigurationError("long response fixture did not exceed Telegram chunk threshold")
+            if any(len(chunk) > 3900 for chunk in chunks):
+                raise ConfigurationError("Telegram chunk exceeded safe limit")
+            provider = _LongResponseReleaseProvider()
+            brain = LLMConversationBrain(
+                GaonRuntimeConfig(assistant_enabled=True, assistant_provider="openai-compatible", assistant_max_output_tokens=128, assistant_max_continuations=2),
+                store.conversations,
+                assistant_provider=provider,
+            )
+            response = brain.respond(LLMConversationRequest("long-response-release-check", "cli", "cli", "긴 한국어 보고서를 작성해줘", _utc_now(), "long-response-release-check:message"))
+            if provider.calls != 2 or "마무리 문단" not in response.text:
+                raise ConfigurationError("continuation did not complete long response")
+            if "hidden reasoning" in response.text or "chain-of-thought" in response.text:
+                raise ConfigurationError("reasoning leaked into long response")
+            print(f"long-response-release-check: PASS schema_version={store.status().schema_version} chunks={len(chunks)} continuations={provider.calls - 1}")
         finally:
             store.close()
     elif args.command == "external-research-release-check":
@@ -1788,6 +1817,34 @@ class _NoopProjection:
     def apply(self, event: DurableEvent, *, dry_run: bool) -> None:
         if not dry_run:
             raise RuntimeError("CLI replay diagnostic must remain dry-run")
+
+
+class _LongResponseReleaseProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities("fake-long-response", "fixture", False, False, 128)
+
+    def health(self) -> ProviderHealth:
+        return ProviderHealth("fake-long-response", True)
+
+    def respond(self, _request) -> AssistantProviderResponse:
+        self.calls += 1
+        if self.calls == 1:
+            return AssistantProviderResponse(
+                text="시작 문단입니다. " + ("긴 한국어 응답입니다. " * 30),
+                provider_name="fake-long-response",
+                finish_reason="length",
+                truncated=True,
+                warnings=("LLM_TRUNCATED",),
+            )
+        return AssistantProviderResponse(
+            text="이어서 작성합니다. 중복 없이 continuation을 완료했습니다. 마무리 문단입니다.",
+            provider_name="fake-long-response",
+            finish_reason="stop",
+        )
 
 
 if __name__ == "__main__":
