@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 from gaon.integrations.telegram.contracts import TelegramChat, TelegramMessage, TelegramResponse, TelegramUpdate, TelegramUser
 from gaon.integrations.telegram.formatter import split_message
@@ -12,8 +14,9 @@ from gaon.runtime.conversation import ConversationResponse
 from gaon.runtime.errors import ExternalServiceError, TransportError
 from gaon.runtime.intents import Intent
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository
-from gaon.runtime.migrations import migrate
+from gaon.runtime.migrations import SCHEMA_VERSION, migrate
 from gaon.runtime.providers import OpenAICompatibleAssistantProvider
+from gaon.runtime.storage import RuntimeStateStore
 
 
 NOW = "2026-07-22T00:00:00Z"
@@ -134,6 +137,27 @@ class LongResponseReliabilityTests(unittest.TestCase):
 
         self.assertEqual(result.status, "send_failed")
         self.assertEqual(result.error, "TELEGRAM_SEND_ERROR")
+
+    def test_long_response_release_check_is_repeatable_on_persistent_db(self) -> None:
+        from gaon.runtime.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(Path(tmp) / "gaon-runtime.sqlite")
+            self.assertEqual(main(["long-response-release-check", "--db", db]), 0)
+            self.assertEqual(main(["long-response-release-check", "--db", db]), 0)
+            self.assertEqual(main(["long-response-release-check", "--db", db]), 0)
+            store = RuntimeStateStore(db)
+            try:
+                status = store.status()
+                self.assertEqual(status.schema_version, SCHEMA_VERSION)
+                rows = store._connection.execute(
+                    "SELECT session_id, message_id FROM conversation_messages WHERE session_id LIKE 'long-response-release-check:%' ORDER BY session_id, message_id"
+                ).fetchall()
+                self.assertEqual(len(rows), 6)
+                self.assertEqual(len({str(row[0]) for row in rows}), 3)
+                self.assertEqual(len({str(row[1]) for row in rows}), 6)
+            finally:
+                store.close()
 
     def _brain(self, provider, *, max_continuations: int = 2) -> LLMConversationBrain:
         return LLMConversationBrain(

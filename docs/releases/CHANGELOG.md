@@ -432,3 +432,8 @@
 - Replaced Telegram hard slicing with source-preserving chunking below the API limit and visible `[n/m]` ordering.
 - Added bounded retry and safe error classification for transient Telegram send failures.
 - Added `long-response-release-check` and long-response reliability tests.
+
+# Hotfix 90.2
+
+- Made `long-response-release-check` repeatable on persistent SQLite databases by namespacing each check with a unique run id.
+- Preserved schema v30 and Hotfix 90.1 long-response behavior.

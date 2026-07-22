@@ -601,3 +601,10 @@ and retries transient send failures with bounded backoff. The hotfix does not
 add live trading, broker integration, automatic Champion promotion, approval
 bypass, shell execution, arbitrary SQL, private repository access, or paid
 provider fallback.
+
+# Hotfix 90.2
+
+`long-response-release-check` now creates a unique run namespace for every
+invocation. Repeated checks against the same persistent runtime database no
+longer collide on `conversation_messages.message_id`, and schema v30 remains
+unchanged.
