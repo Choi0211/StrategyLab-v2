@@ -626,7 +626,8 @@ def _run(args: argparse.Namespace) -> int:
                 store.conversations,
                 assistant_provider=provider,
             )
-            response = brain.respond(LLMConversationRequest("long-response-release-check", "cli", "cli", "긴 한국어 보고서를 작성해줘", _utc_now(), "long-response-release-check:message"))
+            run_id = f"long-response-release-check:{uuid4().hex}"
+            response = brain.respond(LLMConversationRequest(run_id, "cli", "cli", "긴 한국어 보고서를 작성해줘", _utc_now(), f"{run_id}:message"))
             if provider.calls != 2 or "마무리 문단" not in response.text:
                 raise ConfigurationError("continuation did not complete long response")
             if "hidden reasoning" in response.text or "chain-of-thought" in response.text:
