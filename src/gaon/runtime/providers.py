@@ -117,6 +117,8 @@ class OpenAICompatibleAssistantProvider:
             raise ProviderUnavailableError("assistant provider request failed") from exc
         text = _extract_text(payload)
         tool_calls = _extract_tool_calls(payload)
+        finish_reason = _extract_finish_reason(payload)
+        truncated = finish_reason == "length"
         latency_ms = int((time.perf_counter() - started) * 1000)
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else None
         return validate_provider_response(
@@ -124,11 +126,14 @@ class OpenAICompatibleAssistantProvider:
                 text=text,
                 route="provider",
                 references=request.references,
+                warnings=("LLM_TRUNCATED",) if truncated else (),
                 provider_name="openai-compatible",
                 model=self._model,
                 latency_ms=latency_ms,
                 usage={key: int(value) for key, value in usage.items() if isinstance(value, int)} if usage else None,
                 tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                truncated=truncated,
             ),
             max_chars=self._max_output_tokens * 8,
         )
@@ -204,6 +209,14 @@ def _extract_tool_calls(payload: dict[str, Any]) -> tuple[AssistantToolCall, ...
         parsed = _parse_tool_arguments(arguments)
         calls.append(AssistantToolCall(str(raw.get("id") or f"call_{index}"), name, parsed))
     return tuple(calls)
+
+
+def _extract_finish_reason(payload: dict[str, Any]) -> str | None:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return None
+    value = choices[0].get("finish_reason")
+    return value if isinstance(value, str) else None
 
 
 def _parse_tool_arguments(value: object) -> dict[str, object]:

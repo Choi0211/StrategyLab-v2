@@ -587,3 +587,17 @@ The release remains advisory. It does not place orders, promote Champions,
 bypass approvals, access secrets, or depend on a private repository. Feature
 source, trust, and freshness metadata are preserved from the underlying market
 fixture.
+
+# Hotfix 90.1
+
+Gaon now handles longer Telegram-facing LLM responses more reliably. The
+OpenAI-compatible provider records `finish_reason`, treats `length` as
+truncation, requests bounded continuations, and preserves valid partial output
+if a continuation fails.
+
+Telegram delivery now chunks long plain-text responses below the API limit,
+labels multi-part messages with `[n/m]`, preserves the original payload text,
+and retries transient send failures with bounded backoff. The hotfix does not
+add live trading, broker integration, automatic Champion promotion, approval
+bypass, shell execution, arbitrary SQL, private repository access, or paid
+provider fallback.

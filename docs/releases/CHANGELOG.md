@@ -424,3 +424,11 @@
 - Added v30 runtime schema tables for AI Scientist reports, feature importance, walk-forward windows, and Monte Carlo results.
 - Added `feature-discovery-demo`, `feature-discovery-release-check`, `ai-scientist-demo`, and `ai-scientist-release-check` CLI commands.
 - Preserved research-only safety boundaries: no orders, no automatic Champion promotion, no approval bypass, and no private repository dependency.
+
+# Hotfix 90.1
+
+- Hardened long Telegram response delivery with `finish_reason=length` truncation detection and bounded provider continuation.
+- Raised the default assistant output limit to `2048` tokens and added `GAON_ASSISTANT_MAX_CONTINUATIONS`.
+- Replaced Telegram hard slicing with source-preserving chunking below the API limit and visible `[n/m]` ordering.
+- Added bounded retry and safe error classification for transient Telegram send failures.
+- Added `long-response-release-check` and long-response reliability tests.

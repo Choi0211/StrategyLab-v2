@@ -37,7 +37,8 @@ class GaonRuntimeConfig:
     assistant_base_url: str | None = None
     assistant_model: str | None = None
     assistant_timeout_seconds: float = 10.0
-    assistant_max_output_tokens: int = 500
+    assistant_max_output_tokens: int = 2048
+    assistant_max_continuations: int = 2
     assistant_max_tool_calls_per_turn: int = 3
     assistant_max_planner_steps: int = 5
     assistant_max_requests_per_minute: int = 12
@@ -72,6 +73,10 @@ class GaonRuntimeConfig:
             raise ConfigurationError("paid providers cannot be enabled while GAON_FREE_ONLY_MODE=true")
         if self.assistant_max_tool_calls_per_turn < 0 or self.assistant_max_tool_calls_per_turn > 5:
             raise ConfigurationError("assistant_max_tool_calls_per_turn must be between 0 and 5")
+        if self.assistant_max_output_tokens < 64 or self.assistant_max_output_tokens > 8192:
+            raise ConfigurationError("assistant_max_output_tokens must be between 64 and 8192")
+        if self.assistant_max_continuations < 0 or self.assistant_max_continuations > 5:
+            raise ConfigurationError("assistant_max_continuations must be between 0 and 5")
         if self.assistant_max_planner_steps < 1 or self.assistant_max_planner_steps > 8:
             raise ConfigurationError("assistant_max_planner_steps must be between 1 and 8")
         if self.assistant_max_requests_per_minute < 1 or self.assistant_max_requests_per_minute > 60:
@@ -122,7 +127,8 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         assistant_base_url=env.get("GAON_ASSISTANT_BASE_URL"),
         assistant_model=env.get("GAON_ASSISTANT_MODEL"),
         assistant_timeout_seconds=float(env.get("GAON_ASSISTANT_TIMEOUT_SECONDS", "10")),
-        assistant_max_output_tokens=int(env.get("GAON_ASSISTANT_MAX_OUTPUT_TOKENS", "500")),
+        assistant_max_output_tokens=int(env.get("GAON_ASSISTANT_MAX_OUTPUT_TOKENS", "2048")),
+        assistant_max_continuations=int(env.get("GAON_ASSISTANT_MAX_CONTINUATIONS", "2")),
         assistant_max_tool_calls_per_turn=int(env.get("GAON_ASSISTANT_MAX_TOOL_CALLS_PER_TURN", "3")),
         assistant_max_planner_steps=int(env.get("GAON_ASSISTANT_MAX_PLANNER_STEPS", "5")),
         assistant_max_requests_per_minute=int(env.get("GAON_ASSISTANT_MAX_REQUESTS_PER_MINUTE", "12")),

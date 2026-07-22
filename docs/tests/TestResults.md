@@ -993,3 +993,20 @@ Final local verification:
 - `ai-scientist-release-check`: PASS
 - `ai-scientist-demo`: PASS
 - `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only
+
+# Hotfix 90.1
+
+Final local verification:
+
+- full unit tests: PASS, 422 tests
+- full integration tests: PASS, 77 tests
+- targeted Telegram/LLM regression: PASS, 29 tests
+- `scripts/verify_release.py`: PASS
+- `long-response-release-check`: PASS, schema v30, 3 chunks, 1 continuation
+- `conversation-release-check`: PASS
+- `llm-agent-release-check`: PASS
+- `external-research-release-check`: PASS
+- `quant-research-release-check`: PASS
+- `feature-discovery-release-check`: PASS
+- `ai-scientist-release-check`: PASS
+- `git diff --check`: PASS

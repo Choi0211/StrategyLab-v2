@@ -13,6 +13,7 @@ The assistant provider is guarded by explicit configuration. Tests use fake tran
 - `GAON_ASSISTANT_MODEL`
 - `GAON_ASSISTANT_TIMEOUT_SECONDS`
 - `GAON_ASSISTANT_MAX_OUTPUT_TOKENS`
+- `GAON_ASSISTANT_MAX_CONTINUATIONS`
 
 Do not commit real API keys or `.env` files.
 
@@ -25,8 +26,10 @@ Do not commit real API keys or `.env` files.
 
 - Provider disabled or unavailable: rule-based fallback.
 - Provider timeout or malformed response: fallback.
+- Provider `finish_reason=length`: bounded continuation, then partial response with warning if still truncated.
 - Approval, order, execution, policy, and memory mutation requests bypass provider.
 - Provider output is validated before returning to Telegram.
+- Telegram delivery uses plain text chunking below the API limit with bounded retry for transient network, 5xx, and 429 failures.
 
 ## Not Implemented
 
