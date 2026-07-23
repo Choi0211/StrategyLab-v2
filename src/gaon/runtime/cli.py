@@ -39,6 +39,7 @@ from gaon.runtime.health import readiness
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.provider_registry import build_assistant_provider
+from gaon.runtime.research_grounding import contains_unverified_fixture_metrics
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
@@ -200,6 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     real_research_demo.add_argument("--json", action="store_true")
     real_research_release = sub.add_parser("real-research-integration-release-check")
     real_research_release.add_argument("--db", default=":memory:")
+    research_grounding_release = sub.add_parser("research-grounding-release-check")
+    research_grounding_release.add_argument("--db", default=":memory:")
+    research_grounding_release.add_argument("--run-id", default=None)
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1042,6 +1046,44 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} dataset={report.dataset.dataset_id} "
                 f"quality={report.data_quality.status.value} source={report.backtest_result.source.value} tools={len(required_tools)}"
             )
+        finally:
+            store.close()
+    elif args.command == "research-grounding-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            run_id = args.run_id or f"research-grounding-release-check:{uuid4().hex}"
+            brain = LLMConversationBrain(
+                GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic"),
+                store.conversations,
+                tool_executor=SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            checks = (
+                brain.respond(LLMConversationRequest(f"{run_id}:weakness", "cli", "cli", "이 전략 약점과 리스크 분석해줘", _utc_now(), f"{run_id}:message:weakness")),
+                brain.respond(LLMConversationRequest(f"{run_id}:memory", "cli", "cli", "비슷한 전략 연구했어?", _utc_now(), f"{run_id}:message:memory")),
+                brain.respond(LLMConversationRequest(f"{run_id}:improve", "cli", "cli", "이 전략 개선해줘", _utc_now(), f"{run_id}:message:improve")),
+                brain.respond(LLMConversationRequest(f"{run_id}:quality", "cli", "cli", "전략 품질 점수 설명해줘", _utc_now(), f"{run_id}:message:quality")),
+                brain.respond(LLMConversationRequest(f"{run_id}:backtest", "cli", "cli", "백테스트 결과 보여줘", _utc_now(), f"{run_id}:message:backtest")),
+            )
+            routes = {call for response in checks for call in response.tool_calls}
+            if not {"strategy_critique", "research_memory_search", "strategy_quality_score", "backtest_strategy"}.issubset(routes):
+                raise ConfigurationError("research grounding release check failed to route required safe tools")
+            weakness, memory, improve, quality, backtest = checks
+            if contains_unverified_fixture_metrics(weakness.text):
+                raise ConfigurationError("weakness response fabricated fixture metrics")
+            if "찾지 못했습니다" not in memory.text or "접근 권한" in memory.text or "access" in memory.text.casefold():
+                raise ConfigurationError("empty memory response did not report no stored match safely")
+            if "가설/개선 제안" not in improve.text:
+                raise ConfigurationError("improvement request was blocked by empty memory")
+            if contains_unverified_fixture_metrics(quality.text) or "Sharpe" in quality.text or "MDD" in quality.text:
+                raise ConfigurationError("quality response used non-quality fields")
+            if "fixture_backed=true" not in backtest.text or "validation_backend=fixture" not in backtest.text:
+                raise ConfigurationError("backtest provenance was not disclosed")
+            if store.status().schema_version < 32:
+                raise ConfigurationError("research grounding release check requires schema v32")
+            print(f"research-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} tools={len(routes)}")
         finally:
             store.close()
     elif args.command == "backup":

@@ -2,6 +2,22 @@
 
 Status: Passed
 
+## Hotfix Research Grounding and Telegram Routing
+
+- Unit: `tests.unit.test_research_grounding`
+  - strategy weakness responses do not fabricate fixture metrics
+  - user-provided metrics remain allowed when explicitly recorded as facts
+  - tool-returned backtest metrics remain allowed
+  - empty memory returns no stored match without access-error wording
+  - improvement routing works even when memory is empty
+  - quality-score responses use quality fields only
+  - provider tool synthesis falls back to deterministic grounded formatting when fixture metrics are fabricated
+- Integration: `tests.integration.test_research_grounding_release_check`
+  - `research-grounding-release-check` runs three times on one persistent SQLite DB
+  - generated conversation message IDs remain unique
+  - schema version remains unchanged
+- CLI release check: `python -m gaon.runtime.cli research-grounding-release-check --db <db>`
+
 ## Sprint 56-60 LLM Agent
 
 - Provider tests: fake OpenAI-compatible content and tool-call responses.
