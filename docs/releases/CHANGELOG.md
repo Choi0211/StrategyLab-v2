@@ -445,3 +445,11 @@
 - Added read-only safe tools: `research_memory_search`, `strategy_critique`, `strategy_quality_score`, `research_candidate_compare`, and `research_lineage`.
 - Added `research-critic-demo`, `research-memory-demo`, `research-iteration-demo`, `research-tournament-demo`, `autonomous-research-demo`, and `self-improving-research-release-check`.
 - Preserved safety boundaries: no source-code self-modification, no shell, no arbitrary SQL, no live order, no automatic Champion promotion, no approval bypass, and no private repository dependency.
+
+# Sprint 101-110
+
+- Added real-market/backtest integration contracts with market data domain models, provider interface, data quality engine, dataset registry/cache, StrategySpec, external backtest JSON request/result contracts, reproducibility comparison, and Real Research Gateway.
+- Added v32 runtime schema tables for market datasets, strategy specs, backtest runs, real backtest results, and real research reports.
+- Added read-only safe tools: `market_data_status`, `dataset_lookup`, `data_quality_check`, `backtest_strategy`, `backtest_result`, and `compare_backtests`.
+- Added `market-data-demo`, `data-quality-demo`, `backtest-contract-demo`, `external-backtest-demo`, `real-research-demo`, and `real-research-integration-release-check`.
+- Preserved public/private boundaries: no private repository dependency, no hard-coded private path, no arbitrary shell, no arbitrary SQL, no generated Python strategy execution, no live order, no automatic deployment, and no automatic Champion promotion.

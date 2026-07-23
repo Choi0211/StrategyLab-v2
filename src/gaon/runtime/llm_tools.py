@@ -21,6 +21,13 @@ from gaon.research.self_improving import (
     strategy_critique_payload,
     strategy_quality_payload,
 )
+from gaon.research.real_research import (
+    backtest_strategy_payload,
+    compare_backtests_payload,
+    data_quality_payload,
+    dataset_lookup_payload,
+    market_data_status_payload,
+)
 
 
 class ToolRiskLevel(str, Enum):
@@ -225,6 +232,30 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         ToolDefinition("research_lineage", "Read strategy lineage records for a root strategy id.", ToolRiskLevel.READ_ONLY, allowed_args=("root_strategy_id",)),
         lambda args: _research_lineage(connection, str(args.get("root_strategy_id", fixture_candidate().strategy_id))),
     )
+    registry.register(
+        ToolDefinition("market_data_status", "Read market dataset registry status and configured provider mode.", ToolRiskLevel.READ_ONLY),
+        lambda _args: market_data_status_payload(connection),
+    )
+    registry.register(
+        ToolDefinition("dataset_lookup", "Read cached market dataset metadata by fingerprint or list recent datasets.", ToolRiskLevel.READ_ONLY, allowed_args=("fingerprint",)),
+        lambda args: dataset_lookup_payload(connection, str(args["fingerprint"]) if "fingerprint" in args else None),
+    )
+    registry.register(
+        ToolDefinition("data_quality_check", "Run a fixture-backed market data quality check.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol",)),
+        lambda args: data_quality_payload(str(args.get("symbol", "005930"))),
+    )
+    registry.register(
+        ToolDefinition("backtest_strategy", "Run deterministic external-backtest contract demo without live execution.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol",)),
+        lambda args: backtest_strategy_payload(str(args.get("symbol", "005930"))),
+    )
+    registry.register(
+        ToolDefinition("backtest_result", "Read backtest result payload by result id.", ToolRiskLevel.READ_ONLY, required_args=("result_id",)),
+        lambda args: _real_backtest_result(connection, str(args["result_id"])),
+    )
+    registry.register(
+        ToolDefinition("compare_backtests", "Compare fixture baseline and challenger backtests for reproducibility deltas.", ToolRiskLevel.READ_ONLY),
+        lambda _args: compare_backtests_payload(),
+    )
     return registry
 
 
@@ -282,6 +313,13 @@ def _research_lineage(connection: sqlite3.Connection, root_strategy_id: str) -> 
     repository = SQLiteResearchMemoryRepository(connection)
     nodes = repository.lineage(root_strategy_id)
     return {"provider": "sqlite:strategy_lineage", "root_strategy_id": root_strategy_id, "nodes": [item.to_json() for item in nodes], "automatic_promotion": False}
+
+
+def _real_backtest_result(connection: sqlite3.Connection, result_id: str) -> dict[str, object]:
+    if len(result_id) > 180:
+        raise ToolSecurityError("result_id is too long")
+    row = connection.execute("SELECT payload_json FROM real_backtest_results WHERE result_id = ?", (result_id,)).fetchone()
+    return {"provider": "sqlite:real_backtest_results", "result": loads_json(str(row[0])) if row else None, "automatic_promotion": False}
 
 
 def _validate_tool_name(name: str) -> None:

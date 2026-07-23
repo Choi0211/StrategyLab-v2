@@ -620,3 +620,16 @@ autonomous research result.
 The release is deterministic and advisory. It does not modify Python code,
 shell out, run arbitrary SQL, change VPS configuration, place broker orders,
 promote Champions, bypass approvals, or mutate private MyMoneyGuard state.
+
+# Sprint 101-110
+
+Gaon now has a production-grade contract foundation for real market research
+and external backtest integration. It can resolve fixture-backed market
+datasets, validate data quality, cache dataset metadata, build canonical
+StrategySpec payloads, create versioned BacktestRequest JSON, normalize
+BacktestResult payloads, compare reproducibility conditions, and run the Real
+Research Gateway.
+
+Real providers and private backtest engines are not hard-coded in this public
+repository. The current implementation remains fixture-backed by default and
+records `fixture_backed=true` in report provenance.
