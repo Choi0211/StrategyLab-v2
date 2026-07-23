@@ -18,6 +18,7 @@ from gaon.runtime.long_response import continuation_prompt, merge_response_parts
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
+from gaon.runtime.research_grounding import contains_unverified_fixture_metrics, format_grounded_tool_response, grounded_system_policy, is_research_tool
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
@@ -28,6 +29,13 @@ TOOL_RESULT_TTL_SECONDS = {
     "runtime_status": 60,
     "champion_status": 900,
     "v5_pipeline_history": 900,
+    "research_memory_search": 300,
+    "strategy_critique": 300,
+    "strategy_quality_score": 300,
+    "data_quality_check": 300,
+    "backtest_strategy": 300,
+    "backtest_result": 300,
+    "compare_backtests": 300,
 }
 
 
@@ -501,6 +509,9 @@ class LLMConversationBrain:
         if final.truncated:
             final = self._continue_provider_response(provider, request, intent, final, _dedupe((*references, *(f"tool:{name}" for name in executed))))
         text = final.text or _format_multi_tool_response(tuple(results))
+        if any(is_research_tool(result.name) for result in results) and contains_unverified_fixture_metrics(text):
+            text = _format_multi_tool_response(tuple(results))
+            warnings = (*warnings, "provider research grounding fallback")
         return text, "provider_tool_call", _dedupe((*warnings, *final.warnings)), _dedupe((*references, *final.references, *(f"tool:{name}" for name in executed))), final.provider_name, tuple(executed)
 
     def _continue_provider_response(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, initial_response, references: tuple[str, ...]):
@@ -550,7 +561,7 @@ class LLMConversationBrain:
         tool_name = route_read_only_tool(request.text)
         if tool_name is None:
             return None
-        arguments: dict[str, object] = {"slot": "default"} if tool_name == "champion_status" else {"limit": 5} if tool_name == "v5_pipeline_history" else {}
+        arguments = _default_tool_arguments(tool_name, request.text)
         result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
         if result.status != "success":
@@ -568,7 +579,7 @@ class LLMConversationBrain:
             return None
         if latest.tool_name not in {"champion_status", "runtime_status", "v5_pipeline_history"}:
             return None
-        arguments: dict[str, object] = {"slot": "default"} if latest.tool_name == "champion_status" else {"limit": 5} if latest.tool_name == "v5_pipeline_history" else {}
+        arguments = _default_tool_arguments(latest.tool_name, request.text)
         result = self._tool_executor.execute(ToolRequest(latest.tool_name, arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
         if result.status != "success":
@@ -752,6 +763,7 @@ def _base_prompt(text: str, context=None) -> str:
     return (
         "You are Gaon, a calm Korean AI Engineering Partner for Youngha. "
         "Do not claim live trading, automatic approval, private repo access, or unavailable integrations. "
+        f"{grounded_system_policy()} "
         f"User message: {text}{context_text}"
     )
 
@@ -790,7 +802,26 @@ def _dedupe(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
 
 
+def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
+    if tool_name == "champion_status":
+        return {"slot": "default"}
+    if tool_name == "v5_pipeline_history":
+        return {"limit": 5}
+    if tool_name == "strategy_critique":
+        return {"scenario": "overfit"} if any(token in text for token in ("약점", "리스크", "위험", "과최적", "개선")) else {"scenario": "balanced"}
+    if tool_name == "strategy_quality_score":
+        return {"scenario": "balanced"}
+    if tool_name == "research_memory_search":
+        return {"query": text[:120]}
+    if tool_name in {"data_quality_check", "backtest_strategy"}:
+        return {"symbol": "005930"}
+    return {}
+
+
 def _format_tool_response(tool_name: str, output: dict[str, object]) -> str:
+    grounded = format_grounded_tool_response(tool_name, output)
+    if grounded is not None:
+        return grounded
     if tool_name == "champion_status":
         if not output.get("active"):
             return "현재 등록된 활성 Champion은 없습니다, 영하님."
@@ -817,10 +848,21 @@ def _format_tool_response(tool_name: str, output: dict[str, object]) -> str:
 
 
 def _format_multi_tool_response(results: tuple[AssistantToolResult, ...]) -> str:
+    grounded = [_format_tool_result_response(result) for result in results if result.result.get("status") == "success"]
+    grounded = [item for item in grounded if item]
+    if grounded:
+        return "\n\n".join(grounded)
     successful = [result.name for result in results if result.result.get("status") == "success"]
     if successful:
         return f"요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님.\n실행 도구: {', '.join(successful)}"
     return "요청하신 도구 호출은 안전 검증을 통과하지 못했습니다, 영하님."
+
+
+def _format_tool_result_response(result: AssistantToolResult) -> str | None:
+    output_wrapper = result.result.get("output")
+    if not isinstance(output_wrapper, dict):
+        return None
+    return format_grounded_tool_response(result.name, output_wrapper)
 
 
 def _provider_unavailable_message() -> str:
@@ -908,6 +950,7 @@ def _synthesis_prompt(user_text: str, records: tuple[ConversationToolResultRecor
     lines = [
         "You are Gaon, Youngha's Korean AI Engineering Partner.",
         "Use only the verified tool facts below.",
+        grounded_system_policy(),
         "Do not expose hidden reasoning, raw JSON, secrets, or unsupported claims.",
         "Explain concisely in natural Korean.",
         "Distinguish active Champion state from v5 pipeline or pending promotion state.",

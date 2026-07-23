@@ -3,6 +3,14 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix Research Grounding and Telegram Routing
+
+Gaon now grounds Telegram research answers in verified safe-tool output and explicit user-provided facts. Strategy weakness, improvement, memory search, quality-score, data-quality, and backtest requests route to read-only safe tools before free-form synthesis.
+
+Fixture-backed data is disclosed as `fixture_backed=true`. Empty research memory is reported as no stored match, not as a system access failure. This release check is repeatable against persistent SQLite databases through unique run namespaces.
+
+Not included: live trading, broker orders, automatic Champion promotion, automatic approval, private repository access, schema migration, or external paid-provider fallback.
+
 ## Sprint 56-60 LLM Agent Release
 
 Gaon now supports a generic OpenAI-compatible provider interface, native read-only tool calling, bounded multi-turn context, safe agent planning, and release diagnostics. The release remains independent of private repositories and does not add live KIS, broker orders, automatic approval, arbitrary shell, arbitrary SQL, secret access, mandatory Ollama, or paid-provider fallback.

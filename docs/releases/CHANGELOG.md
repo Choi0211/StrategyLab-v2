@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix Research Grounding and Telegram Routing
+
+- Grounded research responses in user input, safe-tool output, persisted memory, fixtures, external backtest payloads, and dataset metadata.
+- Added deterministic routing for strategy critique/improvement, research memory search, strategy quality score, data quality, and backtest requests.
+- Ensured empty research memory reports no stored match instead of access or permission failure.
+- Added fixture disclosure and provenance-preserving formatting for research safe-tool responses.
+- Added repeatable `research-grounding-release-check`.
+
 ## Sprint 56-60 - Gaon LLM Agent
 
 - Added generic OpenAI-compatible provider diagnostics and tool-call support.
