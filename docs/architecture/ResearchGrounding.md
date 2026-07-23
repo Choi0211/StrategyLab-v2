@@ -24,6 +24,14 @@ Research responses separate:
 
 Unavailable metrics are reported as unavailable. Fixture data is disclosed with `fixture_backed=true` and must not be described as real historical market performance.
 
+## Context Isolation
+
+User-provided strategy conditions are isolated from fixture/default strategy metadata. Fixture candidate fields such as default volume multipliers, default risk percentage, internal metrics, and regime tags must not be presented as values of the current user strategy.
+
+Provider-backed tool synthesis receives sanitized research tool payloads. For `strategy_critique`, candidate parameters, candidate metrics, and fixture regime metadata are removed before the provider sees the tool result. The response may reference user-provided conditions only when they are present in the user message.
+
+When a quality-score request has no actual stored backtest-based result for the current user strategy, Gaon returns a Korean deterministic missing-data response instead of using fixture quality scores as if they belonged to the user strategy.
+
 ## Routing
 
 Deterministic routing prioritizes specific research intents before generic status routes:

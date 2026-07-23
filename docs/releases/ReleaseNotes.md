@@ -3,6 +3,14 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 110.1 Research Grounding Context Isolation
+
+Gaon now separates user-provided strategy conditions from fixture/default candidate metadata before producing Telegram research critique responses. Provider-backed tool synthesis receives sanitized research payloads, so default fixture parameters and regime metadata are not described as current user strategy values.
+
+Quality-score requests without an actual stored backtest-based result now return a Korean deterministic missing-data response and suggest running an actual data backtest first. No schema migration is included.
+
+Not included: live trading, broker orders, automatic Champion promotion, approval bypass, shell or SQL expansion, secret exposure, or private repository access.
+
 ## Hotfix Research Grounding and Telegram Routing
 
 Gaon now grounds Telegram research answers in verified safe-tool output and explicit user-provided facts. Strategy weakness, improvement, memory search, quality-score, data-quality, and backtest requests route to read-only safe tools before free-form synthesis.
