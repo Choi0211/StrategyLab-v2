@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -48,6 +48,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         27: _upgrade_v27_to_v28,
         28: _upgrade_v28_to_v29,
         29: _upgrade_v29_to_v30,
+        30: _upgrade_v30_to_v31,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -927,6 +928,86 @@ def _upgrade_v29_to_v30(connection: sqlite3.Connection) -> None:
             payload_json TEXT NOT NULL,
             PRIMARY KEY(report_id, simulation_id)
         );
+        """
+    )
+
+
+def _upgrade_v30_to_v31(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS research_memories (
+            memory_id TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL UNIQUE,
+            strategy_family TEXT NOT NULL,
+            market TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            final_status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            source_run_id TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_memories_scope
+            ON research_memories(strategy_family, market, timeframe, created_at);
+        CREATE INDEX IF NOT EXISTS idx_research_memories_status
+            ON research_memories(final_status, created_at);
+        CREATE TABLE IF NOT EXISTS strategy_lineage (
+            strategy_id TEXT PRIMARY KEY,
+            parent_strategy_id TEXT,
+            root_strategy_id TEXT NOT NULL,
+            generation INTEGER NOT NULL,
+            mutation_reason TEXT NOT NULL,
+            created_from_run_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_lineage_root
+            ON strategy_lineage(root_strategy_id, generation, strategy_id);
+        CREATE TABLE IF NOT EXISTS research_critiques (
+            critique_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_critiques_strategy
+            ON research_critiques(strategy_id, created_at);
+        CREATE TABLE IF NOT EXISTS research_iterations (
+            iteration_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            iteration_index INTEGER NOT NULL,
+            strategy_id TEXT NOT NULL,
+            quality_score REAL NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_iterations_run
+            ON research_iterations(run_id, iteration_index);
+        CREATE TABLE IF NOT EXISTS research_quality_scores (
+            score_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            score REAL NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_quality_scores_strategy
+            ON research_quality_scores(strategy_id, created_at);
+        CREATE TABLE IF NOT EXISTS research_concepts (
+            concept_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS research_concept_relationships (
+            relationship_id TEXT PRIMARY KEY,
+            source_concept_id TEXT NOT NULL,
+            relationship TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_concept_relationships_source
+            ON research_concept_relationships(source_concept_id, relationship);
         """
     )
 

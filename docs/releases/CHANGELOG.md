@@ -437,3 +437,11 @@
 
 - Made `long-response-release-check` repeatable on persistent SQLite databases by namespacing each check with a unique run id.
 - Preserved schema v30 and Hotfix 90.1 long-response behavior.
+
+# Sprint 91-100
+
+- Added Self-Improving Quant Researcher foundation with deterministic research critique, traceable improvement planning, bounded iteration, lineage tracking, research memory, knowledge relationships, novelty detection, quality scoring, tournaments, and autonomous research orchestration.
+- Added v31 runtime schema tables for research memories, lineage, critiques, iterations, quality scores, concepts, and concept relationships.
+- Added read-only safe tools: `research_memory_search`, `strategy_critique`, `strategy_quality_score`, `research_candidate_compare`, and `research_lineage`.
+- Added `research-critic-demo`, `research-memory-demo`, `research-iteration-demo`, `research-tournament-demo`, `autonomous-research-demo`, and `self-improving-research-release-check`.
+- Preserved safety boundaries: no source-code self-modification, no shell, no arbitrary SQL, no live order, no automatic Champion promotion, no approval bypass, and no private repository dependency.
