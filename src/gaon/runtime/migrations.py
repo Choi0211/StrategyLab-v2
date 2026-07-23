@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -49,6 +49,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         28: _upgrade_v28_to_v29,
         29: _upgrade_v29_to_v30,
         30: _upgrade_v30_to_v31,
+        31: _upgrade_v31_to_v32,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1008,6 +1009,68 @@ def _upgrade_v30_to_v31(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_research_concept_relationships_source
             ON research_concept_relationships(source_concept_id, relationship);
+        """
+    )
+
+
+def _upgrade_v31_to_v32(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS market_datasets (
+            dataset_id TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL,
+            symbols_json TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            checksum TEXT NOT NULL,
+            quality_status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_market_datasets_scope
+            ON market_datasets(source, timeframe, start_date, end_date);
+        CREATE INDEX IF NOT EXISTS idx_market_datasets_quality
+            ON market_datasets(quality_status, created_at);
+        CREATE TABLE IF NOT EXISTS strategy_specs (
+            spec_id TEXT PRIMARY KEY,
+            version INTEGER NOT NULL,
+            fingerprint TEXT NOT NULL UNIQUE,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS backtest_runs (
+            run_id TEXT PRIMARY KEY,
+            request_fingerprint TEXT NOT NULL UNIQUE,
+            strategy_fingerprint TEXT NOT NULL,
+            dataset_fingerprint TEXT NOT NULL,
+            engine_name TEXT NOT NULL,
+            engine_version TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_backtest_runs_repro
+            ON backtest_runs(strategy_fingerprint, dataset_fingerprint, engine_version);
+        CREATE TABLE IF NOT EXISTS real_backtest_results (
+            result_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source TEXT NOT NULL,
+            result_fingerprint TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_real_backtest_results_run
+            ON real_backtest_results(run_id, generated_at);
+        CREATE TABLE IF NOT EXISTS real_research_reports (
+            report_id TEXT PRIMARY KEY,
+            request_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_real_research_reports_generated
+            ON real_research_reports(generated_at, report_id);
         """
     )
 

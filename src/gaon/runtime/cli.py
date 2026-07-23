@@ -63,6 +63,20 @@ from gaon.research.self_improving import (
     fixture_candidate,
     fixture_candidates,
 )
+from gaon.research.real_research import (
+    BacktestDatasetReference,
+    BacktestExecutionAssumptions,
+    BacktestRequest,
+    BacktestStrategySpec,
+    DataQualityEngine,
+    DeterministicExternalBacktestAdapter,
+    FixtureMarketDataProvider,
+    RealResearchGateway,
+    RealResearchRequest,
+    SQLiteDatasetRegistry,
+    SQLiteRealResearchRepository,
+    turtle_strategy_spec,
+)
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
@@ -161,6 +175,31 @@ def main(argv: list[str] | None = None) -> int:
     autonomous_research_demo.add_argument("--json", action="store_true")
     self_improving_release = sub.add_parser("self-improving-research-release-check")
     self_improving_release.add_argument("--db", default=":memory:")
+    market_data_demo = sub.add_parser("market-data-demo")
+    market_data_demo.add_argument("--db", default=":memory:")
+    market_data_demo.add_argument("--symbol", default="005930")
+    market_data_demo.add_argument("--start", default="2026-07-01")
+    market_data_demo.add_argument("--end", default="2026-07-10")
+    market_data_demo.add_argument("--json", action="store_true")
+    data_quality_demo = sub.add_parser("data-quality-demo")
+    data_quality_demo.add_argument("--db", default=":memory:")
+    data_quality_demo.add_argument("--symbol", default="005930")
+    data_quality_demo.add_argument("--json", action="store_true")
+    backtest_contract_demo = sub.add_parser("backtest-contract-demo")
+    backtest_contract_demo.add_argument("--db", default=":memory:")
+    backtest_contract_demo.add_argument("--symbol", default="005930")
+    backtest_contract_demo.add_argument("--json", action="store_true")
+    external_backtest_demo = sub.add_parser("external-backtest-demo")
+    external_backtest_demo.add_argument("--db", default=":memory:")
+    external_backtest_demo.add_argument("--symbol", default="005930")
+    external_backtest_demo.add_argument("--json", action="store_true")
+    real_research_demo = sub.add_parser("real-research-demo")
+    real_research_demo.add_argument("--db", default=":memory:")
+    real_research_demo.add_argument("--symbol", default="005930")
+    real_research_demo.add_argument("--request-id", default=None)
+    real_research_demo.add_argument("--json", action="store_true")
+    real_research_release = sub.add_parser("real-research-integration-release-check")
+    real_research_release.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -897,6 +936,111 @@ def _run(args: argparse.Namespace) -> int:
                 "self-improving-research-release-check: PASS "
                 f"schema_version={store.status().schema_version} iterations={len(result.iterations)} "
                 f"quality={result.quality.total:.1f} tools={len(required_tools)}"
+            )
+        finally:
+            store.close()
+    elif args.command == "market-data-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            provider = FixtureMarketDataProvider()
+            dataset = provider.fetch_bars(args.symbol, start_date=args.start, end_date=args.end)
+            quality = provider.validate_dataset(dataset)
+            SQLiteDatasetRegistry(store._connection).put_dataset(dataset, quality)
+            if args.json:
+                print(_dumps_json(dataset.to_json()))
+            else:
+                print(f"market-data-demo: dataset={dataset.dataset_id} bars={len(dataset.bars)} fixture_backed={dataset.metadata.fixture_backed} quality={quality.status.value}")
+        finally:
+            store.close()
+    elif args.command == "data-quality-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            dataset = FixtureMarketDataProvider().fetch_bars(args.symbol, start_date="2026-07-01", end_date="2026-07-10")
+            report = DataQualityEngine().validate(dataset)
+            if args.json:
+                print(_dumps_json(report.to_json()))
+            else:
+                print(f"data-quality-demo: dataset={dataset.dataset_id} status={report.status.value} findings={len(report.findings)}")
+        finally:
+            store.close()
+    elif args.command == "backtest-contract-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            dataset = FixtureMarketDataProvider().fetch_bars(args.symbol, start_date="2026-07-01", end_date="2026-07-10")
+            spec = turtle_strategy_spec(args.symbol)
+            request = BacktestRequest(
+                f"backtest-contract-demo:{uuid4().hex}",
+                BacktestStrategySpec(spec),
+                BacktestDatasetReference(dataset.dataset_id, dataset.fingerprint),
+                BacktestExecutionAssumptions(0.00015, 0.0018, 0.0005),
+                _utc_now(),
+                "cli",
+            )
+            payload = {"strategy_spec": spec.to_json(), "request": request.to_json(), "fingerprint": request.fingerprint, "generated_python": False}
+            if args.json:
+                print(_dumps_json(payload))
+            else:
+                print(f"backtest-contract-demo: strategy={spec.spec_id} request_fingerprint={request.fingerprint[:16]}")
+        finally:
+            store.close()
+    elif args.command == "external-backtest-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            provider = FixtureMarketDataProvider()
+            dataset = provider.fetch_bars(args.symbol, start_date="2026-07-01", end_date="2026-07-10")
+            quality = provider.validate_dataset(dataset)
+            SQLiteDatasetRegistry(store._connection).put_dataset(dataset, quality)
+            spec = turtle_strategy_spec(args.symbol)
+            request = BacktestRequest(
+                f"external-backtest-demo:{uuid4().hex}",
+                BacktestStrategySpec(spec),
+                BacktestDatasetReference(dataset.dataset_id, dataset.fingerprint),
+                BacktestExecutionAssumptions(0.00015, 0.0018, 0.0005),
+                _utc_now(),
+                "cli",
+            )
+            result = DeterministicExternalBacktestAdapter().run(request, dataset)
+            SQLiteRealResearchRepository(store._connection).put_strategy_spec(spec, _utc_now())
+            SQLiteRealResearchRepository(store._connection).put_backtest(request, result)
+            if args.json:
+                print(_dumps_json(result.to_json()))
+            else:
+                print(f"external-backtest-demo: result={result.result_id} status={result.status.value} source={result.source.value} fixture_backed={result.provenance.get('fixture_backed')}")
+        finally:
+            store.close()
+    elif args.command == "real-research-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            request_id = args.request_id or f"real-research-demo:{uuid4().hex}"
+            report = RealResearchGateway(connection=store._connection).run(RealResearchRequest(request_id, args.symbol, "2026-07-01", "2026-07-10"), generated_at=_utc_now())
+            if args.json:
+                print(_dumps_json(report.to_json()))
+            else:
+                print(f"real-research-demo: report={report.report_id} dataset={report.dataset.dataset_id} result={report.backtest_result.status.value} quality={report.data_quality.status.value}")
+        finally:
+            store.close()
+    elif args.command == "real-research-integration-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            required_tools = {"market_data_status", "dataset_lookup", "data_quality_check", "backtest_strategy", "backtest_result", "compare_backtests"}
+            tool_names = {tool.name for tool in default_tool_registry(store._connection).list()}
+            if not required_tools.issubset(tool_names):
+                raise ConfigurationError("real research safe tools are not registered")
+            report = RealResearchGateway(connection=store._connection).run(RealResearchRequest(f"real-research-release-check:{uuid4().hex}", "005930", "2026-07-01", "2026-07-10"), generated_at=_utc_now())
+            if store.status().schema_version < 32:
+                raise ConfigurationError("real research schema was not migrated")
+            if report.backtest_result.status.value != "completed":
+                raise ConfigurationError("real research backtest did not complete")
+            if report.backtest_result.provenance.get("fixture_backed") is not True:
+                raise ConfigurationError("release check must clearly mark fixture-backed data")
+            if report.quality.get("total", -1) < 0 or report.quality.get("total", 101) > 100:
+                raise ConfigurationError("quality score out of range")
+            if report.comparison.changed_conditions != ("cost_assumptions",):
+                raise ConfigurationError("reproducibility comparison did not identify changed cost assumptions")
+            print(
+                "real-research-integration-release-check: PASS "
+                f"schema_version={store.status().schema_version} dataset={report.dataset.dataset_id} "
+                f"quality={report.data_quality.status.value} source={report.backtest_result.source.value} tools={len(required_tools)}"
             )
         finally:
             store.close()

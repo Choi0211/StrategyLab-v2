@@ -41,6 +41,7 @@ Included foundations:
 - Sprint 71-80 AI Quant Researcher foundation with fixture-backed KRX data, news/theme/flow analysis, candidate strategies, bounded backtests, evolution, and advisory reports
 - Sprint 81-90 AI Quant Scientist foundation with feature discovery/selection, walk-forward validation, Monte Carlo robustness, regime detection, meta strategy, portfolio allocation, ensemble decisions, explainability, and scientist reports
 - Sprint 91-100 Self-Improving Quant Researcher foundation with deterministic research critique, bounded improvement iteration, lineage, memory, knowledge relationships, novelty detection, quality scoring, tournaments, autonomous research orchestration, and read-only safe tools
+- Sprint 101-110 Real Market Backtest Integration foundation with versioned market data, provider contracts, data quality checks, dataset registry/cache, StrategySpec, external backtest JSON contracts, reproducibility comparison, and a fixture-backed Real Research Gateway
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
