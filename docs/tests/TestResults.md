@@ -1010,3 +1010,22 @@ Final local verification:
 - `feature-discovery-release-check`: PASS
 - `ai-scientist-release-check`: PASS
 - `git diff --check`: PASS
+
+# Sprint 91-100
+
+Final local verification:
+
+- full unit tests: PASS, 436 tests
+- full integration tests: PASS, 80 tests
+- targeted self-improving research unit tests: PASS, 13 tests
+- targeted self-improving research integration tests: PASS, 3 tests
+- `self-improving-research-release-check`: PASS, schema v31
+- `conversation-release-check`: PASS
+- `llm-agent-release-check`: PASS
+- `long-response-release-check`: PASS
+- `external-research-release-check`: PASS
+- `quant-research-release-check`: PASS
+- `feature-discovery-release-check`: PASS
+- `ai-scientist-release-check`: PASS
+- `scripts/verify_release.py`: PASS
+- `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only

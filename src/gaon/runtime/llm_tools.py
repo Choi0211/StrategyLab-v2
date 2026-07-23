@@ -14,6 +14,13 @@ from gaon.runtime.external_research import ExternalResearchTool, structured_data
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.research.quant_scientist import feature_discovery_payload
 from gaon.research.quant_research import KRXMarketDataTool
+from gaon.research.self_improving import (
+    SQLiteResearchMemoryRepository,
+    fixture_candidate,
+    research_candidate_compare_payload,
+    strategy_critique_payload,
+    strategy_quality_payload,
+)
 
 
 class ToolRiskLevel(str, Enum):
@@ -198,6 +205,26 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         ToolDefinition("feature_discovery", "Read fixture-backed quant features with source, trust, and freshness metadata.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol", "days")),
         lambda args: feature_discovery_payload(symbol=str(args.get("symbol", "KOSPI")), days=int(args.get("days", 60))),
     )
+    registry.register(
+        ToolDefinition("research_memory_search", "Search deterministic self-improving research memory records.", ToolRiskLevel.READ_ONLY, allowed_args=("strategy_family", "market", "timeframe", "query", "tag")),
+        lambda args: _research_memory_search(connection, args),
+    )
+    registry.register(
+        ToolDefinition("strategy_critique", "Critique a fixture strategy candidate without changing strategy state.", ToolRiskLevel.READ_ONLY, allowed_args=("scenario",)),
+        lambda args: strategy_critique_payload(str(args.get("scenario", "balanced"))),
+    )
+    registry.register(
+        ToolDefinition("strategy_quality_score", "Score a fixture strategy candidate across quality components.", ToolRiskLevel.READ_ONLY, allowed_args=("scenario",)),
+        lambda args: strategy_quality_payload(str(args.get("scenario", "balanced"))),
+    )
+    registry.register(
+        ToolDefinition("research_candidate_compare", "Rank fixture research candidates through the advisory tournament engine.", ToolRiskLevel.READ_ONLY, allowed_args=("top_n",)),
+        lambda args: research_candidate_compare_payload(int(args.get("top_n", 3))),
+    )
+    registry.register(
+        ToolDefinition("research_lineage", "Read strategy lineage records for a root strategy id.", ToolRiskLevel.READ_ONLY, allowed_args=("root_strategy_id",)),
+        lambda args: _research_lineage(connection, str(args.get("root_strategy_id", fixture_candidate().strategy_id))),
+    )
     return registry
 
 
@@ -230,6 +257,31 @@ def _v5_pipeline_history(connection: sqlite3.Connection, limit: int) -> dict[str
         (limit,),
     ).fetchall()
     return {"runs": [{"run_id": str(row[0]), "status": str(row[1]), "current_stage": str(row[2]), "updated_at": str(row[3])} for row in rows]}
+
+
+def _research_memory_search(connection: sqlite3.Connection, args: dict[str, object]) -> dict[str, object]:
+    repository = SQLiteResearchMemoryRepository(connection)
+    results = repository.search(
+        strategy_family=str(args["strategy_family"]) if "strategy_family" in args else None,
+        market=str(args["market"]) if "market" in args else None,
+        timeframe=str(args["timeframe"]) if "timeframe" in args else None,
+        query=str(args["query"]) if "query" in args else None,
+        tag=str(args["tag"]) if "tag" in args else None,
+    )
+    return {
+        "provider": "sqlite:research_memories",
+        "count": len(results),
+        "results": [item.to_json() for item in results[:10]],
+        "automatic_promotion": False,
+    }
+
+
+def _research_lineage(connection: sqlite3.Connection, root_strategy_id: str) -> dict[str, object]:
+    if len(root_strategy_id) > 160:
+        raise ToolSecurityError("root_strategy_id is too long")
+    repository = SQLiteResearchMemoryRepository(connection)
+    nodes = repository.lineage(root_strategy_id)
+    return {"provider": "sqlite:strategy_lineage", "root_strategy_id": root_strategy_id, "nodes": [item.to_json() for item in nodes], "automatic_promotion": False}
 
 
 def _validate_tool_name(name: str) -> None:

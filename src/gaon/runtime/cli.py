@@ -50,6 +50,19 @@ from gaon.runtime.v5_pipeline import GaonV5PipelineOrchestrator, GaonV5PipelineR
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
 from gaon.research.quant_scientist import AIScientistOrchestrator, SQLiteAIScientistRepository, feature_discovery_payload
 from gaon.research.quant_research import QuantResearchOrchestrator, SQLiteQuantResearchRepository
+from gaon.research.self_improving import (
+    AutonomousResearchOrchestrator,
+    AutonomousResearchRequest,
+    ResearchCritic,
+    ResearchIterationLoop,
+    ResearchQualityScorer,
+    ResearchTournamentRunner,
+    SQLiteResearchMemoryRepository,
+    StrategyImprovementPlanner,
+    build_memory_entry,
+    fixture_candidate,
+    fixture_candidates,
+)
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
@@ -126,6 +139,28 @@ def main(argv: list[str] | None = None) -> int:
     ai_scientist_demo.add_argument("--json", action="store_true")
     ai_scientist_release = sub.add_parser("ai-scientist-release-check")
     ai_scientist_release.add_argument("--db", default=":memory:")
+    research_critic_demo = sub.add_parser("research-critic-demo")
+    research_critic_demo.add_argument("--db", default=":memory:")
+    research_critic_demo.add_argument("--scenario", default="overfit")
+    research_critic_demo.add_argument("--json", action="store_true")
+    research_memory_demo = sub.add_parser("research-memory-demo")
+    research_memory_demo.add_argument("--db", default=":memory:")
+    research_memory_demo.add_argument("--json", action="store_true")
+    research_iteration_demo = sub.add_parser("research-iteration-demo")
+    research_iteration_demo.add_argument("--db", default=":memory:")
+    research_iteration_demo.add_argument("--max-iterations", type=int, default=3)
+    research_iteration_demo.add_argument("--json", action="store_true")
+    research_tournament_demo = sub.add_parser("research-tournament-demo")
+    research_tournament_demo.add_argument("--db", default=":memory:")
+    research_tournament_demo.add_argument("--top-n", type=int, default=3)
+    research_tournament_demo.add_argument("--json", action="store_true")
+    autonomous_research_demo = sub.add_parser("autonomous-research-demo")
+    autonomous_research_demo.add_argument("--db", default=":memory:")
+    autonomous_research_demo.add_argument("--request", default="Research a safer volume breakout strategy")
+    autonomous_research_demo.add_argument("--run-id", default=None)
+    autonomous_research_demo.add_argument("--json", action="store_true")
+    self_improving_release = sub.add_parser("self-improving-research-release-check")
+    self_improving_release.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -768,6 +803,101 @@ def _run(args: argparse.Namespace) -> int:
                     f"signal={report.ensemble.signal.value} "
                     f"robustness={report.monte_carlo.robustness_score:.3f}"
                 )
+        finally:
+            store.close()
+    elif args.command == "research-critic-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            candidate = fixture_candidate(args.scenario)
+            critique = ResearchCritic().evaluate(candidate, created_at=_utc_now())
+            plan = StrategyImprovementPlanner().plan(candidate, critique, created_at=_utc_now())
+            payload = {"candidate": candidate.to_json(), "critique": critique.to_json(), "improvement_plan": plan.to_json(), "automatic_promotion": False}
+            if args.json:
+                print(_dumps_json(payload))
+            else:
+                print(f"research-critic-demo: scenario={args.scenario} decision={critique.decision.value} findings={len(critique.findings)}")
+        finally:
+            store.close()
+    elif args.command == "research-memory-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            repository = SQLiteResearchMemoryRepository(store._connection)
+            candidate = fixture_candidate("balanced", strategy_id=f"memory-demo:{uuid4().hex}")
+            critique = ResearchCritic().evaluate(candidate, created_at=_utc_now())
+            plan = StrategyImprovementPlanner().plan(candidate, critique, created_at=_utc_now())
+            quality = ResearchQualityScorer().score(candidate, critique, created_at=_utc_now())
+            entry = build_memory_entry(candidate, critique, plan, quality, run_id=f"research-memory-demo:{uuid4().hex}", created_at=_utc_now())
+            repository.add_memory(entry)
+            results = repository.search(strategy_family=candidate.family, market=candidate.market, timeframe=candidate.timeframe)
+            payload = {"saved": entry.to_json(), "results": [item.to_json() for item in results], "automatic_promotion": False}
+            if args.json:
+                print(_dumps_json(payload))
+            else:
+                print(f"research-memory-demo: saved={entry.memory_id} results={len(results)}")
+        finally:
+            store.close()
+    elif args.command == "research-iteration-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = f"research-iteration-demo:{uuid4().hex}"
+            candidate = fixture_candidate("overfit", strategy_id=f"{run_id}:candidate")
+            final, critique, plan, quality, iterations = ResearchIterationLoop().run(candidate, run_id=run_id, max_iterations=args.max_iterations, created_at=_utc_now())
+            payload = {"run_id": run_id, "final_candidate": final.to_json(), "critique": critique.to_json(), "improvement_plan": plan.to_json(), "quality": quality.to_json(), "iterations": [item.to_json() for item in iterations], "automatic_promotion": False}
+            if args.json:
+                print(_dumps_json(payload))
+            else:
+                print(f"research-iteration-demo: iterations={len(iterations)} final={final.strategy_id} quality={quality.total:.1f}")
+        finally:
+            store.close()
+    elif args.command == "research-tournament-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            tournament = ResearchTournamentRunner().run(fixture_candidates(6), top_n=args.top_n, created_at=_utc_now())
+            payload = {"tournament": tournament.to_json(), "automatic_promotion": False}
+            if args.json:
+                print(_dumps_json(payload))
+            else:
+                print(f"research-tournament-demo: top={','.join(tournament.top_n)} rankings={len(tournament.rankings)}")
+        finally:
+            store.close()
+    elif args.command == "autonomous-research-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            request = AutonomousResearchRequest(
+                request_id=f"autonomous-research-request:{uuid4().hex}",
+                market="KRX",
+                timeframe="daily",
+                strategy_family="breakout",
+                hypothesis=args.request,
+            )
+            result = AutonomousResearchOrchestrator(SQLiteResearchMemoryRepository(store._connection)).run(request, run_id=args.run_id, created_at=_utc_now())
+            if args.json:
+                print(_dumps_json(result.to_json()))
+            else:
+                print(f"autonomous-research-demo: run_id={result.run_id} quality={result.quality.total:.1f} novelty={result.novelty.value} memory={result.memory_id or 'preserved'}")
+        finally:
+            store.close()
+    elif args.command == "self-improving-research-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            tool_names = {tool.name for tool in default_tool_registry(store._connection).list()}
+            required_tools = {"research_memory_search", "strategy_critique", "strategy_quality_score", "research_candidate_compare", "research_lineage"}
+            if not required_tools.issubset(tool_names):
+                raise ConfigurationError("self-improving research tools are not registered")
+            run_id = f"self-improving-release-check:{uuid4().hex}"
+            request = AutonomousResearchRequest(run_id, "KRX", "daily", "breakout", "Release-check volume breakout improvement")
+            result = AutonomousResearchOrchestrator(SQLiteResearchMemoryRepository(store._connection)).run(request, run_id=run_id, created_at=_utc_now())
+            if result.quality.total < 0 or result.quality.total > 100:
+                raise ConfigurationError("research quality score out of range")
+            if "automatic promotion" not in " ".join(result.warnings).casefold():
+                raise ConfigurationError("self-improving release check lost safety warning")
+            if store.status().schema_version < 31:
+                raise ConfigurationError("self-improving research schema was not migrated")
+            print(
+                "self-improving-research-release-check: PASS "
+                f"schema_version={store.status().schema_version} iterations={len(result.iterations)} "
+                f"quality={result.quality.total:.1f} tools={len(required_tools)}"
+            )
         finally:
             store.close()
     elif args.command == "backup":

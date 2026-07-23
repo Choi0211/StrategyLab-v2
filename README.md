@@ -40,6 +40,7 @@ Included foundations:
 - Sprint 61-70 External Strategy Research foundation with read-only external research tools, citation/freshness metadata, SSRF guards, bounded research planning, challenger experiments, fixture backtests, validation, Champion comparison, and advisory reports
 - Sprint 71-80 AI Quant Researcher foundation with fixture-backed KRX data, news/theme/flow analysis, candidate strategies, bounded backtests, evolution, and advisory reports
 - Sprint 81-90 AI Quant Scientist foundation with feature discovery/selection, walk-forward validation, Monte Carlo robustness, regime detection, meta strategy, portfolio allocation, ensemble decisions, explainability, and scientist reports
+- Sprint 91-100 Self-Improving Quant Researcher foundation with deterministic research critique, bounded improvement iteration, lineage, memory, knowledge relationships, novelty detection, quality scoring, tournaments, autonomous research orchestration, and read-only safe tools
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

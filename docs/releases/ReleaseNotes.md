@@ -608,3 +608,15 @@ provider fallback.
 invocation. Repeated checks against the same persistent runtime database no
 longer collide on `conversation_messages.message_id`, and schema v30 remains
 unchanged.
+
+# Sprint 91-100
+
+Gaon now has a Self-Improving Quant Researcher foundation. It can critique
+strategy research results, map findings into traceable improvement actions,
+iterate revised strategy candidates within a bounded loop, track lineage, store
+research memory, score quality, run a candidate tournament, and produce an
+autonomous research result.
+
+The release is deterministic and advisory. It does not modify Python code,
+shell out, run arbitrary SQL, change VPS configuration, place broker orders,
+promote Champions, bypass approvals, or mutate private MyMoneyGuard state.
