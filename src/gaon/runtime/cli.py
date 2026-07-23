@@ -39,7 +39,7 @@ from gaon.runtime.health import readiness
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_unverified_fixture_metrics
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
@@ -204,6 +204,9 @@ def main(argv: list[str] | None = None) -> int:
     research_grounding_release = sub.add_parser("research-grounding-release-check")
     research_grounding_release.add_argument("--db", default=":memory:")
     research_grounding_release.add_argument("--run-id", default=None)
+    research_context_release = sub.add_parser("research-context-isolation-release-check")
+    research_context_release.add_argument("--db", default=":memory:")
+    research_context_release.add_argument("--run-id", default=None)
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1084,6 +1087,42 @@ def _run(args: argparse.Namespace) -> int:
             if store.status().schema_version < 32:
                 raise ConfigurationError("research grounding release check requires schema v32")
             print(f"research-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} tools={len(routes)}")
+        finally:
+            store.close()
+    elif args.command == "research-context-isolation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            run_id = args.run_id or f"research-context-isolation-release-check:{uuid4().hex}"
+            brain = LLMConversationBrain(
+                GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic"),
+                store.conversations,
+                tool_executor=SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            strategy_text = (
+                "사용자 전략: 20일 고가 돌파, 종가 > MA20 > MA60, 거래량 >= 20일 평균, "
+                "손절 -5%, 10일 저점 이탈 청산. 이 전략 약점과 리스크 분석해줘"
+            )
+            critique = brain.respond(LLMConversationRequest(f"{run_id}:critique", "cli", "cli", strategy_text, _utc_now(), f"{run_id}:message:critique"))
+            quality = brain.respond(LLMConversationRequest(f"{run_id}:quality", "cli", "cli", "이 전략 연구 품질 점수 알려줘", _utc_now(), f"{run_id}:message:quality"))
+            memory = brain.respond(LLMConversationRequest(f"{run_id}:memory", "cli", "cli", "비슷한 전략 연구했어?", _utc_now(), f"{run_id}:message:memory"))
+            combined = "\n".join((critique.text, quality.text, memory.text))
+            if critique.tool_calls != ("strategy_critique",):
+                raise ConfigurationError("research context isolation failed to route strategy critique")
+            if contains_fixture_leakage(combined) or contains_unverified_fixture_metrics(critique.text):
+                raise ConfigurationError("research context isolation leaked fixture candidate fields")
+            for expected in ("20일 고가 돌파", "종가 > MA20 > MA60", "거래량 >= 20일 평균", "손절 -5%", "10일 저점 이탈 청산"):
+                if expected not in critique.text:
+                    raise ConfigurationError("research context isolation lost user-provided strategy condition")
+            if "실제 백테스트 기반 연구 품질 점수는 저장되어 있지 않습니다" not in quality.text:
+                raise ConfigurationError("missing quality score fallback was not Korean and deterministic")
+            if "찾지 못했습니다" not in memory.text or "접근 권한" in memory.text or "access" in memory.text.casefold():
+                raise ConfigurationError("memory empty-state wording regressed")
+            if store.status().schema_version < 32:
+                raise ConfigurationError("research context isolation release check requires schema v32")
+            print(f"research-context-isolation-release-check: PASS schema_version={store.status().schema_version} run_id={run_id}")
         finally:
             store.close()
     elif args.command == "backup":

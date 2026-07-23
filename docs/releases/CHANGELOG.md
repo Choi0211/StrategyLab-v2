@@ -1,5 +1,12 @@
 # Changelog
 
+## Hotfix 110.1 Research Grounding Context Isolation
+
+- Isolated user-provided strategy conditions from fixture/default strategy metadata in research critique responses.
+- Sanitized provider tool-result payloads so fixture candidate parameters, metrics, and regime metadata are not exposed as current user strategy values.
+- Added Korean deterministic missing-data UX for quality-score requests without stored actual backtest quality results.
+- Added repeatable `research-context-isolation-release-check`.
+
 ## Hotfix Research Grounding and Telegram Routing
 
 - Grounded research responses in user input, safe-tool output, persisted memory, fixtures, external backtest payloads, and dataset metadata.

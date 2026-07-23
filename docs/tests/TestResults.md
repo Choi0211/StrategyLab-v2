@@ -2,6 +2,19 @@
 
 Status: Passed
 
+## Hotfix 110.1 Research Grounding Context Isolation
+
+- Unit: `tests.unit.test_research_grounding`
+  - user strategy context remains isolated from fixture/default candidate fields
+  - provider tool-result payloads exclude fixture parameters, fixture metrics, and regime metadata
+  - `1.5x`, `max_risk_pct=1.0`, and `regime_tags` leakage fails tests
+  - quality-score missing-data fallback is deterministic Korean text
+- Integration: `tests.integration.test_research_context_isolation_release_check`
+  - `research-context-isolation-release-check` runs three times on one persistent SQLite DB
+  - generated conversation message IDs remain unique
+  - schema version remains unchanged
+- CLI release check: `python -m gaon.runtime.cli research-context-isolation-release-check --db <db>`
+
 ## Hotfix Research Grounding and Telegram Routing
 
 - Unit: `tests.unit.test_research_grounding`

@@ -18,7 +18,7 @@ from gaon.runtime.long_response import continuation_prompt, merge_response_parts
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_unverified_fixture_metrics, format_grounded_tool_response, grounded_system_policy, is_research_tool
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, format_grounded_tool_response, grounded_system_policy, is_research_tool, sanitize_research_tool_output
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
@@ -476,7 +476,8 @@ class LLMConversationBrain:
         for call in selected:
             result = self._tool_executor.execute(ToolRequest(call.name, call.arguments, request.user_ref, request.received_at))
             self._record_tool_result(request.session_id, result, request.received_at)
-            results.append(AssistantToolResult(call.call_id, call.name, {"status": result.status, "output": result.output, "warnings": list(result.warnings)}))
+            output = sanitize_research_tool_output(call.name, result.output, request.text) if result.status == "success" and is_research_tool(call.name) else result.output
+            results.append(AssistantToolResult(call.call_id, call.name, {"status": result.status, "output": output, "warnings": list(result.warnings)}))
             if result.status == "success":
                 executed.append(call.name)
         if len(provider_response.tool_calls) > max_calls:
@@ -509,7 +510,7 @@ class LLMConversationBrain:
         if final.truncated:
             final = self._continue_provider_response(provider, request, intent, final, _dedupe((*references, *(f"tool:{name}" for name in executed))))
         text = final.text or _format_multi_tool_response(tuple(results))
-        if any(is_research_tool(result.name) for result in results) and contains_unverified_fixture_metrics(text):
+        if any(is_research_tool(result.name) for result in results) and (contains_unverified_fixture_metrics(text) or contains_fixture_leakage(text)):
             text = _format_multi_tool_response(tuple(results))
             warnings = (*warnings, "provider research grounding fallback")
         return text, "provider_tool_call", _dedupe((*warnings, *final.warnings)), _dedupe((*references, *final.references, *(f"tool:{name}" for name in executed))), final.provider_name, tuple(executed)
@@ -566,7 +567,7 @@ class LLMConversationBrain:
         self._record_tool_result(request.session_id, result, request.received_at)
         if result.status != "success":
             return persona_text(Intent.UNKNOWN), "tool_denied", _dedupe((*warnings, *result.warnings)), references, "deterministic", ()
-        return _format_tool_response(tool_name, result.output), "tool_read_only", _dedupe(warnings), _dedupe((*references, f"tool:{tool_name}")), "deterministic", (tool_name,)
+        return _format_tool_response(tool_name, result.output, request.text), "tool_read_only", _dedupe(warnings), _dedupe((*references, f"tool:{tool_name}")), "deterministic", (tool_name,)
 
     def _try_follow_up_tool(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_result_repository is None or self._tool_executor is None:
@@ -818,8 +819,8 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
     return {}
 
 
-def _format_tool_response(tool_name: str, output: dict[str, object]) -> str:
-    grounded = format_grounded_tool_response(tool_name, output)
+def _format_tool_response(tool_name: str, output: dict[str, object], user_text: str = "") -> str:
+    grounded = format_grounded_tool_response(tool_name, output, user_text)
     if grounded is not None:
         return grounded
     if tool_name == "champion_status":
