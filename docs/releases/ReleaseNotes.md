@@ -749,3 +749,21 @@ tries to fabricate `5.32%`, `1.77%`, `MDD 8`, `거래 횟수 4회`, `RSI(14) 30`
 `MA15/MA90`, and `1.5x`. The final Telegram response must instead report the
 authoritative structured result, including `trade_count=3`, `fixture_backed=false`,
 and `provider=real:yahoo-chart`.
+
+# Hotfix 120.5
+
+Telegram research failures are now classified before they reach the user. A
+market data outage, data quality blocker, backtest execution failure, generic
+tool failure, actual provider timeout, and unexpected internal exception each
+produce a distinct Korean response. Only an actual provider timeout uses the
+local LLM delay message.
+
+The Telegram agent records server-side traceback through `logger.exception`
+with bounded metadata (`error_type`, `failure_stage`, `route`) and increments
+`gaon_telegram_conversation_failures_total` with `error_type` and
+`failure_stage`. It does not log bot tokens, prompts, chat payloads, or secrets.
+The Telegram response does not expose Python exception text or stack traces.
+
+Authoritative `krx_real_research` failures remain fail-closed. If market data
+or backtest execution fails, Gaon returns the classified error message and does
+not ask the provider to invent a replacement research report.

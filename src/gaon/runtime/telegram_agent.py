@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import sqlite3
 
 from gaon.runtime.assistant_provider import AssistantProvider
@@ -19,8 +20,11 @@ from gaon.runtime.llm_conversation import (
 )
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
+from gaon.runtime.research_failures import classify_exception, warning_for_failure
 from gaon.runtime.responses import ResponseAction
 from gaon.runtime.intents import Intent, parse_intent
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -95,19 +99,24 @@ class TelegramConversationAgent:
                 )
             )
         except Exception as exc:  # noqa: BLE001 - Telegram must return a visible fallback.
-            self._metrics.increment("gaon_telegram_conversation_failures_total", error_type=exc.__class__.__name__)
+            failure = classify_exception(exc)
+            self._metrics.increment("gaon_telegram_conversation_failures_total", error_type=failure.error_type, failure_stage=failure.stage)
+            logger.exception(
+                "telegram conversation failed",
+                extra={"error_type": failure.error_type, "failure_stage": failure.stage, "route": "telegram_conversation"},
+            )
             return ConversationResponse(
                 response_id=f"telegram-fallback:{message.message_id}",
                 conversation_id=message.conversation_id,
-                text="현재 로컬 LLM 응답이 지연되고 있습니다, 영하님. 잠시 후 다시 시도해 주세요.",
+                text=failure.user_message,
                 intent=parse_intent(message.text) if message.text else Intent.UNKNOWN,
                 references=(),
-                warnings=(f"conversation fallback: {exc.__class__.__name__}",),
+                warnings=(warning_for_failure(failure),),
                 actions=(ResponseAction("fallback"),),
                 approval_required=False,
                 generated_at=message.received_at,
-                route="fallback",
-                provider_metadata={"provider": "deterministic", "path": "telegram_conversation_fallback"},
+                route=f"failure_{failure.stage}",
+                provider_metadata={"provider": "deterministic", "path": "telegram_conversation_failure", "failure_stage": failure.stage, "error_type": failure.error_type},
             )
         self._links.resolve(message.conversation_id, now=message.received_at)
         return _to_conversation_response(response, message)
