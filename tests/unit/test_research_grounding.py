@@ -16,6 +16,7 @@ from gaon.runtime.research_grounding import (
     format_grounded_tool_response,
     normalize_final_response,
     sanitize_research_tool_output,
+    strict_real_research_grounding_violations,
 )
 
 
@@ -205,7 +206,7 @@ class ResearchGroundingTests(unittest.TestCase):
             assistant_provider=_StrictFabricatingProvider(),
         )
 
-        response = brain.respond(_request("삼성전자 실제 데이터로 백테스트하고 개선 후보까지 비교해줘", "strict-real"))
+        response = brain.respond(_request("provider tool-result roundtrip strict grounding regression check", "strict-real"))
 
         self.assertEqual(response.tool_calls, ("krx_real_research",))
         self.assertIn("provider strict real research grounding fallback", response.warnings)
@@ -214,6 +215,27 @@ class ResearchGroundingTests(unittest.TestCase):
         self.assertNotIn("MDD=8", response.text)
         self.assertNotIn("RSI 20", response.text)
         self.assertTrue(contains_ungrounded_real_research_claim("trade_count=4 MDD=8 RSI 20", payload))
+
+    def test_production_real_research_phrase_routes_to_strict_tool(self) -> None:
+        text = (
+            "가온아 삼성전자 실제 데이터로 아래 전략을 백테스트하고 약점을 분석한 뒤 개선 후보까지 비교해줘.\n\n"
+            "20일 고가 돌파\n종가 > MA20 > MA60\n거래량 20일 평균 이상\n손절 -5%\n10일 저점 이탈 청산"
+        )
+
+        self.assertEqual(route_read_only_tool(text), "krx_real_research")
+
+    def test_strict_real_research_validator_detects_provider_fabricated_metrics(self) -> None:
+        payload = _strict_real_payload()
+        provider_text = (
+            "총 수익률 5.32%, 10일 기간, 평균 거래 수익률 1.77%, MDD 8%, PF 1.42, 거래 횟수 4회입니다. "
+            "-3% 손절, 5% 익절, RSI(14) 30, MA15/MA90, 거래량 평균 * 1.5를 추천합니다."
+        )
+
+        violations = strict_real_research_grounding_violations(provider_text, payload)
+
+        self.assertTrue(any(item.startswith("trade_count_mismatch:4!=") for item in violations))
+        self.assertTrue(any("5.32%" in item for item in violations))
+        self.assertTrue(any("RSI(14) 30" in item for item in violations))
 
 
 class _FabricatingToolProvider:

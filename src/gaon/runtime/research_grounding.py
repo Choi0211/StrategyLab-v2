@@ -214,6 +214,56 @@ def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]
     return any(token in text and token not in allowed for token in suspicious)
 
 
+def strict_real_research_grounding_violations(text: str, output: dict[str, object]) -> tuple[str, ...]:
+    """Return fail-closed grounding violations for user-facing real research text."""
+    allowed = _strict_real_research_allowed_tokens(output)
+    suspicious = (
+        "trade_count=4",
+        "거래 4",
+        "거래 횟수 4",
+        "4회",
+        "win=2",
+        "loss=2",
+        "평균 거래 수익률 1.77",
+        "평균 수익률 1.33",
+        "average return=1.33",
+        "5.32%",
+        "1.77%",
+        "MDD=8",
+        "MDD 8",
+        "MDD 8%",
+        "fixed risk=1.0",
+        "risk 1.0",
+        "daily rebalance",
+        "0.5%",
+        "MDD 4",
+        "take profit 3",
+        "RSI 20",
+        "RSI 30",
+        "RSI(14) 30",
+        "MA15",
+        "MA90",
+        "volume 1.5",
+        "volume_multiplier",
+        "1.5x",
+        "-3%",
+        "5% 익절",
+        "10일 기간",
+        "10-day",
+    )
+    violations = [f"ungrounded_token:{token}" for token in suspicious if token in text and token not in allowed]
+    authoritative_trade_counts = _authoritative_trade_counts(output)
+    if authoritative_trade_counts:
+        for reported in _reported_trade_counts(text):
+            if reported not in authoritative_trade_counts:
+                expected = "/".join(str(value) for value in sorted(authoritative_trade_counts))
+                violations.append(f"trade_count_mismatch:{reported}!={expected}")
+    hypothesis = _section_after(text, "HYPOTHESIS")
+    if hypothesis and _contains_performance_number(hypothesis):
+        violations.append("hypothesis_contains_performance_metric")
+    return tuple(dict.fromkeys(violations))
+
+
 def _format_memory(output: dict[str, object]) -> str:
     count = int(output.get("count", 0) or 0)
     if count <= 0:
@@ -536,6 +586,56 @@ def _strict_real_research_allowed_tokens(output: dict[str, object]) -> set[str]:
     tokens = set(re.findall(r"\d+(?:\.\d+)?%?", text))
     tokens.update(_quality_finding_dates(_as_dict(output.get("quality")), "provider_gap"))
     return tokens
+
+
+def _reported_trade_counts(text: str) -> tuple[int, ...]:
+    patterns = (
+        r"trade_count\s*=\s*(\d+)",
+        r"거래\s*횟수\s*(\d+)\s*회",
+        r"거래\s*(\d+)\s*회",
+    )
+    values: list[int] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            values.append(int(match.group(1)))
+    return tuple(values)
+
+
+def _authoritative_trade_counts(output: dict[str, object]) -> set[int]:
+    counts: set[int] = set()
+
+    def add(value: object) -> None:
+        if value is None:
+            return
+        try:
+            counts.add(int(float(str(value))))
+        except ValueError:
+            return
+
+    backtest = _as_dict(output.get("backtest"))
+    add(_as_dict(backtest.get("metrics")).get("trade_count"))
+    for candidate in _as_list(output.get("candidates")):
+        item = _as_dict(candidate)
+        result = _as_dict(item.get("backtest_result"))
+        add(_as_dict(result.get("metrics")).get("trade_count"))
+    comparison = _as_dict(output.get("comparison"))
+    for row in _as_list(comparison.get("rows")):
+        add(_as_dict(row).get("trade_count"))
+    return counts
+
+
+def _section_after(text: str, marker: str) -> str:
+    index = text.find(marker)
+    if index < 0:
+        return ""
+    tail = text[index + len(marker):]
+    next_section = tail.find("[")
+    return tail if next_section < 0 else tail[:next_section]
+
+
+def _contains_performance_number(text: str) -> bool:
+    metric_words = ("수익", "손실", "MDD", "trade_count", "win_rate", "profit", "return")
+    return any(word in text for word in metric_words) and bool(re.search(r"\d+(?:\.\d+)?%?", text))
 
 
 def _safe_critique(value: object) -> dict[str, object]:
