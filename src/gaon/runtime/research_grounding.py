@@ -233,7 +233,9 @@ def _format_strategy_critique(output: dict[str, object], user_text: str) -> str:
         if isinstance(actions, list) and actions:
             for action in actions[:4]:
                 if isinstance(action, dict):
-                    lines.append(f"- {_ko(action.get('description', '\uac80\uc99d \uc870\uac74\uc744 \ubcf4\uc644\ud569\ub2c8\ub2e4.'))}")
+                    default_description = "\uac80\uc99d \uc870\uac74\uc744 \ubcf4\uc644\ud569\ub2c8\ub2e4."
+                    description = action.get("description", default_description)
+                    lines.append(f"- {_ko(description)}")
     if lines[-1] == "\uac00\uc124/\uac1c\uc120 \uc81c\uc548:":
         lines.append("- \uc2e4\uc81c \ub370\uc774\ud130 \ubc31\ud14c\uc2a4\ud2b8, \uc6cc\ud06c\ud3ec\uc6cc\ub4dc, \ube44\uc6a9 \uac00\uc815 \uac80\uc99d\uc744 \uba3c\uc800 \uc5f0\uacb0\ud558\ub294 \uac83\uc774 \uc548\uc804\ud569\ub2c8\ub2e4.")
     lines.append("fixture\uc758 \uae30\ubcf8 \ud30c\ub77c\ubbf8\ud130\ub098 regime \ud0dc\uadf8\ub97c \ud604\uc7ac \uc0ac\uc6a9\uc790 \uc804\ub7b5\uc758 \uac12\ucc98\ub7fc \uc0ac\uc6a9\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.")
