@@ -13,8 +13,12 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 import hashlib
 import json
+import os
 import re
 import sqlite3
+from typing import Callable, Protocol
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from gaon.research.real_research import (
@@ -32,6 +36,8 @@ from gaon.research.self_improving import ResearchMemoryEntry, SQLiteResearchMemo
 
 KRX_REAL_PIPELINE_SCHEMA_VERSION = 1
 DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+YAHOO_CHART_ENDPOINT = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+HttpOpener = Callable[[Request, float], object]
 
 
 class FieldProvenance(str, Enum):
@@ -294,6 +300,12 @@ class RealAutonomousResearchReport:
         }
 
 
+class KRXHistoricalDataProvider(Protocol):
+    source: str
+
+    def fetch_bars(self, symbol: str, *, start_date: str, end_date: str, timeframe: str = "daily") -> MarketDataset: ...
+
+
 class KRXRealMarketDataProvider:
     """Public-data adapter boundary.
 
@@ -306,6 +318,47 @@ class KRXRealMarketDataProvider:
 
     def fetch_bars(self, symbol: str, *, start_date: str, end_date: str, timeframe: str = "daily") -> MarketDataset:
         raise RealMarketDataUnavailable("real_data_unavailable: configure an approved public KRX fetcher")
+
+
+class YahooKRXHistoricalDataProvider:
+    """Public historical OHLCV provider for KRX-listed symbols.
+
+    Yahoo's chart endpoint is used as a free public historical-data source. The
+    provider is explicit about provenance and never falls back to fixtures.
+    """
+
+    source = "real:yahoo-chart"
+
+    def __init__(self, *, opener: HttpOpener | None = None, timeout_seconds: float = 20.0) -> None:
+        self._opener = opener or _default_urlopen
+        self._timeout = timeout_seconds
+
+    def fetch_bars(self, symbol: str, *, start_date: str, end_date: str, timeframe: str = "daily") -> MarketDataset:
+        _validate_date(start_date)
+        _validate_date(end_date)
+        if timeframe != "daily":
+            raise RealMarketDataUnavailable("real_data_unavailable: only daily timeframe is supported")
+        yahoo_symbol = _to_yahoo_symbol(symbol)
+        period1 = int(datetime.fromisoformat(start_date).replace(tzinfo=UTC).timestamp())
+        period2 = int((datetime.fromisoformat(end_date) + timedelta(days=1)).replace(tzinfo=UTC).timestamp())
+        query = urlencode({"period1": period1, "period2": period2, "interval": "1d", "events": "history", "includeAdjustedClose": "true"})
+        url = f"{YAHOO_CHART_ENDPOINT.format(symbol=yahoo_symbol)}?{query}"
+        request = Request(url, headers={"User-Agent": "StrategyLab-v2 Gaon research data check"})
+        try:
+            response = self._opener(request, self._timeout)
+            raw = response.read().decode("utf-8")
+            payload = json.loads(raw)
+        except Exception as exc:  # noqa: BLE001 - converted to explicit provider state.
+            raise RealMarketDataUnavailable(f"real_data_unavailable: {exc.__class__.__name__}") from exc
+        bars = _parse_yahoo_chart_payload(payload, symbol.upper())
+        if not bars:
+            raise RealMarketDataUnavailable("real_data_unavailable: provider returned no usable bars")
+        filtered = tuple(bar for bar in bars if start_date <= bar.timestamp <= end_date)
+        if not filtered:
+            raise RealMarketDataUnavailable("real_data_unavailable: no bars in requested period")
+        metadata = MarketDataMetadata(self.source, "KOSPI" if yahoo_symbol.endswith(".KS") else "KOSDAQ", timeframe, filtered[0].timestamp, filtered[-1].timestamp, True, utc_now(), False)
+        dataset_id = f"dataset:real:{self.source}:{symbol.upper()}:{timeframe}:{filtered[0].timestamp}:{filtered[-1].timestamp}"
+        return MarketDataset(dataset_id, (MarketSymbol(symbol.upper(), symbol.upper(), metadata.market),), filtered, metadata)
 
 
 class RealMarketDataUnavailable(RuntimeError):
@@ -341,7 +394,7 @@ class KRXFixtureMarketDataProvider:
 
 
 class KRXDatasetBuilder:
-    def __init__(self, connection: sqlite3.Connection | None = None, provider: KRXFixtureMarketDataProvider | KRXRealMarketDataProvider | None = None) -> None:
+    def __init__(self, connection: sqlite3.Connection | None = None, provider: KRXHistoricalDataProvider | None = None) -> None:
         self._connection = connection
         self._provider = provider or KRXFixtureMarketDataProvider()
 
@@ -543,7 +596,7 @@ class ImprovementCandidateGenerator:
 
 
 class RealAutonomousResearchPipeline:
-    def __init__(self, connection: sqlite3.Connection | None = None, provider: KRXFixtureMarketDataProvider | KRXRealMarketDataProvider | None = None) -> None:
+    def __init__(self, connection: sqlite3.Connection | None = None, provider: KRXHistoricalDataProvider | None = None) -> None:
         self._connection = connection
         self._provider = provider or KRXFixtureMarketDataProvider()
 
@@ -609,8 +662,45 @@ class RealAutonomousResearchPipeline:
 
 
 def krx_real_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930") -> dict[str, object]:
-    report = RealAutonomousResearchPipeline(connection).run(request_text, symbol=symbol)
+    report = RealAutonomousResearchPipeline(connection, build_market_data_provider_from_env(os.environ)).run(request_text, symbol=symbol)
     return report.to_json()
+
+
+def build_market_data_provider_from_env(env: dict[str, str]) -> KRXHistoricalDataProvider:
+    enabled = env.get("GAON_REAL_MARKET_DATA_ENABLED", "").strip().casefold() in {"1", "true", "yes", "on"}
+    provider = env.get("GAON_MARKET_DATA_PROVIDER", "fixture").strip().casefold()
+    timeout = float(env.get("GAON_MARKET_DATA_TIMEOUT_SECONDS", "20"))
+    if not enabled:
+        return KRXFixtureMarketDataProvider()
+    if provider in {"yahoo", "yahoo-chart", "yahoo_krx"}:
+        return YahooKRXHistoricalDataProvider(timeout_seconds=timeout)
+    raise RealMarketDataUnavailable(f"real_data_unavailable: unsupported provider {provider}")
+
+
+def real_krx_data_release_check(connection: sqlite3.Connection, *, symbol: str, start_date: str, end_date: str, provider: KRXHistoricalDataProvider) -> dict[str, object]:
+    dataset, quality, _inserted = KRXDatasetBuilder(connection, provider).build(symbol, start_date=start_date, end_date=end_date)
+    if dataset.metadata.fixture_backed:
+        raise RealMarketDataUnavailable("real_data_unavailable: release check requires source=real")
+    if quality.status is not DataQualityStatus.PASS:
+        raise RealMarketDataUnavailable(f"real_data_unavailable: quality={quality.status.value}")
+    spec = UserStrategyParser().parse("20-day breakout close > MA20 > MA60 volume >= volume MA20 stop -5% 10-day low exit", symbol=symbol)
+    assumptions = default_execution_assumptions()
+    result = RuleBasedBacktestEngine().run(f"real-krx-data-release-check:{uuid4().hex}", spec, dataset, assumptions)
+    validation = WalkForwardValidator().validate(spec, dataset, assumptions, run_id=result.run_id)
+    return {
+        "schema_version": 33,
+        "source": result.source.value,
+        "fixture_backed": dataset.metadata.fixture_backed,
+        "provider": dataset.metadata.source,
+        "symbol": symbol.upper(),
+        "start_date": dataset.metadata.start_date,
+        "end_date": dataset.metadata.end_date,
+        "rows": len(dataset.bars),
+        "quality": quality.status.value,
+        "trades": result.metrics.trade_count,
+        "metrics": result.metrics.to_json(),
+        "validation": validation.passed,
+    }
 
 
 def _compare_candidates(original: RealBacktestResult, candidates: tuple[ImprovementCandidate, ...]) -> CandidateComparison:
@@ -693,6 +783,60 @@ def _build_korean_report(request_text: str, dataset: MarketDataset, quality: Dat
 def _empty_result(run_id: str, strategy: CanonicalStrategySpec, dataset: MarketDataset, assumptions: BacktestExecutionAssumptionSet, status: str, warnings: tuple[str, ...], at: str) -> RealBacktestResult:
     metrics = RealPerformanceMetrics(0.0, None, 0.0, None, None, None, 0, None, None, None, None, 0.0, float(assumptions.initial_capital.value), None, 0)
     return RealBacktestResult(f"krx-real-backtest-result:{run_id}", run_id, status, MarketDataAvailability.FIXTURE if dataset.metadata.fixture_backed else MarketDataAvailability.REAL, strategy, dataset.dataset_id, dataset.fingerprint, assumptions, metrics, (), (), warnings, at)
+
+
+def _parse_yahoo_chart_payload(payload: dict[str, object], symbol: str) -> tuple[MarketBar, ...]:
+    chart = payload.get("chart")
+    if not isinstance(chart, dict):
+        raise ValueError("missing chart payload")
+    error = chart.get("error")
+    if error:
+        raise ValueError("provider returned chart error")
+    results = chart.get("result")
+    if not isinstance(results, list) or not results:
+        return ()
+    result = results[0]
+    if not isinstance(result, dict):
+        return ()
+    timestamps = result.get("timestamp")
+    indicators = result.get("indicators")
+    if not isinstance(timestamps, list) or not isinstance(indicators, dict):
+        return ()
+    quotes = indicators.get("quote")
+    if not isinstance(quotes, list) or not quotes or not isinstance(quotes[0], dict):
+        return ()
+    quote = quotes[0]
+    opens = quote.get("open", [])
+    highs = quote.get("high", [])
+    lows = quote.get("low", [])
+    closes = quote.get("close", [])
+    volumes = quote.get("volume", [])
+    bars: list[MarketBar] = []
+    for index, timestamp in enumerate(timestamps):
+        try:
+            open_ = float(opens[index])
+            high = float(highs[index])
+            low = float(lows[index])
+            close = float(closes[index])
+            volume = int(volumes[index] or 0)
+        except (TypeError, ValueError, IndexError):
+            continue
+        day = datetime.fromtimestamp(int(timestamp), UTC).date().isoformat()
+        bars.append(MarketBar(day, symbol, open_, high, low, close, volume, int(close * volume)))
+    return tuple(sorted(bars, key=lambda bar: bar.timestamp))
+
+
+def _to_yahoo_symbol(symbol: str) -> str:
+    upper = symbol.upper().strip()
+    if upper.endswith((".KS", ".KQ")):
+        return upper
+    if upper.startswith("KQ:"):
+        return f"{upper[3:]}.KQ"
+    return f"{upper}.KS"
+
+
+def _default_urlopen(request: Request, timeout: float) -> object:
+    return urlopen(request, timeout=timeout)
 
 
 def _date_range(start: str, end: str) -> list[str]:

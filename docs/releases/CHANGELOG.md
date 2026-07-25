@@ -1,5 +1,13 @@
 # Changelog
 
+## Real KRX Data Activation
+
+- Added `YahooKRXHistoricalDataProvider` for free public KRX-listed daily OHLCV history.
+- Added explicit env gates: `GAON_REAL_MARKET_DATA_ENABLED`, `GAON_MARKET_DATA_PROVIDER`, and `GAON_MARKET_DATA_TIMEOUT_SECONDS`.
+- Added production-only `real-krx-data-release-check`.
+- Updated `krx_real_research` safe tool and `krx-real-research-demo` to use the configured provider while preserving fixture default behavior for CI.
+- Preserved fail-closed behavior: provider failure returns `real_data_unavailable` and does not fall back to fixture.
+
 ## Sprint 111-120 - KRX Real Research Pipeline
 
 - Added KRX public-data provider boundary and explicit fixture/real source separation.

@@ -47,6 +47,9 @@ class GaonRuntimeConfig:
     paid_provider_enabled: bool = False
     execution_mode: str = "disabled"
     live_trading_enabled: bool = False
+    real_market_data_enabled: bool = False
+    market_data_provider: str = "fixture"
+    market_data_timeout_seconds: float = 20.0
 
     def __post_init__(self) -> None:
         validate_mode(self.mode)
@@ -87,6 +90,10 @@ class GaonRuntimeConfig:
             raise ConfigurationError("execution_mode must be disabled, paper, or live")
         if self.live_trading_enabled and self.execution_mode != "live":
             raise ConfigurationError("live trading can only be enabled when GAON_EXECUTION_MODE=live")
+        if self.real_market_data_enabled and self.market_data_provider not in {"yahoo", "yahoo-chart", "yahoo_krx"}:
+            raise ConfigurationError("real market data requires GAON_MARKET_DATA_PROVIDER=yahoo-chart")
+        if self.market_data_timeout_seconds < 1 or self.market_data_timeout_seconds > 120:
+            raise ConfigurationError("market_data_timeout_seconds must be between 1 and 120")
 
     def __repr__(self) -> str:
         return (
@@ -100,7 +107,8 @@ class GaonRuntimeConfig:
             f"assistant_enabled={self.assistant_enabled!r}, assistant_provider={self.assistant_provider!r}, "
             f"assistant_api_key={mask_secret(self.assistant_api_key)!r}, "
             f"free_only_mode={self.free_only_mode!r}, paid_provider_enabled={self.paid_provider_enabled!r}, "
-            f"execution_mode={self.execution_mode!r}, live_trading_enabled={self.live_trading_enabled!r})"
+            f"execution_mode={self.execution_mode!r}, live_trading_enabled={self.live_trading_enabled!r}, "
+            f"real_market_data_enabled={self.real_market_data_enabled!r}, market_data_provider={self.market_data_provider!r})"
         )
 
 
@@ -137,6 +145,9 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         paid_provider_enabled=parse_bool(env.get("GAON_PAID_PROVIDER_ENABLED"), "GAON_PAID_PROVIDER_ENABLED", default=False),
         execution_mode=env.get("GAON_EXECUTION_MODE", "disabled"),
         live_trading_enabled=parse_bool(env.get("GAON_LIVE_TRADING_ENABLED"), "GAON_LIVE_TRADING_ENABLED", default=False),
+        real_market_data_enabled=parse_bool(env.get("GAON_REAL_MARKET_DATA_ENABLED"), "GAON_REAL_MARKET_DATA_ENABLED", default=False),
+        market_data_provider=env.get("GAON_MARKET_DATA_PROVIDER", "fixture"),
+        market_data_timeout_seconds=float(env.get("GAON_MARKET_DATA_TIMEOUT_SECONDS", "20")),
     )
 
 
