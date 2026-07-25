@@ -6,6 +6,7 @@ from gaon.research.krx_real_pipeline import (
     FieldProvenance,
     KRXDatasetBuilder,
     KRXFixtureMarketDataProvider,
+    KRXTradingCalendar,
     RealAutonomousResearchPipeline,
     RealMarketDataUnavailable,
     RuleBasedBacktestEngine,
@@ -14,8 +15,10 @@ from gaon.research.krx_real_pipeline import (
     YahooKRXHistoricalDataProvider,
     build_market_data_provider_from_env,
     default_execution_assumptions,
+    krx_trading_calendar_release_check,
     real_krx_data_release_check,
 )
+from gaon.research.real_research import DataQualityEngine, DataQualityStatus, MarketBar, MarketDataMetadata, MarketDataset, MarketSymbol
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
 
 
@@ -51,6 +54,42 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertEqual(dataset.metadata.source, "real:yahoo-chart")
         self.assertEqual(len(dataset.bars), 70)
         self.assertGreater(dataset.bars[-1].trading_value, 0)
+
+    def test_krx_calendar_excludes_weekends_and_holidays_from_missing_dates(self) -> None:
+        calendar = KRXTradingCalendar()
+        self.assertNotIn("2026-07-04", calendar.expected_open_dates(start_date="2026-07-03", end_date="2026-07-06"))
+        self.assertNotIn("2026-01-01", calendar.expected_open_dates(start_date="2026-01-01", end_date="2026-01-05"))
+        self.assertEqual(len(calendar.expected_open_dates(start_date="2025-01-02", end_date="2026-07-24")), 378)
+        weekend_report = DataQualityEngine().validate(_quality_dataset("weekend", "2026-07-03", "2026-07-06", ("2026-07-03", "2026-07-06")), min_bars=1, calendar=calendar)
+        holiday_start_report = DataQualityEngine().validate(_quality_dataset("holiday-start", "2026-01-01", "2026-01-05", ("2026-01-02", "2026-01-05")), min_bars=1, calendar=calendar)
+        weekend_end_report = DataQualityEngine().validate(_quality_dataset("weekend-end", "2026-07-03", "2026-07-05", ("2026-07-03",)), min_bars=1, calendar=calendar)
+        self.assertEqual(weekend_report.status, DataQualityStatus.PASS)
+        self.assertEqual(holiday_start_report.status, DataQualityStatus.PASS)
+        self.assertEqual(weekend_end_report.status, DataQualityStatus.PASS)
+
+    def test_krx_calendar_detects_missing_trading_day(self) -> None:
+        report = DataQualityEngine().validate(_quality_dataset("missing", "2026-01-02", "2026-01-06", ("2026-01-02", "2026-01-06")), min_bars=1, calendar=KRXTradingCalendar())
+        self.assertEqual(report.status, DataQualityStatus.PASS_WITH_WARNINGS)
+        self.assertTrue(any(item.code == "missing_dates" and "trading dates" in item.message for item in report.findings))
+
+    def test_krx_quality_keeps_malformed_and_duplicate_warnings(self) -> None:
+        malformed = DataQualityEngine().validate(_quality_dataset("malformed", "2026-01-02", "2026-01-02", ("2026-01-02",), invalid_ohlc=True), min_bars=1, calendar=KRXTradingCalendar())
+        duplicate = DataQualityEngine().validate(_quality_dataset("duplicate", "2026-01-02", "2026-01-02", ("2026-01-02", "2026-01-02")), min_bars=1, calendar=KRXTradingCalendar())
+        self.assertEqual(malformed.status, DataQualityStatus.FAIL)
+        self.assertTrue(any(item.code == "invalid_ohlc" for item in malformed.findings))
+        self.assertEqual(duplicate.status, DataQualityStatus.FAIL)
+        self.assertTrue(any(item.code == "duplicate_bars" for item in duplicate.findings))
+
+    def test_krx_trading_calendar_release_check_preserves_schema_and_provenance(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        migrate(connection)
+        result = krx_trading_calendar_release_check(connection)
+        self.assertEqual(result["schema_version"], 33)
+        self.assertFalse(result["fixture_backed"])
+        self.assertEqual(result["source"], "real:test-calendar")
+        self.assertTrue(result["weekend_excluded"])
+        self.assertTrue(result["holiday_excluded"])
+        self.assertTrue(result["missing_trading_day_detected"])
 
     def test_yahoo_provider_empty_malformed_and_failure_are_unavailable(self) -> None:
         with self.assertRaises(RealMarketDataUnavailable):
@@ -108,6 +147,19 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertIsNotNone(report.memory_id)
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM krx_real_research_memories").fetchone()[0], 1)
         self.assertGreaterEqual(SCHEMA_VERSION, 33)
+
+
+def _quality_dataset(name: str, start: str, end: str, dates: tuple[str, ...], *, invalid_ohlc: bool = False) -> MarketDataset:
+    bars = []
+    for index, day in enumerate(dates):
+        close = 100.0 + index
+        high = close + 1.0
+        low = close - 1.0
+        if invalid_ohlc:
+            high = close - 2.0
+        bars.append(MarketBar(day, "005930", close, high, low, close, 1_000_000 + index, int(close * 1_000_000)))
+    metadata = MarketDataMetadata("real:test-calendar", "KOSPI", "daily", start, end, True, "2026-07-25T00:00:00Z", False)
+    return MarketDataset(f"dataset:test:{name}:{start}:{end}", (MarketSymbol("005930", "005930", "KOSPI"),), tuple(bars), metadata)
 
 
 class _Response:

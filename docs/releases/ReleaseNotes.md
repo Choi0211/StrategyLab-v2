@@ -3,6 +3,17 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 120.1 KRX Trading Calendar Quality
+
+KRX daily market-data quality checks now evaluate missing bars against trading
+dates instead of raw calendar dates. Weekends and bounded deterministic KRX
+non-trading dates are not counted as `missing_dates`, while actual missing
+trading bars, duplicate bars, malformed OHLCV, and stale data continue to be
+reported.
+
+The new `krx-trading-calendar-release-check` verifies the calendar policy
+without live network access. Schema remains v33.
+
 ## Real KRX Data Activation
 
 Gaon can now activate a real public historical market data provider for
@@ -15,8 +26,9 @@ Real activation is explicit. Production must set
 `GAON_MARKET_DATA_PROVIDER=yahoo-chart`. Without those settings, CI and local
 release checks continue to use fixture data and disclose `source=fixture`.
 
-Provider failures, empty responses, malformed responses, and low-quality data
-fail closed as `real_data_unavailable`; fixture results are not substituted.
+Provider failures, empty responses, malformed responses, and failed data
+quality checks fail closed as `real_data_unavailable`; fixture results are not
+substituted.
 
 ## Sprint 111-120 KRX Real Research Pipeline
 
@@ -26,10 +38,10 @@ source-aware KRX-shaped datasets, deterministic rule backtests, walk-forward
 validation, evidence-based critique, bounded improvement candidate generation,
 candidate comparison, research memory persistence, and a Korean report.
 
-The public repository still does not bundle a live KRX network fetcher. Tests
-and release checks use explicitly marked `source=fixture` data. If real public
-data is unavailable, the provider boundary reports `real_data_unavailable`
-instead of silently substituting fixture data.
+Tests and default local release checks use explicitly marked `source=fixture`
+data. The production real-data release check uses the configured public provider
+and reports `real_data_unavailable` instead of silently substituting fixture
+data when real data cannot be retrieved or validated.
 
 Not included: live trading, broker orders, automatic Champion promotion,
 approval bypass, arbitrary shell/SQL, LLM-generated Python execution, secret

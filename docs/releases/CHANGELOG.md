@@ -1,5 +1,12 @@
 # Changelog
 
+## Hotfix 120.1 KRX Trading Calendar Quality
+
+- Added deterministic `KRXTradingCalendar` support for daily KRX data-quality checks.
+- Changed KRX daily missing-date validation to use trading dates instead of raw calendar dates.
+- Added `krx-trading-calendar-release-check`.
+- Preserved schema v33 and existing malformed OHLCV, duplicate bar, stale data, and real missing trading-day findings.
+
 ## Real KRX Data Activation
 
 - Added `YahooKRXHistoricalDataProvider` for free public KRX-listed daily OHLCV history.

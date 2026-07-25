@@ -89,6 +89,7 @@ from gaon.research.krx_real_pipeline import (
     WalkForwardValidator,
     build_market_data_provider_from_env,
     default_execution_assumptions,
+    krx_trading_calendar_release_check,
     real_krx_data_release_check,
 )
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
@@ -239,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
     real_krx_data_release.add_argument("--symbol", default="005930")
     real_krx_data_release.add_argument("--start", default="2025-01-01")
     real_krx_data_release.add_argument("--end", default="2026-07-24")
+    krx_calendar_release = sub.add_parser("krx-trading-calendar-release-check")
+    krx_calendar_release.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1288,6 +1291,26 @@ def _run(args: argparse.Namespace) -> int:
                 f"fixture_backed={str(result['fixture_backed']).lower()} provider={result['provider']} "
                 f"symbol={result['symbol']} rows={result['rows']} quality={result['quality']} "
                 f"trades={result['trades']} validation={result['validation']}"
+            )
+        except RealMarketDataUnavailable as exc:
+            raise ConfigurationError(str(exc)) from exc
+        finally:
+            store.close()
+    elif args.command == "krx-trading-calendar-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = krx_trading_calendar_release_check(store._connection)
+            if store.status().schema_version != 33:
+                raise ConfigurationError("KRX trading calendar release check must preserve schema v33")
+            print(
+                "krx-trading-calendar-release-check: PASS "
+                f"schema_version={store.status().schema_version} "
+                f"weekend_excluded={str(result['weekend_excluded']).lower()} "
+                f"holiday_excluded={str(result['holiday_excluded']).lower()} "
+                f"missing_trading_day_detected={str(result['missing_trading_day_detected']).lower()} "
+                f"malformed_detected={str(result['malformed_detected']).lower()} "
+                f"duplicate_detected={str(result['duplicate_detected']).lower()} "
+                f"source={result['source']} fixture_backed={str(result['fixture_backed']).lower()}"
             )
         except RealMarketDataUnavailable as exc:
             raise ConfigurationError(str(exc)) from exc
