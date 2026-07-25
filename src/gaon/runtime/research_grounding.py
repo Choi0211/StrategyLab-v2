@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Iterable
 
 
@@ -37,13 +38,27 @@ FABRICATED_METRIC_TOKENS = (
     "520",
     "14%",
     "0.14",
-    "샤프 1.35",
-    "샤프 1.05",
+    "\uc0e4\ud504 1.35",
+    "\uc0e4\ud504 1.05",
     "MDD 14",
-    "거래 64",
-    "샘플 520",
+    "\uac70\ub798 64",
+    "\uc0d8\ud50c 520",
     *FIXTURE_LEAKAGE_TOKENS,
 )
+
+WRAPPER_TAG_PATTERN = re.compile(r"</?(?:output|response)>", re.IGNORECASE)
+
+CRITIQUE_TRANSLATIONS = {
+    "In-sample performance is much stronger than out-of-sample performance.": "\ud45c\ubcf8 \ub0b4 \uc131\uacfc\uac00 \ud45c\ubcf8 \uc678 \uc131\uacfc\ubcf4\ub2e4 \ud06c\uac8c \ub192\uc2b5\ub2c8\ub2e4.",
+    "Parameter sensitivity is high.": "\ud30c\ub77c\ubbf8\ud130 \ubbfc\uac10\ub3c4\uac00 \ub192\uc2b5\ub2c8\ub2e4.",
+    "Feature complexity is high relative to evidence quality.": "\ud604\uc7ac \uac80\uc99d \uadfc\uac70\uc5d0 \ube44\ud574 \uc804\ub7b5\uc758 \ud2b9\uc9d5/\uc870\uac74 \ubcf5\uc7a1\ub3c4\uac00 \ub192\uc2b5\ub2c8\ub2e4.",
+}
+
+ACTION_TRANSLATIONS = {
+    "Reduce parameter freedom and require walk-forward confirmation.": "\ud30c\ub77c\ubbf8\ud130 \uc790\uc720\ub3c4\ub97c \uc904\uc774\uace0 \uc6cc\ud06c\ud3ec\uc6cc\ub4dc \uac80\uc99d\uc744 \uc694\uad6c\ud558\ub294 \uac83\uc774 \uc88b\uc2b5\ub2c8\ub2e4.",
+    "Prefer wider robust ranges over narrow optimized values.": "\uc881\uac8c \ucd5c\uc801\ud654\ub41c \uac12\ubcf4\ub2e4 \ub354 \ub113\uace0 \uacac\uace0\ud55c \ubc94\uc704\ub97c \uc6b0\uc120\ud558\ub294 \uac83\uc774 \uc88b\uc2b5\ub2c8\ub2e4.",
+    "Remove low-contribution features.": "\uae30\uc5ec\ub3c4\uac00 \ub0ae\uc740 \uc870\uac74\uc740 \uc81c\uac70\ud558\uac70\ub098 \ubcc4\ub3c4\ub85c \uac80\uc99d\ud558\ub294 \uac83\uc774 \uc88b\uc2b5\ub2c8\ub2e4.",
+}
 
 
 @dataclass(frozen=True)
@@ -58,6 +73,10 @@ def is_research_tool(tool_name: str) -> bool:
     return tool_name in RESEARCH_TOOLS
 
 
+def is_korean_request(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
+
+
 def contains_unverified_fixture_metrics(text: str, facts: Iterable[ResearchFact] = ()) -> bool:
     allowed = {str(fact.value) for fact in facts}
     return any(token in text and token not in allowed for token in FABRICATED_METRIC_TOKENS)
@@ -67,12 +86,38 @@ def contains_fixture_leakage(text: str) -> bool:
     return any(token in text for token in FIXTURE_LEAKAGE_TOKENS)
 
 
+def contains_wrapper_tags(text: str) -> bool:
+    return bool(WRAPPER_TAG_PATTERN.search(text))
+
+
+def strip_response_wrappers(text: str) -> str:
+    return WRAPPER_TAG_PATTERN.sub("", text).strip()
+
+
+def looks_like_english_final(text: str) -> bool:
+    stripped = strip_response_wrappers(text)
+    letters = sum(1 for char in stripped if ("a" <= char.lower() <= "z"))
+    hangul = sum(1 for char in stripped if "\uac00" <= char <= "\ud7a3")
+    return letters >= 24 and hangul == 0
+
+
+def normalize_final_response(text: str, user_text: str) -> str:
+    cleaned = strip_response_wrappers(text)
+    if is_korean_request(user_text) and looks_like_english_final(cleaned):
+        return (
+            "\uc601\ud558\ub2d8, \ud55c\uad6d\uc5b4 \uc9c8\ubb38\uc73c\ub85c \uc774\ud574\ud588\uc2b5\ub2c8\ub2e4. "
+            "\ud604\uc7ac \uac80\uc99d\ub41c \uadfc\uac70\uac00 \ucda9\ubd84\ud558\uc9c0 \uc54a\uc544 \uc784\uc758\uc758 \uacb0\uacfc\ub97c \ub9cc\ub4e4\uc9c0 \uc54a\uaca0\uc2b5\ub2c8\ub2e4."
+        )
+    return cleaned
+
+
 def grounded_system_policy() -> str:
     return (
         "For research or strategy claims, use only user-provided facts or verified safe-tool results. "
         "Never invent Sharpe, MDD, trade count, sample size, dates, backtest metrics, fixture parameters, or regime tags. "
         "Do not present fixture/default candidate metadata as the current user strategy. "
         "If a metric is unavailable, say it is unavailable. "
+        "If the user writes Korean, the final user-facing answer must be natural Korean and must not expose output/response XML tags. "
         "Separate verified data, qualitative analysis, and hypotheses. "
         "Disclose fixture-backed data as fixtures and do not label it real historical data."
     )
@@ -81,21 +126,20 @@ def grounded_system_policy() -> str:
 def extract_user_strategy_context(text: str) -> dict[str, object]:
     conditions: list[str] = []
     normalized = text.casefold()
-    if "20" in text and ("고가" in text or "high" in normalized) and ("돌파" in text or "breakout" in normalized):
-        conditions.append("20일 고가 돌파")
-    if ("종가" in text or "close" in normalized) and ("ma20" in normalized or "20" in text) and ("ma60" in normalized or "60" in text):
-        conditions.append("종가 > MA20 > MA60")
-    if "거래량" in text and ("20일" in text or "평균" in text):
-        conditions.append("거래량 >= 20일 평균")
-    if "손절" in text and ("-5" in text or "5%" in text):
-        conditions.append("손절 -5%")
-    if "10일" in text and ("저점" in text or "low" in normalized) and ("청산" in text or "이탈" in text):
-        conditions.append("10일 저점 이탈 청산")
+    if "20" in text and ("\uace0\uac00" in text or "high" in normalized) and ("\ub3cc\ud30c" in text or "breakout" in normalized):
+        conditions.append("20\uc77c \uace0\uac00 \ub3cc\ud30c")
+    if ("\uc885\uac00" in text or "close" in normalized) and ("ma20" in normalized or "20" in text) and ("ma60" in normalized or "60" in text):
+        conditions.append("\uc885\uac00 > MA20 > MA60")
+    if "\uac70\ub798\ub7c9" in text and ("20\uc77c" in text or "\ud3c9\uade0" in text):
+        conditions.append("\uac70\ub798\ub7c9 >= 20\uc77c \ud3c9\uade0")
+    if "\uc190\uc808" in text and ("-5" in text or "5%" in text):
+        conditions.append("\uc190\uc808 -5%")
+    if "10\uc77c" in text and ("\uc800\uc810" in text or "low" in normalized) and ("\uccad\uc0b0" in text or "\uc774\ud0c8" in text):
+        conditions.append("10\uc77c \uc800\uc810 \uc774\ud0c8 \uccad\uc0b0")
     return {"source": "user_provided", "conditions": conditions}
 
 
 def sanitize_research_tool_output(tool_name: str, output: dict[str, object], user_text: str = "") -> dict[str, object]:
-    """Remove fixture candidate internals before provider synthesis."""
     if tool_name == "strategy_critique":
         return {
             "provider": output.get("provider", "unknown"),
@@ -140,18 +184,18 @@ def _format_memory(output: dict[str, object]) -> str:
     count = int(output.get("count", 0) or 0)
     if count <= 0:
         return (
-            "영하님, 연구 메모리를 검색했지만 저장된 유사 연구 기록을 찾지 못했습니다.\n"
-            "검증된 데이터: 검색 도구는 정상 동작했고 결과 수는 0건입니다.\n"
-            "정성 분석: 아직 저장된 매칭 기록이 없다는 뜻입니다.\n"
-            "가설/제안: 현재 전략 조건을 기준으로 새 연구 기록을 만들거나 백테스트 결과를 먼저 연결할 수 있습니다."
+            "\uc601\ud558\ub2d8, \uc5f0\uad6c \uba54\ubaa8\ub9ac\ub97c \uac80\uc0c9\ud588\uc9c0\ub9cc \uc800\uc7a5\ub41c \uc720\uc0ac \uc5f0\uad6c \uae30\ub85d\uc744 \ucc3e\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.\n"
+            "\uac80\uc99d\ub41c \ub370\uc774\ud130: \uac80\uc0c9 \ub3c4\uad6c\ub294 \uc815\uc0c1 \ub3d9\uc791\ud588\uace0 \uacb0\uacfc \uc218\ub294 0\uac74\uc785\ub2c8\ub2e4.\n"
+            "\uc815\uc131 \ubd84\uc11d: \uc544\uc9c1 \uc800\uc7a5\ub41c \ub9e4\uce6d \uae30\ub85d\uc774 \uc5c6\ub2e4\ub294 \ub73b\uc785\ub2c8\ub2e4.\n"
+            "\uac00\uc124/\uc81c\uc548: \ud604\uc7ac \uc804\ub7b5 \uc870\uac74\uc744 \uae30\uc900\uc73c\ub85c \uc0c8 \uc5f0\uad6c \uae30\ub85d\uc744 \ub9cc\ub4e4\uac70\ub098 \ubc31\ud14c\uc2a4\ud2b8 \uacb0\uacfc\ub97c \uba3c\uc800 \uc5f0\uacb0\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4."
         )
     results = output.get("results")
-    lines = [f"영하님, 저장된 연구 메모리에서 {count}건을 찾았습니다.", "검증된 데이터:"]
+    lines = [f"\uc601\ud558\ub2d8, \uc800\uc7a5\ub41c \uc5f0\uad6c \uba54\ubaa8\ub9ac\uc5d0\uc11c {count}\uac74\uc744 \ucc3e\uc558\uc2b5\ub2c8\ub2e4.", "\uac80\uc99d\ub41c \ub370\uc774\ud130:"]
     if isinstance(results, list):
         for item in results[:3]:
             if isinstance(item, dict):
                 lines.append(f"- {item.get('memory_id') or item.get('run_id') or 'memory'} / {item.get('strategy_family') or item.get('family') or 'unknown'}")
-    lines.append("정성 분석: 위 항목은 저장된 연구 기억을 기준으로만 요약했습니다.")
+    lines.append("\uc815\uc131 \ubd84\uc11d: \uc704 \ud56d\ubaa9\uc740 \uc800\uc7a5\ub41c \uc5f0\uad6c \uae30\uc5b5\uc744 \uae30\uc900\uc73c\ub85c\ub9cc \uc694\uc57d\ud588\uc2b5\ub2c8\ub2e4.")
     return "\n".join(lines)
 
 
@@ -162,8 +206,8 @@ def _format_strategy_critique(output: dict[str, object], user_text: str) -> str:
     context = safe.get("user_strategy_context")
     provider = safe.get("provider", "unknown")
     lines = [
-        "영하님, 이 전략은 사용자님이 제공한 조건과 fixture/default 후보 정보를 분리해서 보겠습니다.",
-        "검증된 데이터:",
+        "\uc601\ud558\ub2d8, \uc774 \uc804\ub7b5\uc740 \uc0ac\uc6a9\uc790\ub2d8\uc774 \uc81c\uacf5\ud55c \uc870\uac74\uacfc fixture/default \ud6c4\ubcf4 \uc815\ubcf4\ub97c \ubd84\ub9ac\ud574\uc11c \ubcf4\uaca0\uc2b5\ub2c8\ub2e4.",
+        "\uac80\uc99d\ub41c \ub370\uc774\ud130:",
         f"- data_source={provider}",
         "- fixture_backed=true",
         "- field_provenance=user_provided conditions only; fixture candidate internals are excluded.",
@@ -174,29 +218,26 @@ def _format_strategy_critique(output: dict[str, object], user_text: str) -> str:
             lines.append("- user_provided_conditions=" + ", ".join(str(item) for item in conditions))
         else:
             lines.append("- user_provided_conditions=not_structured")
-    lines.extend(
-        (
-            "- 실제 백테스트 성과 지표는 이 응답에서 확인되지 않았습니다.",
-            "정성 분석:",
-        )
-    )
+    lines.extend(("- \uc2e4\uc81c \ubc31\ud14c\uc2a4\ud2b8 \uc131\uacfc \uc9c0\ud45c\ub294 \uc774 \uc751\ub2f5\uc5d0\uc11c \ud655\uc778\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.", "\uc815\uc131 \ubd84\uc11d:"))
     if isinstance(critique, dict):
         findings = critique.get("findings")
         if isinstance(findings, list) and findings:
             for finding in findings[:4]:
                 if isinstance(finding, dict):
-                    lines.append(f"- {finding.get('severity', 'unknown')}: {finding.get('message', 'finding')}")
-    lines.append("가설/개선 제안:")
+                    message = _ko(finding.get("message", "finding"))
+                    severity = finding.get("severity", "unknown")
+                    lines.append(f"- {severity}: {message}")
+    lines.append("\uac00\uc124/\uac1c\uc120 \uc81c\uc548:")
     if isinstance(plan, dict):
         actions = plan.get("actions")
         if isinstance(actions, list) and actions:
             for action in actions[:4]:
                 if isinstance(action, dict):
-                    lines.append(f"- {action.get('description', '검증 조건을 보완합니다.')}")
-    if lines[-1] == "가설/개선 제안:":
-        lines.append("- 실제 데이터 백테스트, 워크포워드, 비용 가정 검증을 먼저 연결하는 것이 안전합니다.")
-    lines.append("fixture의 기본 파라미터나 regime 태그를 현재 사용자 전략의 값처럼 사용하지 않았습니다.")
-    lines.append("자동 승인이나 Champion 승격은 수행하지 않았습니다.")
+                    lines.append(f"- {_ko(action.get('description', '\uac80\uc99d \uc870\uac74\uc744 \ubcf4\uc644\ud569\ub2c8\ub2e4.'))}")
+    if lines[-1] == "\uac00\uc124/\uac1c\uc120 \uc81c\uc548:":
+        lines.append("- \uc2e4\uc81c \ub370\uc774\ud130 \ubc31\ud14c\uc2a4\ud2b8, \uc6cc\ud06c\ud3ec\uc6cc\ub4dc, \ube44\uc6a9 \uac00\uc815 \uac80\uc99d\uc744 \uba3c\uc800 \uc5f0\uacb0\ud558\ub294 \uac83\uc774 \uc548\uc804\ud569\ub2c8\ub2e4.")
+    lines.append("fixture\uc758 \uae30\ubcf8 \ud30c\ub77c\ubbf8\ud130\ub098 regime \ud0dc\uadf8\ub97c \ud604\uc7ac \uc0ac\uc6a9\uc790 \uc804\ub7b5\uc758 \uac12\ucc98\ub7fc \uc0ac\uc6a9\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.")
+    lines.append("\uc790\ub3d9 \uc2b9\uc778\uc774\ub098 Champion \uc2b9\uaca9\uc740 \uc218\ud589\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.")
     return "\n".join(lines)
 
 
@@ -204,16 +245,17 @@ def _format_quality(output: dict[str, object]) -> str:
     provider = output.get("provider", "unknown")
     if str(provider).startswith("fixture:"):
         return (
-            "영하님, 현재 이 전략에 대해 실제 백테스트 기반 연구 품질 점수는 저장되어 있지 않습니다.\n"
-            "검증된 데이터:\n"
+            "\uc601\ud558\ub2d8, \ud604\uc7ac \uc774 \uc804\ub7b5\uc5d0 \ub300\ud574 \uc2e4\uc81c \ubc31\ud14c\uc2a4\ud2b8\ub97c \uae30\ubc18\uc73c\ub85c \uacc4\uc0b0\ub41c \uc5f0\uad6c \ud488\uc9c8 \uc810\uc218\ub294 \uc800\uc7a5\ub418\uc5b4 \uc788\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4. "
+            "\ub530\ub77c\uc11c \uc784\uc758\uc758 \uc810\uc218\ub97c \uc0dd\uc131\ud558\uc9c0 \uc54a\uaca0\uc2b5\ub2c8\ub2e4.\n"
+            "\uac80\uc99d\ub41c \ub370\uc774\ud130:\n"
             f"- data_source={provider}\n"
             "- fixture_backed=true\n"
             "- quality_score_available=false\n"
-            "정성 분석: fixture/default 후보의 품질 점수를 현재 사용자 전략의 점수처럼 사용하지 않겠습니다.\n"
-            "가설/제안: 실제 데이터 백테스트 후 품질 점수를 계산해야 합니다."
+            "\uc815\uc131 \ubd84\uc11d: fixture/default \ud6c4\ubcf4\uc758 \ud488\uc9c8 \uc810\uc218\ub97c \ud604\uc7ac \uc0ac\uc6a9\uc790 \uc804\ub7b5\uc758 \uc810\uc218\ucc98\ub7fc \uc0ac\uc6a9\ud558\uc9c0 \uc54a\uaca0\uc2b5\ub2c8\ub2e4.\n"
+            "\uac00\uc124/\uc81c\uc548: \uc2e4\uc81c \uc2dc\uc7a5 \ub370\uc774\ud130 \ubc31\ud14c\uc2a4\ud2b8\uac00 \uc644\ub8cc\ub418\uba74 \ud574\ub2f9 \uacb0\uacfc\ub97c \uae30\ubc18\uc73c\ub85c \ud488\uc9c8 \uc810\uc218\ub97c \uacc4\uc0b0\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4."
         )
     quality = output.get("quality")
-    lines = ["영하님, 전략 품질 점수는 도구가 반환한 품질 필드만 사용해 설명하겠습니다.", "검증된 데이터:", f"- data_source={provider}"]
+    lines = ["\uc601\ud558\ub2d8, \uc804\ub7b5 \ud488\uc9c8 \uc810\uc218\ub294 \ub3c4\uad6c\uac00 \ubc18\ud658\ud55c \ud488\uc9c8 \ud544\ub4dc\ub9cc \uc0ac\uc6a9\ud574 \uc124\uba85\ud558\uaca0\uc2b5\ub2c8\ub2e4.", "\uac80\uc99d\ub41c \ub370\uc774\ud130:", f"- data_source={provider}"]
     if isinstance(quality, dict):
         total = quality.get("total")
         if total is not None:
@@ -222,12 +264,7 @@ def _format_quality(output: dict[str, object]) -> str:
         if isinstance(components, dict):
             for key in sorted(components)[:10]:
                 lines.append(f"- {key}={components[key]}")
-    lines.extend(
-        (
-            "정성 분석: 위 점수는 품질 스코어 계약의 구성 요소이며, 별도 백테스트 성과 수치로 해석하지 않습니다.",
-            "가설/제안: 낮은 구성 요소부터 검증 계획을 세우되 자동 승격은 하지 않습니다.",
-        )
-    )
+    lines.extend(("\uc815\uc131 \ubd84\uc11d: \uc704 \uc810\uc218\ub294 \ud488\uc9c8 \uc2a4\ucf54\uc5b4 \uacc4\uc57d\uc758 \uad6c\uc131 \uc694\uc18c\uc774\uba70, \ubcc4\ub3c4 \ubc31\ud14c\uc2a4\ud2b8 \uc131\uacfc \uc218\uce58\ub85c \ud574\uc11d\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.", "\uac00\uc124/\uc81c\uc548: \ub0ae\uc740 \uad6c\uc131 \uc694\uc18c\ubd80\ud130 \uac80\uc99d \uacc4\ud68d\uc744 \uc138\uc6b0\ub418 \uc790\ub3d9 \uc2b9\uaca9\uc740 \ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4."))
     return "\n".join(lines)
 
 
@@ -245,24 +282,24 @@ def _format_data_quality(output: dict[str, object]) -> str:
             source = str(metadata.get("source", "unknown"))
     status = quality.get("status", "unknown") if isinstance(quality, dict) else "unknown"
     return (
-        "영하님, 데이터 품질 확인 결과입니다.\n"
-        "검증된 데이터:\n"
+        "\uc601\ud558\ub2d8, \ub370\uc774\ud130 \ud488\uc9c8 \ud655\uc778 \uacb0\uacfc\uc785\ub2c8\ub2e4.\n"
+        "\uac80\uc99d\ub41c \ub370\uc774\ud130:\n"
         f"- dataset_id={dataset_id}\n"
         f"- data_source={source}\n"
         f"- fixture_backed={fixture_backed}\n"
         f"- quality_status={status}\n"
-        "정성 분석: fixture_backed=true이면 실제 시장 데이터가 아니라 테스트 fixture입니다.\n"
-        "가설/제안: 실데이터 연결 전에는 이 결과를 운영 성과로 해석하지 않는 것이 안전합니다."
+        "\uc815\uc131 \ubd84\uc11d: fixture_backed=true\uc774\uba74 \uc2e4\uc81c \uc2dc\uc7a5 \ub370\uc774\ud130\uac00 \uc544\ub2c8\ub77c \ud14c\uc2a4\ud2b8 fixture\uc785\ub2c8\ub2e4.\n"
+        "\uac00\uc124/\uc81c\uc548: \uc2e4\ub370\uc774\ud130 \uc5f0\uacb0 \uc804\uc5d0\ub294 \uc774 \uacb0\uacfc\ub97c \uc6b4\uc601 \uc131\uacfc\ub85c \ud574\uc11d\ud558\uc9c0 \uc54a\ub294 \uac83\uc774 \uc548\uc804\ud569\ub2c8\ub2e4."
     )
 
 
 def _format_backtest(result_obj: object) -> str:
     if not isinstance(result_obj, dict):
-        return "영하님, 요청한 백테스트 결과를 찾지 못했습니다. 저장된 결과 ID를 다시 확인해 주세요."
+        return "\uc601\ud558\ub2d8, \uc694\uccad\ud55c \ubc31\ud14c\uc2a4\ud2b8 \uacb0\uacfc\ub97c \ucc3e\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. \uc800\uc7a5\ub41c \uacb0\uacfc ID\ub97c \ub2e4\uc2dc \ud655\uc778\ud574 \uc8fc\uc138\uc694."
     metrics = result_obj.get("metrics")
     provenance = result_obj.get("provenance")
     source = result_obj.get("source", "unknown")
-    lines = ["영하님, 백테스트 결과는 반환된 결과 객체의 수치만 사용해 요약하겠습니다.", "검증된 데이터:", f"- validation_backend={source}"]
+    lines = ["\uc601\ud558\ub2d8, \ubc31\ud14c\uc2a4\ud2b8 \uacb0\uacfc\ub294 \ubc18\ud658\ub41c \uacb0\uacfc \uac1d\uccb4\uc758 \uc218\uce58\ub9cc \uc0ac\uc6a9\ud574 \uc694\uc57d\ud558\uaca0\uc2b5\ub2c8\ub2e4.", "\uac80\uc99d\ub41c \ub370\uc774\ud130:", f"- validation_backend={source}"]
     if isinstance(provenance, dict):
         lines.append(f"- dataset_id={provenance.get('dataset_id', 'unknown')}")
         lines.append(f"- fixture_backed={str(provenance.get('fixture_backed', 'unknown')).lower()}")
@@ -270,18 +307,13 @@ def _format_backtest(result_obj: object) -> str:
         for key in ("total_return", "cagr", "mdd", "win_rate", "profit_factor", "trade_count", "expectancy", "sharpe"):
             if key in metrics:
                 lines.append(f"- {key}={metrics[key]}")
-    lines.extend(
-        (
-            "정성 분석: fixture_backed=true이면 실제 시장 성과가 아니라 deterministic fixture 검증입니다.",
-            "가설/제안: 실데이터, 비용, 워크포워드, 몬테카를로 검증 전에는 Champion 승격 근거로 사용하지 않습니다.",
-        )
-    )
+    lines.extend(("\uc815\uc131 \ubd84\uc11d: fixture_backed=true\uc774\uba74 \uc2e4\uc81c \uc2dc\uc7a5 \uc131\uacfc\uac00 \uc544\ub2c8\ub77c deterministic fixture \uac80\uc99d\uc785\ub2c8\ub2e4.", "\uac00\uc124/\uc81c\uc548: \uc2e4\ub370\uc774\ud130, \ube44\uc6a9, \uc6cc\ud06c\ud3ec\uc6cc\ub4dc, \ubaac\ud14c\uce74\ub97c\ub85c \uac80\uc99d \uc804\uc5d0\ub294 Champion \uc2b9\uaca9 \uadfc\uac70\ub85c \uc0ac\uc6a9\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4."))
     return "\n".join(lines)
 
 
 def _format_comparison(output: dict[str, object]) -> str:
     comparison = output.get("comparison")
-    lines = ["영하님, 비교 결과는 도구가 반환한 delta 필드만 기준으로 정리합니다.", "검증된 데이터:"]
+    lines = ["\uc601\ud558\ub2d8, \ube44\uad50 \uacb0\uacfc\ub294 \ub3c4\uad6c\uac00 \ubc18\ud658\ud55c delta \ud544\ub4dc\ub9cc \uae30\uc900\uc73c\ub85c \uc815\ub9ac\ud569\ub2c8\ub2e4.", "\uac80\uc99d\ub41c \ub370\uc774\ud130:"]
     if isinstance(comparison, dict):
         deltas = comparison.get("metric_deltas")
         if isinstance(deltas, dict):
@@ -290,7 +322,7 @@ def _format_comparison(output: dict[str, object]) -> str:
         winner = comparison.get("winner")
         if winner is not None:
             lines.append(f"- winner={winner}")
-    lines.append("정성 분석: 이 비교는 fixture 계약 검증이며 자동 승인이나 배포를 수행하지 않습니다.")
+    lines.append("\uc815\uc131 \ubd84\uc11d: \uc774 \ube44\uad50\ub294 fixture \uacc4\uc57d \uac80\uc99d\uc774\uba70 \uc790\ub3d9 \uc2b9\uc778\uc774\ub098 \ubc30\ud3ec\ub97c \uc218\ud589\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.")
     return "\n".join(lines)
 
 
@@ -305,8 +337,8 @@ def _safe_critique(value: object) -> dict[str, object]:
                 findings.append(
                     {
                         "severity": finding.get("severity", "unknown"),
-                        "message": finding.get("message", "finding"),
-                        "recommended_action": finding.get("recommended_action", ""),
+                        "message": _ko(finding.get("message", "finding")),
+                        "recommended_action": _ko(finding.get("recommended_action", "")),
                         "source": "fixture_qualitative_rule",
                     }
                 )
@@ -321,7 +353,12 @@ def _safe_plan(value: object) -> dict[str, object]:
     if isinstance(raw, list):
         for item in raw[:5]:
             if isinstance(item, dict):
-                actions.append({"description": item.get("description", "검증 조건을 보완합니다."), "source": "fixture_qualitative_rule"})
+                actions.append({"description": _ko(item.get("description", "\uac80\uc99d \uc870\uac74\uc744 \ubcf4\uc644\ud569\ub2c8\ub2e4.")), "source": "fixture_qualitative_rule"})
             else:
-                actions.append({"description": str(item), "source": "fixture_qualitative_rule"})
+                actions.append({"description": _ko(str(item)), "source": "fixture_qualitative_rule"})
     return {"actions": actions}
+
+
+def _ko(value: object) -> str:
+    text = str(value)
+    return CRITIQUE_TRANSLATIONS.get(text) or ACTION_TRANSLATIONS.get(text) or text

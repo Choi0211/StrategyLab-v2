@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 110.2 Korean Response Language Consistency
+
+- Added Korean final-response normalization for Korean Telegram/user messages.
+- Removed `<output>` and `<response>` wrapper tags before final response persistence.
+- Translated internal research critic findings and improvement suggestions into Korean user-facing text.
+- Added deterministic Korean missing-data UX for quality-score requests.
+- Added repeatable `korean-response-release-check`.
+
 ## Hotfix 110.1 Research Grounding Context Isolation
 
 - Isolated user-provided strategy conditions from fixture/default strategy metadata in research critique responses.

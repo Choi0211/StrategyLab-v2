@@ -48,6 +48,12 @@ Empty memory results do not block improvement requests. Empty memory means no st
 
 Provider-backed synthesis receives the same grounding policy. If a provider tool-result response fabricates known fixture-only metrics, Gaon falls back to deterministic grounded formatting for the safe-tool result.
 
+## Korean Response Consistency
+
+When the current user message contains Korean, the final user-facing response must be natural Korean. Internal provenance keys and values such as `fixture_backed=true`, `validation_backend=fixture`, and `data_source=...` may remain untranslated, but explanatory text, missing-data messages, critic findings, and improvement suggestions must be Korean.
+
+Provider wrapper tags such as `<output>`, `</output>`, `<response>`, and `</response>` are stripped before the final response is stored or returned. If a provider returns an English final answer for a Korean research request, Gaon prefers deterministic grounded Korean formatting from the safe-tool result instead of exposing the English response.
+
 ## Safety
 
 This hotfix does not add live KIS, broker orders, automatic Champion promotion, arbitrary shell, arbitrary SQL, secret access, private repository dependency, DB schema changes, or migrations.

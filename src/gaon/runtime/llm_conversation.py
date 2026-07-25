@@ -18,7 +18,7 @@ from gaon.runtime.long_response import continuation_prompt, merge_response_parts
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, format_grounded_tool_response, grounded_system_policy, is_research_tool, sanitize_research_tool_output
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, looks_like_english_final, normalize_final_response, sanitize_research_tool_output
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
@@ -330,6 +330,7 @@ class LLMConversationBrain:
         )
         context = self._context_orchestrator.build(request.session_id) if self._context_orchestrator is not None else None
         response_text, route, warnings, references, provider, tool_calls = self._generate(request, intent, approval_required, context)
+        response_text = normalize_final_response(response_text, request.text)
         generated_at = now
         response_id = f"conversation-assistant:{uuid4().hex}"
         response = LLMConversationResponse(
@@ -445,8 +446,11 @@ class LLMConversationBrain:
                 return follow_up
             if provider_response.truncated:
                 provider_response = self._continue_provider_response(provider, request, intent, provider_response, references)
+            text = normalize_final_response(provider_response.text, request.text)
+            if is_korean_request(request.text) and provider_response.text != text:
+                warnings = (*warnings, "provider response normalized for Korean final answer")
             return (
-                provider_response.text,
+                text,
                 provider_response.route,
                 _dedupe((*warnings, *provider_response.warnings)),
                 _dedupe((*references, *provider_response.references)),
@@ -509,10 +513,19 @@ class LLMConversationBrain:
             return text, "provider_tool_fallback", _dedupe((*warnings, f"provider fallback: {reason}")), _dedupe((*references, *(f"tool:{name}" for name in executed))), "deterministic", tuple(executed)
         if final.truncated:
             final = self._continue_provider_response(provider, request, intent, final, _dedupe((*references, *(f"tool:{name}" for name in executed))))
-        text = final.text or _format_multi_tool_response(tuple(results))
-        if any(is_research_tool(result.name) for result in results) and (contains_unverified_fixture_metrics(text) or contains_fixture_leakage(text)):
+        raw_text = final.text or _format_multi_tool_response(tuple(results))
+        text = raw_text
+        if any(is_research_tool(result.name) for result in results) and (
+            contains_unverified_fixture_metrics(text)
+            or contains_fixture_leakage(text)
+            or (is_korean_request(request.text) and looks_like_english_final(text))
+        ):
             text = _format_multi_tool_response(tuple(results))
             warnings = (*warnings, "provider research grounding fallback")
+        elif contains_wrapper_tags(text):
+            text = normalize_final_response(text, request.text)
+        if any(is_research_tool(result.name) for result in results) and is_korean_request(request.text) and text != raw_text:
+            warnings = (*warnings, "provider response normalized for Korean final answer")
         return text, "provider_tool_call", _dedupe((*warnings, *final.warnings)), _dedupe((*references, *final.references, *(f"tool:{name}" for name in executed))), final.provider_name, tuple(executed)
 
     def _continue_provider_response(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, initial_response, references: tuple[str, ...]):

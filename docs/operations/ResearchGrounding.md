@@ -8,6 +8,7 @@ Windows PowerShell:
 $env:PYTHONPATH='src;tests/unit;tests/integration;tests/fixtures'
 C:\Users\super\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m gaon.runtime.cli research-grounding-release-check --db .\gaon-runtime.sqlite
 C:\Users\super\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m gaon.runtime.cli research-context-isolation-release-check --db .\gaon-runtime.sqlite
+C:\Users\super\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m gaon.runtime.cli korean-response-release-check --db .\gaon-runtime.sqlite
 ```
 
 Linux systemd/VPS:
@@ -20,9 +21,13 @@ python -m gaon.runtime.cli research-grounding-release-check \
 PYTHONPATH=src:tests/unit:tests/integration:tests/fixtures \
 python -m gaon.runtime.cli research-context-isolation-release-check \
   --db /var/lib/strategylab/gaon-runtime.sqlite
+
+PYTHONPATH=src:tests/unit:tests/integration:tests/fixtures \
+python -m gaon.runtime.cli korean-response-release-check \
+  --db /var/lib/strategylab/gaon-runtime.sqlite
 ```
 
-Both checks create unique run namespaces by default and are safe to repeat on the same persistent SQLite database.
+All checks create unique run namespaces by default and are safe to repeat on the same persistent SQLite database.
 
 ## Telegram Verification
 
@@ -56,6 +61,9 @@ Expected behavior:
 - unavailable metrics are not fabricated
 - fixture/default fields such as `volume_multiplier`, `max_risk_pct`, and `regime_tags` are not presented as user strategy values
 - missing quality scores return a Korean deterministic missing-data response
+- Korean questions receive Korean final responses
+- `<output>`, `</output>`, `<response>`, and `</response>` are not exposed in Telegram
+- internal English critic/advisory text is rendered as Korean user-facing prose
 
 ## Safety Notes
 

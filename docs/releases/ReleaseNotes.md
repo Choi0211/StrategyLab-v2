@@ -3,6 +3,14 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 110.2 Korean Response Language Consistency
+
+When Youngha asks in Korean, Gaon's final Telegram-facing response is now normalized to Korean. Internal provenance keys such as `fixture_backed=true` and `validation_backend=fixture` remain intact, while explanations, critic findings, improvement suggestions, missing-data messages, and fallback text are Korean.
+
+Provider wrapper tags such as `<output>` and `<response>` are removed before final response persistence. If a provider returns an English final answer for a Korean research tool request, Gaon falls back to deterministic grounded Korean formatting from the safe-tool result.
+
+Not included: live trading, broker orders, automatic Champion promotion, approval bypass, shell or SQL expansion, secret exposure, or schema migration.
+
 ## Hotfix 110.1 Research Grounding Context Isolation
 
 Gaon now separates user-provided strategy conditions from fixture/default candidate metadata before producing Telegram research critique responses. Provider-backed tool synthesis receives sanitized research payloads, so default fixture parameters and regime metadata are not described as current user strategy values.
