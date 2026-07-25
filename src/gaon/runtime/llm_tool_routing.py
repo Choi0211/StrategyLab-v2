@@ -9,6 +9,8 @@ def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized or _blocked(normalized):
         return None
+    if _krx_real_research(normalized):
+        return "krx_real_research"
     if _strategy_critique(normalized):
         return "strategy_critique"
     if _research_memory(normalized):
@@ -32,6 +34,12 @@ def _strategy_critique(value: str) -> bool:
     critique = ("약점", "리스크", "위험", "문제", "비판", "평가", "취약", "과최적", "과최적화", "개선", "보완", "고쳐", "수정")
     strategy = ("전략", "strategy", "후보", "조건", "매매법")
     return _contains_any(value, strategy) and _contains_any(value, critique)
+
+
+def _krx_real_research(value: str) -> bool:
+    real_data = ("실제", "실데이터", "real", "yahoo", "krx", "삼성전자", "005930")
+    research = ("백테스트", "backtest", "분석", "개선후보", "비교", "연구")
+    return _contains_any(value, real_data) and _contains_any(value, research)
 
 
 def _research_memory(value: str) -> bool:

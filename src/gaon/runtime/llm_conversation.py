@@ -18,7 +18,7 @@ from gaon.runtime.long_response import continuation_prompt, merge_response_parts
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, looks_like_english_final, normalize_final_response, sanitize_research_tool_output
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, normalize_final_response, sanitize_research_tool_output
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
@@ -36,6 +36,7 @@ TOOL_RESULT_TTL_SECONDS = {
     "backtest_strategy": 300,
     "backtest_result": 300,
     "compare_backtests": 300,
+    "krx_real_research": 300,
 }
 
 
@@ -515,7 +516,14 @@ class LLMConversationBrain:
             final = self._continue_provider_response(provider, request, intent, final, _dedupe((*references, *(f"tool:{name}" for name in executed))))
         raw_text = final.text or _format_multi_tool_response(tuple(results))
         text = raw_text
-        if any(is_research_tool(result.name) for result in results) and (
+        strict_real_results = tuple(result for result in results if is_strict_real_research_tool(result.name))
+        if strict_real_results:
+            text = _format_multi_tool_response(tuple(results))
+            if any(isinstance(result.result.get("output"), dict) and contains_ungrounded_real_research_claim(raw_text, result.result["output"]) for result in strict_real_results):
+                warnings = (*warnings, "provider strict real research grounding fallback")
+            else:
+                warnings = (*warnings, "structured real research report preferred")
+        elif any(is_research_tool(result.name) for result in results) and (
             contains_unverified_fixture_metrics(text)
             or contains_fixture_leakage(text)
             or (is_korean_request(request.text) and looks_like_english_final(text))
@@ -827,6 +835,8 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
         return {"scenario": "balanced"}
     if tool_name == "research_memory_search":
         return {"query": text[:120]}
+    if tool_name == "krx_real_research":
+        return {"request_text": text, "symbol": "005930"}
     if tool_name in {"data_quality_check", "backtest_strategy"}:
         return {"symbol": "005930"}
     return {}

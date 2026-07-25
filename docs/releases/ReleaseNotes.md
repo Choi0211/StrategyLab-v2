@@ -713,3 +713,18 @@ Research Gateway.
 Real providers and private backtest engines are not hard-coded in this public
 repository. The current implementation remains fixture-backed by default and
 records `fixture_backed=true` in report provenance.
+
+# Hotfix 120.3
+
+Gaon now treats structured real KRX research results as authoritative when
+writing user-facing Korean research reports. If an LLM provider returns
+ungrounded trade counts, win/loss counts, returns, drawdowns, stop/risk
+settings, or candidate parameters that are not present in the structured
+`BacktestResult`, user strategy, execution assumptions, or tested candidates,
+the final answer is replaced with a deterministic grounded report.
+
+The report separates user-provided strategy conditions, engine/default
+execution assumptions, tested candidates, hypothesis-only follow-up ideas, and
+provider data gaps such as the Yahoo KRX `2025-09-19` missing bar. The hotfix
+does not change schema v33 and does not add trading, broker access, approval
+bypass, shell execution, arbitrary SQL, or generated Python execution.

@@ -5,13 +5,15 @@ from gaon.runtime.assistant_provider import AssistantProviderResponse, Assistant
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository
 from gaon.runtime.llm_tool_routing import route_read_only_tool
-from gaon.runtime.llm_tools import SafeToolExecutor, default_tool_registry
+from gaon.runtime.llm_tools import SafeToolExecutor, ToolResult, default_tool_registry
 from gaon.runtime.migrations import migrate
 from gaon.runtime.research_grounding import (
     ResearchFact,
+    contains_ungrounded_real_research_claim,
     contains_fixture_leakage,
     contains_unverified_fixture_metrics,
     contains_wrapper_tags,
+    format_grounded_tool_response,
     normalize_final_response,
     sanitize_research_tool_output,
 )
@@ -176,6 +178,43 @@ class ResearchGroundingTests(unittest.TestCase):
         self.assertNotIn("metrics", as_text)
         self.assertIn("user_strategy_context", sanitized)
 
+    def test_strict_real_research_formatter_uses_backtest_result_only(self) -> None:
+        payload = _strict_real_payload()
+        text = format_grounded_tool_response("krx_real_research", payload, USER_STRATEGY)
+
+        self.assertIsNotNone(text)
+        assert text is not None
+        self.assertIn("trade_count=3", text)
+        self.assertIn("provider=real:yahoo-chart", text)
+        self.assertIn("fixture_backed=false", text)
+        self.assertIn("2025-09-19", text)
+        self.assertIn("TESTED", text)
+        self.assertIn("HYPOTHESIS", text)
+        self.assertIn("protective_stop_pct=-5.0 provenance=user_provided", text)
+        self.assertIn("commission=0.00015 provenance=default", text)
+        self.assertNotIn("trade_count=4", text)
+        self.assertNotIn("RSI 20", text)
+        self.assertNotIn("volume 1.5", text)
+
+    def test_provider_real_research_tool_result_falls_back_to_structured_report(self) -> None:
+        payload = _strict_real_payload()
+        brain = LLMConversationBrain(
+            GaonRuntimeConfig(assistant_enabled=True, assistant_provider="openai-compatible"),
+            SQLiteConversationRepository(self.connection),
+            tool_executor=_StrictExecutor(payload),
+            assistant_provider=_StrictFabricatingProvider(),
+        )
+
+        response = brain.respond(_request("삼성전자 실제 데이터로 백테스트하고 개선 후보까지 비교해줘", "strict-real"))
+
+        self.assertEqual(response.tool_calls, ("krx_real_research",))
+        self.assertIn("provider strict real research grounding fallback", response.warnings)
+        self.assertIn("trade_count=3", response.text)
+        self.assertNotIn("trade_count=4", response.text)
+        self.assertNotIn("MDD=8", response.text)
+        self.assertNotIn("RSI 20", response.text)
+        self.assertTrue(contains_ungrounded_real_research_claim("trade_count=4 MDD=8 RSI 20", payload))
+
 
 class _FabricatingToolProvider:
     def respond(self, request):
@@ -211,6 +250,51 @@ class _EnglishToolProvider:
                 tool_calls=(AssistantToolCall("call-critique", "strategy_critique", {"scenario": "overfit"}),),
             )
         return AssistantProviderResponse(text="<output>This strategy has weakness and requires validation.</output>", provider_name="openai-compatible")
+
+
+class _StrictExecutor:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def assistant_tool_definitions(self) -> tuple[object, ...]:
+        return ()
+
+    def execute(self, request) -> ToolResult:
+        return ToolResult(request.tool_name, "success", self._payload)
+
+
+class _StrictFabricatingProvider:
+    def respond(self, request):
+        if not request.tool_results:
+            return AssistantProviderResponse(
+                text="",
+                provider_name="openai-compatible",
+                tool_calls=(AssistantToolCall("call-krx", "krx_real_research", {"request_text": request.text, "symbol": "005930"}),),
+            )
+        return AssistantProviderResponse(text="trade_count=4, MDD=8%, RSI 20 filter, volume 1.5x", provider_name="openai-compatible")
+
+
+def _strict_real_payload() -> dict[str, object]:
+    return {
+        "dataset": {
+            "dataset_id": "dataset:real:yahoo:005930",
+            "symbols": [{"symbol": "005930", "name": "Samsung Electronics", "market": "KOSPI"}],
+            "bars": [{"timestamp": f"2025-01-{index + 2:02d}", "symbol": "005930"} for index in range(3)],
+            "metadata": {"source": "real:yahoo-chart", "start_date": "2025-01-02", "end_date": "2026-07-24", "fixture_backed": False},
+        },
+        "quality": {"status": "pass_with_warnings", "findings": [{"code": "provider_gap", "message": "real:yahoo-chart missing bar on open KRX date 2025-09-19"}]},
+        "strategy": {
+            "entry": {"breakout_lookback": {"value": 20, "provenance": "user_provided"}},
+            "exit": {"protective_stop_pct": {"value": -5.0, "provenance": "user_provided"}},
+            "filters": {"volume_gte_ma20": {"value": True, "provenance": "user_provided"}},
+        },
+        "assumptions": {"commission": {"value": 0.00015, "provenance": "default"}, "position_sizing": {"value": "single_position_all_cash", "provenance": "default"}},
+        "backtest": {"source": "real", "metrics": {"trade_count": 3, "total_return": 0.047, "mdd": 0.052, "sharpe": 0.74}},
+        "validation": {"validation_id": "validation:strict", "passed": True, "findings": []},
+        "critic_findings": [{"severity": "warning", "message_ko": "provider gap을 명시해야 합니다."}],
+        "candidates": [{"candidate_id": "candidate:tested", "backtest_result": {"metrics": {"trade_count": 2, "total_return": 0.038, "mdd": 0.044}}}],
+        "comparison": {"rows": [{"candidate_id": "original", "trade_count": 3, "total_return": 0.047, "mdd": 0.052}]},
+    }
 
 
 def _request(text: str, suffix: str) -> LLMConversationRequest:
