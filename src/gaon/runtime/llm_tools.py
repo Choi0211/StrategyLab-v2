@@ -28,6 +28,7 @@ from gaon.research.real_research import (
     dataset_lookup_payload,
     market_data_status_payload,
 )
+from gaon.research.krx_real_pipeline import krx_real_research_payload
 
 
 class ToolRiskLevel(str, Enum):
@@ -255,6 +256,10 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry.register(
         ToolDefinition("compare_backtests", "Compare fixture baseline and challenger backtests for reproducibility deltas.", ToolRiskLevel.READ_ONLY),
         lambda _args: compare_backtests_payload(),
+    )
+    registry.register(
+        ToolDefinition("krx_real_research", "Run the read-only KRX real-research pipeline with explicit source provenance.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol",)),
+        lambda args: krx_real_research_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930"))),
     )
     return registry
 

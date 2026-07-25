@@ -78,6 +78,16 @@ from gaon.research.real_research import (
     SQLiteRealResearchRepository,
     turtle_strategy_spec,
 )
+from gaon.research.krx_real_pipeline import (
+    EvidenceBasedStrategyCritic,
+    KRXDatasetBuilder,
+    KRXFixtureMarketDataProvider,
+    RealAutonomousResearchPipeline,
+    RuleBasedBacktestEngine,
+    UserStrategyParser,
+    WalkForwardValidator,
+    default_execution_assumptions,
+)
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
@@ -210,6 +220,17 @@ def main(argv: list[str] | None = None) -> int:
     korean_response_release = sub.add_parser("korean-response-release-check")
     korean_response_release.add_argument("--db", default=":memory:")
     korean_response_release.add_argument("--run-id", default=None)
+    strategy_parser_release = sub.add_parser("strategy-parser-release-check")
+    strategy_parser_release.add_argument("--db", default=":memory:")
+    real_backtest_release = sub.add_parser("real-backtest-release-check")
+    real_backtest_release.add_argument("--db", default=":memory:")
+    krx_real_research_demo = sub.add_parser("krx-real-research-demo")
+    krx_real_research_demo.add_argument("--db", default=":memory:")
+    krx_real_research_demo.add_argument("--request", default="20일 고가 돌파 + 종가 > MA20 > MA60 + 거래량 >= 20일 평균 이상, 손절 -5%, 10일 저점 이탈 청산")
+    krx_real_research_demo.add_argument("--symbol", default="005930")
+    krx_real_research_demo.add_argument("--json", action="store_true")
+    krx_real_research_release = sub.add_parser("krx-real-research-release-check")
+    krx_real_research_release.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1162,6 +1183,84 @@ def _run(args: argparse.Namespace) -> int:
             if "\uc800\uc7a5\ub41c \uc720\uc0ac \uc5f0\uad6c \uae30\ub85d\uc744 \ucc3e\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4" not in checks[2].text:
                 raise ConfigurationError("Korean memory empty-state response regressed")
             print(f"korean-response-release-check: PASS schema_version={store.status().schema_version} run_id={run_id}")
+        finally:
+            store.close()
+    elif args.command == "strategy-parser-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            text = "20일 고가 돌파 + 종가 > MA20 > MA60 + 거래량 >= 20일 평균 이상, 손절 -5%, 10일 저점 이탈 청산"
+            spec = UserStrategyParser().parse(text, symbol="005930", created_at=_utc_now())
+            if spec.entry["breakout_lookback"].value != 20:
+                raise ConfigurationError("strategy parser did not extract breakout lookback")
+            if spec.entry["breakout_lookback"].provenance.value != "user_provided":
+                raise ConfigurationError("strategy parser lost user provenance")
+            payload = _dumps_json(spec.to_json())
+            for forbidden in ("volume_multiplier", "max_risk_pct", "regime_tags"):
+                if forbidden in payload:
+                    raise ConfigurationError("strategy parser leaked fixture/default candidate metadata")
+            print(f"strategy-parser-release-check: PASS schema_version={store.status().schema_version} fingerprint={spec.fingerprint[:12]}")
+        finally:
+            store.close()
+    elif args.command == "real-backtest-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = f"real-backtest-release-check:{uuid4().hex}"
+            dataset, quality, _inserted = KRXDatasetBuilder(store._connection, KRXFixtureMarketDataProvider()).build("005930", start_date="2026-01-01", end_date="2026-07-10")
+            spec = UserStrategyParser().parse("20일 고가 돌파 종가 > MA20 > MA60 거래량 >= 20일 평균 손절 -5% 10일 저점 이탈 청산", symbol="005930", created_at=_utc_now())
+            assumptions = default_execution_assumptions()
+            result = RuleBasedBacktestEngine().run(run_id, spec, dataset, assumptions, generated_at=_utc_now())
+            validation = WalkForwardValidator().validate(spec, dataset, assumptions, run_id=run_id, generated_at=_utc_now())
+            findings = EvidenceBasedStrategyCritic().critique(spec, result, validation)
+            if quality.status.value == "fail":
+                raise ConfigurationError("fixture KRX dataset quality failed")
+            if result.status != "completed":
+                raise ConfigurationError("rule-based real backtest did not complete")
+            if result.source.value != "fixture":
+                raise ConfigurationError("fixture backtest source was not disclosed")
+            if result.metrics.trade_count < 1:
+                raise ConfigurationError("rule-based backtest did not produce a deterministic trade")
+            if not findings:
+                raise ConfigurationError("evidence critic produced no findings")
+            print(f"real-backtest-release-check: PASS schema_version={store.status().schema_version} source={result.source.value} trades={result.metrics.trade_count} validation={validation.passed}")
+        finally:
+            store.close()
+    elif args.command == "krx-real-research-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            report = RealAutonomousResearchPipeline(store._connection).run(args.request, symbol=args.symbol)
+            if args.json:
+                print(_dumps_json(report.to_json()))
+            else:
+                print(f"krx-real-research-demo: report={report.report_id} source={report.backtest.source.value} trades={report.backtest.metrics.trade_count} memory={report.memory_id}")
+        finally:
+            store.close()
+    elif args.command == "krx-real-research-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            required_tools = {"krx_real_research", "krx_market_data", "data_quality_check", "research_memory_search"}
+            tool_names = {tool.name for tool in default_tool_registry(store._connection).list()}
+            if not required_tools.issubset(tool_names):
+                raise ConfigurationError("KRX real research safe tools are not registered")
+            text = "20일 고가 돌파 + 종가 > MA20 > MA60 + 거래량 >= 20일 평균 이상, 손절 -5%, 10일 저점 이탈 청산 전략의 약점을 분석하고 개선해줘"
+            first = RealAutonomousResearchPipeline(store._connection).run(text, run_id=f"krx-real-research-release-check:{uuid4().hex}", symbol="005930")
+            second = RealAutonomousResearchPipeline(store._connection).run(text, run_id=f"krx-real-research-release-check:{uuid4().hex}", symbol="005930")
+            combined = _dumps_json(first.to_json()) + _dumps_json(second.to_json())
+            for forbidden in ("volume_multiplier", "max_risk_pct", "regime_tags", "<output>", "<response>"):
+                if forbidden in combined:
+                    raise ConfigurationError("KRX real research leaked fixture metadata or wrapper tags")
+            if first.backtest.source.value != "fixture":
+                raise ConfigurationError("release check must explicitly disclose fixture source")
+            if first.backtest.metrics.trade_count < 1 or second.backtest.metrics.trade_count < 1:
+                raise ConfigurationError("repeatable KRX research did not produce deterministic backtests")
+            if "source=fixture" not in first.korean_report:
+                raise ConfigurationError("Korean report did not disclose fixture source")
+            if store.status().schema_version < 33:
+                raise ConfigurationError("KRX real research schema was not migrated to v33")
+            print(
+                "krx-real-research-release-check: PASS "
+                f"schema_version={store.status().schema_version} source={first.backtest.source.value} "
+                f"trades={first.backtest.metrics.trade_count} candidates={len(first.candidates)} tools={len(required_tools)}"
+            )
         finally:
             store.close()
     elif args.command == "backup":

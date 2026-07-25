@@ -2,6 +2,24 @@
 
 Status: Passed
 
+## Sprint 111-120 KRX Real Research Pipeline
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - StrategySpec provenance and fixture metadata isolation
+  - fixture/real source isolation and reproducible dataset fingerprints
+  - deterministic rule-based backtest with cost application
+  - prior-bar look-ahead prevention through breakout and MA calculations
+  - walk-forward chronological split
+  - Korean report and research memory persistence
+- Integration: `tests.integration.test_krx_real_research_pipeline_flow`
+  - `krx-real-research-release-check` repeats three times on one persistent SQLite DB
+  - read-only safe tool `krx_real_research` produces fixture-disclosed Korean report
+  - parser, real-backtest, and full KRX research release checks pass
+- CLI release checks:
+  - `python -m gaon.runtime.cli strategy-parser-release-check --db <db>`
+  - `python -m gaon.runtime.cli real-backtest-release-check --db <db>`
+  - `python -m gaon.runtime.cli krx-real-research-release-check --db <db>`
+
 ## Hotfix 110.2 Korean Response Language Consistency
 
 - Unit: `tests.unit.test_research_grounding`

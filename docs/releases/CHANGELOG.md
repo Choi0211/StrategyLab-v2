@@ -1,5 +1,15 @@
 # Changelog
 
+## Sprint 111-120 - KRX Real Research Pipeline
+
+- Added KRX public-data provider boundary and explicit fixture/real source separation.
+- Added reproducible KRX dataset builder/cache and schema v33 `krx_real_research_memories`.
+- Added Korean user-strategy parser with per-field provenance.
+- Added deterministic rule-based backtest engine with cost assumptions and look-ahead prevention.
+- Added real performance metrics, walk-forward validation, evidence-based critic, improvement candidates, comparison, and Korean research reports.
+- Added read-only safe tool `krx_real_research`.
+- Added CLI commands `strategy-parser-release-check`, `real-backtest-release-check`, `krx-real-research-demo`, and `krx-real-research-release-check`.
+
 ## Hotfix 110.2 Korean Response Language Consistency
 
 - Added Korean final-response normalization for Korean Telegram/user messages.
