@@ -3,6 +3,18 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 120.2 Real Provider Gap Classification
+
+Gaon now separates exchange calendar gaps from market-data-provider gaps. The
+KRX calendar remains the exchange schedule only. The known Yahoo KRX anomaly on
+`2025-09-19` is classified as `provider_gap` for `real:yahoo-chart` and is not
+added as a KRX holiday.
+
+Real-data release checks now allow provider-gap-only warnings while continuing
+to block unknown missing trading days, malformed OHLCV, duplicates, and other
+non-allowlisted quality findings. Korean research reports disclose provider
+gaps instead of hiding them.
+
 ## Hotfix 120.1 KRX Trading Calendar Quality
 
 KRX daily market-data quality checks now evaluate missing bars against trading

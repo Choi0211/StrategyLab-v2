@@ -2,6 +2,22 @@
 
 Status: Passed
 
+## Hotfix 120.2 Real Provider Gap Classification
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - `2025-09-19` remains an exchange-open KRX trading date
+  - Yahoo `2025-09-19` missing bar is classified as `provider_gap`
+  - provider anomaly policy does not affect other providers
+  - provider-gap-only real datasets are research/release eligible
+  - unknown missing trading dates, malformed OHLCV, and duplicates remain blocking
+  - Korean research reports disclose provider gaps
+- Integration: `tests.integration.test_krx_real_research_pipeline_flow`
+  - `provider-gap-release-check` repeats three times on one persistent SQLite DB
+  - schema remains v33
+- CLI release checks:
+  - `python -m gaon.runtime.cli provider-gap-release-check --db <db>`
+  - `python -m gaon.runtime.cli real-krx-data-release-check --db <db>` allows provider-gap-only warnings
+
 ## Hotfix 120.1 KRX Trading Calendar Quality
 
 - Unit: `tests.unit.test_krx_real_pipeline`

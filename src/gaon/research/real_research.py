@@ -15,7 +15,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from typing import Protocol
+from typing import Callable, Protocol
 from uuid import uuid4
 
 from gaon.research.self_improving import ResearchCritic, ResearchQualityScorer, StrategyCandidate
@@ -184,6 +184,9 @@ class TradingCalendar(Protocol):
     def expected_open_dates(self, *, start_date: str, end_date: str) -> tuple[str, ...]: ...
 
 
+MissingDateClassifier = Callable[[str], "DataQualityFinding"]
+
+
 class FixtureMarketDataProvider:
     def fetch_bars(self, symbol: str, *, start_date: str, end_date: str, timeframe: str = "daily") -> MarketDataset:
         _validate_date(start_date)
@@ -234,7 +237,15 @@ class DataQualityReport:
 
 
 class DataQualityEngine:
-    def validate(self, dataset: MarketDataset, *, min_bars: int = 3, max_stale_days: int = 3650, calendar: TradingCalendar | None = None) -> DataQualityReport:
+    def validate(
+        self,
+        dataset: MarketDataset,
+        *,
+        min_bars: int = 3,
+        max_stale_days: int = 3650,
+        calendar: TradingCalendar | None = None,
+        missing_date_classifier: MissingDateClassifier | None = None,
+    ) -> DataQualityReport:
         findings: list[DataQualityFinding] = []
         seen: set[tuple[str, str]] = set()
         previous: str | None = None
@@ -268,8 +279,11 @@ class DataQualityEngine:
             )
             missing = sorted(expected_dates.difference(dates))
             if missing:
-                label = "trading dates" if calendar is not None else "calendar dates"
-                findings.append(DataQualityFinding("missing_dates", "warning", f"missing {len(missing)} {label}"))
+                if missing_date_classifier is not None:
+                    findings.extend(missing_date_classifier(day) for day in missing)
+                else:
+                    label = "trading dates" if calendar is not None else "calendar dates"
+                    findings.append(DataQualityFinding("missing_dates", "warning", f"missing {len(missing)} {label}"))
         try:
             retrieved = datetime.fromisoformat(dataset.metadata.retrieved_at.replace("Z", "+00:00"))
             if datetime.now(UTC) - retrieved > timedelta(days=max_stale_days):
