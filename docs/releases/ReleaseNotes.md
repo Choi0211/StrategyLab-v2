@@ -3,6 +3,23 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 111-120 KRX Real Research Pipeline
+
+Gaon now has a read-only KRX real-research pipeline foundation. Korean strategy
+requests can be parsed into provenance-aware StrategySpec records, run through
+source-aware KRX-shaped datasets, deterministic rule backtests, walk-forward
+validation, evidence-based critique, bounded improvement candidate generation,
+candidate comparison, research memory persistence, and a Korean report.
+
+The public repository still does not bundle a live KRX network fetcher. Tests
+and release checks use explicitly marked `source=fixture` data. If real public
+data is unavailable, the provider boundary reports `real_data_unavailable`
+instead of silently substituting fixture data.
+
+Not included: live trading, broker orders, automatic Champion promotion,
+approval bypass, arbitrary shell/SQL, LLM-generated Python execution, secret
+exposure, private repository dependency, or automatic production deployment.
+
 ## Hotfix 110.2 Korean Response Language Consistency
 
 When Youngha asks in Korean, Gaon's final Telegram-facing response is now normalized to Korean. Internal provenance keys such as `fixture_backed=true` and `validation_backend=fixture` remain intact, while explanations, critic findings, improvement suggestions, missing-data messages, and fallback text are Korean.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -50,6 +50,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         29: _upgrade_v29_to_v30,
         30: _upgrade_v30_to_v31,
         31: _upgrade_v31_to_v32,
+        32: _upgrade_v32_to_v33,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1071,6 +1072,28 @@ def _upgrade_v31_to_v32(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_real_research_reports_generated
             ON real_research_reports(generated_at, report_id);
+        """
+    )
+
+
+def _upgrade_v32_to_v33(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS krx_real_research_memories (
+            memory_id TEXT PRIMARY KEY,
+            strategy_fingerprint TEXT NOT NULL,
+            dataset_fingerprint TEXT NOT NULL,
+            backtest_run_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            source TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_krx_real_research_strategy
+            ON krx_real_research_memories(strategy_fingerprint, created_at);
+        CREATE INDEX IF NOT EXISTS idx_krx_real_research_dataset
+            ON krx_real_research_memories(dataset_fingerprint, created_at);
+        CREATE INDEX IF NOT EXISTS idx_krx_real_research_source
+            ON krx_real_research_memories(source, created_at);
         """
     )
 

@@ -1,0 +1,753 @@
+"""KRX real-research pipeline foundation for Sprint 111-120.
+
+The implementation is deterministic, advisory, and read-only. It can run on
+fixture-backed KRX-shaped data for tests, but it never labels fixture data as
+real and never places orders, promotes Champions, executes generated code, or
+uses a private repository.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+from enum import Enum
+import hashlib
+import json
+import re
+import sqlite3
+from uuid import uuid4
+
+from gaon.research.real_research import (
+    DataQualityEngine,
+    DataQualityReport,
+    DataQualityStatus,
+    MarketBar,
+    MarketDataMetadata,
+    MarketDataset,
+    MarketSymbol,
+    SQLiteDatasetRegistry,
+)
+from gaon.research.self_improving import ResearchMemoryEntry, SQLiteResearchMemoryRepository
+
+
+KRX_REAL_PIPELINE_SCHEMA_VERSION = 1
+DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+class FieldProvenance(str, Enum):
+    USER_PROVIDED = "user_provided"
+    DEFAULT = "default"
+    DERIVED = "derived"
+    FIXTURE = "fixture"
+    REAL = "real"
+    RESEARCH_CANDIDATE = "research_candidate"
+
+
+class MarketDataAvailability(str, Enum):
+    REAL = "real"
+    FIXTURE = "fixture"
+    REAL_DATA_UNAVAILABLE = "real_data_unavailable"
+
+
+@dataclass(frozen=True)
+class ProvenancedValue:
+    value: float | int | str | bool
+    provenance: FieldProvenance
+
+    def to_json(self) -> dict[str, object]:
+        return {"value": self.value, "provenance": self.provenance.value}
+
+
+@dataclass(frozen=True)
+class CanonicalStrategySpec:
+    spec_id: str
+    symbol: str
+    entry: dict[str, ProvenancedValue]
+    exit: dict[str, ProvenancedValue]
+    filters: dict[str, ProvenancedValue]
+    source_text: str
+    created_at: str
+
+    @property
+    def fingerprint(self) -> str:
+        return _sha(self.to_json(include_fingerprint=False))
+
+    def to_json(self, *, include_fingerprint: bool = True) -> dict[str, object]:
+        payload = {
+            "schema_version": KRX_REAL_PIPELINE_SCHEMA_VERSION,
+            "spec_id": self.spec_id,
+            "symbol": self.symbol,
+            "entry": {key: value.to_json() for key, value in sorted(self.entry.items())},
+            "exit": {key: value.to_json() for key, value in sorted(self.exit.items())},
+            "filters": {key: value.to_json() for key, value in sorted(self.filters.items())},
+            "source_text": self.source_text,
+            "created_at": self.created_at,
+        }
+        if include_fingerprint:
+            payload["fingerprint"] = self.fingerprint
+        return payload
+
+
+@dataclass(frozen=True)
+class BacktestExecutionAssumptionSet:
+    commission: ProvenancedValue
+    tax: ProvenancedValue
+    slippage: ProvenancedValue
+    execution_timing: ProvenancedValue
+    position_sizing: ProvenancedValue
+    initial_capital: ProvenancedValue
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "commission": self.commission.to_json(),
+            "tax": self.tax.to_json(),
+            "slippage": self.slippage.to_json(),
+            "execution_timing": self.execution_timing.to_json(),
+            "position_sizing": self.position_sizing.to_json(),
+            "initial_capital": self.initial_capital.to_json(),
+        }
+
+
+@dataclass(frozen=True)
+class RealBacktestTrade:
+    trade_id: str
+    symbol: str
+    entry_date: str
+    exit_date: str
+    entry_price: float
+    exit_price: float
+    quantity: int
+    pnl: float
+    return_pct: float
+    exit_reason: str
+
+    def to_json(self) -> dict[str, object]:
+        return self.__dict__
+
+
+@dataclass(frozen=True)
+class RealPerformanceMetrics:
+    total_return: float
+    cagr: float | None
+    mdd: float
+    sharpe: float | None
+    win_rate: float | None
+    profit_factor: float | None
+    trade_count: int
+    average_trade: float | None
+    average_win: float | None
+    average_loss: float | None
+    payoff_ratio: float | None
+    exposure: float
+    ending_equity: float
+    expectancy: float | None
+    longest_losing_streak: int
+
+    def to_json(self) -> dict[str, object]:
+        return self.__dict__
+
+
+@dataclass(frozen=True)
+class RealBacktestResult:
+    result_id: str
+    run_id: str
+    status: str
+    source: MarketDataAvailability
+    strategy: CanonicalStrategySpec
+    dataset_id: str
+    dataset_fingerprint: str
+    assumptions: BacktestExecutionAssumptionSet
+    metrics: RealPerformanceMetrics
+    trades: tuple[RealBacktestTrade, ...]
+    equity_curve: tuple[dict[str, float | str], ...]
+    warnings: tuple[str, ...]
+    generated_at: str
+
+    @property
+    def fingerprint(self) -> str:
+        return _sha(self.to_json(include_fingerprint=False))
+
+    def to_json(self, *, include_fingerprint: bool = True) -> dict[str, object]:
+        payload = {
+            "schema_version": KRX_REAL_PIPELINE_SCHEMA_VERSION,
+            "result_id": self.result_id,
+            "run_id": self.run_id,
+            "status": self.status,
+            "source": self.source.value,
+            "strategy": self.strategy.to_json(),
+            "dataset_id": self.dataset_id,
+            "dataset_fingerprint": self.dataset_fingerprint,
+            "assumptions": self.assumptions.to_json(),
+            "metrics": self.metrics.to_json(),
+            "trades": [trade.to_json() for trade in self.trades],
+            "equity_curve": [dict(point) for point in self.equity_curve],
+            "warnings": list(self.warnings),
+            "generated_at": self.generated_at,
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+        }
+        if include_fingerprint:
+            payload["fingerprint"] = self.fingerprint
+        return payload
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    validation_id: str
+    train_metrics: RealPerformanceMetrics
+    test_metrics: RealPerformanceMetrics
+    passed: bool
+    findings: tuple[str, ...]
+    generated_at: str
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "validation_id": self.validation_id,
+            "train_metrics": self.train_metrics.to_json(),
+            "test_metrics": self.test_metrics.to_json(),
+            "passed": self.passed,
+            "findings": list(self.findings),
+            "generated_at": self.generated_at,
+        }
+
+
+@dataclass(frozen=True)
+class CriticFinding:
+    code: str
+    message_ko: str
+    evidence_refs: tuple[str, ...]
+    severity: str
+
+    def to_json(self) -> dict[str, object]:
+        return {"code": self.code, "message_ko": self.message_ko, "evidence_refs": list(self.evidence_refs), "severity": self.severity}
+
+
+@dataclass(frozen=True)
+class ImprovementCandidate:
+    candidate_id: str
+    parent_strategy_id: str
+    strategy: CanonicalStrategySpec
+    changed_fields: tuple[str, ...]
+    reason_ko: str
+    provenance: FieldProvenance
+    backtest_result: RealBacktestResult | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "candidate_id": self.candidate_id,
+            "parent_strategy_id": self.parent_strategy_id,
+            "strategy": self.strategy.to_json(),
+            "changed_fields": list(self.changed_fields),
+            "reason_ko": self.reason_ko,
+            "provenance": self.provenance.value,
+            "backtest_result": self.backtest_result.to_json() if self.backtest_result else None,
+        }
+
+
+@dataclass(frozen=True)
+class CandidateComparison:
+    original_result_id: str
+    rows: tuple[dict[str, object], ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {"original_result_id": self.original_result_id, "rows": [dict(row) for row in self.rows]}
+
+
+@dataclass(frozen=True)
+class RealAutonomousResearchReport:
+    report_id: str
+    run_id: str
+    request_text: str
+    dataset: MarketDataset
+    quality: DataQualityReport
+    strategy: CanonicalStrategySpec
+    assumptions: BacktestExecutionAssumptionSet
+    backtest: RealBacktestResult
+    validation: ValidationReport
+    critic_findings: tuple[CriticFinding, ...]
+    candidates: tuple[ImprovementCandidate, ...]
+    comparison: CandidateComparison
+    memory_id: str | None
+    korean_report: str
+    generated_at: str
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": KRX_REAL_PIPELINE_SCHEMA_VERSION,
+            "report_id": self.report_id,
+            "run_id": self.run_id,
+            "request_text": self.request_text,
+            "dataset": self.dataset.to_json(),
+            "quality": self.quality.to_json(),
+            "strategy": self.strategy.to_json(),
+            "assumptions": self.assumptions.to_json(),
+            "backtest": self.backtest.to_json(),
+            "validation": self.validation.to_json(),
+            "critic_findings": [finding.to_json() for finding in self.critic_findings],
+            "candidates": [candidate.to_json() for candidate in self.candidates],
+            "comparison": self.comparison.to_json(),
+            "memory_id": self.memory_id,
+            "korean_report": self.korean_report,
+            "generated_at": self.generated_at,
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+        }
+
+
+class KRXRealMarketDataProvider:
+    """Public-data adapter boundary.
+
+    The production network fetch is intentionally not implemented in this
+    public repository. It reports explicit unavailability instead of silently
+    substituting fixtures.
+    """
+
+    source = "krx-public"
+
+    def fetch_bars(self, symbol: str, *, start_date: str, end_date: str, timeframe: str = "daily") -> MarketDataset:
+        raise RealMarketDataUnavailable("real_data_unavailable: configure an approved public KRX fetcher")
+
+
+class RealMarketDataUnavailable(RuntimeError):
+    """Raised when real public market data is not configured."""
+
+
+class KRXFixtureMarketDataProvider:
+    source = "fixture"
+
+    def fetch_bars(self, symbol: str, *, start_date: str, end_date: str, timeframe: str = "daily") -> MarketDataset:
+        _validate_date(start_date)
+        _validate_date(end_date)
+        if start_date > end_date:
+            raise ValueError("start_date must not be after end_date")
+        bars: list[MarketBar] = []
+        base = 100.0
+        dates = _date_range(start_date, end_date)
+        for index, day in enumerate(dates):
+            trend = index * 0.18
+            cycle = ((index % 9) - 4) * 0.16
+            jump = 4.0 if index in {65, 92} else 0.0
+            close = round(base + trend + cycle + jump, 4)
+            high = round(close + 0.8 + (0.4 if index in {64, 91} else 0.0), 4)
+            low = round(close - 0.9, 4)
+            open_ = round(close - 0.25, 4)
+            volume = 900_000 + index * 4_000 + (500_000 if index in {65, 92} else 0)
+            bars.append(MarketBar(day, symbol.upper(), open_, high, low, close, volume, int(volume * close)))
+        metadata = MarketDataMetadata("fixture:krx-real-research", "KOSPI", timeframe, start_date, end_date, True, f"{end_date}T00:00:00Z", True)
+        return MarketDataset(f"dataset:{symbol.upper()}:{timeframe}:{start_date}:{end_date}", (MarketSymbol(symbol.upper(), symbol.upper(), "KOSPI"),), tuple(bars), metadata)
+
+    def validate_dataset(self, dataset: MarketDataset) -> DataQualityReport:
+        return DataQualityEngine().validate(dataset, min_bars=60)
+
+
+class KRXDatasetBuilder:
+    def __init__(self, connection: sqlite3.Connection | None = None, provider: KRXFixtureMarketDataProvider | KRXRealMarketDataProvider | None = None) -> None:
+        self._connection = connection
+        self._provider = provider or KRXFixtureMarketDataProvider()
+
+    def build(self, symbol: str, *, start_date: str, end_date: str) -> tuple[MarketDataset, DataQualityReport, bool]:
+        dataset = self._provider.fetch_bars(symbol, start_date=start_date, end_date=end_date)
+        quality = DataQualityEngine().validate(dataset, min_bars=60)
+        inserted = False
+        if self._connection is not None:
+            inserted = SQLiteDatasetRegistry(self._connection).put_dataset(dataset, quality)
+        return dataset, quality, inserted
+
+
+class UserStrategyParser:
+    def parse(self, text: str, *, symbol: str = "005930", created_at: str | None = None) -> CanonicalStrategySpec:
+        normalized = text.casefold()
+        entry: dict[str, ProvenancedValue] = {}
+        exit_rules: dict[str, ProvenancedValue] = {}
+        filters: dict[str, ProvenancedValue] = {}
+        if "20" in normalized and ("고가" in text or "high" in normalized or "breakout" in normalized or "돌파" in text):
+            entry["breakout_lookback"] = ProvenancedValue(20, FieldProvenance.USER_PROVIDED)
+        if "ma20" in normalized or "20일" in text:
+            entry["close_gt_ma20"] = ProvenancedValue(True, FieldProvenance.USER_PROVIDED)
+        if "ma60" in normalized or "60일" in text:
+            entry["ma20_gt_ma60"] = ProvenancedValue(True, FieldProvenance.USER_PROVIDED)
+        if "거래량" in text or "volume" in normalized:
+            filters["volume_gte_ma20"] = ProvenancedValue(True, FieldProvenance.USER_PROVIDED)
+        if "-5" in normalized or "손절" in text or "stop" in normalized:
+            exit_rules["protective_stop_pct"] = ProvenancedValue(-5.0, FieldProvenance.USER_PROVIDED)
+        if "10" in normalized and ("저점" in text or "low" in normalized or "청산" in text):
+            exit_rules["channel_exit_lookback"] = ProvenancedValue(10, FieldProvenance.USER_PROVIDED)
+        if "breakout_lookback" not in entry:
+            entry["breakout_lookback"] = ProvenancedValue(20, FieldProvenance.DEFAULT)
+        if "protective_stop_pct" not in exit_rules:
+            exit_rules["protective_stop_pct"] = ProvenancedValue(-5.0, FieldProvenance.DEFAULT)
+        return CanonicalStrategySpec(f"canonical-strategy:{uuid4().hex}", symbol.upper(), entry, exit_rules, filters, text, created_at or utc_now())
+
+
+def default_execution_assumptions() -> BacktestExecutionAssumptionSet:
+    return BacktestExecutionAssumptionSet(
+        ProvenancedValue(0.00015, FieldProvenance.DEFAULT),
+        ProvenancedValue(0.0018, FieldProvenance.DEFAULT),
+        ProvenancedValue(0.0005, FieldProvenance.DEFAULT),
+        ProvenancedValue("next_close", FieldProvenance.DEFAULT),
+        ProvenancedValue("single_position_all_cash", FieldProvenance.DEFAULT),
+        ProvenancedValue(1_000_000.0, FieldProvenance.DEFAULT),
+    )
+
+
+class RuleBasedBacktestEngine:
+    engine_name = "gaon-rule-backtest"
+    engine_version = "v1"
+
+    def run(self, run_id: str, strategy: CanonicalStrategySpec, dataset: MarketDataset, assumptions: BacktestExecutionAssumptionSet, *, generated_at: str | None = None) -> RealBacktestResult:
+        at = generated_at or utc_now()
+        bars = tuple(sorted(dataset.bars, key=lambda bar: bar.timestamp))
+        if len(bars) < 61:
+            return _empty_result(run_id, strategy, dataset, assumptions, "rejected", ("insufficient bars for MA60 and breakout lookback",), at)
+        initial_capital = float(assumptions.initial_capital.value)
+        cash = initial_capital
+        quantity = 0
+        entry_price = 0.0
+        entry_date = ""
+        entry_index = -1
+        trades: list[RealBacktestTrade] = []
+        equity_curve: list[dict[str, float | str]] = []
+        invested_days = 0
+        cost_rate = float(assumptions.commission.value) + float(assumptions.tax.value) + float(assumptions.slippage.value)
+        breakout_n = int(strategy.entry["breakout_lookback"].value)
+        exit_n = int(strategy.exit.get("channel_exit_lookback", ProvenancedValue(10, FieldProvenance.DEFAULT)).value)
+        stop_pct = abs(float(strategy.exit["protective_stop_pct"].value)) / 100.0
+        for index, bar in enumerate(bars):
+            if quantity:
+                invested_days += 1
+            equity = cash + quantity * bar.close
+            equity_curve.append({"timestamp": bar.timestamp, "equity": round(equity, 4)})
+            if index < max(60, breakout_n, exit_n):
+                continue
+            prior = bars[:index]
+            prior_high = max(item.high for item in prior[-breakout_n:])
+            ma20 = sum(item.close for item in prior[-20:]) / 20
+            ma60 = sum(item.close for item in prior[-60:]) / 60
+            volume_ma20 = sum(item.volume for item in prior[-20:]) / 20
+            prior_low = min(item.low for item in prior[-exit_n:])
+            if quantity == 0:
+                entry_ok = bar.close > prior_high and (not strategy.entry.get("close_gt_ma20") or bar.close > ma20) and (not strategy.entry.get("ma20_gt_ma60") or ma20 > ma60)
+                volume_ok = not strategy.filters.get("volume_gte_ma20") or bar.volume >= volume_ma20
+                if entry_ok and volume_ok:
+                    fill = bar.close * (1.0 + cost_rate)
+                    quantity = int(cash // fill)
+                    if quantity > 0:
+                        entry_price = fill
+                        entry_date = bar.timestamp
+                        entry_index = index
+                        cash -= quantity * fill
+            else:
+                stop_price = entry_price * (1.0 - stop_pct)
+                exit_reason = ""
+                if bar.close <= stop_price:
+                    exit_reason = "protective_stop"
+                elif bar.close < prior_low:
+                    exit_reason = "channel_low_exit"
+                elif index == len(bars) - 1:
+                    exit_reason = "end_of_dataset"
+                if exit_reason:
+                    fill = bar.close * (1.0 - cost_rate)
+                    pnl = (fill - entry_price) * quantity
+                    cash += quantity * fill
+                    trades.append(RealBacktestTrade(f"trade:{run_id}:{len(trades) + 1}", bar.symbol, entry_date, bar.timestamp, round(entry_price, 4), round(fill, 4), quantity, round(pnl, 4), round((fill - entry_price) / entry_price, 6), exit_reason))
+                    quantity = 0
+                    entry_price = 0.0
+                    entry_date = ""
+                    entry_index = -1
+        if quantity:
+            last = bars[-1]
+            fill = last.close * (1.0 - cost_rate)
+            pnl = (fill - entry_price) * quantity
+            cash += quantity * fill
+            trades.append(RealBacktestTrade(f"trade:{run_id}:{len(trades) + 1}", last.symbol, entry_date, last.timestamp, round(entry_price, 4), round(fill, 4), quantity, round(pnl, 4), round((fill - entry_price) / entry_price, 6), "end_of_dataset"))
+            equity_curve[-1] = {"timestamp": last.timestamp, "equity": round(cash, 4)}
+        metrics = PerformanceMetricsCalculator().calculate(tuple(equity_curve), tuple(trades), initial_capital, bars[0].timestamp, bars[-1].timestamp, invested_days, len(bars))
+        source = MarketDataAvailability.FIXTURE if dataset.metadata.fixture_backed else MarketDataAvailability.REAL
+        warnings = ("fixture source disclosed; not real KRX data" if source is MarketDataAvailability.FIXTURE else "real public data source; verify freshness before decisions",)
+        return RealBacktestResult(f"krx-real-backtest-result:{_sha({'run_id': run_id, 'strategy': strategy.fingerprint, 'dataset': dataset.fingerprint})}", run_id, "completed", source, strategy, dataset.dataset_id, dataset.fingerprint, assumptions, metrics, tuple(trades), tuple(equity_curve), warnings, at)
+
+
+class PerformanceMetricsCalculator:
+    def calculate(self, equity_curve: tuple[dict[str, float | str], ...], trades: tuple[RealBacktestTrade, ...], initial_capital: float, start_date: str, end_date: str, invested_days: int, total_days: int) -> RealPerformanceMetrics:
+        ending = float(equity_curve[-1]["equity"]) if equity_curve else initial_capital
+        total_return = (ending / initial_capital) - 1.0 if initial_capital else 0.0
+        years = max(1.0 / 365.0, (datetime.fromisoformat(end_date) - datetime.fromisoformat(start_date)).days / 365.0)
+        cagr = (ending / initial_capital) ** (1 / years) - 1 if initial_capital > 0 and ending > 0 else None
+        equities = [float(point["equity"]) for point in equity_curve]
+        mdd = _max_drawdown(equities)
+        returns = [(equities[i] / equities[i - 1] - 1.0) for i in range(1, len(equities)) if equities[i - 1] > 0]
+        sharpe = _sharpe(returns)
+        wins = [trade.pnl for trade in trades if trade.pnl > 0]
+        losses = [trade.pnl for trade in trades if trade.pnl < 0]
+        trade_count = len(trades)
+        win_rate = len(wins) / trade_count if trade_count else None
+        profit_factor = sum(wins) / abs(sum(losses)) if losses else (None if not wins else float("inf"))
+        avg_trade = sum(trade.pnl for trade in trades) / trade_count if trade_count else None
+        avg_win = sum(wins) / len(wins) if wins else None
+        avg_loss = sum(losses) / len(losses) if losses else None
+        payoff = abs(avg_win / avg_loss) if avg_win is not None and avg_loss not in (None, 0) else None
+        expectancy = ((win_rate or 0.0) * (avg_win or 0.0) + (1 - (win_rate or 0.0)) * (avg_loss or 0.0)) if trade_count else None
+        return RealPerformanceMetrics(round(total_return, 6), round(cagr, 6) if cagr is not None else None, round(mdd, 6), round(sharpe, 6) if sharpe is not None else None, round(win_rate, 6) if win_rate is not None else None, round(profit_factor, 6) if profit_factor not in (None, float("inf")) else profit_factor, trade_count, round(avg_trade, 6) if avg_trade is not None else None, round(avg_win, 6) if avg_win is not None else None, round(avg_loss, 6) if avg_loss is not None else None, round(payoff, 6) if payoff is not None else None, round(invested_days / max(1, total_days), 6), round(ending, 4), round(expectancy, 6) if expectancy is not None else None, _longest_losing_streak(trades))
+
+
+class WalkForwardValidator:
+    def validate(self, strategy: CanonicalStrategySpec, dataset: MarketDataset, assumptions: BacktestExecutionAssumptionSet, *, run_id: str, generated_at: str | None = None) -> ValidationReport:
+        at = generated_at or utc_now()
+        bars = tuple(sorted(dataset.bars, key=lambda bar: bar.timestamp))
+        split = max(70, int(len(bars) * 0.65))
+        train = replace(dataset, dataset_id=f"{dataset.dataset_id}:train", bars=bars[:split])
+        test = replace(dataset, dataset_id=f"{dataset.dataset_id}:test", bars=bars[split - 60 :])
+        engine = RuleBasedBacktestEngine()
+        train_result = engine.run(f"{run_id}:train", strategy, train, assumptions, generated_at=at)
+        test_result = engine.run(f"{run_id}:test", strategy, test, assumptions, generated_at=at)
+        findings = []
+        if test_result.metrics.trade_count == 0:
+            findings.append("표본 외 구간에서 거래가 발생하지 않았습니다.")
+        if train_result.metrics.total_return > 0 and test_result.metrics.total_return < 0:
+            findings.append("표본 내 성과와 표본 외 성과 방향이 다릅니다.")
+        passed = not findings and test_result.status == "completed"
+        return ValidationReport(f"validation:{run_id}", train_result.metrics, test_result.metrics, passed, tuple(findings), at)
+
+
+class EvidenceBasedStrategyCritic:
+    def critique(self, strategy: CanonicalStrategySpec, backtest: RealBacktestResult, validation: ValidationReport) -> tuple[CriticFinding, ...]:
+        findings: list[CriticFinding] = [
+            CriticFinding("strategy_structure", "20일 고가 돌파, MA20/MA60 필터, 거래량 필터, 손절 및 10일 저점 이탈 청산 구조는 추세 추종형 전략입니다.", (strategy.fingerprint,), "info"),
+            CriticFinding("false_breakout_risk", "돌파 조건은 횡보장에서 거짓 돌파가 발생할 수 있어 거래량 확인과 표본 외 검증이 중요합니다.", (strategy.fingerprint,), "warning"),
+            CriticFinding("ma_lag", "MA20/MA60 필터는 추세 확인에는 도움이 되지만 진입이 늦어질 수 있습니다.", (strategy.fingerprint,), "warning"),
+            CriticFinding("giveback", "10일 저점 이탈 청산은 수익 일부를 되돌린 뒤 청산될 가능성이 있습니다.", (strategy.fingerprint,), "warning"),
+        ]
+        if backtest.metrics.trade_count:
+            findings.append(CriticFinding("backtest_mdd", f"백테스트 결과 MDD는 {backtest.metrics.mdd:.2%}입니다.", (backtest.result_id,), "info"))
+        else:
+            findings.append(CriticFinding("low_trade_count", "현재 데이터 구간에서는 거래 수가 부족해 통계적 판단이 제한됩니다.", (backtest.result_id,), "warning"))
+        if not validation.passed:
+            findings.append(CriticFinding("oos_validation", "표본 외 검증에서 추가 확인이 필요한 항목이 있습니다.", (validation.validation_id,), "warning"))
+        return tuple(findings)
+
+
+class ImprovementCandidateGenerator:
+    def generate(self, strategy: CanonicalStrategySpec, findings: tuple[CriticFinding, ...], *, run_id: str, created_at: str | None = None) -> tuple[ImprovementCandidate, ...]:
+        at = created_at or utc_now()
+        candidates: list[ImprovementCandidate] = []
+        entry_a = dict(strategy.entry)
+        entry_a["breakout_lookback"] = ProvenancedValue(30, FieldProvenance.RESEARCH_CANDIDATE)
+        candidates.append(ImprovementCandidate(f"{run_id}:candidate:a", strategy.spec_id, replace(strategy, spec_id=f"{strategy.spec_id}:breakout30", entry=entry_a, created_at=at), ("entry.breakout_lookback",), "거짓 돌파를 줄이기 위해 돌파 기준을 20일에서 30일로 늘립니다.", FieldProvenance.RESEARCH_CANDIDATE))
+        exit_b = dict(strategy.exit)
+        exit_b["channel_exit_lookback"] = ProvenancedValue(15, FieldProvenance.RESEARCH_CANDIDATE)
+        candidates.append(ImprovementCandidate(f"{run_id}:candidate:b", strategy.spec_id, replace(strategy, spec_id=f"{strategy.spec_id}:exit15", exit=exit_b, created_at=at), ("exit.channel_exit_lookback",), "수익 반납을 줄이는지 확인하기 위해 청산 저점 기준을 15일로 완화합니다.", FieldProvenance.RESEARCH_CANDIDATE))
+        filters_c = dict(strategy.filters)
+        filters_c["volume_gte_ma20"] = ProvenancedValue(False, FieldProvenance.RESEARCH_CANDIDATE)
+        candidates.append(ImprovementCandidate(f"{run_id}:candidate:c", strategy.spec_id, replace(strategy, spec_id=f"{strategy.spec_id}:volume-off", filters=filters_c, created_at=at), ("filters.volume_gte_ma20",), "거래량 필터가 지나치게 선택적인지 확인하기 위해 필터 제거 후보를 비교합니다.", FieldProvenance.RESEARCH_CANDIDATE))
+        return tuple(candidates)
+
+
+class RealAutonomousResearchPipeline:
+    def __init__(self, connection: sqlite3.Connection | None = None, provider: KRXFixtureMarketDataProvider | KRXRealMarketDataProvider | None = None) -> None:
+        self._connection = connection
+        self._provider = provider or KRXFixtureMarketDataProvider()
+
+    def run(self, request_text: str, *, run_id: str | None = None, symbol: str = "005930", start_date: str = "2026-01-01", end_date: str = "2026-07-10", generated_at: str | None = None) -> RealAutonomousResearchReport:
+        at = generated_at or utc_now()
+        rid = run_id or f"krx-real-research:{uuid4().hex}"
+        dataset, quality, _inserted = KRXDatasetBuilder(self._connection, self._provider).build(symbol, start_date=start_date, end_date=end_date)
+        strategy = UserStrategyParser().parse(request_text, symbol=symbol, created_at=at)
+        assumptions = default_execution_assumptions()
+        engine = RuleBasedBacktestEngine()
+        backtest = engine.run(f"{rid}:original", strategy, dataset, assumptions, generated_at=at) if quality.status is not DataQualityStatus.FAIL else _empty_result(f"{rid}:original", strategy, dataset, assumptions, "rejected", ("data quality failed",), at)
+        validation = WalkForwardValidator().validate(strategy, dataset, assumptions, run_id=rid, generated_at=at)
+        findings = EvidenceBasedStrategyCritic().critique(strategy, backtest, validation)
+        raw_candidates = ImprovementCandidateGenerator().generate(strategy, findings, run_id=rid, created_at=at)
+        tested_candidates = []
+        for candidate in raw_candidates:
+            result = engine.run(f"{rid}:{candidate.candidate_id}", candidate.strategy, dataset, assumptions, generated_at=at)
+            tested_candidates.append(replace(candidate, backtest_result=result))
+        comparison = _compare_candidates(backtest, tuple(tested_candidates))
+        memory_id = self._persist(rid, request_text, strategy, dataset, backtest, findings, tuple(tested_candidates), comparison, at)
+        korean_report = _build_korean_report(request_text, dataset, quality, strategy, assumptions, backtest, validation, findings, tuple(tested_candidates), comparison)
+        report = RealAutonomousResearchReport(f"krx-real-research-report:{rid}", rid, request_text, dataset, quality, strategy, assumptions, backtest, validation, findings, tuple(tested_candidates), comparison, memory_id, korean_report, at)
+        if self._connection is not None:
+            with self._connection:
+                self._connection.execute(
+                    "INSERT OR REPLACE INTO real_research_reports(report_id, request_id, payload_json, generated_at) VALUES (?, ?, ?, ?)",
+                    (report.report_id, rid, _json(report.to_json()), at),
+                )
+        return report
+
+    def _persist(self, run_id: str, request_text: str, strategy: CanonicalStrategySpec, dataset: MarketDataset, backtest: RealBacktestResult, findings: tuple[CriticFinding, ...], candidates: tuple[ImprovementCandidate, ...], comparison: CandidateComparison, at: str) -> str | None:
+        if self._connection is None:
+            return None
+        with self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO krx_real_research_memories(memory_id, strategy_fingerprint, dataset_fingerprint, backtest_run_id, payload_json, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (f"krx-memory:{run_id}", strategy.fingerprint, dataset.fingerprint, backtest.run_id, _json({"strategy": strategy.to_json(), "backtest": backtest.to_json(), "findings": [item.to_json() for item in findings], "candidates": [item.to_json() for item in candidates], "comparison": comparison.to_json()}), at, backtest.source.value),
+            )
+        memory = ResearchMemoryEntry(
+            f"memory:{run_id}",
+            "breakout",
+            dataset.metadata.market,
+            dataset.metadata.timeframe,
+            request_text,
+            f"source={backtest.source.value}; total_return={backtest.metrics.total_return:.4f}; trade_count={backtest.metrics.trade_count}",
+            "; ".join(item.code for item in findings),
+            "; ".join(row["candidate_id"] for row in comparison.rows),
+            "real_research_candidate" if backtest.source is MarketDataAvailability.REAL else "fixture_research_candidate",
+            ("krx_real_research", "breakout", backtest.source.value),
+            at,
+            run_id,
+            _sha({"strategy": strategy.fingerprint, "dataset": dataset.fingerprint, "source": backtest.source.value}),
+            (backtest.result_id, dataset.dataset_id),
+        )
+        repo = SQLiteResearchMemoryRepository(self._connection)
+        try:
+            if repo.find_by_fingerprint(memory.fingerprint) is None:
+                repo.add_memory(memory)
+                return memory.memory_id
+        except sqlite3.IntegrityError:
+            return None
+        return None
+
+
+def krx_real_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930") -> dict[str, object]:
+    report = RealAutonomousResearchPipeline(connection).run(request_text, symbol=symbol)
+    return report.to_json()
+
+
+def _compare_candidates(original: RealBacktestResult, candidates: tuple[ImprovementCandidate, ...]) -> CandidateComparison:
+    rows = [
+        {
+            "candidate_id": "original",
+            "result_id": original.result_id,
+            "total_return": original.metrics.total_return,
+            "mdd": original.metrics.mdd,
+            "profit_factor": original.metrics.profit_factor,
+            "trade_count": original.metrics.trade_count,
+            "source": original.source.value,
+        }
+    ]
+    for candidate in candidates:
+        result = candidate.backtest_result
+        rows.append(
+            {
+                "candidate_id": candidate.candidate_id,
+                "result_id": result.result_id if result else None,
+                "changed_fields": list(candidate.changed_fields),
+                "reason_ko": candidate.reason_ko,
+                "total_return": result.metrics.total_return if result else None,
+                "mdd": result.metrics.mdd if result else None,
+                "profit_factor": result.metrics.profit_factor if result else None,
+                "trade_count": result.metrics.trade_count if result else None,
+                "source": result.source.value if result else None,
+            }
+        )
+    return CandidateComparison(original.result_id, tuple(rows))
+
+
+def _build_korean_report(request_text: str, dataset: MarketDataset, quality: DataQualityReport, strategy: CanonicalStrategySpec, assumptions: BacktestExecutionAssumptionSet, backtest: RealBacktestResult, validation: ValidationReport, findings: tuple[CriticFinding, ...], candidates: tuple[ImprovementCandidate, ...], comparison: CandidateComparison) -> str:
+    source_label = "fixture" if dataset.metadata.fixture_backed else "real"
+    lines = [
+        "[분석 기준]",
+        f"- 요청: {request_text}",
+        "- 자동 주문, Champion 자동 승격, 승인 우회는 수행하지 않았습니다.",
+        "",
+        "[검증된 데이터]",
+        f"- dataset_id={dataset.dataset_id}",
+        f"- source={source_label}",
+        f"- quality_status={quality.status.value}",
+        f"- bars={len(dataset.bars)}",
+        "",
+        "[백테스트 결과]",
+        f"- total_return={backtest.metrics.total_return:.2%}",
+        f"- MDD={backtest.metrics.mdd:.2%}",
+        f"- Sharpe={backtest.metrics.sharpe if backtest.metrics.sharpe is not None else 'not_available'}",
+        f"- trade_count={backtest.metrics.trade_count}",
+        f"- execution_assumptions={assumptions.to_json()}",
+        "",
+        "[발견된 약점]",
+    ]
+    lines.extend(f"- {finding.message_ko}" for finding in findings)
+    lines.extend(
+        [
+            "",
+            "[개선 가설]",
+        ]
+    )
+    lines.extend(f"- {candidate.candidate_id}: {candidate.reason_ko}" for candidate in candidates)
+    lines.extend(["", "[개선 후보 비교]"])
+    for row in comparison.rows:
+        lines.append(f"- {row['candidate_id']}: total_return={row.get('total_return')} mdd={row.get('mdd')} trade_count={row.get('trade_count')}")
+    lines.extend(
+        [
+            "",
+            "[가온의 판단]",
+            "- 현재 결과는 연구와 비교를 위한 참고 자료이며, 실거래 판단이나 자동 승격 근거가 아닙니다.",
+            "- fixture 결과는 실제 KRX 결과가 아니며 실제 데이터가 연결되면 source=real로 별도 표시됩니다." if dataset.metadata.fixture_backed else "- 실제 public 데이터 기반 결과이지만, 주문 전 별도 승인과 운영 검증이 필요합니다.",
+            "",
+            "[주의사항]",
+            "- LLM 생성 Python, arbitrary shell/SQL, broker 주문, KIS 실거래 연결은 사용하지 않았습니다.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _empty_result(run_id: str, strategy: CanonicalStrategySpec, dataset: MarketDataset, assumptions: BacktestExecutionAssumptionSet, status: str, warnings: tuple[str, ...], at: str) -> RealBacktestResult:
+    metrics = RealPerformanceMetrics(0.0, None, 0.0, None, None, None, 0, None, None, None, None, 0.0, float(assumptions.initial_capital.value), None, 0)
+    return RealBacktestResult(f"krx-real-backtest-result:{run_id}", run_id, status, MarketDataAvailability.FIXTURE if dataset.metadata.fixture_backed else MarketDataAvailability.REAL, strategy, dataset.dataset_id, dataset.fingerprint, assumptions, metrics, (), (), warnings, at)
+
+
+def _date_range(start: str, end: str) -> list[str]:
+    current = datetime.fromisoformat(start)
+    final = datetime.fromisoformat(end)
+    dates = []
+    while current <= final:
+        dates.append(current.date().isoformat())
+        current += timedelta(days=1)
+    return dates
+
+
+def _validate_date(value: str) -> None:
+    if DATE_ONLY.fullmatch(value) is None:
+        raise ValueError("date must use YYYY-MM-DD")
+
+
+def _max_drawdown(equities: list[float]) -> float:
+    peak = equities[0] if equities else 0.0
+    worst = 0.0
+    for equity in equities:
+        peak = max(peak, equity)
+        if peak:
+            worst = min(worst, equity / peak - 1.0)
+    return abs(worst)
+
+
+def _sharpe(returns: list[float]) -> float | None:
+    if len(returns) < 2:
+        return None
+    avg = sum(returns) / len(returns)
+    variance = sum((item - avg) ** 2 for item in returns) / (len(returns) - 1)
+    stdev = variance ** 0.5
+    return None if stdev == 0 else (avg / stdev) * (252 ** 0.5)
+
+
+def _longest_losing_streak(trades: tuple[RealBacktestTrade, ...]) -> int:
+    longest = 0
+    current = 0
+    for trade in trades:
+        if trade.pnl < 0:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def _sha(payload: dict[str, object]) -> str:
+    return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
+
+
+def _json(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
