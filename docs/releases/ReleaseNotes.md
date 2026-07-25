@@ -3,6 +3,21 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Real KRX Data Activation
+
+Gaon can now activate a real public historical market data provider for
+KRX-listed symbols. The first provider is `real:yahoo-chart`, which maps Korean
+symbols such as `005930` to public Yahoo chart symbols such as `005930.KS` and
+parses daily OHLCV data into the existing MarketDataset contract.
+
+Real activation is explicit. Production must set
+`GAON_REAL_MARKET_DATA_ENABLED=true` and
+`GAON_MARKET_DATA_PROVIDER=yahoo-chart`. Without those settings, CI and local
+release checks continue to use fixture data and disclose `source=fixture`.
+
+Provider failures, empty responses, malformed responses, and low-quality data
+fail closed as `real_data_unavailable`; fixture results are not substituted.
+
 ## Sprint 111-120 KRX Real Research Pipeline
 
 Gaon now has a read-only KRX real-research pipeline foundation. Korean strategy

@@ -83,10 +83,13 @@ from gaon.research.krx_real_pipeline import (
     KRXDatasetBuilder,
     KRXFixtureMarketDataProvider,
     RealAutonomousResearchPipeline,
+    RealMarketDataUnavailable,
     RuleBasedBacktestEngine,
     UserStrategyParser,
     WalkForwardValidator,
+    build_market_data_provider_from_env,
     default_execution_assumptions,
+    real_krx_data_release_check,
 )
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
 
@@ -231,6 +234,11 @@ def main(argv: list[str] | None = None) -> int:
     krx_real_research_demo.add_argument("--json", action="store_true")
     krx_real_research_release = sub.add_parser("krx-real-research-release-check")
     krx_real_research_release.add_argument("--db", default=":memory:")
+    real_krx_data_release = sub.add_parser("real-krx-data-release-check")
+    real_krx_data_release.add_argument("--db", default=":memory:")
+    real_krx_data_release.add_argument("--symbol", default="005930")
+    real_krx_data_release.add_argument("--start", default="2025-01-01")
+    real_krx_data_release.add_argument("--end", default="2026-07-24")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1227,7 +1235,7 @@ def _run(args: argparse.Namespace) -> int:
     elif args.command == "krx-real-research-demo":
         store = RuntimeStateStore(args.db)
         try:
-            report = RealAutonomousResearchPipeline(store._connection).run(args.request, symbol=args.symbol)
+            report = RealAutonomousResearchPipeline(store._connection, build_market_data_provider_from_env(os.environ)).run(args.request, symbol=args.symbol)
             if args.json:
                 print(_dumps_json(report.to_json()))
             else:
@@ -1242,17 +1250,18 @@ def _run(args: argparse.Namespace) -> int:
             if not required_tools.issubset(tool_names):
                 raise ConfigurationError("KRX real research safe tools are not registered")
             text = "20일 고가 돌파 + 종가 > MA20 > MA60 + 거래량 >= 20일 평균 이상, 손절 -5%, 10일 저점 이탈 청산 전략의 약점을 분석하고 개선해줘"
-            first = RealAutonomousResearchPipeline(store._connection).run(text, run_id=f"krx-real-research-release-check:{uuid4().hex}", symbol="005930")
-            second = RealAutonomousResearchPipeline(store._connection).run(text, run_id=f"krx-real-research-release-check:{uuid4().hex}", symbol="005930")
+            provider = build_market_data_provider_from_env(os.environ)
+            first = RealAutonomousResearchPipeline(store._connection, provider).run(text, run_id=f"krx-real-research-release-check:{uuid4().hex}", symbol="005930")
+            second = RealAutonomousResearchPipeline(store._connection, provider).run(text, run_id=f"krx-real-research-release-check:{uuid4().hex}", symbol="005930")
             combined = _dumps_json(first.to_json()) + _dumps_json(second.to_json())
             for forbidden in ("volume_multiplier", "max_risk_pct", "regime_tags", "<output>", "<response>"):
                 if forbidden in combined:
                     raise ConfigurationError("KRX real research leaked fixture metadata or wrapper tags")
-            if first.backtest.source.value != "fixture":
-                raise ConfigurationError("release check must explicitly disclose fixture source")
+            if first.backtest.source.value not in {"fixture", "real"}:
+                raise ConfigurationError("release check must explicitly disclose data source")
             if first.backtest.metrics.trade_count < 1 or second.backtest.metrics.trade_count < 1:
                 raise ConfigurationError("repeatable KRX research did not produce deterministic backtests")
-            if "source=fixture" not in first.korean_report:
+            if f"source={first.backtest.source.value}" not in first.korean_report:
                 raise ConfigurationError("Korean report did not disclose fixture source")
             if store.status().schema_version < 33:
                 raise ConfigurationError("KRX real research schema was not migrated to v33")
@@ -1261,6 +1270,27 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} source={first.backtest.source.value} "
                 f"trades={first.backtest.metrics.trade_count} candidates={len(first.candidates)} tools={len(required_tools)}"
             )
+        finally:
+            store.close()
+    elif args.command == "real-krx-data-release-check":
+        config = load_runtime_config(os.environ)
+        store = RuntimeStateStore(args.db)
+        try:
+            if not config.real_market_data_enabled:
+                raise ConfigurationError("real KRX data release check requires GAON_REAL_MARKET_DATA_ENABLED=true")
+            provider = build_market_data_provider_from_env(os.environ)
+            result = real_krx_data_release_check(store._connection, symbol=args.symbol, start_date=args.start, end_date=args.end, provider=provider)
+            if result["source"] != "real" or result["fixture_backed"] is not False:
+                raise ConfigurationError("real KRX data release check did not use real source")
+            print(
+                "real-krx-data-release-check: PASS "
+                f"schema_version={store.status().schema_version} source={result['source']} "
+                f"fixture_backed={str(result['fixture_backed']).lower()} provider={result['provider']} "
+                f"symbol={result['symbol']} rows={result['rows']} quality={result['quality']} "
+                f"trades={result['trades']} validation={result['validation']}"
+            )
+        except RealMarketDataUnavailable as exc:
+            raise ConfigurationError(str(exc)) from exc
         finally:
             store.close()
     elif args.command == "backup":

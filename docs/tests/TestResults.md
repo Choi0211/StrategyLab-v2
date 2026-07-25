@@ -2,6 +2,20 @@
 
 Status: Passed
 
+## Real KRX Data Activation
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - Yahoo chart provider response parsing
+  - `source=real` and `fixture_backed=false` provenance
+  - empty, malformed, and failing provider responses return unavailable state
+  - release check rejects fixture providers
+  - env provider selection requires explicit real provider
+- Unit: `tests.unit.test_gaon_runtime_collaboration`
+  - real market data env defaults to disabled fixture mode
+  - real mode rejects fixture provider configuration
+- CLI:
+  - `real-krx-data-release-check` fails closed unless `GAON_REAL_MARKET_DATA_ENABLED=true`
+
 ## Sprint 111-120 KRX Real Research Pipeline
 
 - Unit: `tests.unit.test_krx_real_pipeline`

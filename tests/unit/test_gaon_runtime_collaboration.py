@@ -55,12 +55,19 @@ class GaonRuntimeCollaborationTest(unittest.TestCase):
         self.assertTrue(load_runtime_config({}).dry_run)
         self.assertTrue(load_runtime_config({}).free_only_mode)
         self.assertFalse(load_runtime_config({}).paid_provider_enabled)
+        self.assertFalse(load_runtime_config({}).real_market_data_enabled)
+        self.assertEqual(load_runtime_config({}).market_data_provider, "fixture")
         with self.assertRaises(ConfigurationError):
             GaonRuntimeConfig(telegram_enabled=True)
         with self.assertRaises(ConfigurationError):
             GaonRuntimeConfig(telegram_allowed_chat_ids=("abc",))
         with self.assertRaises(ConfigurationError):
             load_runtime_config({"GAON_FREE_ONLY_MODE": "true", "GAON_PAID_PROVIDER_ENABLED": "true"})
+        with self.assertRaises(ConfigurationError):
+            load_runtime_config({"GAON_REAL_MARKET_DATA_ENABLED": "true", "GAON_MARKET_DATA_PROVIDER": "fixture"})
+        real_data_config = load_runtime_config({"GAON_REAL_MARKET_DATA_ENABLED": "true", "GAON_MARKET_DATA_PROVIDER": "yahoo-chart"})
+        self.assertTrue(real_data_config.real_market_data_enabled)
+        self.assertEqual(real_data_config.market_data_provider, "yahoo-chart")
 
     def test_runtime_config_timezone_policy_is_windows_safe(self) -> None:
         default_config = load_runtime_config({})
