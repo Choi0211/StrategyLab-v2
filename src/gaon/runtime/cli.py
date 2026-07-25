@@ -25,7 +25,7 @@ from gaon.integrations.telegram.contracts import TelegramClient, TelegramDiscove
 from gaon.integrations.telegram.formatter import split_message
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import discover_private_chats, parse_update_result
-from gaon.runtime.assistant_provider import AssistantProviderResponse, ProviderCapabilities, ProviderHealth
+from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall, ProviderCapabilities, ProviderHealth
 from gaon.runtime.agents import AgentDispatcher, AgentRequest, default_agent_registry
 from gaon.runtime.agent_planner import AgentPlanExecutor, AgentPlanner, AgentPlanPolicy
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
@@ -36,7 +36,7 @@ from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutiveRequest, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.external_research import ExternalResearchError, ExternalResearchTool, validate_external_url
 from gaon.runtime.health import readiness
-from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
+from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, ToolResult, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.provider_registry import build_assistant_provider
 from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, looks_like_english_final
@@ -225,6 +225,9 @@ def main(argv: list[str] | None = None) -> int:
     korean_response_release = sub.add_parser("korean-response-release-check")
     korean_response_release.add_argument("--db", default=":memory:")
     korean_response_release.add_argument("--run-id", default=None)
+    strict_real_grounding_release = sub.add_parser("strict-real-research-grounding-release-check")
+    strict_real_grounding_release.add_argument("--db", default=":memory:")
+    strict_real_grounding_release.add_argument("--run-id", default=None)
     strategy_parser_release = sub.add_parser("strategy-parser-release-check")
     strategy_parser_release.add_argument("--db", default=":memory:")
     real_backtest_release = sub.add_parser("real-backtest-release-check")
@@ -1197,6 +1200,50 @@ def _run(args: argparse.Namespace) -> int:
             if "\uc800\uc7a5\ub41c \uc720\uc0ac \uc5f0\uad6c \uae30\ub85d\uc744 \ucc3e\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4" not in checks[2].text:
                 raise ConfigurationError("Korean memory empty-state response regressed")
             print(f"korean-response-release-check: PASS schema_version={store.status().schema_version} run_id={run_id}")
+        finally:
+            store.close()
+    elif args.command == "strict-real-research-grounding-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            run_id = args.run_id or f"strict-real-research-grounding-release-check:{uuid4().hex}"
+            payload = _strict_real_research_payload()
+            provider = _StrictGroundingFakeProvider()
+            brain = LLMConversationBrain(
+                GaonRuntimeConfig(assistant_enabled=True, assistant_provider="openai-compatible"),
+                store.conversations,
+                tool_executor=_StrictGroundingFakeExecutor(payload),
+                tool_result_repository=store.conversation_tool_results,
+                assistant_provider=provider,
+            )
+            text = (
+                "삼성전자 실제 데이터로 아래 전략을 백테스트하고 약점 분석과 개선 후보까지 비교해줘.\n"
+                "20일 고가 돌파\n종가 > MA20 > MA60\n거래량 20일 평균 이상\n손절 -5%\n10일 저점 이탈 청산"
+            )
+            response = brain.respond(LLMConversationRequest(f"{run_id}:session", "cli", "cli", text, _utc_now(), f"{run_id}:message"))
+            final = response.text
+            if provider.tool_result_roundtrip_count != 1:
+                raise ConfigurationError("strict grounding release check did not exercise provider tool-result roundtrip")
+            if "trade_count=3" not in final:
+                raise ConfigurationError("strict grounding final response did not preserve BacktestResult trade_count=3")
+            forbidden = ("trade_count=4", "4회", "win=2", "loss=2", "1.33", "MDD=8", "MDD 8", "fixed risk", "daily rebalance", "0.5%", "MDD 4", "take profit 3", "RSI 20", "volume 1.5", "volume_multiplier", "10일 기간")
+            if any(token in final for token in forbidden):
+                raise ConfigurationError("strict grounding final response leaked fabricated provider metrics")
+            required = ("provider=real:yahoo-chart", "fixture_backed=false", "2025-09-19", "TESTED", "HYPOTHESIS", "commission=", "손절 -5")
+            if any(token not in final for token in required):
+                raise ConfigurationError("strict grounding final response lost required structured evidence")
+            if not _contains_hangul(final):
+                raise ConfigurationError("strict grounding final response was not Korean")
+            if contains_wrapper_tags(final):
+                raise ConfigurationError("strict grounding final response leaked wrapper tags")
+            if response.tool_calls != ("krx_real_research",):
+                raise ConfigurationError("strict grounding release check did not execute krx_real_research")
+            if "provider strict real research grounding fallback" not in response.warnings:
+                raise ConfigurationError("strict grounding fallback warning was not recorded")
+            if store.status().schema_version != 33:
+                raise ConfigurationError("strict grounding release check must preserve schema v33")
+            print(f"strict-real-research-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} trades=3 provider_mock_trades=4")
         finally:
             store.close()
     elif args.command == "strategy-parser-release-check":
@@ -2297,6 +2344,93 @@ def _utc_now() -> str:
 
 def _contains_hangul(text: str) -> bool:
     return any("\uac00" <= char <= "\ud7a3" for char in text)
+
+
+def _strict_real_research_payload() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "request_text": "20일 고가 돌파 종가 > MA20 > MA60 거래량 20일 평균 이상 손절 -5% 10일 저점 이탈 청산",
+        "dataset": {
+            "dataset_id": "dataset:real:yahoo:005930:2025-01-02:2026-07-24",
+            "symbols": [{"schema_version": 1, "symbol": "005930", "name": "Samsung Electronics", "market": "KOSPI", "exchange": "KRX"}],
+            "bars": [{"timestamp": f"2025-01-{index + 2:02d}", "symbol": "005930", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1000000, "trading_value": 100000000} for index in range(28)],
+            "metadata": {"schema_version": 1, "source": "real:yahoo-chart", "market": "KOSPI", "timeframe": "daily", "start_date": "2025-01-02", "end_date": "2026-07-24", "adjusted": True, "retrieved_at": _utc_now(), "fixture_backed": False},
+        },
+        "quality": {"schema_version": 1, "status": "pass_with_warnings", "findings": [{"code": "provider_gap", "severity": "warning", "message": "real:yahoo-chart missing bar on open KRX date 2025-09-19"}]},
+        "strategy": {
+            "entry": {
+                "breakout_lookback": {"value": 20, "provenance": "user_provided"},
+                "close_gt_ma20": {"value": True, "provenance": "user_provided"},
+                "ma20_gt_ma60": {"value": True, "provenance": "user_provided"},
+            },
+            "exit": {"protective_stop_pct": {"value": -5.0, "provenance": "user_provided"}, "channel_exit_lookback": {"value": 10, "provenance": "user_provided"}},
+            "filters": {"volume_gte_ma20": {"value": True, "provenance": "user_provided"}},
+        },
+        "assumptions": {
+            "commission": {"value": 0.00015, "provenance": "default"},
+            "tax": {"value": 0.0018, "provenance": "default"},
+            "slippage": {"value": 0.0005, "provenance": "default"},
+            "position_sizing": {"value": "single_position_all_cash", "provenance": "default"},
+            "initial_capital": {"value": 1000000.0, "provenance": "default"},
+        },
+        "backtest": {
+            "result_id": "krx-real-backtest-result:strict-grounding",
+            "run_id": "strict-grounding",
+            "status": "completed",
+            "source": "real",
+            "metrics": {"total_return": 0.047, "cagr": 0.031, "mdd": 0.052, "sharpe": 0.74, "win_rate": 0.666667, "profit_factor": 1.42, "trade_count": 3, "average_trade": 15666.67, "expectancy": 15666.67, "exposure": 0.18, "ending_equity": 1047000.0},
+            "warnings": ("real public data source; verify freshness before decisions",),
+        },
+        "validation": {"validation_id": "validation:strict-grounding", "passed": True, "findings": []},
+        "critic_findings": [{"code": "provider_gap", "message_ko": "데이터 공급자 gap이 있으므로 결과 해석 시 해당 일자를 명시해야 합니다.", "severity": "warning"}],
+        "candidates": [
+            {"candidate_id": "candidate:breakout30", "backtest_result": {"metrics": {"trade_count": 2, "total_return": 0.038, "mdd": 0.044}}},
+            {"candidate_id": "candidate:exit15", "backtest_result": {"metrics": {"trade_count": 3, "total_return": 0.041, "mdd": 0.049}}},
+        ],
+        "comparison": {"rows": [{"candidate_id": "original", "total_return": 0.047, "mdd": 0.052, "trade_count": 3}, {"candidate_id": "candidate:breakout30", "total_return": 0.038, "mdd": 0.044, "trade_count": 2}]},
+        "automatic_order": False,
+        "automatic_champion_promotion": False,
+    }
+
+
+class _StrictGroundingFakeExecutor:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def assistant_tool_definitions(self) -> tuple[object, ...]:
+        return ()
+
+    def execute(self, request: ToolRequest) -> ToolResult:
+        if request.tool_name != "krx_real_research":
+            return ToolResult(request.tool_name, "denied", {}, ("unexpected tool",))
+        return ToolResult("krx_real_research", "success", self._payload)
+
+
+class _StrictGroundingFakeProvider:
+    def __init__(self) -> None:
+        self.tool_result_roundtrip_count = 0
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities("fake-strict-grounding", "fixture", False, True, 2048)
+
+    def health(self) -> ProviderHealth:
+        return ProviderHealth("fake-strict-grounding", True)
+
+    def respond(self, request) -> AssistantProviderResponse:
+        if request.tool_results:
+            self.tool_result_roundtrip_count += 1
+            return AssistantProviderResponse(
+                "검증 결과 trade_count=4, win=2, loss=2, average return=1.33%, MDD=8%, fixed risk=1.0%, daily rebalance, risk 0.5% -> MDD 4%, take profit 3%, RSI 20 filter, volume 1.5x, 10일 기간입니다.",
+                provider_name="fake-strict-grounding",
+                route="provider",
+            )
+        return AssistantProviderResponse(
+            "",
+            provider_name="fake-strict-grounding",
+            route="provider",
+            tool_calls=(AssistantToolCall("call-strict-krx", "krx_real_research", {"request_text": request.text, "symbol": "005930"}),),
+        )
 
 
 def _agent_run_plan(agent: str, now: str) -> ExecutivePlan:

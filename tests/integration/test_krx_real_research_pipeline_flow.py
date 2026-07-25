@@ -48,6 +48,22 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_strict_real_research_grounding_release_check_is_repeatable_on_persistent_db(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            db_path = f"{folder}/strict-real-grounding.sqlite"
+            for _ in range(3):
+                self.assertEqual(cli_main(["strict-real-research-grounding-release-check", "--db", db_path]), 0)
+            connection = sqlite3.connect(db_path)
+            try:
+                version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
+                self.assertEqual(version, 33)
+                rows = connection.execute("SELECT content FROM conversation_messages WHERE route='provider_tool_call'").fetchall()
+                self.assertEqual(len(rows), 3)
+                self.assertTrue(all("trade_count=3" in str(row[0]) for row in rows))
+                self.assertFalse(any("trade_count=4" in str(row[0]) for row in rows))
+            finally:
+                connection.close()
+
     def test_safe_tool_runs_read_only_pipeline(self) -> None:
         connection = sqlite3.connect(":memory:")
         migrate(connection)
@@ -72,6 +88,7 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(cli_main(["krx-real-research-release-check", "--db", ":memory:"]), 0)
         self.assertEqual(cli_main(["krx-trading-calendar-release-check", "--db", ":memory:"]), 0)
         self.assertEqual(cli_main(["provider-gap-release-check", "--db", ":memory:"]), 0)
+        self.assertEqual(cli_main(["strict-real-research-grounding-release-check", "--db", ":memory:"]), 0)
 
 
 if __name__ == "__main__":

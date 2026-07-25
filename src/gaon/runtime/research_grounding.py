@@ -20,6 +20,7 @@ RESEARCH_TOOLS = {
     "backtest_result",
     "compare_backtests",
     "krx_market_data",
+    "krx_real_research",
 }
 
 FIXTURE_LEAKAGE_TOKENS = (
@@ -163,6 +164,8 @@ def sanitize_research_tool_output(tool_name: str, output: dict[str, object], use
 
 
 def format_grounded_tool_response(tool_name: str, output: dict[str, object], user_text: str = "") -> str | None:
+    if tool_name == "krx_real_research":
+        return _format_krx_real_research(output)
     if tool_name == "research_memory_search":
         return _format_memory(output)
     if tool_name == "strategy_critique":
@@ -178,6 +181,37 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
     if tool_name == "compare_backtests":
         return _format_comparison(output)
     return None
+
+
+def is_strict_real_research_tool(tool_name: str) -> bool:
+    return tool_name == "krx_real_research"
+
+
+def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]) -> bool:
+    allowed = _strict_real_research_allowed_tokens(output)
+    suspicious = (
+        "trade_count=4",
+        "거래 4",
+        "4회",
+        "win=2",
+        "loss=2",
+        "평균 수익률 1.33",
+        "average return=1.33",
+        "MDD=8",
+        "MDD 8",
+        "fixed risk=1.0",
+        "risk 1.0",
+        "daily rebalance",
+        "0.5%",
+        "MDD 4",
+        "take profit 3",
+        "RSI 20",
+        "volume 1.5",
+        "volume_multiplier",
+        "10일 기간",
+        "10-day",
+    )
+    return any(token in text and token not in allowed for token in suspicious)
 
 
 def _format_memory(output: dict[str, object]) -> str:
@@ -196,6 +230,106 @@ def _format_memory(output: dict[str, object]) -> str:
             if isinstance(item, dict):
                 lines.append(f"- {item.get('memory_id') or item.get('run_id') or 'memory'} / {item.get('strategy_family') or item.get('family') or 'unknown'}")
     lines.append("\uc815\uc131 \ubd84\uc11d: \uc704 \ud56d\ubaa9\uc740 \uc800\uc7a5\ub41c \uc5f0\uad6c \uae30\uc5b5\uc744 \uae30\uc900\uc73c\ub85c\ub9cc \uc694\uc57d\ud588\uc2b5\ub2c8\ub2e4.")
+    return "\n".join(lines)
+
+
+def _format_krx_real_research(output: dict[str, object]) -> str:
+    dataset = _as_dict(output.get("dataset"))
+    metadata = _as_dict(dataset.get("metadata"))
+    quality = _as_dict(output.get("quality"))
+    backtest = _as_dict(output.get("backtest"))
+    metrics = _as_dict(backtest.get("metrics"))
+    validation = _as_dict(output.get("validation"))
+    strategy = _as_dict(output.get("strategy"))
+    assumptions = _as_dict(output.get("assumptions"))
+    comparison = _as_dict(output.get("comparison"))
+    rows = _as_list(comparison.get("rows"))
+    findings = _as_list(output.get("critic_findings"))
+    candidates = _as_list(output.get("candidates"))
+    provider_gap_dates = _quality_finding_dates(quality, "provider_gap")
+    lines = [
+        "영하님, 실제 KRX 연구 결과는 구조화된 백테스트 결과만 기준으로 정리하겠습니다.",
+        "",
+        "[데이터]",
+        f"- 종목: {_symbol_label(dataset)}",
+        f"- provider={metadata.get('source', 'unknown')}",
+        f"- 기간={metadata.get('start_date', 'unknown')} ~ {metadata.get('end_date', 'unknown')}",
+        f"- bars={len(_as_list(dataset.get('bars')))}",
+        f"- source={backtest.get('source', 'unknown')}",
+        f"- fixture_backed={str(metadata.get('fixture_backed', 'unknown')).lower()}",
+        f"- quality_status={quality.get('status', 'unknown')}",
+    ]
+    if provider_gap_dates:
+        lines.append(f"- provider_gap_dates={', '.join(provider_gap_dates)}")
+        lines.append(f"- 공급자 경고: 실제 KRX 거래일 {', '.join(provider_gap_dates)} 일봉이 provider에서 누락된 것으로 분류했습니다.")
+    lines.extend(
+        [
+            "",
+            "[전략 조건 - user_provided]",
+            *_strategy_lines(strategy),
+            "",
+            "[백테스트 가정 - engine/default]",
+            *_assumption_lines(assumptions),
+            "",
+            "[백테스트 결과 - BacktestResult]",
+            *_metric_lines(metrics),
+            "",
+            "[검증 - ValidationReport]",
+            f"- validation_id={validation.get('validation_id', 'unknown')}",
+            f"- passed={validation.get('passed', 'unknown')}",
+        ]
+    )
+    validation_findings = _as_list(validation.get("findings"))
+    if validation_findings:
+        lines.extend(f"- finding={item}" for item in validation_findings)
+    lines.extend(["", "[약점 - EvidenceBasedCritic]"])
+    if findings:
+        for finding in findings:
+            item = _as_dict(finding)
+            lines.append(f"- {item.get('severity', 'unknown')}: {item.get('message_ko', item.get('code', 'finding'))}")
+    else:
+        lines.append("- 저장된 critic finding이 없습니다.")
+    lines.extend(["", "[개선 후보 - TESTED]"])
+    tested = False
+    for candidate in candidates:
+        item = _as_dict(candidate)
+        result = _as_dict(item.get("backtest_result"))
+        if not result:
+            continue
+        tested = True
+        candidate_metrics = _as_dict(result.get("metrics"))
+        lines.append(
+            "- TESTED "
+            f"{item.get('candidate_id', 'candidate')}: "
+            f"trade_count={candidate_metrics.get('trade_count', 'unknown')} "
+            f"total_return={candidate_metrics.get('total_return', 'unknown')} "
+            f"mdd={candidate_metrics.get('mdd', 'unknown')}"
+        )
+    if not tested:
+        lines.append("- TESTED 후보가 없습니다. 검증되지 않은 후보를 검증 완료처럼 말하지 않겠습니다.")
+    lines.extend(["", "[후보 비교 - CandidateComparison]"])
+    if rows:
+        for row in rows:
+            item = _as_dict(row)
+            lines.append(
+                f"- {item.get('candidate_id', 'candidate')}: "
+                f"total_return={item.get('total_return', 'unknown')} "
+                f"mdd={item.get('mdd', 'unknown')} "
+                f"trade_count={item.get('trade_count', 'unknown')}"
+            )
+    else:
+        lines.append("- 비교 결과가 저장되어 있지 않습니다.")
+    lines.extend(
+        [
+            "",
+            "[추가 검증 아이디어 - HYPOTHESIS]",
+            "- 리스크 축소, 익절 조건, RSI 필터, 거래량 배수 변경은 현재 결과에서 검증된 값이 아닙니다. 별도 후보를 만들고 동일한 dataset/assumptions로 백테스트해야 합니다.",
+            "",
+            "[가온의 판단]",
+            "- 위 숫자는 user input, dataset metadata, DataQualityReport, BacktestResult, ValidationReport, tested ImprovementCandidate, CandidateComparison에 존재하는 필드만 사용했습니다.",
+            "- 자동 주문, KIS 주문, Champion 자동 승격, 승인 우회는 수행하지 않았습니다.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -326,6 +460,82 @@ def _format_comparison(output: dict[str, object]) -> str:
             lines.append(f"- winner={winner}")
     lines.append("\uc815\uc131 \ubd84\uc11d: \uc774 \ube44\uad50\ub294 fixture \uacc4\uc57d \uac80\uc99d\uc774\uba70 \uc790\ub3d9 \uc2b9\uc778\uc774\ub098 \ubc30\ud3ec\ub97c \uc218\ud589\ud558\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.")
     return "\n".join(lines)
+
+
+def _as_dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
+def _symbol_label(dataset: dict[str, object]) -> str:
+    symbols = _as_list(dataset.get("symbols"))
+    if symbols:
+        first = _as_dict(symbols[0])
+        return str(first.get("symbol", "unknown"))
+    return "unknown"
+
+
+def _strategy_lines(strategy: dict[str, object]) -> list[str]:
+    lines: list[str] = []
+    labels = {
+        "breakout_lookback": "20일 고가 돌파",
+        "close_gt_ma20": "종가 > MA20",
+        "ma20_gt_ma60": "MA20 > MA60",
+        "volume_gte_ma20": "거래량 >= 20일 평균",
+        "protective_stop_pct": "손절",
+        "channel_exit_lookback": "10일 저점 이탈 청산",
+    }
+    for section_name, section in (("entry", strategy.get("entry")), ("exit", strategy.get("exit")), ("filters", strategy.get("filters"))):
+        if not isinstance(section, dict):
+            continue
+        for key in sorted(section):
+            value = _as_dict(section[key])
+            provenance = value.get("provenance", "unknown")
+            raw_value = value.get("value")
+            label = labels.get(str(key), str(key))
+            if str(key) == "protective_stop_pct" and raw_value is not None:
+                label = f"손절 {raw_value}%"
+            if provenance == "user_provided":
+                lines.append(f"- {label}: {section_name}.{key}={raw_value} provenance=user_provided")
+            else:
+                lines.append(f"- {label}: {section_name}.{key}=not_user_provided provenance={provenance}")
+    return lines or ["- user_provided 전략 조건을 구조화하지 못했습니다."]
+
+
+def _assumption_lines(assumptions: dict[str, object]) -> list[str]:
+    lines: list[str] = []
+    for key in sorted(assumptions):
+        value = _as_dict(assumptions[key])
+        lines.append(f"- {key}={value.get('value', 'unknown')} provenance={value.get('provenance', 'unknown')}")
+    return lines or ["- 백테스트 가정이 저장되어 있지 않습니다."]
+
+
+def _metric_lines(metrics: dict[str, object]) -> list[str]:
+    keys = ("total_return", "cagr", "mdd", "sharpe", "win_rate", "profit_factor", "trade_count", "average_trade", "average_win", "average_loss", "expectancy", "exposure", "ending_equity")
+    lines = [f"- {key}={metrics[key]}" for key in keys if key in metrics]
+    return lines or ["- BacktestResult metrics가 저장되어 있지 않습니다."]
+
+
+def _quality_finding_dates(quality: dict[str, object], code: str) -> tuple[str, ...]:
+    dates = []
+    for finding in _as_list(quality.get("findings")):
+        item = _as_dict(finding)
+        if item.get("code") != code:
+            continue
+        match = re.search(r"\d{4}-\d{2}-\d{2}", str(item.get("message", "")))
+        if match:
+            dates.append(match.group(0))
+    return tuple(dates)
+
+
+def _strict_real_research_allowed_tokens(output: dict[str, object]) -> set[str]:
+    text = str(output)
+    tokens = set(re.findall(r"\d+(?:\.\d+)?%?", text))
+    tokens.update(_quality_finding_dates(_as_dict(output.get("quality")), "provider_gap"))
+    return tokens
 
 
 def _safe_critique(value: object) -> dict[str, object]:

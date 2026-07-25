@@ -1158,3 +1158,16 @@ Final local verification:
 - conflict marker search: PASS
 - duplicate definition check: PASS
 - `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only
+
+# Hotfix 120.3
+
+Targeted verification:
+
+- `tests.unit.test_research_grounding`: PASS
+- `tests.integration.test_krx_real_research_pipeline_flow`: PASS
+- `strict-real-research-grounding-release-check`: PASS, schema v33
+
+The release check runs with a unique namespace per invocation and verifies that
+provider-fabricated metrics such as `trade_count=4`, `MDD=8`, `RSI 20`, and
+`volume 1.5x` are not exposed when the structured real research payload records
+`trade_count=3`.

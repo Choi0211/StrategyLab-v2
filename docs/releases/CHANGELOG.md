@@ -508,3 +508,10 @@
 - Added read-only safe tools: `market_data_status`, `dataset_lookup`, `data_quality_check`, `backtest_strategy`, `backtest_result`, and `compare_backtests`.
 - Added `market-data-demo`, `data-quality-demo`, `backtest-contract-demo`, `external-backtest-demo`, `real-research-demo`, and `real-research-integration-release-check`.
 - Preserved public/private boundaries: no private repository dependency, no hard-coded private path, no arbitrary shell, no arbitrary SQL, no generated Python strategy execution, no live order, no automatic deployment, and no automatic Champion promotion.
+
+# Hotfix 120.3
+
+- Added strict real research grounding for Telegram/LLM-facing KRX backtest reports.
+- Real research final responses now prefer deterministic Korean structured reports when provider text invents or conflicts with `BacktestResult` metrics.
+- Added `strict-real-research-grounding-release-check`, idempotent run IDs, and regression tests for fabricated metric suppression.
+- Preserved schema v33 and safety boundaries: no live trading, broker order, automatic Champion promotion, approval bypass, arbitrary shell/SQL, or generated Python execution.
