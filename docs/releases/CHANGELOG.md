@@ -515,3 +515,10 @@
 - Real research final responses now prefer deterministic Korean structured reports when provider text invents or conflicts with `BacktestResult` metrics.
 - Added `strict-real-research-grounding-release-check`, idempotent run IDs, and regression tests for fabricated metric suppression.
 - Preserved schema v33 and safety boundaries: no live trading, broker order, automatic Champion promotion, approval bypass, arbitrary shell/SQL, or generated Python execution.
+
+# Hotfix 120.4
+
+- Routed production Telegram real KRX research requests through authoritative `krx_real_research` before provider free-form generation.
+- Added fail-closed strict real research metric validation for provider output and Telegram final responses.
+- Added `telegram-strict-real-research-release-check` covering the production Korean request path end to end.
+- Preserved schema v33 and safety boundaries: no live trading, broker orders, automatic Champion promotion, or approval bypass.

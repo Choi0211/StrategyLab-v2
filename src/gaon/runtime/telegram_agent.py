@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import sqlite3
 
+from gaon.runtime.assistant_provider import AssistantProvider
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.conversation import ConversationInput, ConversationResponse
 from gaon.runtime.conversation_context import ConversationContextOrchestrator
@@ -56,15 +57,24 @@ class SQLiteTelegramConversationLinkRepository:
 class TelegramConversationAgent:
     """Adapter that lets TelegramRuntime reuse the LLM conversation brain."""
 
-    def __init__(self, config: GaonRuntimeConfig, connection: sqlite3.Connection, *, metrics: MetricsCollector | None = None) -> None:
+    def __init__(
+        self,
+        config: GaonRuntimeConfig,
+        connection: sqlite3.Connection,
+        *,
+        metrics: MetricsCollector | None = None,
+        assistant_provider: AssistantProvider | None = None,
+        tool_executor: SafeToolExecutor | None = None,
+    ) -> None:
         repository = SQLiteConversationRepository(connection)
         context = ConversationContextOrchestrator(connection, repository)
         self._brain = LLMConversationBrain(
             config,
             repository,
             context_orchestrator=context,
-            tool_executor=SafeToolExecutor(default_tool_registry(connection), SQLiteToolAuditRepository(connection)),
+            tool_executor=tool_executor or SafeToolExecutor(default_tool_registry(connection), SQLiteToolAuditRepository(connection)),
             tool_result_repository=SQLiteConversationToolResultRepository(connection),
+            assistant_provider=assistant_provider,
             event_store=SQLiteEventStore(connection),
             metrics=metrics,
         )

@@ -728,3 +728,24 @@ execution assumptions, tested candidates, hypothesis-only follow-up ideas, and
 provider data gaps such as the Yahoo KRX `2025-09-19` missing bar. The hotfix
 does not change schema v33 and does not add trading, broker access, approval
 bypass, shell execution, arbitrary SQL, or generated Python execution.
+
+# Hotfix 120.4
+
+Telegram production-equivalent real KRX research requests now take the
+authoritative safe-tool path:
+
+`Telegram update -> TelegramRuntime -> TelegramConversationAgent -> LLMConversationBrain -> krx_real_research -> deterministic Korean renderer -> Telegram send`.
+
+For requests such as "삼성전자 실제 데이터로 ... 백테스트 ... 개선 후보까지 비교",
+Gaon executes the read-only `krx_real_research` tool before asking an LLM
+provider for free-form text. Provider-generated performance numbers are not
+allowed to become the final Telegram answer. If a provider tool-result
+roundtrip is used elsewhere, the final text is validated against the structured
+payload and replaced with the deterministic report when it contains
+ungrounded metrics.
+
+The new `telegram-strict-real-research-release-check` injects a provider that
+tries to fabricate `5.32%`, `1.77%`, `MDD 8`, `거래 횟수 4회`, `RSI(14) 30`,
+`MA15/MA90`, and `1.5x`. The final Telegram response must instead report the
+authoritative structured result, including `trade_count=3`, `fixture_backed=false`,
+and `provider=real:yahoo-chart`.

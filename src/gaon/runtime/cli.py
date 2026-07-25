@@ -36,16 +36,17 @@ from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutiveRequest, RoutingDecision, ToolSelection, executive_plan_event
 from gaon.runtime.external_research import ExternalResearchError, ExternalResearchTool, validate_external_url
 from gaon.runtime.health import readiness
-from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, ToolResult, default_tool_registry
+from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, ToolDefinition, ToolRegistry, ToolResult, ToolRiskLevel, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, looks_like_english_final
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, looks_like_english_final, strict_real_research_grounding_violations
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
 from gaon.runtime.serialization import dumps_json
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
+from gaon.runtime.telegram_agent import TelegramConversationAgent
 from gaon.runtime.telegram_worker import TelegramPollingWorker
 from gaon.runtime.v5_pipeline import GaonV5PipelineOrchestrator, GaonV5PipelineRequest, SQLiteGaonV5PipelineRepository
 from gaon.research.orchestration_v3 import ResearchOrchestratorV3, SQLiteResearchRunRepository
@@ -228,6 +229,9 @@ def main(argv: list[str] | None = None) -> int:
     strict_real_grounding_release = sub.add_parser("strict-real-research-grounding-release-check")
     strict_real_grounding_release.add_argument("--db", default=":memory:")
     strict_real_grounding_release.add_argument("--run-id", default=None)
+    telegram_strict_real_release = sub.add_parser("telegram-strict-real-research-release-check")
+    telegram_strict_real_release.add_argument("--db", default=":memory:")
+    telegram_strict_real_release.add_argument("--run-id", default=None)
     strategy_parser_release = sub.add_parser("strategy-parser-release-check")
     strategy_parser_release.add_argument("--db", default=":memory:")
     real_backtest_release = sub.add_parser("real-backtest-release-check")
@@ -1217,10 +1221,7 @@ def _run(args: argparse.Namespace) -> int:
                 tool_result_repository=store.conversation_tool_results,
                 assistant_provider=provider,
             )
-            text = (
-                "삼성전자 실제 데이터로 아래 전략을 백테스트하고 약점 분석과 개선 후보까지 비교해줘.\n"
-                "20일 고가 돌파\n종가 > MA20 > MA60\n거래량 20일 평균 이상\n손절 -5%\n10일 저점 이탈 청산"
-            )
+            text = "provider tool-result roundtrip strict grounding regression check"
             response = brain.respond(LLMConversationRequest(f"{run_id}:session", "cli", "cli", text, _utc_now(), f"{run_id}:message"))
             final = response.text
             if provider.tool_result_roundtrip_count != 1:
@@ -1244,6 +1245,58 @@ def _run(args: argparse.Namespace) -> int:
             if store.status().schema_version != 33:
                 raise ConfigurationError("strict grounding release check must preserve schema v33")
             print(f"strict-real-research-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} trades=3 provider_mock_trades=4")
+        finally:
+            store.close()
+    elif args.command == "telegram-strict-real-research-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"telegram-strict-real-research-release-check:{uuid4().hex}"
+            payload = _strict_real_research_payload()
+            provider = _StrictTelegramHallucinatingProvider()
+            client = _ReleaseCheckTelegramClient()
+            tool_executor = _strict_real_safe_tool_executor(store, payload)
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100",),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="openai-compatible",
+                assistant_api_key="ollama-dummy-key",
+                assistant_base_url="http://ollama.invalid/v1",
+                assistant_model="qwen3:8b",
+            )
+            update = parse_update_result(_telegram_strict_real_update(run_id), received_at=_utc_now())
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(config, store._connection, assistant_provider=provider, tool_executor=tool_executor),
+                allowed_chat_ids=("100",),
+            )
+            result = process_update(update, runtime, client)
+            if result.status != "sent":
+                raise ConfigurationError(f"telegram strict grounding release check did not send response: {result.status}")
+            if len(client.sent) != 1:
+                raise ConfigurationError("telegram strict grounding release check sent unexpected number of responses")
+            final = client.sent[0][1]
+            violations = strict_real_research_grounding_violations(final, payload)
+            if violations:
+                raise ConfigurationError("telegram strict grounding final response violated authoritative metrics: " + ",".join(violations))
+            forbidden = ("5.32%", "1.77%", "MDD 8", "거래 횟수 4", "4회", "RSI(14) 30", "RSI 30", "MA15", "MA90", "1.5x", "-3%", "5% 익절", "10일 기간")
+            if any(token in final for token in forbidden):
+                raise ConfigurationError("telegram strict grounding leaked provider-fabricated values")
+            required = ("trade_count=3", "provider=real:yahoo-chart", "fixture_backed=false", "TESTED", "HYPOTHESIS")
+            if any(token not in final for token in required):
+                raise ConfigurationError("telegram strict grounding lost authoritative structured report fields")
+            if provider.calls != 0:
+                raise ConfigurationError("telegram strict real research should not ask provider to invent the final report")
+            if len(store.tool_audit.list(tool_name="krx_real_research")) != 1:
+                raise ConfigurationError("telegram strict grounding did not audit krx_real_research safe tool")
+            messages = store.conversations.list_messages("telegram:100")
+            assistant = [message for message in messages if message.role == "assistant"]
+            if not assistant or assistant[-1].route != "tool_read_only_authoritative":
+                raise ConfigurationError("telegram strict grounding did not use authoritative tool route")
+            print(f"telegram-strict-real-research-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} route=tool_read_only_authoritative trades=3 provider_calls=0")
         finally:
             store.close()
     elif args.command == "strategy-parser-release-check":
@@ -2431,6 +2484,75 @@ class _StrictGroundingFakeProvider:
             route="provider",
             tool_calls=(AssistantToolCall("call-strict-krx", "krx_real_research", {"request_text": request.text, "symbol": "005930"}),),
         )
+
+
+def _strict_real_safe_tool_executor(store: RuntimeStateStore, payload: dict[str, object]) -> SafeToolExecutor:
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            "krx_real_research",
+            "Run the read-only KRX real-research pipeline with explicit source provenance.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol",),
+        ),
+        lambda _args: payload,
+    )
+    return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _telegram_strict_real_update(run_id: str) -> dict[str, object]:
+    return {
+        "update_id": 9100,
+        "message": {
+            "message_id": abs(hash(run_id)) % 100000000,
+            "chat": {"id": 100, "type": "private"},
+            "from": {"id": 200, "username": "youngha"},
+            "text": (
+                "가온아 삼성전자 실제 데이터로 아래 전략을 백테스트하고 약점을 분석한 뒤 개선 후보까지 비교해줘.\n\n"
+                "20일 고가 돌파\n"
+                "종가 > MA20 > MA60\n"
+                "거래량 20일 평균 이상\n"
+                "손절 -5%\n"
+                "10일 저점 이탈 청산"
+            ),
+        },
+    }
+
+
+class _StrictTelegramHallucinatingProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities("fake-telegram-hallucinating", "fixture", False, True, 2048)
+
+    def health(self) -> ProviderHealth:
+        return ProviderHealth("fake-telegram-hallucinating", True)
+
+    def respond(self, request) -> AssistantProviderResponse:
+        self.calls += 1
+        return AssistantProviderResponse(
+            "총 수익률 5.32%, 10일 기간, 평균 거래 수익률 1.77%, MDD 8%, PF 1.42, 거래 횟수 4회입니다. "
+            "동시에 10일간 단 1회 청산했고 -3% 손절, 5% 익절, RSI(14) 30, MA15/MA90, 거래량 평균 * 1.5를 추천합니다.",
+            provider_name="fake-telegram-hallucinating",
+            route="provider",
+        )
+
+
+class _ReleaseCheckTelegramClient:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def get_updates(self, *, offset=None, timeout=0, limit=100):
+        return ()
+
+    def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None):
+        from gaon.integrations.telegram.contracts import TelegramResponse
+
+        self.sent.append((chat_id, text))
+        return TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"release-check:{len(self.sent)}", message_id=str(len(self.sent)))
 
 
 def _agent_run_plan(agent: str, now: str) -> ExecutivePlan:

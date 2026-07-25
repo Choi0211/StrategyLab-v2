@@ -18,7 +18,7 @@ from gaon.runtime.long_response import continuation_prompt, merge_response_parts
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_fixture_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, normalize_final_response, sanitize_research_tool_output
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, normalize_final_response, sanitize_research_tool_output, strict_real_research_grounding_violations
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
@@ -397,6 +397,9 @@ class LLMConversationBrain:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
             return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
+        authoritative = self._try_authoritative_research_tool(request, warnings, references)
+        if authoritative is not None:
+            return authoritative
         synthesis = self._try_multi_result_synthesis(request, warnings, references)
         if synthesis is not None:
             return synthesis
@@ -519,7 +522,7 @@ class LLMConversationBrain:
         strict_real_results = tuple(result for result in results if is_strict_real_research_tool(result.name))
         if strict_real_results:
             text = _format_multi_tool_response(tuple(results))
-            if any(isinstance(result.result.get("output"), dict) and contains_ungrounded_real_research_claim(raw_text, result.result["output"]) for result in strict_real_results):
+            if any(isinstance(result.result.get("output"), dict) and strict_real_research_grounding_violations(raw_text, result.result["output"]) for result in strict_real_results):
                 warnings = (*warnings, "provider strict real research grounding fallback")
             else:
                 warnings = (*warnings, "structured real research report preferred")
@@ -535,6 +538,30 @@ class LLMConversationBrain:
         if any(is_research_tool(result.name) for result in results) and is_korean_request(request.text) and text != raw_text:
             warnings = (*warnings, "provider response normalized for Korean final answer")
         return text, "provider_tool_call", _dedupe((*warnings, *final.warnings)), _dedupe((*references, *final.references, *(f"tool:{name}" for name in executed))), final.provider_name, tuple(executed)
+
+    def _try_authoritative_research_tool(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        if self._tool_executor is None:
+            return None
+        tool_name = route_read_only_tool(request.text)
+        if tool_name is None or not is_strict_real_research_tool(tool_name):
+            return None
+        arguments = _default_tool_arguments(tool_name, request.text)
+        result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
+        self._record_tool_result(request.session_id, result, request.received_at)
+        if result.status != "success":
+            return persona_text(Intent.UNKNOWN), "tool_denied", _dedupe((*warnings, *result.warnings)), references, "deterministic", ()
+        text = _format_tool_response(tool_name, result.output, request.text)
+        violations = strict_real_research_grounding_violations(text, result.output)
+        if violations:
+            raise ConfigurationError("authoritative real research renderer violated grounding policy: " + ",".join(violations))
+        return (
+            text,
+            "tool_read_only_authoritative",
+            _dedupe((*warnings, "strict real research authoritative tool route")),
+            _dedupe((*references, f"tool:{tool_name}")),
+            "deterministic",
+            (tool_name,),
+        )
 
     def _continue_provider_response(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, initial_response, references: tuple[str, ...]):
         parts = [initial_response.text]

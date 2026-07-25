@@ -1171,3 +1171,19 @@ The release check runs with a unique namespace per invocation and verifies that
 provider-fabricated metrics such as `trade_count=4`, `MDD=8`, `RSI 20`, and
 `volume 1.5x` are not exposed when the structured real research payload records
 `trade_count=3`.
+
+# Hotfix 120.4
+
+Targeted verification:
+
+- `tests.unit.test_research_grounding`: PASS
+- `tests.integration.test_telegram_conversation_agent`: PASS
+- `tests.integration.test_krx_real_research_pipeline_flow`: PASS
+- `strict-real-research-grounding-release-check`: PASS, schema v33
+- `telegram-strict-real-research-release-check`: PASS, schema v33
+
+The Telegram release check uses the production Korean request text and verifies
+the full path from Telegram update to final send. A fake provider attempts to
+invent `5.32%`, `1.77%`, `MDD 8`, `거래 횟수 4회`, `RSI(14) 30`, `MA15/MA90`,
+and `1.5x`; the final response remains on `tool_read_only_authoritative` and
+reports only structured `krx_real_research` values.

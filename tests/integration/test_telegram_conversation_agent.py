@@ -3,10 +3,14 @@ import tempfile
 import unittest
 
 from gaon.integrations.telegram.contracts import TelegramResponse
+from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
+from gaon.integrations.telegram.transport import parse_update_result
 from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall
-from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, poll_once
+from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, _strict_real_research_payload, poll_once
 from gaon.runtime.config import GaonRuntimeConfig
+from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel
 from gaon.runtime.storage import RuntimeStateStore
+from gaon.runtime.telegram_agent import TelegramConversationAgent
 
 
 class FakeTelegramClient:
@@ -160,6 +164,51 @@ class TelegramConversationAgentTests(unittest.TestCase):
             store.close()
 
 
+    def test_production_korean_real_research_request_uses_authoritative_tool_route(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_production_real_research_update(),))
+        provider = _HallucinatingRealResearchProvider()
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition(
+                "krx_real_research",
+                "Run the read-only KRX real-research pipeline with explicit source provenance.",
+                ToolRiskLevel.READ_ONLY,
+                required_args=("request_text",),
+                allowed_args=("symbol",),
+            ),
+            lambda _args: _strict_real_research_payload(),
+        )
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(
+                    _config(assistant_enabled=True, assistant_provider="openai-compatible"),
+                    store._connection,
+                    assistant_provider=provider,
+                    tool_executor=SafeToolExecutor(registry, store.tool_audit),
+                ),
+                allowed_chat_ids=("100",),
+            )
+            result = process_update(parse_update_result(client.updates[0], received_at="2026-07-26T00:00:00Z"), runtime, client)
+
+            self.assertEqual(result.status, "sent")
+            self.assertEqual(provider.calls, 0)
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            final = client.sent[0][1]
+            self.assertIn("trade_count=3", final)
+            self.assertIn("fixture_backed=false", final)
+            self.assertIn("provider=real:yahoo-chart", final)
+            self.assertIn("TESTED", final)
+            self.assertIn("HYPOTHESIS", final)
+            for forbidden in ("5.32%", "1.77%", "MDD 8", "거래 횟수 4", "4회", "RSI(14) 30", "RSI 30", "MA15", "MA90", "1.5x", "-3%", "5% 익절", "10일 기간"):
+                self.assertNotIn(forbidden, final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "tool_read_only_authoritative")
+            self.assertEqual(assistant[-1].tool_calls, ("krx_real_research",))
+        finally:
+            store.close()
+
+
 class _FakeOllamaToolProvider:
     def __init__(self) -> None:
         self.calls = 0
@@ -195,6 +244,21 @@ class _FakeSynthesisProvider:
         return AssistantProviderResponse(text="챔피언과 v5 파이프라인 상태를 종합했습니다, 영하님.", provider_name="openai-compatible")
 
 
+class _HallucinatingRealResearchProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def respond(self, request):
+        self.calls += 1
+        return AssistantProviderResponse(
+            text=(
+                "총 수익률 5.32%, 10일 기간, 평균 거래 수익률 1.77%, MDD 8%, PF 1.42, 거래 횟수 4회입니다. "
+                "동시에 10일간 단 1회 청산했고 -3% 손절, 5% 익절, RSI(14) 30, MA15/MA90, 거래량 평균 * 1.5를 추천합니다."
+            ),
+            provider_name="openai-compatible",
+        )
+
+
 def _config(*, assistant_enabled: bool = False, assistant_provider: str = "deterministic") -> GaonRuntimeConfig:
     return GaonRuntimeConfig(
         mode="execute",
@@ -213,6 +277,19 @@ def _config(*, assistant_enabled: bool = False, assistant_provider: str = "deter
 
 def _update(update_id: int, message_id: int, text: str, *, chat_id: int = 100) -> dict:
     return {"update_id": update_id, "message": {"message_id": message_id, "chat": {"id": chat_id}, "from": {"id": 200}, "text": text}}
+
+
+def _production_real_research_update() -> dict:
+    return _update(
+        91,
+        91,
+        "가온아 삼성전자 실제 데이터로 아래 전략을 백테스트하고 약점을 분석한 뒤 개선 후보까지 비교해줘.\n\n"
+        "20일 고가 돌파\n"
+        "종가 > MA20 > MA60\n"
+        "거래량 20일 평균 이상\n"
+        "손절 -5%\n"
+        "10일 저점 이탈 청산",
+    )
 
 
 if __name__ == "__main__":
