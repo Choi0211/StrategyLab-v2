@@ -2,6 +2,20 @@
 
 Status: Passed
 
+## Hotfix 110.2 Korean Response Language Consistency
+
+- Unit: `tests.unit.test_research_grounding`
+  - Korean quality-score missing-data response is deterministic Korean text
+  - Korean strategy critique translates internal English findings
+  - Provider English tool-result answers fall back to grounded Korean formatting
+  - `<output>` and `<response>` wrappers are removed
+  - English user requests may still receive English responses
+- Integration: `tests.integration.test_korean_response_release_check`
+  - `korean-response-release-check` runs three times on one persistent SQLite DB
+  - generated conversation message IDs remain unique
+  - schema version remains unchanged
+- CLI release check: `python -m gaon.runtime.cli korean-response-release-check --db <db>`
+
 ## Hotfix 110.1 Research Grounding Context Isolation
 
 - Unit: `tests.unit.test_research_grounding`

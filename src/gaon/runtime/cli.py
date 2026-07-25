@@ -39,7 +39,7 @@ from gaon.runtime.health import readiness
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, looks_like_english_final
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
@@ -207,6 +207,9 @@ def main(argv: list[str] | None = None) -> int:
     research_context_release = sub.add_parser("research-context-isolation-release-check")
     research_context_release.add_argument("--db", default=":memory:")
     research_context_release.add_argument("--run-id", default=None)
+    korean_response_release = sub.add_parser("korean-response-release-check")
+    korean_response_release.add_argument("--db", default=":memory:")
+    korean_response_release.add_argument("--run-id", default=None)
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1116,13 +1119,49 @@ def _run(args: argparse.Namespace) -> int:
             for expected in ("20일 고가 돌파", "종가 > MA20 > MA60", "거래량 >= 20일 평균", "손절 -5%", "10일 저점 이탈 청산"):
                 if expected not in critique.text:
                     raise ConfigurationError("research context isolation lost user-provided strategy condition")
-            if "실제 백테스트 기반 연구 품질 점수는 저장되어 있지 않습니다" not in quality.text:
+            if "실제 백테스트를 기반으로 계산된 연구 품질 점수는 저장되어 있지 않습니다" not in quality.text:
                 raise ConfigurationError("missing quality score fallback was not Korean and deterministic")
             if "찾지 못했습니다" not in memory.text or "접근 권한" in memory.text or "access" in memory.text.casefold():
                 raise ConfigurationError("memory empty-state wording regressed")
             if store.status().schema_version < 32:
                 raise ConfigurationError("research context isolation release check requires schema v32")
             print(f"research-context-isolation-release-check: PASS schema_version={store.status().schema_version} run_id={run_id}")
+        finally:
+            store.close()
+    elif args.command == "korean-response-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            run_id = args.run_id or f"korean-response-release-check:{uuid4().hex}"
+            brain = LLMConversationBrain(
+                GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic"),
+                store.conversations,
+                tool_executor=SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            checks = (
+                brain.respond(LLMConversationRequest(f"{run_id}:quality", "cli", "cli", "\uc774 \uc804\ub7b5\uc758 \uc5f0\uad6c \ud488\uc9c8 \uc810\uc218\ub97c \ubcf4\uc5ec\uc918.", _utc_now(), f"{run_id}:message:quality")),
+                brain.respond(LLMConversationRequest(f"{run_id}:critique", "cli", "cli", "\uc774 \uc804\ub7b5\uc758 \uc57d\uc810\uc744 \ubd84\uc11d\ud574\uc918.", _utc_now(), f"{run_id}:message:critique")),
+                brain.respond(LLMConversationRequest(f"{run_id}:memory", "cli", "cli", "\ube44\uc2b7\ud55c \uc804\ub7b5\uc744 \uc608\uc804\uc5d0 \uc5f0\uad6c\ud55c \uae30\ub85d\uc774 \uc788\ub294\uc9c0 \ucc3e\uc544\uc918.", _utc_now(), f"{run_id}:message:memory")),
+            )
+            combined = "\n".join(response.text for response in checks)
+            if not all(_contains_hangul(response.text) for response in checks):
+                raise ConfigurationError("Korean release check response did not contain Korean text")
+            if contains_wrapper_tags(combined):
+                raise ConfigurationError("Korean release check leaked output/response wrapper tags")
+            if contains_fixture_leakage(combined) or contains_unverified_fixture_metrics(combined):
+                raise ConfigurationError("Korean release check leaked fixture or fabricated metrics")
+            if looks_like_english_final(combined):
+                raise ConfigurationError("Korean release check returned English final text")
+            for phrase in ("In-sample performance", "Parameter sensitivity", "Feature complexity", "access unavailable"):
+                if phrase in combined:
+                    raise ConfigurationError("Korean release check leaked English internal advisory text")
+            if "\uc2e4\uc81c \ubc31\ud14c\uc2a4\ud2b8\ub97c \uae30\ubc18\uc73c\ub85c \uacc4\uc0b0\ub41c \uc5f0\uad6c \ud488\uc9c8 \uc810\uc218\ub294 \uc800\uc7a5\ub418\uc5b4 \uc788\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4" not in checks[0].text:
+                raise ConfigurationError("Korean missing quality score response regressed")
+            if "\uc800\uc7a5\ub41c \uc720\uc0ac \uc5f0\uad6c \uae30\ub85d\uc744 \ucc3e\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4" not in checks[2].text:
+                raise ConfigurationError("Korean memory empty-state response regressed")
+            print(f"korean-response-release-check: PASS schema_version={store.status().schema_version} run_id={run_id}")
         finally:
             store.close()
     elif args.command == "backup":
@@ -2081,6 +2120,10 @@ def _deployment_service(store: RuntimeStateStore, target_dir: str | None = None)
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _contains_hangul(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
 
 
 def _agent_run_plan(agent: str, now: str) -> ExecutivePlan:
