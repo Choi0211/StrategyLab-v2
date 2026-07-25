@@ -25,7 +25,7 @@ from gaon.integrations.telegram.contracts import TelegramClient, TelegramDiscove
 from gaon.integrations.telegram.formatter import split_message
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import discover_private_chats, parse_update_result
-from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall, ProviderCapabilities, ProviderHealth
+from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall, ProviderCapabilities, ProviderHealth, ProviderTimeoutError
 from gaon.runtime.agents import AgentDispatcher, AgentRequest, default_agent_registry
 from gaon.runtime.agent_planner import AgentPlanExecutor, AgentPlanner, AgentPlanPolicy
 from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
@@ -232,6 +232,9 @@ def main(argv: list[str] | None = None) -> int:
     telegram_strict_real_release = sub.add_parser("telegram-strict-real-research-release-check")
     telegram_strict_real_release.add_argument("--db", default=":memory:")
     telegram_strict_real_release.add_argument("--run-id", default=None)
+    telegram_failure_release = sub.add_parser("telegram-real-research-failure-routing-release-check")
+    telegram_failure_release.add_argument("--db", default=":memory:")
+    telegram_failure_release.add_argument("--run-id", default=None)
     strategy_parser_release = sub.add_parser("strategy-parser-release-check")
     strategy_parser_release.add_argument("--db", default=":memory:")
     real_backtest_release = sub.add_parser("real-backtest-release-check")
@@ -1297,6 +1300,30 @@ def _run(args: argparse.Namespace) -> int:
             if not assistant or assistant[-1].route != "tool_read_only_authoritative":
                 raise ConfigurationError("telegram strict grounding did not use authoritative tool route")
             print(f"telegram-strict-real-research-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} route=tool_read_only_authoritative trades=3 provider_calls=0")
+        finally:
+            store.close()
+    elif args.command == "telegram-real-research-failure-routing-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"telegram-real-research-failure-routing-release-check:{uuid4().hex}"
+            market_provider = _StrictTelegramHallucinatingProvider()
+            market_text = _run_telegram_failure_case(store, run_id, "market", _failure_tool_executor(store, RealMarketDataUnavailable("real_data_unavailable: provider returned no usable bars")), market_provider, _production_real_research_text())
+            if "실제 시장 데이터를 가져오지 못해" not in market_text or "로컬 LLM" in market_text or market_provider.calls != 0:
+                raise ConfigurationError("market data failure was not transparent or fail-closed")
+            backtest_provider = _StrictTelegramHallucinatingProvider()
+            backtest_text = _run_telegram_failure_case(store, run_id, "backtest", _failure_tool_executor(store, RuntimeError("backtest execution failed")), backtest_provider, _production_real_research_text())
+            if "백테스트 실행 중 오류" not in backtest_text or "5.32%" in backtest_text or backtest_provider.calls != 0:
+                raise ConfigurationError("backtest failure was not transparent or fail-closed")
+            timeout_provider = _TimeoutAssistantProvider()
+            timeout_text = _run_telegram_failure_case(store, run_id, "timeout", SafeToolExecutor(ToolRegistry(), None), timeout_provider, "안녕하세요 가온")
+            if "로컬 LLM 응답이 지연" not in timeout_text:
+                raise ConfigurationError("actual provider timeout was not classified as LLM delay")
+            internal_text = _run_telegram_failure_case(store, run_id, "internal", _RaisingToolExecutor(RuntimeError("synthetic internal failure")), _StrictTelegramHallucinatingProvider(), _production_real_research_text())
+            if "내부 오류" not in internal_text or "synthetic internal failure" in internal_text:
+                raise ConfigurationError("unexpected internal error was not safely summarized")
+            if any(token in (market_text + backtest_text + internal_text) for token in ("5.32%", "1.77%", "MDD 8", "거래 횟수 4", "RSI(14) 30", "1.5x")):
+                raise ConfigurationError("failure routing leaked fabricated provider research results")
+            print(f"telegram-real-research-failure-routing-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} market=classified backtest=classified timeout=classified internal=classified provider_fail_closed=true")
         finally:
             store.close()
     elif args.command == "strategy-parser-release-check":
@@ -2520,6 +2547,74 @@ def _telegram_strict_real_update(run_id: str) -> dict[str, object]:
     }
 
 
+def _production_real_research_text() -> str:
+    return (
+        "가온아 삼성전자 실제 데이터로 아래 전략을 백테스트하고 약점을 분석한 뒤 개선 후보까지 비교해줘.\n\n"
+        "20일 고가 돌파\n"
+        "종가 > MA20 > MA60\n"
+        "거래량 20일 평균 이상\n"
+        "손절 -5%\n"
+        "10일 저점 이탈 청산"
+    )
+
+
+def _telegram_update_with_text(run_id: str, suffix: str, text: str) -> dict[str, object]:
+    return {
+        "update_id": 9200 + (abs(hash((run_id, suffix))) % 700),
+        "message": {
+            "message_id": abs(hash((run_id, suffix, "message"))) % 100000000,
+            "chat": {"id": 100, "type": "private"},
+            "from": {"id": 200, "username": "youngha"},
+            "text": text,
+        },
+    }
+
+
+def _failure_tool_executor(store: RuntimeStateStore, exc: Exception) -> SafeToolExecutor:
+    registry = ToolRegistry()
+
+    def raise_failure(_args):
+        raise exc
+
+    registry.register(
+        ToolDefinition(
+            "krx_real_research",
+            "Run the read-only KRX real-research pipeline with explicit source provenance.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol",),
+        ),
+        raise_failure,
+    )
+    return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _run_telegram_failure_case(store: RuntimeStateStore, run_id: str, suffix: str, tool_executor, provider, text: str) -> str:
+    client = _ReleaseCheckTelegramClient()
+    config = GaonRuntimeConfig(
+        mode="execute",
+        dry_run=False,
+        telegram_enabled=True,
+        telegram_bot_token="synthetic-token",
+        telegram_allowed_chat_ids=("100",),
+        approval_signing_secret="synthetic-approval-secret",
+        assistant_enabled=True,
+        assistant_provider="openai-compatible",
+        assistant_api_key="ollama-dummy-key",
+        assistant_base_url="http://ollama.invalid/v1",
+        assistant_model="qwen3:8b",
+    )
+    update = parse_update_result(_telegram_update_with_text(run_id, suffix, text), received_at=_utc_now())
+    runtime = TelegramRuntime(
+        TelegramConversationAgent(config, store._connection, assistant_provider=provider, tool_executor=tool_executor),
+        allowed_chat_ids=("100",),
+    )
+    result = process_update(update, runtime, client)
+    if result.status != "sent" or not client.sent:
+        raise ConfigurationError(f"telegram failure case did not send a classified response: {suffix}:{result.status}")
+    return client.sent[0][1]
+
+
 class _StrictTelegramHallucinatingProvider:
     def __init__(self) -> None:
         self.calls = 0
@@ -2539,6 +2634,33 @@ class _StrictTelegramHallucinatingProvider:
             provider_name="fake-telegram-hallucinating",
             route="provider",
         )
+
+
+class _TimeoutAssistantProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities("fake-timeout", "fixture", False, True, 2048)
+
+    def health(self) -> ProviderHealth:
+        return ProviderHealth("fake-timeout", True)
+
+    def respond(self, request) -> AssistantProviderResponse:
+        self.calls += 1
+        raise ProviderTimeoutError("synthetic provider timeout")
+
+
+class _RaisingToolExecutor:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def assistant_tool_definitions(self) -> tuple[object, ...]:
+        return ()
+
+    def execute(self, request):
+        raise self._exc
 
 
 class _ReleaseCheckTelegramClient:

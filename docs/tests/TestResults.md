@@ -1187,3 +1187,18 @@ the full path from Telegram update to final send. A fake provider attempts to
 invent `5.32%`, `1.77%`, `MDD 8`, `거래 횟수 4회`, `RSI(14) 30`, `MA15/MA90`,
 and `1.5x`; the final response remains on `tool_read_only_authoritative` and
 reports only structured `krx_real_research` values.
+
+# Hotfix 120.5
+
+Targeted verification:
+
+- `tests.unit.test_research_failures`: PASS
+- `tests.unit.test_research_grounding`: PASS
+- `tests.integration.test_telegram_conversation_agent`: PASS
+- `telegram-real-research-failure-routing-release-check`: PASS, schema v33
+- `telegram-strict-real-research-release-check`: PASS, schema v33
+
+The failure routing release check verifies market-data unavailable, backtest
+failure, actual provider timeout, and unexpected internal exception cases. It
+also verifies that authoritative route failures do not call the provider and do
+not leak fabricated research metrics.

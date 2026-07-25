@@ -6,11 +6,12 @@ from gaon.integrations.telegram.contracts import TelegramResponse
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import parse_update_result
 from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall
-from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, _strict_real_research_payload, poll_once
+from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, _failure_tool_executor, _strict_real_research_payload, main as cli_main, poll_once
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
+from gaon.research.krx_real_pipeline import RealMarketDataUnavailable
 
 
 class FakeTelegramClient:
@@ -207,6 +208,36 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertEqual(assistant[-1].tool_calls, ("krx_real_research",))
         finally:
             store.close()
+
+    def test_authoritative_market_data_failure_is_transparent_and_provider_free_form_is_blocked(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_production_real_research_update(),))
+        provider = _HallucinatingRealResearchProvider()
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(
+                    _config(assistant_enabled=True, assistant_provider="openai-compatible"),
+                    store._connection,
+                    assistant_provider=provider,
+                    tool_executor=_failure_tool_executor(store, RealMarketDataUnavailable("real_data_unavailable: provider returned no usable bars")),
+                ),
+                allowed_chat_ids=("100",),
+            )
+            result = process_update(parse_update_result(client.updates[0], received_at="2026-07-26T00:00:00Z"), runtime, client)
+
+            self.assertEqual(result.status, "sent")
+            self.assertEqual(provider.calls, 0)
+            final = client.sent[0][1]
+            self.assertIn("실제 시장 데이터를 가져오지 못해", final)
+            self.assertNotIn("로컬 LLM", final)
+            self.assertNotIn("5.32%", final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "research_failure_market_data")
+        finally:
+            store.close()
+
+    def test_telegram_failure_routing_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["telegram-real-research-failure-routing-release-check", "--db", ":memory:"]), 0)
 
 
 class _FakeOllamaToolProvider:

@@ -19,6 +19,7 @@ from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
 from gaon.runtime.research_grounding import contains_fixture_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, normalize_final_response, sanitize_research_tool_output, strict_real_research_grounding_violations
+from gaon.runtime.research_failures import classify_tool_failure, warning_for_failure
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
@@ -549,7 +550,15 @@ class LLMConversationBrain:
         result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
         if result.status != "success":
-            return persona_text(Intent.UNKNOWN), "tool_denied", _dedupe((*warnings, *result.warnings)), references, "deterministic", ()
+            failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+            return (
+                failure.user_message,
+                f"research_failure_{failure.stage}",
+                _dedupe((*warnings, *result.warnings, warning_for_failure(failure))),
+                references,
+                "deterministic",
+                (tool_name,),
+            )
         text = _format_tool_response(tool_name, result.output, request.text)
         violations = strict_real_research_grounding_violations(text, result.output)
         if violations:

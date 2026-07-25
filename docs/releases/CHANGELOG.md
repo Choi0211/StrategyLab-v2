@@ -522,3 +522,10 @@
 - Added fail-closed strict real research metric validation for provider output and Telegram final responses.
 - Added `telegram-strict-real-research-release-check` covering the production Korean request path end to end.
 - Preserved schema v33 and safety boundaries: no live trading, broker orders, automatic Champion promotion, or approval bypass.
+
+# Hotfix 120.5
+
+- Added structured Telegram research failure classification for market data, data quality, backtest, tool, LLM timeout, and internal errors.
+- Telegram research failures now log traceback server-side while returning Korean user-facing messages without Python exception text or fabricated research results.
+- Authoritative real research tool failures remain fail-closed and do not fall back to provider free-form answers.
+- Added `telegram-real-research-failure-routing-release-check`.
