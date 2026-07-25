@@ -2,6 +2,21 @@
 
 Status: Passed
 
+## Hotfix 120.1 KRX Trading Calendar Quality
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - weekends are excluded from KRX daily missing-date checks
+  - deterministic KRX non-trading dates are excluded from missing-date checks
+  - actual missing trading days still produce `missing_dates`
+  - malformed OHLCV and duplicate trading days remain quality findings
+  - real/fixture provenance remains unchanged
+- Integration: `tests.integration.test_krx_real_research_pipeline_flow`
+  - `krx-trading-calendar-release-check` repeats three times on one persistent SQLite DB
+  - schema remains v33
+- CLI release checks:
+  - `python -m gaon.runtime.cli krx-trading-calendar-release-check --db <db>`
+  - `python -m gaon.runtime.cli real-krx-data-release-check --db <db>` when real Yahoo access is enabled
+
 ## Real KRX Data Activation
 
 - Unit: `tests.unit.test_krx_real_pipeline`

@@ -30,6 +30,7 @@ from gaon.research.real_research import (
     MarketDataset,
     MarketSymbol,
     SQLiteDatasetRegistry,
+    TradingCalendar,
 )
 from gaon.research.self_improving import ResearchMemoryEntry, SQLiteResearchMemoryRepository
 
@@ -365,6 +366,74 @@ class RealMarketDataUnavailable(RuntimeError):
     """Raised when real public market data is not configured."""
 
 
+class KRXTradingCalendar(TradingCalendar):
+    """Deterministic KRX daily calendar for quality checks.
+
+    This local calendar excludes weekends and the bounded KRX non-trading dates
+    needed by current release checks. It is intentionally replaceable by an
+    official KRX calendar provider later.
+    """
+
+    market = "KRX"
+    closed_dates = frozenset(
+        {
+            "2025-01-01",
+            "2025-01-27",
+            "2025-01-28",
+            "2025-01-29",
+            "2025-01-30",
+            "2025-03-03",
+            "2025-05-01",
+            "2025-05-05",
+            "2025-05-06",
+            "2025-06-03",
+            "2025-06-06",
+            "2025-08-15",
+            "2025-10-03",
+            "2025-10-06",
+            "2025-10-07",
+            "2025-10-08",
+            "2025-10-09",
+            "2025-12-25",
+            "2025-12-31",
+            "2026-01-01",
+            "2026-01-02",
+            "2026-02-16",
+            "2026-02-17",
+            "2026-02-18",
+            "2026-03-02",
+            "2026-05-01",
+            "2026-05-05",
+            "2026-05-25",
+            "2026-06-03",
+            "2026-07-17",
+            "2026-08-17",
+            "2026-09-24",
+            "2026-09-25",
+            "2026-10-05",
+            "2026-10-09",
+            "2026-12-25",
+            "2026-12-31",
+        }
+    )
+
+    def expected_open_dates(self, *, start_date: str, end_date: str) -> tuple[str, ...]:
+        _validate_date(start_date)
+        _validate_date(end_date)
+        if start_date > end_date:
+            raise ValueError("start_date must not be after end_date")
+        dates = []
+        for day in _date_range(start_date, end_date):
+            current = datetime.fromisoformat(day)
+            if current.weekday() >= 5 or day in self.closed_dates:
+                continue
+            dates.append(day)
+        return tuple(dates)
+
+    def is_open(self, day: str) -> bool:
+        return day in self.expected_open_dates(start_date=day, end_date=day)
+
+
 class KRXFixtureMarketDataProvider:
     source = "fixture"
 
@@ -390,7 +459,7 @@ class KRXFixtureMarketDataProvider:
         return MarketDataset(f"dataset:{symbol.upper()}:{timeframe}:{start_date}:{end_date}", (MarketSymbol(symbol.upper(), symbol.upper(), "KOSPI"),), tuple(bars), metadata)
 
     def validate_dataset(self, dataset: MarketDataset) -> DataQualityReport:
-        return DataQualityEngine().validate(dataset, min_bars=60)
+        return DataQualityEngine().validate(dataset, min_bars=60, calendar=KRXTradingCalendar())
 
 
 class KRXDatasetBuilder:
@@ -400,7 +469,7 @@ class KRXDatasetBuilder:
 
     def build(self, symbol: str, *, start_date: str, end_date: str) -> tuple[MarketDataset, DataQualityReport, bool]:
         dataset = self._provider.fetch_bars(symbol, start_date=start_date, end_date=end_date)
-        quality = DataQualityEngine().validate(dataset, min_bars=60)
+        quality = DataQualityEngine().validate(dataset, min_bars=60, calendar=KRXTradingCalendar() if dataset.metadata.timeframe == "daily" else None)
         inserted = False
         if self._connection is not None:
             inserted = SQLiteDatasetRegistry(self._connection).put_dataset(dataset, quality)
@@ -703,6 +772,60 @@ def real_krx_data_release_check(connection: sqlite3.Connection, *, symbol: str, 
     }
 
 
+def krx_trading_calendar_release_check(connection: sqlite3.Connection) -> dict[str, object]:
+    calendar = KRXTradingCalendar()
+    engine = DataQualityEngine()
+    weekend = engine.validate(
+        _quality_fixture_dataset("calendar-weekend", "2026-07-03", "2026-07-06", ("2026-07-03", "2026-07-06"), fixture_backed=False),
+        min_bars=1,
+        calendar=calendar,
+    )
+    holiday = engine.validate(
+        _quality_fixture_dataset("calendar-holiday", "2026-01-01", "2026-01-05", ("2026-01-02", "2026-01-05"), fixture_backed=False),
+        min_bars=1,
+        calendar=calendar,
+    )
+    missing = engine.validate(
+        _quality_fixture_dataset("calendar-missing", "2026-01-02", "2026-01-06", ("2026-01-02", "2026-01-06"), fixture_backed=False),
+        min_bars=1,
+        calendar=calendar,
+    )
+    malformed = engine.validate(
+        _quality_fixture_dataset("calendar-malformed", "2026-01-02", "2026-01-02", ("2026-01-02",), invalid_ohlc=True, fixture_backed=False),
+        min_bars=1,
+        calendar=calendar,
+    )
+    duplicate = engine.validate(
+        _quality_fixture_dataset("calendar-duplicate", "2026-01-02", "2026-01-02", ("2026-01-02", "2026-01-02"), fixture_backed=False),
+        min_bars=1,
+        calendar=calendar,
+    )
+    if weekend.status is not DataQualityStatus.PASS:
+        raise RealMarketDataUnavailable("real_data_unavailable: weekend dates were treated as missing")
+    if holiday.status is not DataQualityStatus.PASS:
+        raise RealMarketDataUnavailable("real_data_unavailable: KRX holiday dates were treated as missing")
+    if not _has_finding(missing, "missing_dates"):
+        raise RealMarketDataUnavailable("real_data_unavailable: missing trading day was not detected")
+    if not _has_finding(malformed, "invalid_ohlc"):
+        raise RealMarketDataUnavailable("real_data_unavailable: malformed OHLCV was not detected")
+    if not _has_finding(duplicate, "duplicate_bars"):
+        raise RealMarketDataUnavailable("real_data_unavailable: duplicate trading day was not detected")
+    release_dataset = _quality_fixture_dataset("calendar-release", "2026-01-01", "2026-01-05", ("2026-01-02", "2026-01-05"), fixture_backed=False)
+    release_quality = engine.validate(release_dataset, min_bars=1, calendar=calendar)
+    inserted = SQLiteDatasetRegistry(connection).put_dataset(release_dataset, release_quality)
+    return {
+        "schema_version": 33,
+        "weekend_excluded": True,
+        "holiday_excluded": True,
+        "missing_trading_day_detected": True,
+        "malformed_detected": True,
+        "duplicate_detected": True,
+        "fixture_backed": False,
+        "source": "real:test-calendar",
+        "inserted": inserted,
+    }
+
+
 def _compare_candidates(original: RealBacktestResult, candidates: tuple[ImprovementCandidate, ...]) -> CandidateComparison:
     rows = [
         {
@@ -837,6 +960,32 @@ def _to_yahoo_symbol(symbol: str) -> str:
 
 def _default_urlopen(request: Request, timeout: float) -> object:
     return urlopen(request, timeout=timeout)
+
+
+def _quality_fixture_dataset(
+    dataset_key: str,
+    start_date: str,
+    end_date: str,
+    dates: tuple[str, ...],
+    *,
+    fixture_backed: bool,
+    invalid_ohlc: bool = False,
+) -> MarketDataset:
+    bars = []
+    for index, day in enumerate(dates):
+        close = 100.0 + index
+        high = close + 1.0
+        low = close - 1.0
+        if invalid_ohlc:
+            high = close - 2.0
+        bars.append(MarketBar(day, "005930", close, high, low, close, 1_000_000 + index, int(close * 1_000_000)))
+    source = "fixture:quality-calendar" if fixture_backed else "real:test-calendar"
+    metadata = MarketDataMetadata(source, "KOSPI", "daily", start_date, end_date, True, "2026-07-25T00:00:00Z", fixture_backed)
+    return MarketDataset(f"dataset:{dataset_key}:{start_date}:{end_date}", (MarketSymbol("005930", "005930", "KOSPI"),), tuple(bars), metadata)
+
+
+def _has_finding(report: DataQualityReport, code: str) -> bool:
+    return any(finding.code == code for finding in report.findings)
 
 
 def _date_range(start: str, end: str) -> list[str]:

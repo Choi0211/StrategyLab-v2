@@ -180,6 +180,10 @@ class MarketDataProvider(Protocol):
     def validate_dataset(self, dataset: MarketDataset) -> "DataQualityReport": ...
 
 
+class TradingCalendar(Protocol):
+    def expected_open_dates(self, *, start_date: str, end_date: str) -> tuple[str, ...]: ...
+
+
 class FixtureMarketDataProvider:
     def fetch_bars(self, symbol: str, *, start_date: str, end_date: str, timeframe: str = "daily") -> MarketDataset:
         _validate_date(start_date)
@@ -230,7 +234,7 @@ class DataQualityReport:
 
 
 class DataQualityEngine:
-    def validate(self, dataset: MarketDataset, *, min_bars: int = 3, max_stale_days: int = 3650) -> DataQualityReport:
+    def validate(self, dataset: MarketDataset, *, min_bars: int = 3, max_stale_days: int = 3650, calendar: TradingCalendar | None = None) -> DataQualityReport:
         findings: list[DataQualityFinding] = []
         seen: set[tuple[str, str]] = set()
         previous: str | None = None
@@ -257,10 +261,15 @@ class DataQualityEngine:
             findings.append(DataQualityFinding("insufficient_lookback", "error", "dataset has insufficient lookback"))
         dates = [bar.timestamp for bar in dataset.bars]
         if dates:
-            expected_dates = set(_date_range(min(dates), max(dates)))
+            expected_dates = set(
+                calendar.expected_open_dates(start_date=dataset.metadata.start_date, end_date=dataset.metadata.end_date)
+                if calendar is not None
+                else _date_range(min(dates), max(dates))
+            )
             missing = sorted(expected_dates.difference(dates))
             if missing:
-                findings.append(DataQualityFinding("missing_dates", "warning", f"missing {len(missing)} calendar dates"))
+                label = "trading dates" if calendar is not None else "calendar dates"
+                findings.append(DataQualityFinding("missing_dates", "warning", f"missing {len(missing)} {label}"))
         try:
             retrieved = datetime.fromisoformat(dataset.metadata.retrieved_at.replace("Z", "+00:00"))
             if datetime.now(UTC) - retrieved > timedelta(days=max_stale_days):

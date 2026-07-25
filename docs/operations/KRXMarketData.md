@@ -4,6 +4,7 @@ Use fixture-backed checks locally:
 
 ```bash
 python -m gaon.runtime.cli krx-real-research-release-check --db runtime.sqlite
+python -m gaon.runtime.cli krx-trading-calendar-release-check --db runtime.sqlite
 ```
 
 Current production behavior:
@@ -12,6 +13,9 @@ Current production behavior:
 - real public KRX fetcher can be enabled through Yahoo chart historical data
 - unavailable real data reports `real_data_unavailable`
 - fixture data remains explicitly marked `source=fixture`
+- daily KRX data quality is evaluated against trading dates, not raw calendar dates
+- weekends and bounded deterministic KRX non-trading dates are not counted as missing bars
+- malformed OHLCV, duplicate bars, stale data, and actual missing trading bars remain quality findings
 
 Production environment:
 
