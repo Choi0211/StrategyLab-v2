@@ -90,6 +90,7 @@ from gaon.research.krx_real_pipeline import (
     build_market_data_provider_from_env,
     default_execution_assumptions,
     krx_trading_calendar_release_check,
+    provider_gap_release_check,
     real_krx_data_release_check,
 )
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
@@ -242,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     real_krx_data_release.add_argument("--end", default="2026-07-24")
     krx_calendar_release = sub.add_parser("krx-trading-calendar-release-check")
     krx_calendar_release.add_argument("--db", default=":memory:")
+    provider_gap_release = sub.add_parser("provider-gap-release-check")
+    provider_gap_release.add_argument("--db", default=":memory:")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1290,6 +1293,7 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} source={result['source']} "
                 f"fixture_backed={str(result['fixture_backed']).lower()} provider={result['provider']} "
                 f"symbol={result['symbol']} rows={result['rows']} quality={result['quality']} "
+                f"provider_gaps={result['provider_gaps']} blocking_findings={result['blocking_findings']} "
                 f"trades={result['trades']} validation={result['validation']}"
             )
         except RealMarketDataUnavailable as exc:
@@ -1311,6 +1315,23 @@ def _run(args: argparse.Namespace) -> int:
                 f"malformed_detected={str(result['malformed_detected']).lower()} "
                 f"duplicate_detected={str(result['duplicate_detected']).lower()} "
                 f"source={result['source']} fixture_backed={str(result['fixture_backed']).lower()}"
+            )
+        except RealMarketDataUnavailable as exc:
+            raise ConfigurationError(str(exc)) from exc
+        finally:
+            store.close()
+    elif args.command == "provider-gap-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = provider_gap_release_check(store._connection)
+            if store.status().schema_version != 33:
+                raise ConfigurationError("provider gap release check must preserve schema v33")
+            print(
+                "provider-gap-release-check: PASS "
+                f"schema_version={store.status().schema_version} provider={result['provider']} "
+                f"fixture_backed={str(result['fixture_backed']).lower()} quality={result['quality']} "
+                f"provider_gaps={result['provider_gaps']} provider_gap_dates={','.join(result['provider_gap_dates'])} "
+                f"blocking_findings={result['blocking_findings']} other_provider_isolated={str(result['other_provider_isolated']).lower()}"
             )
         except RealMarketDataUnavailable as exc:
             raise ConfigurationError(str(exc)) from exc

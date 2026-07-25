@@ -1,5 +1,12 @@
 # Changelog
 
+## Hotfix 120.2 Real Provider Gap Classification
+
+- Added provider-gap classification for Yahoo KRX daily data anomalies without changing the KRX exchange calendar.
+- Classified `2025-09-19` as a `real:yahoo-chart` provider gap, not a KRX holiday.
+- Added release-check warning allowlist behavior: provider-gap-only datasets can pass real-data checks while unknown missing trading days, malformed OHLCV, and duplicates remain blocking.
+- Added `provider-gap-release-check` and Korean research-report disclosure for provider gaps.
+
 ## Hotfix 120.1 KRX Trading Calendar Quality
 
 - Added deterministic `KRXTradingCalendar` support for daily KRX data-quality checks.

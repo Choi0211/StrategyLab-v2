@@ -5,6 +5,7 @@ Use fixture-backed checks locally:
 ```bash
 python -m gaon.runtime.cli krx-real-research-release-check --db runtime.sqlite
 python -m gaon.runtime.cli krx-trading-calendar-release-check --db runtime.sqlite
+python -m gaon.runtime.cli provider-gap-release-check --db runtime.sqlite
 ```
 
 Current production behavior:
@@ -16,6 +17,8 @@ Current production behavior:
 - daily KRX data quality is evaluated against trading dates, not raw calendar dates
 - weekends and bounded deterministic KRX non-trading dates are not counted as missing bars
 - malformed OHLCV, duplicate bars, stale data, and actual missing trading bars remain quality findings
+- `2025-09-19` remains an exchange-open KRX date; for `real:yahoo-chart` it is classified as `provider_gap`, not as an exchange holiday
+- `real-krx-data-release-check` allows provider-gap-only warnings while still blocking unknown missing trading days and malformed data
 
 Production environment:
 
@@ -36,7 +39,8 @@ python -m gaon.runtime.cli real-krx-data-release-check \
 ```
 
 Expected successful output includes `source=real`, `fixture_backed=false`,
-`provider=real:yahoo-chart`, row count, and `quality=pass`.
+`provider=real:yahoo-chart`, row count, `provider_gaps`, `blocking_findings`,
+and either `quality=pass` or provider-gap-only `quality=pass_with_warnings`.
 
 Do not place credentials, private API clients, or broker connections in this
 public repository.
