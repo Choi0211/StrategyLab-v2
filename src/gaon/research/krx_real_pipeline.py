@@ -41,6 +41,7 @@ DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 YAHOO_CHART_ENDPOINT = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 HttpOpener = Callable[[Request, float], object]
 ALLOWED_RELEASE_WARNING_CODES = frozenset({"provider_gap"})
+KRX_WON_FLOAT_DRIFT_TOLERANCE = 0.01
 
 
 class FieldProvenance(str, Enum):
@@ -856,8 +857,8 @@ def real_krx_data_release_check(connection: sqlite3.Connection, *, symbol: str, 
         raise RealMarketDataUnavailable("real_data_unavailable: release check requires source=real")
     blocking = _blocking_quality_findings(quality)
     if blocking:
-        codes = ",".join(finding.code for finding in blocking)
-        raise RealMarketDataUnavailable(f"real_data_unavailable: blocking_quality_findings={codes}")
+        details = "; ".join(f"{finding.code}:{finding.message}" for finding in blocking)
+        raise RealMarketDataUnavailable(f"real_data_unavailable: blocking_quality_findings={details}")
     spec = UserStrategyParser().parse("20-day breakout close > MA20 > MA60 volume >= volume MA20 stop -5% 10-day low exit", symbol=symbol)
     assumptions = default_execution_assumptions()
     result = RuleBasedBacktestEngine().run(f"real-krx-data-release-check:{uuid4().hex}", spec, dataset, assumptions)
@@ -1215,16 +1216,31 @@ def _parse_yahoo_chart_payload(payload: dict[str, object], symbol: str) -> tuple
     bars: list[MarketBar] = []
     for index, timestamp in enumerate(timestamps):
         try:
-            open_ = float(opens[index])
-            high = float(highs[index])
-            low = float(lows[index])
-            close = float(closes[index])
+            open_ = _normalize_yahoo_krx_ohlc(float(opens[index]))
+            high = _normalize_yahoo_krx_ohlc(float(highs[index]))
+            low = _normalize_yahoo_krx_ohlc(float(lows[index]))
+            close = _normalize_yahoo_krx_ohlc(float(closes[index]))
             volume = int(volumes[index] or 0)
         except (TypeError, ValueError, IndexError):
             continue
         day = datetime.fromtimestamp(int(timestamp), UTC).date().isoformat()
         bars.append(MarketBar(day, symbol, open_, high, low, close, volume, int(close * volume)))
     return tuple(sorted(bars, key=lambda bar: bar.timestamp))
+
+
+def _normalize_yahoo_krx_ohlc(value: float) -> float:
+    """Normalize tiny Yahoo float drift while preserving real OHLC errors.
+
+    KRX daily equity prices are quoted in integer KRW. Yahoo chart JSON may
+    serialize those values as floats very close to an integer, so values such
+    as 71999.999999 should not trip OHLC ordering. Wider differences are left
+    untouched so genuine provider/parser data defects remain fail-closed.
+    """
+
+    rounded = round(value)
+    if abs(value - rounded) <= KRX_WON_FLOAT_DRIFT_TOLERANCE:
+        return float(rounded)
+    return value
 
 
 def _to_yahoo_symbol(symbol: str) -> str:

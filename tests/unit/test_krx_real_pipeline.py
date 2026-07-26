@@ -19,6 +19,7 @@ from gaon.research.krx_real_pipeline import (
     krx_trading_calendar_release_check,
     provider_gap_release_check,
     real_krx_data_release_check,
+    _parse_yahoo_chart_payload,
 )
 from gaon.research.real_research import DataQualityEngine, DataQualityStatus, MarketBar, MarketDataMetadata, MarketDataset, MarketSymbol
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
@@ -56,6 +57,44 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertEqual(dataset.metadata.source, "real:yahoo-chart")
         self.assertEqual(len(dataset.bars), 70)
         self.assertGreater(dataset.bars[-1].trading_value, 0)
+
+    def test_yahoo_parser_normalizes_krx_won_float_drift(self) -> None:
+        payload = {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [1767225600],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [70000.000004],
+                                    "high": [69999.999996],
+                                    "low": [69000.000004],
+                                    "close": [70000.000003],
+                                    "volume": [1_000_000],
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "error": None,
+            }
+        }
+        bars = _parse_yahoo_chart_payload(payload, "005930")
+        self.assertEqual(bars[0].open, 70000.0)
+        self.assertEqual(bars[0].high, 70000.0)
+        self.assertEqual(bars[0].low, 69000.0)
+        self.assertEqual(bars[0].close, 70000.0)
+        dataset = MarketDataset("dataset:test:yahoo-float-drift", (MarketSymbol("005930", "005930", "KOSPI"),), bars, MarketDataMetadata("real:yahoo-chart", "KOSPI", "daily", bars[0].timestamp, bars[0].timestamp, False, "2026-07-25T00:00:00Z", False))
+        self.assertEqual(DataQualityEngine().validate(dataset, min_bars=1).status, DataQualityStatus.PASS)
+
+    def test_data_quality_reports_invalid_ohlc_date_and_values(self) -> None:
+        dataset = _quality_dataset("diagnostic-invalid", "2026-01-02", "2026-01-02", ("2026-01-02",), invalid_ohlc=True)
+        report = DataQualityEngine().validate(dataset, min_bars=1, calendar=KRXTradingCalendar())
+        finding = next(item for item in report.findings if item.code == "invalid_ohlc")
+        self.assertIn("date=2026-01-02", finding.message)
+        self.assertIn("open=", finding.message)
+        self.assertIn("high=", finding.message)
 
     def test_krx_calendar_excludes_weekends_and_holidays_from_missing_dates(self) -> None:
         calendar = KRXTradingCalendar()
@@ -113,6 +152,14 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         dates = tuple(day for day in KRXTradingCalendar().expected_open_dates(start_date="2025-09-17", end_date="2025-12-31") if day != "2025-09-19")
         dataset = _quality_dataset("unknown-large-gap", "2025-09-17", "2025-12-31", dates, source="real:other-provider")
         with self.assertRaises(RealMarketDataUnavailable):
+            real_krx_data_release_check(connection, symbol="005930", start_date=dataset.metadata.start_date, end_date=dataset.metadata.end_date, provider=_StaticProvider(dataset))
+
+    def test_real_release_check_reports_invalid_ohlc_detail(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        migrate(connection)
+        dates = KRXTradingCalendar().expected_open_dates(start_date="2026-01-02", end_date="2026-04-10")
+        dataset = _quality_dataset("release-invalid-detail", "2026-01-02", "2026-04-10", dates, invalid_ohlc=True, source="real:yahoo-chart")
+        with self.assertRaisesRegex(RealMarketDataUnavailable, r"invalid_ohlc:.*date=2026-01-02.*open=.*high="):
             real_krx_data_release_check(connection, symbol="005930", start_date=dataset.metadata.start_date, end_date=dataset.metadata.end_date, provider=_StaticProvider(dataset))
 
     def test_krx_trading_calendar_release_check_preserves_schema_and_provenance(self) -> None:
