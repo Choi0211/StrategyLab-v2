@@ -185,7 +185,10 @@ class ResearchGroundingTests(unittest.TestCase):
 
         self.assertIsNotNone(text)
         assert text is not None
+        self.assertEqual(strict_real_research_grounding_violations(text, payload), ())
         self.assertIn("trade_count=3", text)
+        self.assertIn("wins=2", text)
+        self.assertIn("losses=1", text)
         self.assertIn("provider=real:yahoo-chart", text)
         self.assertIn("fixture_backed=false", text)
         self.assertIn("2025-09-19", text)
@@ -236,6 +239,32 @@ class ResearchGroundingTests(unittest.TestCase):
         self.assertTrue(any(item.startswith("trade_count_mismatch:4!=") for item in violations))
         self.assertTrue(any("5.32%" in item for item in violations))
         self.assertTrue(any("RSI(14) 30" in item for item in violations))
+
+    def test_authoritative_metric_aliases_are_structurally_grounded(self) -> None:
+        payload = _strict_real_payload()
+
+        allowed = "win=2 loss=1 trade_count=3 MDD 5.2% PF 1.42 거래 횟수 3회"
+        blocked = "win=3 loss=2 trade_count=4 MDD 8% RSI(14) 30 MA15/MA90 volume 1.5x"
+
+        self.assertEqual(strict_real_research_grounding_violations(allowed, payload), ())
+        violations = strict_real_research_grounding_violations(blocked, payload)
+        self.assertTrue(any(item.startswith("wins_mismatch:3!=") for item in violations))
+        self.assertTrue(any(item.startswith("losses_mismatch:2!=") for item in violations))
+        self.assertTrue(any(item.startswith("trade_count_mismatch:4!=") for item in violations))
+        self.assertTrue(any("MDD 8%" in item for item in violations))
+        self.assertTrue(any("RSI(14) 30" in item for item in violations))
+
+    def test_authoritative_renderer_grounding_invariant_varied_metrics(self) -> None:
+        for index, (wins, losses, trades, mdd, total_return) in enumerate(((0, 0, 0, 0.0, 0.0), (1, 2, 3, 0.073, -0.012), (5, 1, 6, 0.181, 0.245))):
+            payload = _strict_real_payload()
+            payload["backtest"]["metrics"].update({"wins": wins, "losses": losses, "trade_count": trades, "mdd": mdd, "total_return": total_return})
+            payload["comparison"]["rows"][0].update({"trade_count": trades, "mdd": mdd, "total_return": total_return})
+            text = format_grounded_tool_response("krx_real_research", payload, f"variant {index}")
+
+            self.assertIsNotNone(text)
+            assert text is not None
+            self.assertEqual(strict_real_research_grounding_violations(text, payload), ())
+            self.assertEqual(strict_real_research_grounding_violations(f"wins={wins} losses={losses} trade_count={trades}", payload), ())
 
 
 class _FabricatingToolProvider:
@@ -311,7 +340,7 @@ def _strict_real_payload() -> dict[str, object]:
             "filters": {"volume_gte_ma20": {"value": True, "provenance": "user_provided"}},
         },
         "assumptions": {"commission": {"value": 0.00015, "provenance": "default"}, "position_sizing": {"value": "single_position_all_cash", "provenance": "default"}},
-        "backtest": {"source": "real", "metrics": {"trade_count": 3, "total_return": 0.047, "mdd": 0.052, "sharpe": 0.74}},
+        "backtest": {"source": "real", "metrics": {"trade_count": 3, "wins": 2, "losses": 1, "total_return": 0.047, "mdd": 0.052, "sharpe": 0.74, "profit_factor": 1.42}},
         "validation": {"validation_id": "validation:strict", "passed": True, "findings": []},
         "critic_findings": [{"severity": "warning", "message_ko": "provider gap을 명시해야 합니다."}],
         "candidates": [{"candidate_id": "candidate:tested", "backtest_result": {"metrics": {"trade_count": 2, "total_return": 0.038, "mdd": 0.044}}}],

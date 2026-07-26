@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 120.6 Authoritative Backtest Metric Grounding
+
+- Added structured authoritative metric evidence extraction for strict real-research reports.
+- Added semantic aliases for wins/losses/trades/MDD/profit factor/returns without allowing arbitrary values.
+- Added `authoritative-renderer-grounding-release-check`.
+- Made `telegram-strict-real-research-release-check` repeatable on persistent DBs by checking audit append behavior.
+- Preserved schema v33 and strict blocking for fabricated RSI, MA, volume multiplier, take-profit, mismatched trade count, and mismatched MDD claims.
+
 ## Hotfix 120.2 Real Provider Gap Classification
 
 - Added provider-gap classification for Yahoo KRX daily data anomalies without changing the KRX exchange calendar.

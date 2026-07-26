@@ -3,6 +3,21 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 120.6 Authoritative Backtest Metric Grounding
+
+Strict real-research grounding now derives allowed user-facing metric evidence
+from structured authoritative results instead of fixed suspicious-token
+exceptions. Backtest metrics such as `wins`, `losses`, `trade_count`, `mdd`,
+`total_return`, and `profit_factor` can be rendered through Korean or internal
+aliases only when the value matches the authoritative result.
+
+The deterministic real-research renderer is self-validated before Telegram
+delivery. Fabricated metrics such as a mismatched trade count, MDD, RSI,
+take-profit, MA, or volume multiplier remain blocked. The Telegram strict
+release check is repeatable on persistent DBs by validating that a new
+`krx_real_research` audit entry is appended for the current run. Schema remains
+v33.
+
 ## Hotfix 120.2 Real Provider Gap Classification
 
 Gaon now separates exchange calendar gaps from market-data-provider gaps. The

@@ -39,7 +39,7 @@ from gaon.runtime.health import readiness
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, ToolDefinition, ToolRegistry, ToolResult, ToolRiskLevel, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, looks_like_english_final, strict_real_research_grounding_violations
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, looks_like_english_final, strict_real_research_grounding_violations
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
@@ -232,6 +232,9 @@ def main(argv: list[str] | None = None) -> int:
     telegram_strict_real_release = sub.add_parser("telegram-strict-real-research-release-check")
     telegram_strict_real_release.add_argument("--db", default=":memory:")
     telegram_strict_real_release.add_argument("--run-id", default=None)
+    authoritative_renderer_release = sub.add_parser("authoritative-renderer-grounding-release-check")
+    authoritative_renderer_release.add_argument("--db", default=":memory:")
+    authoritative_renderer_release.add_argument("--run-id", default=None)
     telegram_failure_release = sub.add_parser("telegram-real-research-failure-routing-release-check")
     telegram_failure_release.add_argument("--db", default=":memory:")
     telegram_failure_release.add_argument("--run-id", default=None)
@@ -1255,6 +1258,7 @@ def _run(args: argparse.Namespace) -> int:
         try:
             run_id = args.run_id or f"telegram-strict-real-research-release-check:{uuid4().hex}"
             payload = _strict_real_research_payload()
+            audit_before = len(store.tool_audit.list(tool_name="krx_real_research"))
             provider = _StrictTelegramHallucinatingProvider()
             client = _ReleaseCheckTelegramClient()
             tool_executor = _strict_real_safe_tool_executor(store, payload)
@@ -1293,13 +1297,42 @@ def _run(args: argparse.Namespace) -> int:
                 raise ConfigurationError("telegram strict grounding lost authoritative structured report fields")
             if provider.calls != 0:
                 raise ConfigurationError("telegram strict real research should not ask provider to invent the final report")
-            if len(store.tool_audit.list(tool_name="krx_real_research")) != 1:
+            audit_after = len(store.tool_audit.list(tool_name="krx_real_research"))
+            if audit_after <= audit_before:
                 raise ConfigurationError("telegram strict grounding did not audit krx_real_research safe tool")
             messages = store.conversations.list_messages("telegram:100")
             assistant = [message for message in messages if message.role == "assistant"]
             if not assistant or assistant[-1].route != "tool_read_only_authoritative":
                 raise ConfigurationError("telegram strict grounding did not use authoritative tool route")
             print(f"telegram-strict-real-research-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} route=tool_read_only_authoritative trades=3 provider_calls=0")
+        finally:
+            store.close()
+    elif args.command == "authoritative-renderer-grounding-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"authoritative-renderer-grounding-release-check:{uuid4().hex}"
+            payload = _strict_real_research_payload()
+            rendered = format_grounded_tool_response("krx_real_research", payload, payload["request_text"])
+            if not rendered:
+                raise ConfigurationError("authoritative renderer produced no final response")
+            violations = strict_real_research_grounding_violations(rendered, payload)
+            if violations:
+                raise ConfigurationError("authoritative renderer self-validation failed: " + ",".join(violations))
+            legitimate = "win=2 loss=1 trade_count=3 MDD 5.2% PF 1.42"
+            legitimate_violations = strict_real_research_grounding_violations(legitimate, payload)
+            if legitimate_violations:
+                raise ConfigurationError("authoritative metric aliases were rejected: " + ",".join(legitimate_violations))
+            fabricated = "win=3 trade_count=4 MDD 8% RSI(14) 30 MA15/MA90 volume 1.5x"
+            fabricated_violations = strict_real_research_grounding_violations(fabricated, payload)
+            if not fabricated_violations:
+                raise ConfigurationError("fabricated metrics were not blocked")
+            if not any("trade_count_mismatch:4!=" in item for item in fabricated_violations):
+                raise ConfigurationError("fabricated trade count mismatch was not detected")
+            if "2025-09-19" not in rendered:
+                raise ConfigurationError("provider gap evidence was not preserved")
+            if store.status().schema_version != 33:
+                raise ConfigurationError("authoritative renderer check must preserve schema v33")
+            print(f"authoritative-renderer-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} aliases=pass fabricated=blocked")
         finally:
             store.close()
     elif args.command == "telegram-real-research-failure-routing-release-check":
@@ -2458,7 +2491,7 @@ def _strict_real_research_payload() -> dict[str, object]:
             "run_id": "strict-grounding",
             "status": "completed",
             "source": "real",
-            "metrics": {"total_return": 0.047, "cagr": 0.031, "mdd": 0.052, "sharpe": 0.74, "win_rate": 0.666667, "profit_factor": 1.42, "trade_count": 3, "average_trade": 15666.67, "expectancy": 15666.67, "exposure": 0.18, "ending_equity": 1047000.0},
+            "metrics": {"total_return": 0.047, "cagr": 0.031, "mdd": 0.052, "sharpe": 0.74, "win_rate": 0.666667, "profit_factor": 1.42, "trade_count": 3, "wins": 2, "losses": 1, "average_trade": 15666.67, "expectancy": 15666.67, "exposure": 0.18, "ending_equity": 1047000.0},
             "warnings": ("real public data source; verify freshness before decisions",),
         },
         "validation": {"validation_id": "validation:strict-grounding", "passed": True, "findings": []},
