@@ -90,6 +90,7 @@ from gaon.research.krx_real_pipeline import (
     WalkForwardValidator,
     build_market_data_provider_from_env,
     default_execution_assumptions,
+    historical_krx_calendar_release_check,
     krx_trading_calendar_release_check,
     provider_gap_release_check,
     real_krx_data_release_check,
@@ -275,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
     real_krx_data_release.add_argument("--end", default="2026-07-24")
     krx_calendar_release = sub.add_parser("krx-trading-calendar-release-check")
     krx_calendar_release.add_argument("--db", default=":memory:")
+    historical_krx_calendar_release = sub.add_parser("historical-krx-calendar-release-check")
+    historical_krx_calendar_release.add_argument("--db", default=":memory:")
     provider_gap_release = sub.add_parser("provider-gap-release-check")
     provider_gap_release.add_argument("--db", default=":memory:")
     research_ops_demo = sub.add_parser("research-ops-demo")
@@ -1576,6 +1579,26 @@ def _run(args: argparse.Namespace) -> int:
                 f"malformed_detected={str(result['malformed_detected']).lower()} "
                 f"duplicate_detected={str(result['duplicate_detected']).lower()} "
                 f"source={result['source']} fixture_backed={str(result['fixture_backed']).lower()}"
+            )
+        except RealMarketDataUnavailable as exc:
+            raise ConfigurationError(str(exc)) from exc
+        finally:
+            store.close()
+    elif args.command == "historical-krx-calendar-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = historical_krx_calendar_release_check(store._connection)
+            if store.status().schema_version < 33:
+                raise ConfigurationError("historical KRX calendar release check requires schema v33 or later")
+            print(
+                "historical-krx-calendar-release-check: PASS "
+                f"schema_version={store.status().schema_version} provider={result['provider']} "
+                f"fixture_backed={str(result['fixture_backed']).lower()} "
+                f"provider_gap_dates={','.join(result['provider_gap_dates'])} "
+                f"blocking_findings={result['blocking_findings']} "
+                f"expected_3y={result['expected_3y']} "
+                f"actual_3y_without_provider_gap={result['actual_3y_without_provider_gap']} "
+                f"expected_5y={result['expected_5y']}"
             )
         except RealMarketDataUnavailable as exc:
             raise ConfigurationError(str(exc)) from exc

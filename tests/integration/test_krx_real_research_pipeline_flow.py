@@ -48,6 +48,19 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_historical_calendar_release_check_is_repeatable_on_persistent_db(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            db_path = f"{folder}/historical-calendar.sqlite"
+            for _ in range(3):
+                self.assertEqual(cli_main(["historical-krx-calendar-release-check", "--db", db_path]), 0)
+            connection = sqlite3.connect(db_path)
+            try:
+                version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
+                self.assertEqual(version, SCHEMA_VERSION)
+                self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM market_datasets").fetchone()[0], 1)
+            finally:
+                connection.close()
+
     def test_strict_real_research_grounding_release_check_is_repeatable_on_persistent_db(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             db_path = f"{folder}/strict-real-grounding.sqlite"

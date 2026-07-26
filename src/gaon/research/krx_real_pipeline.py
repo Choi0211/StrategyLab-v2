@@ -371,14 +371,91 @@ class RealMarketDataUnavailable(RuntimeError):
 class KRXTradingCalendar(TradingCalendar):
     """Deterministic KRX daily calendar for quality checks.
 
-    This local calendar excludes weekends and the bounded KRX non-trading dates
-    needed by current release checks. It is intentionally replaceable by an
-    official KRX calendar provider later.
+    This local calendar models KRX market closures with explicit annual
+    overrides for government holidays, election days, Labor Day, temporary
+    holidays, KRX-designated closures, and year-end exchange holidays. It is
+    intentionally replaceable by an official KRX calendar provider later.
     """
 
     market = "KRX"
-    closed_dates = frozenset(
-        {
+    annual_closed_dates = {
+        2021: frozenset(
+            {
+                "2021-01-01",
+                "2021-02-11",
+                "2021-02-12",
+                "2021-03-01",
+                "2021-05-05",
+                "2021-05-19",
+                "2021-08-16",
+                "2021-09-20",
+                "2021-09-21",
+                "2021-09-22",
+                "2021-10-04",
+                "2021-10-11",
+                "2021-12-31",
+            }
+        ),
+        2022: frozenset(
+            {
+                "2022-01-31",
+                "2022-02-01",
+                "2022-02-02",
+                "2022-03-01",
+                "2022-03-09",
+                "2022-05-05",
+                "2022-06-01",
+                "2022-06-06",
+                "2022-08-15",
+                "2022-09-09",
+                "2022-09-12",
+                "2022-10-03",
+                "2022-10-10",
+                "2022-12-30",
+            }
+        ),
+        2023: frozenset(
+            {
+                "2023-01-23",
+                "2023-01-24",
+                "2023-03-01",
+                "2023-05-01",
+                "2023-05-05",
+                "2023-06-06",
+                "2023-08-15",
+                "2023-09-28",
+                "2023-09-29",
+                "2023-10-02",
+                "2023-10-03",
+                "2023-10-09",
+                "2023-12-25",
+                "2023-12-29",
+            }
+        ),
+        2024: frozenset(
+            {
+                "2024-01-01",
+                "2024-02-09",
+                "2024-02-12",
+                "2024-03-01",
+                "2024-04-10",
+                "2024-05-01",
+                "2024-05-06",
+                "2024-05-15",
+                "2024-06-06",
+                "2024-08-15",
+                "2024-09-16",
+                "2024-09-17",
+                "2024-09-18",
+                "2024-10-01",
+                "2024-10-03",
+                "2024-10-09",
+                "2024-12-25",
+                "2024-12-31",
+            }
+        ),
+        2025: frozenset(
+            {
             "2025-01-01",
             "2025-01-27",
             "2025-01-28",
@@ -398,8 +475,11 @@ class KRXTradingCalendar(TradingCalendar):
             "2025-10-09",
             "2025-12-25",
             "2025-12-31",
+            }
+        ),
+        2026: frozenset(
+            {
             "2026-01-01",
-            "2026-01-02",
             "2026-02-16",
             "2026-02-17",
             "2026-02-18",
@@ -416,8 +496,10 @@ class KRXTradingCalendar(TradingCalendar):
             "2026-10-09",
             "2026-12-25",
             "2026-12-31",
-        }
-    )
+            }
+        ),
+    }
+    closed_dates = frozenset(day for days in annual_closed_dates.values() for day in days)
 
     def expected_open_dates(self, *, start_date: str, end_date: str) -> tuple[str, ...]:
         _validate_date(start_date)
@@ -871,6 +953,86 @@ def provider_gap_release_check(connection: sqlite3.Connection) -> dict[str, obje
         "provider_gap_dates": _finding_dates(_findings_by_code(yahoo_quality, "provider_gap")),
         "blocking_findings": len(_blocking_quality_findings(yahoo_quality)),
         "other_provider_isolated": True,
+        "inserted": inserted,
+    }
+
+
+def historical_krx_calendar_release_check(connection: sqlite3.Connection) -> dict[str, object]:
+    calendar = KRXTradingCalendar()
+    historical_closed = (
+        "2023-08-15",
+        "2023-09-28",
+        "2023-09-29",
+        "2023-10-02",
+        "2023-10-03",
+        "2023-10-09",
+        "2023-12-25",
+        "2023-12-29",
+        "2024-01-01",
+        "2024-02-09",
+        "2024-02-12",
+        "2024-03-01",
+        "2024-04-10",
+        "2024-05-01",
+        "2024-05-06",
+        "2024-05-15",
+        "2024-06-06",
+        "2024-08-15",
+        "2024-09-16",
+        "2024-09-17",
+        "2024-09-18",
+        "2024-10-01",
+        "2024-10-03",
+        "2024-10-09",
+        "2024-12-25",
+        "2024-12-31",
+    )
+    for day in historical_closed:
+        if day in calendar.expected_open_dates(start_date=day, end_date=day):
+            raise RealMarketDataUnavailable(f"real_data_unavailable: historical KRX closure treated as open {day}")
+    if "2025-09-19" not in calendar.expected_open_dates(start_date="2025-09-19", end_date="2025-09-19"):
+        raise RealMarketDataUnavailable("real_data_unavailable: Yahoo provider gap date was incorrectly marked exchange closed")
+    expected_3y = calendar.expected_open_dates(start_date="2023-07-25", end_date="2026-07-24")
+    yahoo_dates = tuple(day for day in expected_3y if day != "2025-09-19")
+    yahoo_dataset = _quality_fixture_dataset(
+        "historical-yahoo-gap",
+        "2023-07-25",
+        "2026-07-24",
+        yahoo_dates,
+        fixture_backed=False,
+        source="real:yahoo-chart",
+    )
+    yahoo_quality = _validate_krx_daily_dataset(yahoo_dataset, min_bars=1)
+    if _finding_dates(_findings_by_code(yahoo_quality, "provider_gap")) != ("2025-09-19",):
+        raise RealMarketDataUnavailable("real_data_unavailable: historical Yahoo gap was not isolated to 2025-09-19")
+    if _blocking_quality_findings(yahoo_quality):
+        raise RealMarketDataUnavailable("real_data_unavailable: historical Yahoo provider-gap-only data was blocking")
+    unknown_dataset = _quality_fixture_dataset(
+        "historical-unknown-gap",
+        "2023-07-25",
+        "2026-07-24",
+        tuple(day for day in expected_3y if day not in {"2025-09-19", "2026-01-05"}),
+        fixture_backed=False,
+        source="real:yahoo-chart",
+    )
+    unknown_quality = _validate_krx_daily_dataset(unknown_dataset, min_bars=1)
+    if not _blocking_quality_findings(unknown_quality):
+        raise RealMarketDataUnavailable("real_data_unavailable: genuine historical trading-day gap was not blocking")
+    expected_5y = calendar.expected_open_dates(start_date="2021-07-25", end_date="2026-07-24")
+    for day in ("2021-08-16", "2021-09-20", "2021-09-21", "2021-09-22", "2021-10-04", "2021-10-11", "2021-12-31", "2022-03-09", "2022-06-01", "2022-12-30"):
+        if day in expected_5y:
+            raise RealMarketDataUnavailable(f"real_data_unavailable: five-year KRX closure treated as open {day}")
+    inserted = SQLiteDatasetRegistry(connection).put_dataset(yahoo_dataset, yahoo_quality)
+    return {
+        "schema_version": 33,
+        "historical_closed_excluded": True,
+        "provider_gap_dates": _finding_dates(_findings_by_code(yahoo_quality, "provider_gap")),
+        "blocking_findings": len(_blocking_quality_findings(yahoo_quality)),
+        "expected_3y": len(expected_3y),
+        "actual_3y_without_provider_gap": len(yahoo_dates),
+        "expected_5y": len(expected_5y),
+        "fixture_backed": False,
+        "provider": yahoo_dataset.metadata.source,
         "inserted": inserted,
     }
 
