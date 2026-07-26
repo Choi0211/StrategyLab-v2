@@ -11,6 +11,10 @@ def route_read_only_tool(text: str) -> str | None:
         return None
     if _krx_real_research(normalized):
         return "krx_real_research"
+    if _research_retest_history(normalized):
+        return "research_retest_history"
+    if _research_retest_status(normalized):
+        return "research_retest_status"
     if _strategy_critique(normalized):
         return "strategy_critique"
     if _research_memory(normalized):
@@ -40,6 +44,14 @@ def _krx_real_research(value: str) -> bool:
     real_data = ("실제", "실데이터", "real", "yahoo", "krx", "삼성전자", "005930")
     research = ("백테스트", "backtest", "분석", "개선후보", "비교", "연구")
     return _contains_any(value, real_data) and _contains_any(value, research)
+
+
+def _research_retest_status(value: str) -> bool:
+    return _contains_any(value, ("retest", "재검증", "표본", "기간확장", "샘플")) and _contains_any(value, ("상태", "status", "충분", "확인", "알려"))
+
+
+def _research_retest_history(value: str) -> bool:
+    return _contains_any(value, ("retest", "재검증", "기간확장", "검증과정", "lineage")) and _contains_any(value, ("이력", "history", "과정", "보여", "기록"))
 
 
 def _research_memory(value: str) -> bool:

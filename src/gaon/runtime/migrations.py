@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 34
+SCHEMA_VERSION = 35
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -52,6 +52,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         31: _upgrade_v31_to_v32,
         32: _upgrade_v32_to_v33,
         33: _upgrade_v33_to_v34,
+        34: _upgrade_v34_to_v35,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1146,6 +1147,50 @@ def _upgrade_v33_to_v34(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_strategy_config_audit_target
             ON strategy_config_audit(target_ref, created_at);
+        """
+    )
+
+
+def _upgrade_v34_to_v35(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS research_retest_runs (
+            run_id TEXT PRIMARY KEY,
+            request_text TEXT NOT NULL,
+            status TEXT NOT NULL,
+            stop_reason TEXT NOT NULL,
+            recommendation TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            source TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_retest_runs_generated
+            ON research_retest_runs(generated_at, run_id);
+        CREATE INDEX IF NOT EXISTS idx_research_retest_runs_recommendation
+            ON research_retest_runs(recommendation, generated_at);
+        CREATE TABLE IF NOT EXISTS research_retest_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            period_label TEXT NOT NULL,
+            trade_count INTEGER NOT NULL,
+            quality_status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_retest_evidence_run
+            ON research_retest_evidence(run_id, created_at);
+        CREATE TABLE IF NOT EXISTS research_period_plans (
+            plan_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_period_plans_run
+            ON research_period_plans(run_id, created_at);
         """
     )
 

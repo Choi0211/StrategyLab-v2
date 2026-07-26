@@ -42,6 +42,7 @@ Included foundations:
 - Sprint 81-90 AI Quant Scientist foundation with feature discovery/selection, walk-forward validation, Monte Carlo robustness, regime detection, meta strategy, portfolio allocation, ensemble decisions, explainability, and scientist reports
 - Sprint 91-100 Self-Improving Quant Researcher foundation with deterministic research critique, bounded improvement iteration, lineage, memory, knowledge relationships, novelty detection, quality scoring, tournaments, autonomous research orchestration, and read-only safe tools
 - Sprint 101-110 Real Market Backtest Integration foundation with versioned market data, provider contracts, data quality checks, dataset registry/cache, StrategySpec, external backtest JSON contracts, reproducibility comparison, and a fixture-backed Real Research Gateway
+- Sprint 131-140 Autonomous Retest Pipeline with insufficient-sample triggers, deterministic period expansion, real-data re-fetch contracts, repeated re-backtests, candidate re-evaluation, multi-period evidence lineage, advisory recommendation refresh, schema v35 persistence, and read-only retest status/history tools
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -113,6 +114,19 @@ Required files: PASS
 ```
 
 ## Basic Usage
+
+Autonomous retest release check:
+
+```bash
+python -m gaon.runtime.cli autonomous-retest-release-check --db runtime.sqlite
+```
+
+Read retest state:
+
+```bash
+python -m gaon.runtime.cli research-retest-status --db runtime.sqlite
+python -m gaon.runtime.cli research-retest-history --db runtime.sqlite
+```
 
 ```python
 from strategylab.market import InMemoryMarketDataAdapter
