@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 140.2 - Telegram Retest Persistence Visibility
+
+- Fixed retest history/status hiding production `autonomous-retest:*` runs because the artifact filter matched the broad `test:` substring inside `retest`.
+- Narrowed retest artifact filtering to explicit release-check/demo/test prefixes only.
+- Added richer persisted retest lineage in status/history payloads, including symbol, strategy/assumptions fingerprints, period counts, provider gaps, blocking findings, quality finding details, metrics, confidence, and warnings.
+- Added `telegram-retest-persistence-release-check` to verify the Telegram authoritative retest route persists run/evidence state in an isolated DB and remains duplicate-message idempotent.
+- Preserved release-check/demo isolation, no trading, no automatic Champion promotion, no approval bypass, and schema v35.
+
 ## Hotfix 140.1 - Telegram Autonomous Retest Routing
 
 - Added explicit autonomous retest natural-language routing for Korean and English requests such as `재검증`, `표본이 부족하면`, `기간을 확장`, `18개월`, `3년`, `5년`, `retest`, and `expand period`.

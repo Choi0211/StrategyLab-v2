@@ -121,6 +121,7 @@ class RetestEvidence:
     recommendation: str
     stop_reason: StopReason | None
     warnings: tuple[str, ...]
+    quality_findings: tuple[dict[str, object], ...] = ()
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -138,6 +139,7 @@ class RetestEvidence:
             "recommendation": self.recommendation,
             "stop_reason": self.stop_reason.value if self.stop_reason else None,
             "warnings": list(self.warnings),
+            "quality_findings": list(self.quality_findings),
         }
 
 
@@ -254,28 +256,74 @@ class SQLiteAutonomousRetestRepository:
         return _run_from_json(str(row[0])) if row else None
 
     def list_runs(self, *, limit: int = 5, include_artifacts: bool = False) -> tuple[dict[str, object], ...]:
-        rows = self._connection.execute("SELECT run_id, status, stop_reason, recommendation, generated_at, source FROM research_retest_runs ORDER BY generated_at DESC, run_id DESC").fetchall()
+        rows = self._connection.execute("SELECT run_id, status, stop_reason, recommendation, generated_at, source, payload_json FROM research_retest_runs ORDER BY generated_at DESC, run_id DESC").fetchall()
         results: list[dict[str, object]] = []
         for row in rows:
             run_id = str(row[0])
             if not include_artifacts and _is_artifact_run(run_id):
                 continue
-            results.append({"run_id": run_id, "status": str(row[1]), "stop_reason": str(row[2]), "recommendation": str(row[3]), "generated_at": str(row[4]), "source": str(row[5])})
+            payload = json.loads(str(row[6]))
+            evidence = tuple(payload.get("evidence", ()))
+            final = evidence[-1] if evidence else {}
+            results.append(
+                {
+                    "run_id": run_id,
+                    "status": str(row[1]),
+                    "stop_reason": str(row[2]),
+                    "recommendation": str(row[3]),
+                    "generated_at": str(row[4]),
+                    "source": str(row[5]),
+                    "symbol": str(payload.get("symbol", "")),
+                    "strategy_fingerprint": str(payload.get("strategy_fingerprint", "")),
+                    "assumptions_fingerprint": str(payload.get("assumptions_fingerprint", "")),
+                    "period_count": len(payload.get("period_plan", ())),
+                    "evidence_count": len(evidence),
+                    "candidate_count": len(payload.get("candidates", ())),
+                    "final_trade_count": int(final.get("trade_count", 0)) if isinstance(final, dict) else 0,
+                    "final_quality_status": str(final.get("quality_status", "")) if isinstance(final, dict) else "",
+                    "final_blocking_findings": int(final.get("blocking_findings", 0)) if isinstance(final, dict) else 0,
+                    "provider_gaps": list(final.get("provider_gaps", ())) if isinstance(final, dict) else [],
+                    "quality_findings": list(final.get("quality_findings", ())) if isinstance(final, dict) else [],
+                }
+            )
             if len(results) >= limit:
                 break
         return tuple(results)
 
     def evidence_history(self, *, run_id: str | None = None, limit: int = 20, include_artifacts: bool = False) -> tuple[dict[str, object], ...]:
         if run_id:
-            rows = self._connection.execute("SELECT evidence_id, run_id, period_label, trade_count, quality_status, created_at FROM research_retest_evidence WHERE run_id = ? ORDER BY created_at, evidence_id LIMIT ?", (run_id, limit)).fetchall()
+            rows = self._connection.execute("SELECT evidence_id, run_id, period_label, trade_count, quality_status, created_at, payload_json FROM research_retest_evidence WHERE run_id = ? ORDER BY created_at, evidence_id LIMIT ?", (run_id, limit)).fetchall()
         else:
-            rows = self._connection.execute("SELECT evidence_id, run_id, period_label, trade_count, quality_status, created_at FROM research_retest_evidence ORDER BY created_at DESC, evidence_id DESC").fetchall()
+            rows = self._connection.execute("SELECT evidence_id, run_id, period_label, trade_count, quality_status, created_at, payload_json FROM research_retest_evidence ORDER BY created_at DESC, evidence_id DESC").fetchall()
         results: list[dict[str, object]] = []
         for row in rows:
             item_run_id = str(row[1])
             if run_id is None and not include_artifacts and _is_artifact_run(item_run_id):
                 continue
-            results.append({"evidence_id": str(row[0]), "run_id": item_run_id, "period_label": str(row[2]), "trade_count": int(row[3]), "quality_status": str(row[4]), "created_at": str(row[5])})
+            payload = json.loads(str(row[6]))
+            period = payload.get("period", {}) if isinstance(payload.get("period"), dict) else {}
+            backtest = payload.get("backtest", {}) if isinstance(payload.get("backtest"), dict) else {}
+            metrics = backtest.get("metrics", {}) if isinstance(backtest.get("metrics"), dict) else {}
+            results.append(
+                {
+                    "evidence_id": str(row[0]),
+                    "run_id": item_run_id,
+                    "period_label": str(row[2]),
+                    "start_date": str(period.get("start_date", "")),
+                    "end_date": str(period.get("end_date", "")),
+                    "trade_count": int(row[3]),
+                    "quality_status": str(row[4]),
+                    "source": str(backtest.get("source", "")),
+                    "fixture_backed": bool(backtest.get("fixture_backed", False)),
+                    "provider_gaps": list(payload.get("provider_gaps", ())),
+                    "blocking_findings": int(payload.get("blocking_findings", 0)),
+                    "quality_findings": list(payload.get("quality_findings", ())),
+                    "metrics": metrics,
+                    "confidence_level": str(payload.get("confidence_level", "")),
+                    "warnings": list(payload.get("warnings", ())),
+                    "created_at": str(row[5]),
+                }
+            )
             if len(results) >= limit:
                 break
         return tuple(results)
@@ -444,6 +492,7 @@ def _evidence_from_backtest(result: RealBacktestResult, quality: DataQualityRepo
         RecommendationDecision.NEEDS_RETEST.value if result.metrics.trade_count < min_trades else RecommendationDecision.HOLD.value,
         None,
         warnings,
+        tuple(finding.to_json() for finding in quality.findings),
     )
 
 
@@ -453,7 +502,22 @@ def _ops_evidence(result: RealBacktestResult, quality: DataQualityReport) -> Bac
 
 
 def _failure_evidence(run_id: str, period: ResearchPeriodStep, reason: StopReason, message: str) -> RetestEvidence:
-    return RetestEvidence(f"retest-evidence:{run_id}:{period.label}:failure", period, None, None, "provider_failure", (), 1, None, 0, "low", RecommendationDecision.NEEDS_RETEST.value, reason, (message,))
+    return RetestEvidence(
+        f"retest-evidence:{run_id}:{period.label}:failure",
+        period,
+        None,
+        None,
+        "provider_failure",
+        (),
+        1,
+        None,
+        0,
+        "low",
+        RecommendationDecision.NEEDS_RETEST.value,
+        reason,
+        (message,),
+        ({"code": "provider_failure", "severity": "error", "message": message},),
+    )
 
 
 def _blocking_count(quality: DataQualityReport) -> int:
@@ -515,6 +579,11 @@ def _build_retest_report(final_result: RealBacktestResult | None, quality: DataQ
         lines.append(f"- {item.period.label}: {item.period.start_date}~{item.period.end_date} trade_count={item.trade_count} quality={item.quality_status} confidence={item.confidence_level}")
         if item.provider_gaps:
             lines.append(f"  provider_gap_dates={', '.join(item.provider_gaps)}")
+        blocking = tuple(_blocking_finding_payloads(item))
+        if blocking:
+            lines.append(f"  blocking_findings={len(blocking)}")
+            for finding in blocking:
+                lines.append(f"  blocking={finding.get('code', 'unknown')}:{finding.get('severity', 'unknown')}:{finding.get('message', '')}")
         if item.warnings:
             lines.extend(f"  warning={warning}" for warning in item.warnings)
     if final_result:
@@ -553,7 +622,19 @@ def _run_uses_real(run: AutonomousRetestRun) -> bool:
 
 
 def _is_artifact_run(run_id: str) -> bool:
-    return any(marker in run_id for marker in RETEST_ARTIFACT_MARKERS)
+    return any(run_id.startswith(marker) for marker in RETEST_ARTIFACT_MARKERS)
+
+
+def _blocking_finding_payloads(item: RetestEvidence) -> tuple[dict[str, object], ...]:
+    blocking: list[dict[str, object]] = []
+    for finding in item.quality_findings:
+        code = str(finding.get("code", ""))
+        severity = str(finding.get("severity", ""))
+        if code == "provider_gap":
+            continue
+        if severity in {"fail", "error", "critical"} or (item.blocking_findings and code != "provider_gap"):
+            blocking.append(finding)
+    return tuple(blocking)
 
 
 def _run_from_json(value: str) -> AutonomousRetestRun:
@@ -591,6 +672,7 @@ def _evidence_from_payload(payload: dict[str, object]) -> RetestEvidence:
         str(payload["recommendation"]),
         StopReason(payload["stop_reason"]) if payload.get("stop_reason") else None,
         tuple(str(item) for item in payload.get("warnings", [])),
+        tuple(dict(item) for item in payload.get("quality_findings", [])),
     )
 
 

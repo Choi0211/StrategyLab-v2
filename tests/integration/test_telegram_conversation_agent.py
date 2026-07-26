@@ -11,7 +11,8 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
-from gaon.research.autonomous_retest import autonomous_retest_release_check
+from gaon.research import autonomous_retest
+from gaon.research.autonomous_retest import autonomous_retest_release_check, research_retest_history_payload, research_retest_status_payload
 from gaon.research.krx_real_pipeline import RealMarketDataUnavailable
 
 
@@ -263,6 +264,89 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertEqual(assistant[-1].route, "tool_read_only_authoritative")
             self.assertEqual(assistant[-1].tool_calls, ("research_retest",))
         finally:
+            store.close()
+
+    def test_telegram_autonomous_retest_persists_to_runtime_db(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            db_path = os.path.join(folder, "runtime.sqlite")
+            store = RuntimeStateStore(db_path)
+            client = FakeTelegramClient((_production_autonomous_retest_update(),))
+            try:
+                result = poll_once(
+                    client,
+                    _config(assistant_enabled=True, assistant_provider="openai-compatible"),
+                    offset=None,
+                    received_at="2026-07-26T00:00:00Z",
+                    state=store.telegram,
+                    runtime_store=store,
+                )
+
+                self.assertEqual(result[0].status, "sent")
+                self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM research_retest_runs").fetchone()[0], 1)
+                self.assertGreaterEqual(store._connection.execute("SELECT COUNT(*) FROM research_retest_evidence").fetchone()[0], 1)
+                self.assertGreaterEqual(store._connection.execute("SELECT COUNT(*) FROM research_period_plans").fetchone()[0], 4)
+                status = research_retest_status_payload(store._connection)
+                history = research_retest_history_payload(store._connection)
+                self.assertFalse(status["empty"])
+                self.assertFalse(history["empty"])
+                self.assertTrue(status["runs"][0]["run_id"].startswith("autonomous-retest:"))
+                self.assertIn("strategy_fingerprint", status["runs"][0])
+                self.assertIn("assumptions_fingerprint", status["runs"][0])
+                self.assertIn("provider_gaps", history["evidence"][0])
+                self.assertIn("blocking_findings", history["evidence"][0])
+                self.assertIn("metrics", history["evidence"][0])
+            finally:
+                store.close()
+
+            reopened = RuntimeStateStore(db_path)
+            try:
+                self.assertFalse(research_retest_status_payload(reopened._connection)["empty"])
+                self.assertFalse(research_retest_history_payload(reopened._connection)["empty"])
+            finally:
+                reopened.close()
+
+    def test_telegram_autonomous_retest_duplicate_message_does_not_store_second_run(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_production_autonomous_retest_update(),))
+        try:
+            config = _config(assistant_enabled=True, assistant_provider="openai-compatible")
+            first = poll_once(client, config, offset=None, received_at="2026-07-26T00:00:00Z", state=store.telegram, runtime_store=store)
+            second = poll_once(client, config, offset=None, received_at="2026-07-26T00:00:01Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual(first[0].status, "sent")
+            self.assertEqual(second[0].status, "duplicate")
+            self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM research_retest_runs").fetchone()[0], 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="research_retest")), 1)
+        finally:
+            store.close()
+
+    def test_telegram_autonomous_retest_persistence_failure_is_not_success(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_production_autonomous_retest_update(),))
+        original = autonomous_retest.SQLiteAutonomousRetestRepository.add_run
+
+        def fail_persist(self, run):  # noqa: ANN001
+            raise RuntimeError("synthetic persistence failure")
+
+        autonomous_retest.SQLiteAutonomousRetestRepository.add_run = fail_persist
+        try:
+            result = poll_once(
+                client,
+                _config(assistant_enabled=True, assistant_provider="openai-compatible"),
+                offset=None,
+                received_at="2026-07-26T00:00:00Z",
+                state=store.telegram,
+                runtime_store=store,
+            )
+
+            self.assertEqual(result[0].status, "sent")
+            self.assertIn("오류", client.sent[0][1])
+            self.assertNotIn("[자동 재검증 결과]", client.sent[0][1])
+            self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM research_retest_runs").fetchone()[0], 0)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertIn("failure", assistant[-1].route)
+        finally:
+            autonomous_retest.SQLiteAutonomousRetestRepository.add_run = original
             store.close()
 
     def test_authoritative_market_data_failure_is_transparent_and_provider_free_form_is_blocked(self) -> None:

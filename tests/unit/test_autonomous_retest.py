@@ -116,6 +116,23 @@ class AutonomousRetestTests(unittest.TestCase):
 
         self.assertFalse(status["empty"])
         self.assertEqual(len(history["evidence"]), 4)
+        self.assertIn("quality_findings", status["runs"][0])
+        self.assertIn("metrics", history["evidence"][0])
+
+    def test_autonomous_retest_run_id_is_not_filtered_as_artifact(self) -> None:
+        run = AutonomousRetestOrchestrator(self.connection, _ReleaseCheckProvider(), _ReleaseCheckBacktestRunner()).run(
+            REQUEST,
+            run_id="autonomous-retest:production-like",
+            min_trades=30,
+            generated_at=NOW,
+        )
+
+        status = research_retest_status_payload(self.connection)
+        history = research_retest_history_payload(self.connection, run_id=run.run_id)
+
+        self.assertFalse(status["empty"])
+        self.assertEqual(status["runs"][0]["run_id"], "autonomous-retest:production-like")
+        self.assertFalse(history["empty"])
 
 
 if __name__ == "__main__":
