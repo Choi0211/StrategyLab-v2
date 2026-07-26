@@ -2,6 +2,19 @@
 
 Status: Passed
 
+## Hotfix 120.7 Structural Authoritative Grounding Validator
+
+- Unit: `tests.unit.test_research_grounding`
+  - `wins=2`, `win=2`, and `승리 2회` pass only when `BacktestResult.metrics["wins"] == 2`
+  - `loss=1`, `trades=3`, `MDD 5.2%`, `return 4.7%`, and `PF 1.42` pass only when backed by structured metrics
+  - unrelated raw output numbers do not allow `trade_count=4`
+  - unsupported `PF`, mismatched `win`, mismatched `trade_count`, mismatched MDD, RSI, MA, volume multiplier, stop, and take-profit claims remain blocked
+- Integration: `tests.integration.test_krx_real_research_pipeline_flow`
+  - `structural-authoritative-grounding-release-check` repeats three times on one persistent SQLite DB
+  - Telegram strict real-research release check continues to append tool audit records
+- CLI release check:
+  - `python -m gaon.runtime.cli structural-authoritative-grounding-release-check --db <db>`
+
 ## Hotfix 120.6 Authoritative Backtest Metric Grounding
 
 - Unit: `tests.unit.test_research_grounding`

@@ -235,6 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     authoritative_renderer_release = sub.add_parser("authoritative-renderer-grounding-release-check")
     authoritative_renderer_release.add_argument("--db", default=":memory:")
     authoritative_renderer_release.add_argument("--run-id", default=None)
+    structural_authoritative_release = sub.add_parser("structural-authoritative-grounding-release-check")
+    structural_authoritative_release.add_argument("--db", default=":memory:")
+    structural_authoritative_release.add_argument("--run-id", default=None)
     telegram_failure_release = sub.add_parser("telegram-real-research-failure-routing-release-check")
     telegram_failure_release.add_argument("--db", default=":memory:")
     telegram_failure_release.add_argument("--run-id", default=None)
@@ -1333,6 +1336,44 @@ def _run(args: argparse.Namespace) -> int:
             if store.status().schema_version != 33:
                 raise ConfigurationError("authoritative renderer check must preserve schema v33")
             print(f"authoritative-renderer-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} aliases=pass fabricated=blocked")
+        finally:
+            store.close()
+    elif args.command == "structural-authoritative-grounding-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"structural-authoritative-grounding-release-check:{uuid4().hex}"
+            payload = _strict_real_research_payload()
+            rendered = format_grounded_tool_response("krx_real_research", payload, payload["request_text"])
+            if not rendered:
+                raise ConfigurationError("structural authoritative grounding renderer produced no report")
+            if strict_real_research_grounding_violations(rendered, payload):
+                raise ConfigurationError("structural authoritative grounding rejected deterministic renderer output")
+            valid_alias_text = "wins=2 win=2 승리 2회 loss=1 losses=1 trades=3 MDD 5.2% return 4.7% PF 1.42"
+            if strict_real_research_grounding_violations(valid_alias_text, payload):
+                raise ConfigurationError("structural authoritative grounding rejected valid metric aliases")
+            fabricated_metric_text = "win=4 trade_count=4 MDD=8% 평균 거래 수익률 1.77% 총 수익률 5.32%"
+            fabricated_metric_violations = strict_real_research_grounding_violations(fabricated_metric_text, payload)
+            if not fabricated_metric_violations:
+                raise ConfigurationError("structural authoritative grounding allowed fabricated metrics")
+            missing_pf_payload = _strict_real_research_payload()
+            backtest = missing_pf_payload.get("backtest")
+            if isinstance(backtest, dict) and isinstance(backtest.get("metrics"), dict):
+                backtest["metrics"].pop("profit_factor", None)
+            for candidate in missing_pf_payload.get("candidates", ()):
+                if not isinstance(candidate, dict):
+                    continue
+                result = candidate.get("backtest_result")
+                if isinstance(result, dict) and isinstance(result.get("metrics"), dict):
+                    result["metrics"].pop("profit_factor", None)
+            missing_pf_violations = strict_real_research_grounding_violations("PF 1.42", missing_pf_payload)
+            if not any(item.startswith("profit_factor_missing_authoritative_evidence") for item in missing_pf_violations):
+                raise ConfigurationError("structural authoritative grounding did not block unsupported PF")
+            strategy_violations = strict_real_research_grounding_violations("RSI(14) 30 MA15 MA90 volume 1.5x -3% stop 5% 익절", payload)
+            if not strategy_violations:
+                raise ConfigurationError("structural authoritative grounding allowed fabricated strategy conditions")
+            if store.status().schema_version != 33:
+                raise ConfigurationError("structural authoritative grounding release check must preserve schema v33")
+            print(f"structural-authoritative-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} valid_aliases=pass fabricated=blocked")
         finally:
             store.close()
     elif args.command == "telegram-real-research-failure-routing-release-check":
