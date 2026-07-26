@@ -273,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     research_ops_demo = sub.add_parser("research-ops-demo")
     research_ops_demo.add_argument("--db", default=":memory:")
     research_ops_demo.add_argument("--insufficient-sample", action="store_true")
+    research_ops_demo.add_argument("--persist", action="store_true", default=False)
     research_ops_demo.add_argument("--json", action="store_true")
     research_ops_release = sub.add_parser("research-ops-release-check")
     research_ops_release.add_argument("--db", default=":memory:")
@@ -287,7 +288,13 @@ def main(argv: list[str] | None = None) -> int:
     research_ops_report = sub.add_parser("research-ops-report")
     research_ops_report.add_argument("--db", default=":memory:")
     research_ops_report.add_argument("--report-id", default=None)
+    research_ops_report.add_argument("--include-artifacts", action="store_true", default=False)
     research_ops_report.add_argument("--json", action="store_true")
+    research_ops_cleanup = sub.add_parser("research-ops-cleanup")
+    research_ops_cleanup.add_argument("--db", default=":memory:")
+    research_ops_cleanup.add_argument("--dry-run", action="store_true", default=False)
+    research_ops_cleanup.add_argument("--apply", action="store_true", default=False)
+    research_ops_cleanup.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1566,7 +1573,7 @@ def _run(args: argparse.Namespace) -> int:
         finally:
             store.close()
     elif args.command == "research-ops-demo":
-        store = RuntimeStateStore(args.db)
+        store = RuntimeStateStore(args.db if args.persist else ":memory:")
         try:
             champion, challenger = fixture_evidence_pair(sufficient=not args.insufficient_sample)
             report = ResearchOperationsService(SQLiteResearchOperationRepository(store._connection)).analyze(
@@ -1582,7 +1589,13 @@ def _run(args: argparse.Namespace) -> int:
         finally:
             store.close()
     elif args.command == "research-ops-release-check":
-        store = RuntimeStateStore(args.db)
+        target_store = RuntimeStateStore(args.db)
+        try:
+            target_counts_before = _research_ops_table_counts(target_store._connection)
+            target_schema = target_store.status().schema_version
+        finally:
+            target_store.close()
+        store = RuntimeStateStore(":memory:")
         try:
             service = ResearchOperationsService(SQLiteResearchOperationRepository(store._connection))
             insufficient_champion, insufficient_challenger = fixture_evidence_pair(sufficient=False)
@@ -1609,9 +1622,16 @@ def _run(args: argparse.Namespace) -> int:
             audit = SQLiteResearchOperationRepository(store._connection).audit_history()
             if len(audit) < 5:
                 raise ConfigurationError("research ops audit history was not recorded")
+            target_store = RuntimeStateStore(args.db)
+            try:
+                target_counts_after = _research_ops_table_counts(target_store._connection)
+            finally:
+                target_store.close()
+            if target_counts_after != target_counts_before:
+                raise ConfigurationError("research ops release check modified target research state")
             print(
                 "research-ops-release-check: PASS "
-                f"schema_version={store.status().schema_version} insufficient_sample=detected "
+                f"schema_version={target_schema} isolated=true insufficient_sample=detected "
                 f"dominance={report.dominance.decision.value} recommendation={report.recommendation.decision.value} "
                 f"applied={config.config_id} rollback={rolled_back.config_id} audit={len(audit)}"
             )
@@ -1641,7 +1661,27 @@ def _run(args: argparse.Namespace) -> int:
                     raise ConfigurationError("research operation report not found")
                 print(_dumps_json(report.to_json()) if args.json else operation_report_markdown(report))
             else:
-                print(_dumps_json({"reports": list(repository.list_reports())}) if args.json else "\n".join(str(item) for item in repository.list_reports()))
+                reports = repository.list_reports(include_artifacts=args.include_artifacts)
+                print(_dumps_json({"reports": list(reports)}) if args.json else "\n".join(str(item) for item in reports))
+        finally:
+            store.close()
+    elif args.command == "research-ops-cleanup":
+        if args.apply and args.dry_run:
+            raise ConfigurationError("choose either --dry-run or --apply")
+        apply_cleanup = bool(args.apply)
+        store = RuntimeStateStore(args.db)
+        try:
+            repository = SQLiteResearchOperationRepository(store._connection)
+            plan = repository.cleanup_artifacts(apply=apply_cleanup, actor_ref="cli", created_at=_utc_now())
+            output = {"mode": "apply" if apply_cleanup else "dry-run", "deleted" if apply_cleanup else "matched": plan.to_json(), "schema_version": store.status().schema_version}
+            if args.json:
+                print(_dumps_json(output))
+            else:
+                action = "APPLIED" if apply_cleanup else "DRY-RUN"
+                print(
+                    f"research-ops-cleanup: {action} reports={len(plan.report_ids)} approvals={len(plan.approval_ids)} "
+                    f"configs={len(plan.config_ids)} audit={len(plan.audit_ids)} total={plan.total}"
+                )
         finally:
             store.close()
     elif args.command == "backup":
@@ -2600,6 +2640,16 @@ def _deployment_service(store: RuntimeStateStore, target_dir: str | None = None)
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _research_ops_table_counts(connection: Any) -> dict[str, int]:
+    tables = (
+        "research_operation_reports",
+        "research_config_approvals",
+        "strategy_config_versions",
+        "strategy_config_audit",
+    )
+    return {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in tables}
 
 
 def _contains_hangul(text: str) -> bool:

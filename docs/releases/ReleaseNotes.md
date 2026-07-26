@@ -3,6 +3,28 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 130.1 Research Operations State Isolation
+
+Research Operations release-check and demo fixture data no longer contaminates
+production research state. `research-ops-release-check --db <db>` validates the
+target schema and table immutability while executing its fixture writes in an
+isolated in-memory runtime store.
+
+`research_operation_status` excludes release-check/demo/test artifacts by
+default. When no real operational research report or approved config exists, it
+returns the deterministic Korean message `현재 활성 연구 운영 결과가 없습니다.`
+
+Production cleanup is available through:
+
+```bash
+python -m gaon.runtime.cli research-ops-cleanup --db /var/lib/strategylab/gaon-runtime.sqlite --dry-run
+python -m gaon.runtime.cli research-ops-cleanup --db /var/lib/strategylab/gaon-runtime.sqlite --apply
+```
+
+Cleanup targets only provenance-identifiable release-check/demo/test artifacts,
+records an `artifact_cleanup` audit event, and preserves real user research
+state. Schema remains v34.
+
 ## Sprint 121-130 Research Operations
 
 Gaon now has an approval-gated research operations layer for structured

@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 130.1 - Research Operations State Isolation
+
+- Isolated `research-ops-release-check` fixture writes from the target production SQLite database.
+- Made `research-ops-demo` isolated by default and added an explicit `--persist` diagnostic mode.
+- Hid release-check/demo/test artifacts from `research_operation_status` and normal `research-ops-report` output.
+- Added `research-ops-cleanup --dry-run|--apply` to identify and remove existing release-check/demo/test artifacts while preserving real user research state.
+- Preserved schema v34 and all no-trading/no-auto-promotion/no-approval-bypass boundaries.
+
 ## Sprint 121-130 - Research Operations
 
 - Added research quality gate, statistical confidence scoring, candidate dominance analysis, period-expansion policy, and approval-gated strategy configuration changes.

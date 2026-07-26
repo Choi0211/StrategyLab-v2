@@ -104,6 +104,44 @@ class ResearchOperationsTests(unittest.TestCase):
         self.assertFalse(result.output["automatic_champion_promotion"])
         self.assertEqual(result.output["provider"], "sqlite:research_operations")
 
+    def test_release_check_artifacts_are_hidden_from_status_tool(self) -> None:
+        champion, challenger = fixture_evidence_pair(sufficient=True)
+        self.service.analyze("research-ops-release-check:unit", champion, challenger, generated_at=NOW)
+        executor = SafeToolExecutor(default_tool_registry(self.connection))
+
+        result = executor.execute(ToolRequest("research_operation_status", {"limit": 3}, "unit", NOW))
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.output["reports"], [])
+        self.assertTrue(result.output["empty"])
+        self.assertIn("현재 활성 연구 운영 결과가 없습니다", result.output["message"])
+
+    def test_cleanup_dry_run_and_apply_only_target_artifacts(self) -> None:
+        champion, challenger = fixture_evidence_pair(sufficient=True)
+        artifact = self.service.analyze("research-ops-release-check:cleanup", champion, challenger, generated_at=NOW)
+        self.service.approve_and_apply(artifact.report_id, actor_ref="release-check-human", approved_at="2026-07-26T00:01:00Z")
+        real = self.service.analyze("research-ops:user-live", champion, challenger, generated_at="2026-07-26T00:02:00Z")
+
+        dry_run = self.repository.cleanup_artifacts(apply=False, actor_ref="unit", created_at="2026-07-26T00:03:00Z")
+        self.assertGreater(dry_run.total, 0)
+        self.assertIsNotNone(self.repository.get_report(artifact.report_id))
+
+        applied = self.repository.cleanup_artifacts(apply=True, actor_ref="unit", created_at="2026-07-26T00:04:00Z")
+
+        self.assertEqual(applied.report_ids, dry_run.report_ids)
+        self.assertIsNone(self.repository.get_report(artifact.report_id))
+        self.assertIsNotNone(self.repository.get_report(real.report_id))
+        self.assertTrue(any(item["event_type"] == "artifact_cleanup" for item in self.repository.audit_history()))
+        self.assertIsNone(self.repository.active_config())
+
+    def test_real_research_report_and_config_remain_visible(self) -> None:
+        champion, challenger = fixture_evidence_pair(sufficient=True)
+        report = self.service.analyze("research-ops:user-visible", champion, challenger, generated_at=NOW)
+        config = self.service.approve_and_apply(report.report_id, actor_ref="human:youngha", approved_at="2026-07-26T00:01:00Z")
+
+        self.assertEqual(self.repository.list_reports()[-1]["report_id"], report.report_id)
+        self.assertEqual(self.repository.active_config().config_id, config.config_id)
+
 
 if __name__ == "__main__":
     unittest.main()

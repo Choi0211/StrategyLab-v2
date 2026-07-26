@@ -65,10 +65,36 @@ All configuration mutations write audit records and preserve rollback references
 - `research-config-approve`
 - `research-config-rollback`
 - `research-ops-report`
+- `research-ops-cleanup`
 
 ## Safe Tools
 
-`research_operation_status` is read-only. It exposes recent operation reports, active strategy config metadata, and audit count. It cannot approve, apply, roll back, trade, or promote.
+`research_operation_status` is read-only. It exposes recent operation reports, active strategy config metadata, and audit count. It excludes release-check/demo/test artifacts by default and cannot approve, apply, roll back, trade, or promote.
+
+## Hotfix 130.1 State Isolation
+
+Release-check and demo fixtures are treated as non-production artifacts. The
+reserved identifiers are `research-ops-release-check:*`,
+`research-recommendation:research-ops-release-check:*`, `research-ops-demo:*`,
+and `research-recommendation:research-ops-demo:*`.
+
+`research-ops-release-check --db <production-db>` opens the target DB only for
+schema/state verification, then runs fixture writes in an isolated in-memory
+runtime store. The command fails if production research operation table counts
+change during the check.
+
+`research-ops-demo` is isolated by default. Use `--persist` only for local
+diagnostics. Persisted demo artifacts remain hidden from normal status output
+and can be removed with:
+
+```bash
+python -m gaon.runtime.cli research-ops-cleanup --db /var/lib/strategylab/gaon-runtime.sqlite --dry-run
+python -m gaon.runtime.cli research-ops-cleanup --db /var/lib/strategylab/gaon-runtime.sqlite --apply
+```
+
+Cleanup deletes only release-check/demo/test artifacts and appends an
+`artifact_cleanup` audit record. Real user research reports and approved configs
+are preserved.
 
 ## Known Limitations
 
