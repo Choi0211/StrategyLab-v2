@@ -338,11 +338,14 @@ def _research_operation_status(connection: sqlite3.Connection, limit: int) -> di
     repository = SQLiteResearchOperationRepository(connection)
     reports = repository.list_reports()[-limit:]
     active = repository.active_config()
+    empty = not reports and active is None
     return {
         "provider": "sqlite:research_operations",
         "reports": list(reports),
         "active_config": active.to_json() if active else None,
         "audit_count": len(repository.audit_history()),
+        "empty": empty,
+        "message": "현재 활성 연구 운영 결과가 없습니다." if empty else "활성 연구 운영 결과를 조회했습니다.",
         "automatic_order": False,
         "automatic_champion_promotion": False,
     }

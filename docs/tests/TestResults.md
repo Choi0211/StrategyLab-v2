@@ -12,11 +12,16 @@ Status: Passed
   - approval applies strategy configuration and rollback restores the previous config
   - fixture evidence cannot drive configuration changes
   - `research_operation_status` is read-only and preserves no-order/no-promotion flags
+  - release-check artifacts are hidden from `research_operation_status`
+  - cleanup dry-run changes no rows and cleanup apply removes only artifacts
+  - real user reports and approved configs remain visible
 - Integration: `tests.integration.test_research_operations_flow`
   - `research-ops-release-check` repeats three times on one persistent SQLite DB
-  - schema v34 migration persists reports, approvals, config versions, and audit history
+  - release-check fixture writes are isolated and leave production research state unchanged
+  - cleanup CLI dry-run/apply removes persisted demo artifacts while recording cleanup audit
 - CLI release check:
   - `python -m gaon.runtime.cli research-ops-release-check --db <db>`
+  - `python -m gaon.runtime.cli research-ops-cleanup --db <db> --dry-run`
 
 ## Hotfix 120.7 Structural Authoritative Grounding Validator
 

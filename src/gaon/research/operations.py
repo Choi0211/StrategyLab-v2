@@ -19,6 +19,15 @@ from typing import Any
 SCHEMA_VERSION = 1
 ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 REF_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.:\-]{0,159}$")
+ARTIFACT_MARKERS = (
+    "research-ops-release-check:",
+    "research-recommendation:research-ops-release-check:",
+    "research-ops-demo:",
+    "research-recommendation:research-ops-demo:",
+    "test:",
+    "unit:",
+    "integration:",
+)
 
 
 class QualityStatus(str, Enum):
@@ -197,6 +206,27 @@ class ResearchOperationReport:
         }
 
 
+@dataclass(frozen=True)
+class ResearchOpsCleanupPlan:
+    report_ids: tuple[str, ...]
+    approval_ids: tuple[str, ...]
+    config_ids: tuple[str, ...]
+    audit_ids: tuple[str, ...]
+
+    @property
+    def total(self) -> int:
+        return len(self.report_ids) + len(self.approval_ids) + len(self.config_ids) + len(self.audit_ids)
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "report_ids": list(self.report_ids),
+            "approval_ids": list(self.approval_ids),
+            "config_ids": list(self.config_ids),
+            "audit_ids": list(self.audit_ids),
+            "total": self.total,
+        }
+
+
 class SQLiteResearchOperationRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
@@ -212,9 +242,17 @@ class SQLiteResearchOperationRepository:
         row = self._connection.execute("SELECT payload_json FROM research_operation_reports WHERE report_id = ?", (report_id,)).fetchone()
         return report_from_json(str(row[0])) if row else None
 
-    def list_reports(self) -> tuple[dict[str, object], ...]:
-        rows = self._connection.execute("SELECT report_id, recommendation_id, status, generated_at FROM research_operation_reports ORDER BY generated_at, report_id").fetchall()
-        return tuple({"report_id": str(row[0]), "recommendation_id": str(row[1]), "status": str(row[2]), "generated_at": str(row[3])} for row in rows)
+    def list_reports(self, *, include_artifacts: bool = False) -> tuple[dict[str, object], ...]:
+        rows = self._connection.execute("SELECT report_id, recommendation_id, status, generated_at, payload_json FROM research_operation_reports ORDER BY generated_at, report_id").fetchall()
+        reports: list[dict[str, object]] = []
+        for row in rows:
+            report_id = str(row[0])
+            recommendation_id = str(row[1])
+            payload = str(row[4])
+            if not include_artifacts and _is_artifact_text(report_id, recommendation_id, payload):
+                continue
+            reports.append({"report_id": report_id, "recommendation_id": recommendation_id, "status": str(row[2]), "generated_at": str(row[3])})
+        return tuple(reports)
 
     def add_approval(self, recommendation_id: str, status: ApprovalStatus, *, actor_ref: str, decided_at: str, reason: str) -> str:
         approval_id = f"research-config-approval:{recommendation_id}:{status.value}"
@@ -236,13 +274,21 @@ class SQLiteResearchOperationRepository:
                 (version.config_id, version.slot, version.revision, version.status.value, version.strategy_ref, _dumps(version.to_json()), version.created_at, version.previous_config_id, version.rollback_ref),
             )
 
-    def active_config(self, slot: str = "default") -> StrategyConfigVersion | None:
-        row = self._connection.execute("SELECT payload_json FROM strategy_config_versions WHERE slot = ? AND status = ? ORDER BY revision DESC, created_at DESC LIMIT 1", (slot, ApprovalStatus.APPLIED.value)).fetchone()
-        return config_from_json(str(row[0])) if row else None
+    def active_config(self, slot: str = "default", *, include_artifacts: bool = False) -> StrategyConfigVersion | None:
+        rows = self._connection.execute("SELECT payload_json FROM strategy_config_versions WHERE slot = ? AND status = ? ORDER BY revision DESC, created_at DESC", (slot, ApprovalStatus.APPLIED.value)).fetchall()
+        for row in rows:
+            config = config_from_json(str(row[0]))
+            if include_artifacts or not _is_artifact_config(config):
+                return config
+        return None
 
-    def latest_config(self, slot: str = "default") -> StrategyConfigVersion | None:
-        row = self._connection.execute("SELECT payload_json FROM strategy_config_versions WHERE slot = ? ORDER BY revision DESC, created_at DESC LIMIT 1", (slot,)).fetchone()
-        return config_from_json(str(row[0])) if row else None
+    def latest_config(self, slot: str = "default", *, include_artifacts: bool = False) -> StrategyConfigVersion | None:
+        rows = self._connection.execute("SELECT payload_json FROM strategy_config_versions WHERE slot = ? ORDER BY revision DESC, created_at DESC", (slot,)).fetchall()
+        for row in rows:
+            config = config_from_json(str(row[0]))
+            if include_artifacts or not _is_artifact_config(config):
+                return config
+        return None
 
     def append_audit(self, event_type: str, target_ref: str, payload: dict[str, object], created_at: str) -> str:
         audit_id = f"research-config-audit:{target_ref}:{event_type}:{created_at}".replace(" ", "_")
@@ -259,6 +305,53 @@ class SQLiteResearchOperationRepository:
         else:
             rows = self._connection.execute("SELECT audit_id, event_type, target_ref, created_at FROM strategy_config_audit WHERE target_ref = ? ORDER BY created_at, audit_id", (target_ref,)).fetchall()
         return tuple({"audit_id": str(row[0]), "event_type": str(row[1]), "target_ref": str(row[2]), "created_at": str(row[3])} for row in rows)
+
+    def cleanup_plan(self) -> ResearchOpsCleanupPlan:
+        report_ids = _artifact_ids(
+            self._connection.execute("SELECT report_id, recommendation_id, payload_json FROM research_operation_reports ORDER BY generated_at, report_id").fetchall(),
+            0,
+        )
+        approval_ids = _artifact_ids(
+            self._connection.execute("SELECT approval_id, recommendation_id, payload_json FROM research_config_approvals ORDER BY decided_at, approval_id").fetchall(),
+            0,
+        )
+        config_rows = self._connection.execute("SELECT config_id, payload_json FROM strategy_config_versions ORDER BY revision, config_id").fetchall()
+        config_ids = tuple(str(row[0]) for row in config_rows if _is_artifact_text(str(row[0]), str(row[1])))
+        artifact_config_ids = set(config_ids)
+        audit_rows = self._connection.execute("SELECT audit_id, event_type, target_ref, payload_json FROM strategy_config_audit ORDER BY created_at, audit_id").fetchall()
+        audit_ids: list[str] = []
+        for row in audit_rows:
+            audit_id = str(row[0])
+            event_type = str(row[1])
+            target_ref = str(row[2])
+            payload = str(row[3])
+            if event_type == "artifact_cleanup":
+                continue
+            if target_ref in artifact_config_ids or _is_artifact_text(audit_id, target_ref, payload):
+                audit_ids.append(audit_id)
+        return ResearchOpsCleanupPlan(report_ids, approval_ids, config_ids, tuple(audit_ids))
+
+    def cleanup_artifacts(self, *, apply: bool, actor_ref: str, created_at: str) -> ResearchOpsCleanupPlan:
+        _validate_utc(created_at)
+        plan = self.cleanup_plan()
+        if not apply:
+            return plan
+        with self._connection:
+            _delete_ids(self._connection, "strategy_config_versions", "config_id", plan.config_ids)
+            _delete_ids(self._connection, "strategy_config_audit", "audit_id", plan.audit_ids)
+            _delete_ids(self._connection, "research_config_approvals", "approval_id", plan.approval_ids)
+            _delete_ids(self._connection, "research_operation_reports", "report_id", plan.report_ids)
+            self._connection.execute(
+                "INSERT OR REPLACE INTO strategy_config_audit(audit_id, event_type, target_ref, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    f"research-config-audit:research-ops-cleanup:artifact_cleanup:{created_at}".replace(" ", "_"),
+                    "artifact_cleanup",
+                    "research-ops-cleanup",
+                    _dumps({"actor_ref": actor_ref, "deleted": plan.to_json(), "reason": "release-check/demo/test artifact cleanup"}),
+                    created_at,
+                ),
+            )
+        return plan
 
 
 class ResearchOperationsService:
@@ -286,8 +379,10 @@ class ResearchOperationsService:
             raise ValueError("human approval actor is required")
         _validate_utc(approved_at)
         self._repository.add_approval(report.recommendation.recommendation_id, ApprovalStatus.APPROVED, actor_ref=actor_ref, decided_at=approved_at, reason="explicit human approval")
-        previous = self._repository.active_config(slot)
-        revision = (previous.revision + 1) if previous else 1
+        report_is_artifact = _is_artifact_text(report.report_id, report.recommendation.recommendation_id)
+        previous = self._repository.active_config(slot, include_artifacts=report_is_artifact)
+        latest = self._repository.latest_config(slot, include_artifacts=True)
+        revision = (latest.revision + 1) if latest else 1
         config = StrategyConfigVersion(
             f"strategy-config:{slot}:{revision}",
             slot,
@@ -309,7 +404,8 @@ class ResearchOperationsService:
         if not actor_ref:
             raise ValueError("rollback actor is required")
         _validate_utc(rolled_back_at)
-        active = self._repository.active_config(slot)
+        target = self._find_config(config_id)
+        active = self._repository.active_config(slot, include_artifacts=_is_artifact_config(target))
         if active is None or active.config_id != config_id:
             raise ValueError("only active config can be rolled back")
         if active.rollback_ref is None:
@@ -481,6 +577,10 @@ def config_from_json(value: str) -> StrategyConfigVersion:
     return StrategyConfigVersion(str(payload["config_id"]), str(payload["slot"]), int(payload["revision"]), str(payload["strategy_ref"]), dict(payload["parameters"]), str(payload["source_recommendation_id"]), ApprovalStatus(payload["status"]), str(payload["created_at"]), payload.get("previous_config_id"), payload.get("rollback_ref"))
 
 
+def is_research_operation_artifact_ref(value: str) -> bool:
+    return _is_artifact_text(value)
+
+
 def _evidence_from_dict(payload: dict[str, object]) -> BacktestEvidence:
     return BacktestEvidence(str(payload["result_id"]), str(payload["strategy_ref"]), str(payload["period_start"]), str(payload["period_end"]), str(payload["source"]), bool(payload["fixture_backed"]), dict(payload["metrics"]), str(payload["quality_status"]), int(payload.get("provider_gap_count", 0)), int(payload.get("blocking_findings", 0)))
 
@@ -505,6 +605,23 @@ def _validate_ref(value: str, field: str) -> None:
 def _validate_utc(value: str) -> None:
     if ISO_UTC.fullmatch(value) is None:
         raise ValueError("timestamp must be ISO 8601 UTC")
+
+
+def _is_artifact_config(config: StrategyConfigVersion) -> bool:
+    return _is_artifact_text(config.config_id, config.source_recommendation_id, _dumps(config.to_json()))
+
+
+def _is_artifact_text(*values: str) -> bool:
+    return any(marker in value for marker in ARTIFACT_MARKERS for value in values)
+
+
+def _artifact_ids(rows: list[sqlite3.Row] | list[tuple[Any, ...]], id_index: int) -> tuple[str, ...]:
+    return tuple(str(row[id_index]) for row in rows if _is_artifact_text(*(str(item) for item in row)))
+
+
+def _delete_ids(connection: sqlite3.Connection, table: str, column: str, ids: tuple[str, ...]) -> None:
+    for item_id in ids:
+        connection.execute(f"DELETE FROM {table} WHERE {column} = ?", (item_id,))
 
 
 def _dumps(payload: dict[str, object]) -> str:
