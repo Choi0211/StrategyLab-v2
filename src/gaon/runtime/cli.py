@@ -310,6 +310,8 @@ def main(argv: list[str] | None = None) -> int:
     retest_demo.add_argument("--json", action="store_true")
     retest_release = sub.add_parser("autonomous-retest-release-check")
     retest_release.add_argument("--db", default=":memory:")
+    telegram_retest_release = sub.add_parser("telegram-retest-persistence-release-check")
+    telegram_retest_release.add_argument("--db", default=":memory:")
     retest_status = sub.add_parser("research-retest-status")
     retest_status.add_argument("--db", default=":memory:")
     retest_status.add_argument("--limit", type=int, default=5)
@@ -1743,6 +1745,57 @@ def _run(args: argparse.Namespace) -> int:
             )
         finally:
             store.close()
+    elif args.command == "telegram-retest-persistence-release-check":
+        target_store = RuntimeStateStore(args.db)
+        try:
+            target_schema = target_store.status().schema_version
+            target_counts_before = _retest_table_counts(target_store._connection)
+        finally:
+            target_store.close()
+        store = RuntimeStateStore(":memory:")
+        try:
+            run_id = f"telegram-retest-persistence-release-check:{uuid4().hex}"
+            update = _telegram_update_with_text(
+                run_id,
+                "retest",
+                "retest until enough samples and expand period for Samsung Electronics real data backtest",
+            )
+            client = _ReleaseCheckTelegramClient((update,))
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100",),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            results = poll_once(client, config, offset=None, received_at=_utc_now(), state=store.telegram, runtime_store=store)
+            if tuple(result.status for result in results) != ("sent",):
+                raise ConfigurationError("telegram retest persistence release check did not send exactly one response")
+            runs = research_retest_status_payload(store._connection, limit=5)["runs"]
+            history = research_retest_history_payload(store._connection, limit=20)["evidence"]
+            if len(runs) != 1 or len(history) < 1:
+                raise ConfigurationError("telegram retest route did not persist status/history")
+            duplicate = poll_once(client, config, offset=None, received_at=_utc_now(), state=store.telegram, runtime_store=store)
+            if tuple(result.status for result in duplicate) != ("duplicate",):
+                raise ConfigurationError("telegram retest duplicate update was not idempotent")
+            if len(research_retest_status_payload(store._connection, limit=5)["runs"]) != 1:
+                raise ConfigurationError("telegram retest duplicate update stored another run")
+            target_store = RuntimeStateStore(args.db)
+            try:
+                target_counts_after = _retest_table_counts(target_store._connection)
+            finally:
+                target_store.close()
+            if target_counts_after != target_counts_before:
+                raise ConfigurationError("telegram retest release check modified target retest state")
+            print(
+                "telegram-retest-persistence-release-check: PASS "
+                f"schema_version={target_schema} isolated=true persisted_runs=1 evidence={len(history)} duplicate=idempotent"
+            )
+        finally:
+            store.close()
     elif args.command == "research-retest-status":
         store = RuntimeStateStore(args.db)
         try:
@@ -2976,11 +3029,12 @@ class _RaisingToolExecutor:
 
 
 class _ReleaseCheckTelegramClient:
-    def __init__(self) -> None:
+    def __init__(self, updates: tuple[dict[str, object], ...] = ()) -> None:
+        self._updates = updates
         self.sent: list[tuple[str, str]] = []
 
     def get_updates(self, *, offset=None, timeout=0, limit=100):
-        return ()
+        return self._updates
 
     def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None):
         from gaon.integrations.telegram.contracts import TelegramResponse

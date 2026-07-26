@@ -3,6 +3,32 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 140.2 Telegram Retest Persistence Visibility
+
+Telegram autonomous retest runs are now visible through the same production
+SQLite runtime DB used by the Telegram worker. The root cause was an overly
+broad artifact filter: the `test:` marker matched the substring inside
+`autonomous-retest:*`, so real production runs were persisted but hidden from
+`research-retest-status` and `research-retest-history`.
+
+The filter now excludes only explicit release-check/demo/test artifact prefixes.
+Status/history payloads also expose the key lineage required for operations:
+run metadata, symbol, strategy and assumptions fingerprints, period evidence,
+provider gaps, blocking finding details, metrics, confidence, warnings, stop
+reason, and candidate counts.
+
+Verification:
+
+```bash
+python -m gaon.runtime.cli telegram-retest-persistence-release-check --db <db>
+python -m gaon.runtime.cli research-retest-status --db /var/lib/strategylab/gaon-runtime.sqlite
+python -m gaon.runtime.cli research-retest-history --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+The release check runs isolated fixture state and must not add release-check
+artifacts to production history. Real production history is created only by the
+actual Telegram retest request path.
+
 ## Hotfix 140.1 Telegram Autonomous Retest Routing
 
 Telegram natural-language requests that explicitly ask for automatic retesting,

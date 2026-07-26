@@ -2,6 +2,21 @@
 
 Status: Passed
 
+## Hotfix 140.2 Telegram Retest Persistence Visibility
+
+- Unit: `tests.unit.test_autonomous_retest`
+  - production-style `autonomous-retest:*` run IDs are not filtered as release-check/test artifacts
+  - status/history payloads expose persisted metrics and quality finding lineage
+- Integration: `tests.integration.test_telegram_conversation_agent`
+  - production-equivalent Telegram retest requests persist runs, evidence, and period plans to the runtime DB
+  - reopening the same DB preserves status/history visibility
+  - duplicate Telegram message IDs do not store a second retest run
+  - persistence failure returns a visible fallback instead of a successful research report
+- Integration: `tests.integration.test_autonomous_retest_flow`
+  - `telegram-retest-persistence-release-check` remains isolated and leaves the target DB retest tables unchanged
+- CLI release check:
+  - `python -m gaon.runtime.cli telegram-retest-persistence-release-check --db <db>`
+
 ## Hotfix 140.1 Telegram Autonomous Retest Routing
 
 - Unit: `tests.unit.test_autonomous_retest`
