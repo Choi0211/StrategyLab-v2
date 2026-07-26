@@ -2,6 +2,19 @@
 
 Status: Passed
 
+## Hotfix 120.6 Authoritative Backtest Metric Grounding
+
+- Unit: `tests.unit.test_research_grounding`
+  - deterministic `krx_real_research` renderer validates against its own authoritative structured output
+  - `wins`, `losses`, `trade_count`, `MDD`, `PF`, and return aliases pass only when values match the authoritative result
+  - fabricated `win`, `loss`, `trade_count`, `MDD`, RSI, MA, and volume multiplier claims remain blocked
+  - renderer invariant is tested with varied wins/losses/trades/MDD/return values
+- Integration: `tests.integration.test_krx_real_research_pipeline_flow`
+  - `authoritative-renderer-grounding-release-check` repeats three times on one persistent SQLite DB
+  - `telegram-strict-real-research-release-check` repeats three times and appends `krx_real_research` tool audit records
+- CLI release check:
+  - `python -m gaon.runtime.cli authoritative-renderer-grounding-release-check --db <db>`
+
 ## Hotfix 120.2 Real Provider Gap Classification
 
 - Unit: `tests.unit.test_krx_real_pipeline`

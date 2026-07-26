@@ -258,6 +258,11 @@ def strict_real_research_grounding_violations(text: str, output: dict[str, objec
             if reported not in authoritative_trade_counts:
                 expected = "/".join(str(value) for value in sorted(authoritative_trade_counts))
                 violations.append(f"trade_count_mismatch:{reported}!={expected}")
+    for metric_name, reported in _reported_authoritative_alias_metrics(text):
+        expected_values = _authoritative_metric_numeric_values(output, metric_name)
+        if expected_values and not any(_metric_numbers_match(reported, expected) for expected in expected_values):
+            expected = "/".join(_trim_float(value) for value in sorted(expected_values))
+            violations.append(f"{metric_name}_mismatch:{_trim_float(reported)}!={expected}")
     hypothesis = _section_after(text, "HYPOTHESIS")
     if hypothesis and _contains_performance_number(hypothesis):
         violations.append("hypothesis_contains_performance_metric")
@@ -564,7 +569,7 @@ def _assumption_lines(assumptions: dict[str, object]) -> list[str]:
 
 
 def _metric_lines(metrics: dict[str, object]) -> list[str]:
-    keys = ("total_return", "cagr", "mdd", "sharpe", "win_rate", "profit_factor", "trade_count", "average_trade", "average_win", "average_loss", "expectancy", "exposure", "ending_equity")
+    keys = ("total_return", "cagr", "mdd", "max_drawdown", "sharpe", "win_rate", "profit_factor", "trade_count", "trades", "wins", "win", "losses", "loss", "average_trade", "average_win", "average_loss", "expectancy", "exposure", "ending_equity")
     lines = [f"- {key}={metrics[key]}" for key in keys if key in metrics]
     return lines or ["- BacktestResult metrics가 저장되어 있지 않습니다."]
 
@@ -585,7 +590,157 @@ def _strict_real_research_allowed_tokens(output: dict[str, object]) -> set[str]:
     text = str(output)
     tokens = set(re.findall(r"\d+(?:\.\d+)?%?", text))
     tokens.update(_quality_finding_dates(_as_dict(output.get("quality")), "provider_gap"))
+    tokens.update(_authoritative_metric_tokens(output))
     return tokens
+
+
+_METRIC_ALIASES = {
+    "trade_count": ("trade_count", "trades", "거래 횟수", "거래"),
+    "trades": ("trade_count", "trades", "거래 횟수", "거래"),
+    "wins": ("wins", "win", "승리", "승리 거래", "수익 거래"),
+    "win": ("wins", "win", "승리", "승리 거래", "수익 거래"),
+    "losses": ("losses", "loss", "패배", "손실 거래"),
+    "loss": ("losses", "loss", "패배", "손실 거래"),
+    "mdd": ("mdd", "MDD", "max_drawdown", "최대 낙폭"),
+    "max_drawdown": ("mdd", "MDD", "max_drawdown", "최대 낙폭"),
+    "profit_factor": ("profit_factor", "PF", "프로핏 팩터"),
+    "total_return": ("total_return", "return", "총 수익률"),
+    "cagr": ("cagr", "CAGR"),
+    "sharpe": ("sharpe", "Sharpe"),
+    "win_rate": ("win_rate", "승률"),
+    "average_trade": ("average_trade", "평균 거래 수익"),
+    "average_win": ("average_win", "평균 승리 수익"),
+    "average_loss": ("average_loss", "평균 손실"),
+    "expectancy": ("expectancy", "기대값"),
+    "exposure": ("exposure", "노출"),
+    "ending_equity": ("ending_equity", "최종 자산"),
+}
+
+_PERCENT_METRICS = {"total_return", "return", "cagr", "mdd", "max_drawdown", "win_rate", "exposure"}
+
+
+def _authoritative_metric_tokens(output: dict[str, object]) -> set[str]:
+    tokens: set[str] = set()
+    for metrics in _authoritative_metric_dicts(output):
+        for raw_key, raw_value in metrics.items():
+            key = str(raw_key)
+            aliases = _METRIC_ALIASES.get(key, (key,))
+            values = _metric_value_strings(key, raw_value)
+            for alias in aliases:
+                for value in values:
+                    tokens.add(f"{alias}={value}")
+                    tokens.add(f"{alias} {value}")
+                    if _looks_int(value):
+                        tokens.add(f"{alias} {value}회")
+    return tokens
+
+
+def _authoritative_metric_dicts(output: dict[str, object]) -> tuple[dict[str, object], ...]:
+    metrics: list[dict[str, object]] = []
+    backtest = _as_dict(output.get("backtest"))
+    backtest_metrics = _as_dict(backtest.get("metrics"))
+    if backtest_metrics:
+        metrics.append(backtest_metrics)
+    for candidate in _as_list(output.get("candidates")):
+        item = _as_dict(candidate)
+        result = _as_dict(item.get("backtest_result"))
+        candidate_metrics = _as_dict(result.get("metrics"))
+        if candidate_metrics:
+            metrics.append(candidate_metrics)
+    comparison = _as_dict(output.get("comparison"))
+    for row in _as_list(comparison.get("rows")):
+        row_metrics = _as_dict(row)
+        if row_metrics:
+            metrics.append(row_metrics)
+    validation = _as_dict(output.get("validation"))
+    validation_metrics = _as_dict(validation.get("metrics"))
+    if validation_metrics:
+        metrics.append(validation_metrics)
+    return tuple(metrics)
+
+
+def _metric_value_strings(key: str, value: object) -> set[str]:
+    values = {str(value)}
+    try:
+        numeric = float(str(value))
+    except ValueError:
+        return values
+    if numeric.is_integer():
+        values.add(str(int(numeric)))
+    if key in _PERCENT_METRICS:
+        percent = numeric * 100 if abs(numeric) <= 1 else numeric
+        values.add(_trim_float(percent))
+        values.add(f"{_trim_float(percent)}%")
+    return values
+
+
+def _trim_float(value: float) -> str:
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _looks_int(value: str) -> bool:
+    try:
+        return float(value).is_integer()
+    except ValueError:
+        return False
+
+
+def _reported_authoritative_alias_metrics(text: str) -> tuple[tuple[str, float], ...]:
+    reported: list[tuple[str, float]] = []
+    for metric_name, aliases in (
+        ("wins", _METRIC_ALIASES["wins"]),
+        ("losses", _METRIC_ALIASES["losses"]),
+        ("mdd", _METRIC_ALIASES["mdd"]),
+        ("profit_factor", _METRIC_ALIASES["profit_factor"]),
+        ("total_return", _METRIC_ALIASES["total_return"]),
+    ):
+        for alias in aliases:
+            if alias.isascii():
+                prefix = rf"(?<![A-Za-z_]){re.escape(alias)}(?![A-Za-z_])"
+            else:
+                prefix = re.escape(alias)
+            pattern = prefix + r"\s*(?:=|:)?\s*(-?\d+(?:\.\d+)?%?)"
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                value = _parse_metric_number(match.group(1), percent_metric=metric_name in _PERCENT_METRICS)
+                if value is not None:
+                    reported.append((metric_name, value))
+    return tuple(reported)
+
+
+def _authoritative_metric_numeric_values(output: dict[str, object], metric_name: str) -> set[float]:
+    values: set[float] = set()
+    keys = {metric_name}
+    for key, aliases in _METRIC_ALIASES.items():
+        if metric_name == key or metric_name in aliases:
+            keys.add(key)
+    for metrics in _authoritative_metric_dicts(output):
+        for key in keys:
+            value = _parse_metric_number(metrics.get(key), percent_metric=False)
+            if value is not None:
+                values.add(value)
+                if key in _PERCENT_METRICS and abs(value) <= 1:
+                    values.add(value * 100)
+    return values
+
+
+def _parse_metric_number(value: object, *, percent_metric: bool) -> float | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    is_percent = raw.endswith("%")
+    if is_percent:
+        raw = raw[:-1]
+    try:
+        number = float(raw)
+    except ValueError:
+        return None
+    if is_percent and not percent_metric:
+        return number
+    return number
+
+
+def _metric_numbers_match(reported: float, expected: float) -> bool:
+    return abs(reported - expected) <= 0.000001
 
 
 def _reported_trade_counts(text: str) -> tuple[int, ...]:
