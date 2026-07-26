@@ -1,3 +1,5 @@
+import contextlib
+import io
 import sqlite3
 import tempfile
 import unittest
@@ -32,6 +34,21 @@ class ResearchOperationsFlowTests(unittest.TestCase):
             db_path = f"{folder}/research-ops-demo.sqlite"
             self.assertEqual(cli_main(["research-ops-demo", "--db", db_path]), 0)
             self.assertEqual(cli_main(["research-ops-report", "--db", db_path]), 0)
+
+    def test_cli_reconfigures_cp1252_stdout_for_korean_report(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            db_path = f"{folder}/research-ops-demo.sqlite"
+            buffer = io.BytesIO()
+            stream = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+            try:
+                with contextlib.redirect_stdout(stream):
+                    self.assertEqual(cli_main(["research-ops-demo", "--db", db_path]), 0)
+                    self.assertEqual(cli_main(["research-ops-report", "--db", db_path]), 0)
+                stream.flush()
+                output = buffer.getvalue().decode("utf-8")
+                self.assertIn("[연구 운영 보고서]", output)
+            finally:
+                stream.detach()
 
     def test_cleanup_cli_removes_only_persisted_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

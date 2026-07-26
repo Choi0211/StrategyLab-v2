@@ -117,7 +117,23 @@ TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
 
 
+def _configure_cli_text_streams() -> None:
+    _configure_text_stream(sys.stdout)
+    _configure_text_stream(sys.stderr)
+
+
+def _configure_text_stream(stream: object) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (TypeError, ValueError, OSError):
+        return
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_cli_text_streams()
     parser = argparse.ArgumentParser(prog="gaon.runtime")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("config-check")
