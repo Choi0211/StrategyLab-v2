@@ -3,6 +3,22 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 121-130 Research Operations
+
+Gaon now has an approval-gated research operations layer for structured
+Champion/Challenger research. The pipeline detects insufficient sample sizes,
+caps confidence when trade count is low, recommends period expansion/re-test,
+evaluates candidate dominance, and recommends a Challenger only when quality,
+confidence, and dominance rules pass.
+
+Approved strategy configuration changes are separated from Champion promotion
+and live trading. A config can be applied only after explicit human approval,
+and every applied change stores audit and rollback references. The read-only
+`research_operation_status` safe tool can inspect operation status but cannot
+approve, mutate configuration, place orders, or promote a Champion.
+
+Schema advances to v34. Existing v33 safety boundaries remain in force.
+
 ## Hotfix 120.7 Structural Authoritative Grounding Validator
 
 Strict real-research grounding now treats authoritative performance metrics as

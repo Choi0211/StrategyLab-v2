@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 121-130 - Research Operations
+
+- Added research quality gate, statistical confidence scoring, candidate dominance analysis, period-expansion policy, and approval-gated strategy configuration changes.
+- Added schema v34 tables for research operation reports, research config approvals, strategy config versions, and strategy config audit history.
+- Added rollback-capable approved strategy configuration workflow.
+- Added read-only safe tool `research_operation_status`.
+- Added CLI commands `research-ops-demo`, `research-ops-release-check`, `research-config-approve`, `research-config-rollback`, and `research-ops-report`.
+- Preserved safety boundaries: no live trading, no KIS orders, no broker orders, no automatic Champion promotion, no approval bypass, no arbitrary shell/SQL, and no private repository dependency.
+
 ## Hotfix 120.7 Structural Authoritative Grounding Validator
 
 - Replaced metric literal blacklist handling with canonical metric alias parsing and structured evidence comparison.

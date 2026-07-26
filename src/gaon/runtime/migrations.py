@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -51,6 +51,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         30: _upgrade_v30_to_v31,
         31: _upgrade_v31_to_v32,
         32: _upgrade_v32_to_v33,
+        33: _upgrade_v33_to_v34,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1094,6 +1095,57 @@ def _upgrade_v32_to_v33(connection: sqlite3.Connection) -> None:
             ON krx_real_research_memories(dataset_fingerprint, created_at);
         CREATE INDEX IF NOT EXISTS idx_krx_real_research_source
             ON krx_real_research_memories(source, created_at);
+        """
+    )
+
+
+def _upgrade_v33_to_v34(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS research_operation_reports (
+            report_id TEXT PRIMARY KEY,
+            recommendation_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_operation_reports_recommendation
+            ON research_operation_reports(recommendation_id, generated_at);
+        CREATE TABLE IF NOT EXISTS research_config_approvals (
+            approval_id TEXT PRIMARY KEY,
+            recommendation_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            actor_ref TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            decided_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_config_approvals_recommendation
+            ON research_config_approvals(recommendation_id, decided_at);
+        CREATE TABLE IF NOT EXISTS strategy_config_versions (
+            config_id TEXT PRIMARY KEY,
+            slot TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            strategy_ref TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            previous_config_id TEXT,
+            rollback_ref TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_config_versions_slot_revision
+            ON strategy_config_versions(slot, revision);
+        CREATE INDEX IF NOT EXISTS idx_strategy_config_versions_active
+            ON strategy_config_versions(slot, status, revision);
+        CREATE TABLE IF NOT EXISTS strategy_config_audit (
+            audit_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_strategy_config_audit_target
+            ON strategy_config_audit(target_ref, created_at);
         """
     )
 
