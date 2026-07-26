@@ -188,56 +188,21 @@ def is_strict_real_research_tool(tool_name: str) -> bool:
 
 
 def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]) -> bool:
-    allowed = _strict_real_research_allowed_tokens(output)
-    suspicious = (
-        "trade_count=4",
-        "거래 4",
-        "4회",
-        "win=2",
-        "loss=2",
-        "평균 수익률 1.33",
-        "average return=1.33",
-        "MDD=8",
-        "MDD 8",
-        "fixed risk=1.0",
-        "risk 1.0",
-        "daily rebalance",
-        "0.5%",
-        "MDD 4",
-        "take profit 3",
-        "RSI 20",
-        "volume 1.5",
-        "volume_multiplier",
-        "10일 기간",
-        "10-day",
-    )
-    return any(token in text and token not in allowed for token in suspicious)
+    return bool(strict_real_research_grounding_violations(text, output))
 
 
 def strict_real_research_grounding_violations(text: str, output: dict[str, object]) -> tuple[str, ...]:
     """Return fail-closed grounding violations for user-facing real research text."""
     allowed = _strict_real_research_allowed_tokens(output)
     suspicious = (
-        "trade_count=4",
-        "거래 4",
-        "거래 횟수 4",
-        "4회",
-        "win=2",
-        "loss=2",
-        "평균 거래 수익률 1.77",
-        "평균 수익률 1.33",
-        "average return=1.33",
-        "5.32%",
-        "1.77%",
-        "MDD=8",
-        "MDD 8",
-        "MDD 8%",
         "fixed risk=1.0",
         "risk 1.0",
         "daily rebalance",
         "0.5%",
-        "MDD 4",
         "take profit 3",
+        "take-profit 3",
+        "take profit 5",
+        "take-profit 5",
         "RSI 20",
         "RSI 30",
         "RSI(14) 30",
@@ -246,7 +211,8 @@ def strict_real_research_grounding_violations(text: str, output: dict[str, objec
         "volume 1.5",
         "volume_multiplier",
         "1.5x",
-        "-3%",
+        "-3% stop",
+        "-3% 손절",
         "5% 익절",
         "10일 기간",
         "10-day",
@@ -260,7 +226,9 @@ def strict_real_research_grounding_violations(text: str, output: dict[str, objec
                 violations.append(f"trade_count_mismatch:{reported}!={expected}")
     for metric_name, reported in _reported_authoritative_alias_metrics(text):
         expected_values = _authoritative_metric_numeric_values(output, metric_name)
-        if expected_values and not any(_metric_numbers_match(reported, expected) for expected in expected_values):
+        if not expected_values:
+            violations.append(f"{metric_name}_missing_authoritative_evidence:{_trim_float(reported)}")
+        elif not any(_metric_numbers_match(reported, expected) for expected in expected_values):
             expected = "/".join(_trim_float(value) for value in sorted(expected_values))
             violations.append(f"{metric_name}_mismatch:{_trim_float(reported)}!={expected}")
     hypothesis = _section_after(text, "HYPOTHESIS")
@@ -587,8 +555,7 @@ def _quality_finding_dates(quality: dict[str, object], code: str) -> tuple[str, 
 
 
 def _strict_real_research_allowed_tokens(output: dict[str, object]) -> set[str]:
-    text = str(output)
-    tokens = set(re.findall(r"\d+(?:\.\d+)?%?", text))
+    tokens: set[str] = set()
     tokens.update(_quality_finding_dates(_as_dict(output.get("quality")), "provider_gap"))
     tokens.update(_authoritative_metric_tokens(output))
     return tokens
@@ -604,11 +571,11 @@ _METRIC_ALIASES = {
     "mdd": ("mdd", "MDD", "max_drawdown", "최대 낙폭"),
     "max_drawdown": ("mdd", "MDD", "max_drawdown", "최대 낙폭"),
     "profit_factor": ("profit_factor", "PF", "프로핏 팩터"),
-    "total_return": ("total_return", "return", "총 수익률"),
+    "total_return": ("total_return", "return", "average return", "총 수익률", "수익률"),
     "cagr": ("cagr", "CAGR"),
     "sharpe": ("sharpe", "Sharpe"),
     "win_rate": ("win_rate", "승률"),
-    "average_trade": ("average_trade", "평균 거래 수익"),
+    "average_trade": ("average_trade", "평균 거래 수익", "평균 거래 수익률"),
     "average_win": ("average_win", "평균 승리 수익"),
     "average_loss": ("average_loss", "평균 손실"),
     "expectancy": ("expectancy", "기대값"),
@@ -688,11 +655,21 @@ def _looks_int(value: str) -> bool:
 def _reported_authoritative_alias_metrics(text: str) -> tuple[tuple[str, float], ...]:
     reported: list[tuple[str, float]] = []
     for metric_name, aliases in (
+        ("trade_count", _METRIC_ALIASES["trade_count"]),
         ("wins", _METRIC_ALIASES["wins"]),
         ("losses", _METRIC_ALIASES["losses"]),
         ("mdd", _METRIC_ALIASES["mdd"]),
         ("profit_factor", _METRIC_ALIASES["profit_factor"]),
         ("total_return", _METRIC_ALIASES["total_return"]),
+        ("cagr", _METRIC_ALIASES["cagr"]),
+        ("sharpe", _METRIC_ALIASES["sharpe"]),
+        ("win_rate", _METRIC_ALIASES["win_rate"]),
+        ("average_trade", _METRIC_ALIASES["average_trade"]),
+        ("average_win", _METRIC_ALIASES["average_win"]),
+        ("average_loss", _METRIC_ALIASES["average_loss"]),
+        ("expectancy", _METRIC_ALIASES["expectancy"]),
+        ("exposure", _METRIC_ALIASES["exposure"]),
+        ("ending_equity", _METRIC_ALIASES["ending_equity"]),
     ):
         for alias in aliases:
             if alias.isascii():

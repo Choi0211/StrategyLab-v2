@@ -237,22 +237,34 @@ class ResearchGroundingTests(unittest.TestCase):
         violations = strict_real_research_grounding_violations(provider_text, payload)
 
         self.assertTrue(any(item.startswith("trade_count_mismatch:4!=") for item in violations))
-        self.assertTrue(any("5.32%" in item for item in violations))
+        self.assertTrue(any(item.startswith("total_return_mismatch:5.32!=") for item in violations))
         self.assertTrue(any("RSI(14) 30" in item for item in violations))
 
     def test_authoritative_metric_aliases_are_structurally_grounded(self) -> None:
         payload = _strict_real_payload()
 
-        allowed = "win=2 loss=1 trade_count=3 MDD 5.2% PF 1.42 거래 횟수 3회"
-        blocked = "win=3 loss=2 trade_count=4 MDD 8% RSI(14) 30 MA15/MA90 volume 1.5x"
+        allowed = "wins=2 win=2 승리 2회 loss=1 losses=1 trades=3 trade_count=3 MDD 5.2% return 4.7% PF 1.42 거래 횟수 3회"
+        blocked = "win=4 loss=4 trade_count=4 MDD=8% 평균 거래 수익률 1.77% 총 수익률 5.32% RSI(14) 30 MA15/MA90 volume 1.5x -3% stop 5% 익절"
 
         self.assertEqual(strict_real_research_grounding_violations(allowed, payload), ())
         violations = strict_real_research_grounding_violations(blocked, payload)
-        self.assertTrue(any(item.startswith("wins_mismatch:3!=") for item in violations))
-        self.assertTrue(any(item.startswith("losses_mismatch:2!=") for item in violations))
+        self.assertTrue(any(item.startswith("wins_mismatch:4!=") for item in violations))
+        self.assertTrue(any(item.startswith("losses_mismatch:4!=") for item in violations))
         self.assertTrue(any(item.startswith("trade_count_mismatch:4!=") for item in violations))
-        self.assertTrue(any("MDD 8%" in item for item in violations))
+        self.assertTrue(any(item.startswith("mdd_mismatch:8!=") for item in violations))
+        self.assertTrue(any(item.startswith("average_trade_missing_authoritative_evidence:1.77") for item in violations))
+        self.assertTrue(any(item.startswith("total_return_mismatch:5.32!=") for item in violations))
         self.assertTrue(any("RSI(14) 30" in item for item in violations))
+
+    def test_metric_numbers_are_not_allowed_by_unrelated_output_numbers(self) -> None:
+        payload = _strict_real_payload()
+        payload["metadata_with_unrelated_number"] = {"unrelated": 4, "notes": "PF is intentionally absent here"}
+        payload["backtest"]["metrics"].pop("profit_factor", None)
+
+        violations = strict_real_research_grounding_violations("trade_count=4 PF 1.42", payload)
+
+        self.assertTrue(any(item.startswith("trade_count_mismatch:4!=") for item in violations))
+        self.assertTrue(any(item.startswith("profit_factor_missing_authoritative_evidence") for item in violations))
 
     def test_authoritative_renderer_grounding_invariant_varied_metrics(self) -> None:
         for index, (wins, losses, trades, mdd, total_return) in enumerate(((0, 0, 0, 0.0, 0.0), (1, 2, 3, 0.073, -0.012), (5, 1, 6, 0.181, 0.245))):

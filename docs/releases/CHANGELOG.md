@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 120.7 Structural Authoritative Grounding Validator
+
+- Replaced metric literal blacklist handling with canonical metric alias parsing and structured evidence comparison.
+- Removed broad `str(output)` numeric allowlisting from strict real-research grounding.
+- Added `structural-authoritative-grounding-release-check`.
+- Preserved fail-closed blocking for fabricated trade counts, wins/losses, MDD, returns, unsupported PF, RSI, MA, volume multiplier, stop, and take-profit claims.
+- Preserved schema v33.
+
 ## Hotfix 120.6 Authoritative Backtest Metric Grounding
 
 - Added structured authoritative metric evidence extraction for strict real-research reports.

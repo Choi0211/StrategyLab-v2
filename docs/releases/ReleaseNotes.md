@@ -3,6 +3,22 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 120.7 Structural Authoritative Grounding Validator
+
+Strict real-research grounding now treats authoritative performance metrics as
+structured evidence, not independent literal blacklist tokens. Reported metric
+phrases are normalized to canonical fields such as `trade_count`, `wins`,
+`losses`, `mdd`, `profit_factor`, and `total_return`, then compared against the
+structured `BacktestResult`, tested candidate results, comparison rows, and
+validation metrics.
+
+The validator no longer allows numbers merely because they appear somewhere in
+the raw output object. Metadata dates and provider-gap evidence remain allowed,
+while performance values must match a metric key/value relationship. Untested
+strategy conditions such as RSI, MA changes, volume multipliers, stop/take-profit
+changes, and performance numbers in `HYPOTHESIS` remain fail-closed. Schema
+remains v33.
+
 ## Hotfix 120.6 Authoritative Backtest Metric Grounding
 
 Strict real-research grounding now derives allowed user-facing metric evidence
