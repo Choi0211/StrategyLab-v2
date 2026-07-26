@@ -94,6 +94,15 @@ from gaon.research.krx_real_pipeline import (
     provider_gap_release_check,
     real_krx_data_release_check,
 )
+from gaon.research.operations import (
+    ApprovalStatus as ResearchConfigApprovalStatus,
+    QualityStatus,
+    RecommendationDecision,
+    ResearchOperationsService,
+    SQLiteResearchOperationRepository,
+    fixture_evidence_pair,
+    operation_report_markdown,
+)
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
@@ -261,6 +270,24 @@ def main(argv: list[str] | None = None) -> int:
     krx_calendar_release.add_argument("--db", default=":memory:")
     provider_gap_release = sub.add_parser("provider-gap-release-check")
     provider_gap_release.add_argument("--db", default=":memory:")
+    research_ops_demo = sub.add_parser("research-ops-demo")
+    research_ops_demo.add_argument("--db", default=":memory:")
+    research_ops_demo.add_argument("--insufficient-sample", action="store_true")
+    research_ops_demo.add_argument("--json", action="store_true")
+    research_ops_release = sub.add_parser("research-ops-release-check")
+    research_ops_release.add_argument("--db", default=":memory:")
+    research_ops_approve = sub.add_parser("research-config-approve")
+    research_ops_approve.add_argument("--db", default=":memory:")
+    research_ops_approve.add_argument("--report-id", required=True)
+    research_ops_approve.add_argument("--actor-ref", required=True)
+    research_ops_rollback = sub.add_parser("research-config-rollback")
+    research_ops_rollback.add_argument("--db", default=":memory:")
+    research_ops_rollback.add_argument("--config-id", required=True)
+    research_ops_rollback.add_argument("--actor-ref", required=True)
+    research_ops_report = sub.add_parser("research-ops-report")
+    research_ops_report.add_argument("--db", default=":memory:")
+    research_ops_report.add_argument("--report-id", default=None)
+    research_ops_report.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1251,8 +1278,8 @@ def _run(args: argparse.Namespace) -> int:
                 raise ConfigurationError("strict grounding release check did not execute krx_real_research")
             if "provider strict real research grounding fallback" not in response.warnings:
                 raise ConfigurationError("strict grounding fallback warning was not recorded")
-            if store.status().schema_version != 33:
-                raise ConfigurationError("strict grounding release check must preserve schema v33")
+            if store.status().schema_version < 33:
+                raise ConfigurationError("strict grounding release check requires schema v33 or later")
             print(f"strict-real-research-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} trades=3 provider_mock_trades=4")
         finally:
             store.close()
@@ -1333,8 +1360,8 @@ def _run(args: argparse.Namespace) -> int:
                 raise ConfigurationError("fabricated trade count mismatch was not detected")
             if "2025-09-19" not in rendered:
                 raise ConfigurationError("provider gap evidence was not preserved")
-            if store.status().schema_version != 33:
-                raise ConfigurationError("authoritative renderer check must preserve schema v33")
+            if store.status().schema_version < 33:
+                raise ConfigurationError("authoritative renderer check requires schema v33 or later")
             print(f"authoritative-renderer-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} aliases=pass fabricated=blocked")
         finally:
             store.close()
@@ -1371,8 +1398,8 @@ def _run(args: argparse.Namespace) -> int:
             strategy_violations = strict_real_research_grounding_violations("RSI(14) 30 MA15 MA90 volume 1.5x -3% stop 5% 익절", payload)
             if not strategy_violations:
                 raise ConfigurationError("structural authoritative grounding allowed fabricated strategy conditions")
-            if store.status().schema_version != 33:
-                raise ConfigurationError("structural authoritative grounding release check must preserve schema v33")
+            if store.status().schema_version < 33:
+                raise ConfigurationError("structural authoritative grounding release check requires schema v33 or later")
             print(f"structural-authoritative-grounding-release-check: PASS schema_version={store.status().schema_version} run_id={run_id} valid_aliases=pass fabricated=blocked")
         finally:
             store.close()
@@ -1505,8 +1532,8 @@ def _run(args: argparse.Namespace) -> int:
         store = RuntimeStateStore(args.db)
         try:
             result = krx_trading_calendar_release_check(store._connection)
-            if store.status().schema_version != 33:
-                raise ConfigurationError("KRX trading calendar release check must preserve schema v33")
+            if store.status().schema_version < 33:
+                raise ConfigurationError("KRX trading calendar release check requires schema v33 or later")
             print(
                 "krx-trading-calendar-release-check: PASS "
                 f"schema_version={store.status().schema_version} "
@@ -1525,8 +1552,8 @@ def _run(args: argparse.Namespace) -> int:
         store = RuntimeStateStore(args.db)
         try:
             result = provider_gap_release_check(store._connection)
-            if store.status().schema_version != 33:
-                raise ConfigurationError("provider gap release check must preserve schema v33")
+            if store.status().schema_version < 33:
+                raise ConfigurationError("provider gap release check requires schema v33 or later")
             print(
                 "provider-gap-release-check: PASS "
                 f"schema_version={store.status().schema_version} provider={result['provider']} "
@@ -1536,6 +1563,85 @@ def _run(args: argparse.Namespace) -> int:
             )
         except RealMarketDataUnavailable as exc:
             raise ConfigurationError(str(exc)) from exc
+        finally:
+            store.close()
+    elif args.command == "research-ops-demo":
+        store = RuntimeStateStore(args.db)
+        try:
+            champion, challenger = fixture_evidence_pair(sufficient=not args.insufficient_sample)
+            report = ResearchOperationsService(SQLiteResearchOperationRepository(store._connection)).analyze(
+                f"research-ops-demo:{uuid4().hex}",
+                champion,
+                challenger,
+                generated_at=_utc_now(),
+            )
+            if args.json:
+                print(_dumps_json(report.to_json()))
+            else:
+                print(operation_report_markdown(report))
+        finally:
+            store.close()
+    elif args.command == "research-ops-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            service = ResearchOperationsService(SQLiteResearchOperationRepository(store._connection))
+            insufficient_champion, insufficient_challenger = fixture_evidence_pair(sufficient=False)
+            insufficient = service.analyze(f"research-ops-release-check:insufficient:{uuid4().hex}", insufficient_champion, insufficient_challenger, generated_at=_utc_now())
+            if insufficient.quality_gate.status is not QualityStatus.INSUFFICIENT_SAMPLE or not insufficient.period_plan.expansion_required:
+                raise ConfigurationError("research ops did not detect insufficient sample and period expansion")
+            champion, challenger = fixture_evidence_pair(sufficient=True)
+            report_id = f"research-ops-release-check:{uuid4().hex}"
+            config_count_before = store._connection.execute("SELECT COUNT(*) FROM strategy_config_versions").fetchone()[0]
+            report = service.analyze(report_id, champion, challenger, generated_at=_utc_now())
+            if report.recommendation.decision is not RecommendationDecision.RECOMMEND_CHALLENGER:
+                raise ConfigurationError("research ops did not recommend dominant challenger")
+            config_count_after_analysis = store._connection.execute("SELECT COUNT(*) FROM strategy_config_versions").fetchone()[0]
+            if config_count_after_analysis != config_count_before:
+                raise ConfigurationError("research ops changed strategy config before approval")
+            config = service.approve_and_apply(report_id, actor_ref="release-check-human", approved_at=_utc_now())
+            if config.status is not ResearchConfigApprovalStatus.APPLIED or config.strategy_ref != challenger.strategy_ref:
+                raise ConfigurationError("approved strategy configuration was not applied")
+            second_report = service.analyze(f"research-ops-release-check:second:{uuid4().hex}", champion, challenger, generated_at=_utc_now())
+            second_config = service.approve_and_apply(second_report.report_id, actor_ref="release-check-human", approved_at=_utc_now())
+            rolled_back = service.rollback(second_config.config_id, actor_ref="release-check-human", rolled_back_at=_utc_now())
+            if rolled_back.strategy_ref != config.strategy_ref:
+                raise ConfigurationError("strategy config rollback did not restore previous config")
+            audit = SQLiteResearchOperationRepository(store._connection).audit_history()
+            if len(audit) < 5:
+                raise ConfigurationError("research ops audit history was not recorded")
+            print(
+                "research-ops-release-check: PASS "
+                f"schema_version={store.status().schema_version} insufficient_sample=detected "
+                f"dominance={report.dominance.decision.value} recommendation={report.recommendation.decision.value} "
+                f"applied={config.config_id} rollback={rolled_back.config_id} audit={len(audit)}"
+            )
+        finally:
+            store.close()
+    elif args.command == "research-config-approve":
+        store = RuntimeStateStore(args.db)
+        try:
+            config = ResearchOperationsService(SQLiteResearchOperationRepository(store._connection)).approve_and_apply(args.report_id, actor_ref=args.actor_ref, approved_at=_utc_now())
+            print(f"research-config-approve: applied config_id={config.config_id} revision={config.revision} rollback_ref={config.rollback_ref}")
+        finally:
+            store.close()
+    elif args.command == "research-config-rollback":
+        store = RuntimeStateStore(args.db)
+        try:
+            config = ResearchOperationsService(SQLiteResearchOperationRepository(store._connection)).rollback(args.config_id, actor_ref=args.actor_ref, rolled_back_at=_utc_now())
+            print(f"research-config-rollback: restored config_id={config.config_id} revision={config.revision} previous={config.previous_config_id}")
+        finally:
+            store.close()
+    elif args.command == "research-ops-report":
+        store = RuntimeStateStore(args.db)
+        try:
+            repository = SQLiteResearchOperationRepository(store._connection)
+            if args.report_id:
+                report = repository.get_report(args.report_id)
+                if report is None:
+                    raise ConfigurationError("research operation report not found")
+                print(_dumps_json(report.to_json()) if args.json else operation_report_markdown(report))
+            else:
+                print(_dumps_json({"reports": list(repository.list_reports())}) if args.json else "\n".join(str(item) for item in repository.list_reports()))
         finally:
             store.close()
     elif args.command == "backup":

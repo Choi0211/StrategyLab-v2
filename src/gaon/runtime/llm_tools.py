@@ -29,6 +29,7 @@ from gaon.research.real_research import (
     market_data_status_payload,
 )
 from gaon.research.krx_real_pipeline import krx_real_research_payload
+from gaon.research.operations import SQLiteResearchOperationRepository
 
 
 class ToolRiskLevel(str, Enum):
@@ -261,6 +262,10 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         ToolDefinition("krx_real_research", "Run the read-only KRX real-research pipeline with explicit source provenance.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol",)),
         lambda args: krx_real_research_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930"))),
     )
+    registry.register(
+        ToolDefinition("research_operation_status", "Read research quality, recommendation, strategy config, and rollback audit status.", ToolRiskLevel.READ_ONLY, allowed_args=("limit",)),
+        lambda args: _research_operation_status(connection, int(args.get("limit", 5))),
+    )
     return registry
 
 
@@ -325,6 +330,22 @@ def _real_backtest_result(connection: sqlite3.Connection, result_id: str) -> dic
         raise ToolSecurityError("result_id is too long")
     row = connection.execute("SELECT payload_json FROM real_backtest_results WHERE result_id = ?", (result_id,)).fetchone()
     return {"provider": "sqlite:real_backtest_results", "result": loads_json(str(row[0])) if row else None, "automatic_promotion": False}
+
+
+def _research_operation_status(connection: sqlite3.Connection, limit: int) -> dict[str, object]:
+    if limit < 1 or limit > 20:
+        raise ToolSecurityError("limit must be between 1 and 20")
+    repository = SQLiteResearchOperationRepository(connection)
+    reports = repository.list_reports()[-limit:]
+    active = repository.active_config()
+    return {
+        "provider": "sqlite:research_operations",
+        "reports": list(reports),
+        "active_config": active.to_json() if active else None,
+        "audit_count": len(repository.audit_history()),
+        "automatic_order": False,
+        "automatic_champion_promotion": False,
+    }
 
 
 def _validate_tool_name(name: str) -> None:

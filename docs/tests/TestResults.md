@@ -2,6 +2,22 @@
 
 Status: Passed
 
+## Sprint 121-130 Research Operations
+
+- Unit: `tests.unit.test_research_operations`
+  - insufficient sample is detected and period expansion is recommended
+  - statistical confidence is capped when sample size is insufficient
+  - dominant Challenger requires real, non-fixture, blocking-finding-free evidence
+  - recommendation does not mutate strategy configuration before approval
+  - approval applies strategy configuration and rollback restores the previous config
+  - fixture evidence cannot drive configuration changes
+  - `research_operation_status` is read-only and preserves no-order/no-promotion flags
+- Integration: `tests.integration.test_research_operations_flow`
+  - `research-ops-release-check` repeats three times on one persistent SQLite DB
+  - schema v34 migration persists reports, approvals, config versions, and audit history
+- CLI release check:
+  - `python -m gaon.runtime.cli research-ops-release-check --db <db>`
+
 ## Hotfix 120.7 Structural Authoritative Grounding Validator
 
 - Unit: `tests.unit.test_research_grounding`
