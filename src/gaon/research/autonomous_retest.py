@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum
 import json
+import os
 import sqlite3
 from typing import Protocol
 from uuid import uuid4
@@ -386,7 +387,9 @@ class AutonomousRetestOrchestrator:
 
 
 def research_retest_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930") -> dict[str, object]:
-    return AutonomousRetestOrchestrator(connection).run(request_text, symbol=symbol).to_json()
+    from gaon.research.krx_real_pipeline import build_market_data_provider_from_env
+
+    return AutonomousRetestOrchestrator(connection, build_market_data_provider_from_env(os.environ)).run(request_text, symbol=symbol).to_json()
 
 
 def autonomous_retest_release_check(connection: sqlite3.Connection) -> dict[str, object]:

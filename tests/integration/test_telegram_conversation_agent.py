@@ -11,6 +11,7 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
+from gaon.research.autonomous_retest import autonomous_retest_release_check
 from gaon.research.krx_real_pipeline import RealMarketDataUnavailable
 
 
@@ -209,6 +210,61 @@ class TelegramConversationAgentTests(unittest.TestCase):
         finally:
             store.close()
 
+    def test_production_korean_autonomous_retest_request_uses_retest_authoritative_route(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_production_autonomous_retest_update(),))
+        provider = _HallucinatingRealResearchProvider()
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition(
+                "research_retest",
+                "Run autonomous retest.",
+                ToolRiskLevel.READ_ONLY,
+                required_args=("request_text",),
+                allowed_args=("symbol",),
+            ),
+            lambda _args: autonomous_retest_release_check(store._connection),
+        )
+        registry.register(
+            ToolDefinition(
+                "krx_real_research",
+                "Run the read-only KRX real-research pipeline with explicit source provenance.",
+                ToolRiskLevel.READ_ONLY,
+                required_args=("request_text",),
+                allowed_args=("symbol",),
+            ),
+            lambda _args: _strict_real_research_payload(),
+        )
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(
+                    _config(assistant_enabled=True, assistant_provider="openai-compatible"),
+                    store._connection,
+                    assistant_provider=provider,
+                    tool_executor=SafeToolExecutor(registry, store.tool_audit),
+                ),
+                allowed_chat_ids=("100",),
+            )
+            result = process_update(parse_update_result(client.updates[0], received_at="2026-07-26T00:00:00Z"), runtime, client)
+
+            self.assertEqual(result.status, "sent")
+            self.assertEqual(provider.calls, 0)
+            self.assertEqual(len(store.tool_audit.list(tool_name="research_retest")), 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 0)
+            final = client.sent[0][1]
+            self.assertIn("[자동 재검증 결과]", final)
+            self.assertIn("stop_reason=min_trades_reached", final)
+            self.assertIn("trade_count=31", final)
+            self.assertIn("source=real", final)
+            self.assertIn("fixture_backed=false", final)
+            self.assertIn("TESTED", final)
+            self.assertNotIn("2026-01-02 ~ 2026-07-10", final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "tool_read_only_authoritative")
+            self.assertEqual(assistant[-1].tool_calls, ("research_retest",))
+        finally:
+            store.close()
+
     def test_authoritative_market_data_failure_is_transparent_and_provider_free_form_is_blocked(self) -> None:
         store = RuntimeStateStore(":memory:")
         client = FakeTelegramClient((_production_real_research_update(),))
@@ -320,6 +376,22 @@ def _production_real_research_update() -> dict:
         "거래량 20일 평균 이상\n"
         "손절 -5%\n"
         "10일 저점 이탈 청산",
+    )
+
+
+def _production_autonomous_retest_update() -> dict:
+    return _update(
+        92,
+        92,
+        "가온아 삼성전자 실제 데이터로 아래 전략을 충분한 표본이 나올 때까지 자동 재검증해줘.\n\n"
+        "20일 고가 돌파\n"
+        "종가 > MA20 > MA60\n"
+        "거래량 20일 평균 이상\n"
+        "손절 -5%\n"
+        "10일 저점 이탈 청산\n\n"
+        "최초 기간의 거래 표본이 부족하면 18개월, 3년, 5년 순서로 기간을 확장해서 다시 백테스트해줘.\n"
+        "각 기간의 거래 수와 결과를 기록하고, 충분한 표본이 확보되거나 최대 기간에 도달할 때까지 진행해줘.\n"
+        "마지막에는 원본 전략과 TESTED 개선 후보들을 비교하고 최종 연구 판단을 알려줘.",
     )
 
 

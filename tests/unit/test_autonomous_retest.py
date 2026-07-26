@@ -99,6 +99,14 @@ class AutonomousRetestTests(unittest.TestCase):
     def test_retest_tool_routing(self) -> None:
         self.assertEqual(route_read_only_tool("재검증 상태 알려줘"), "research_retest_status")
         self.assertEqual(route_read_only_tool("재검증 과정과 이력 보여줘"), "research_retest_history")
+        self.assertEqual(
+            route_read_only_tool(
+                "가온아 삼성전자 실제 데이터로 아래 전략을 충분한 표본이 나올 때까지 자동 재검증해줘. "
+                "표본이 부족하면 18개월, 3년, 5년 순서로 기간을 확장해서 다시 백테스트해줘."
+            ),
+            "research_retest",
+        )
+        self.assertEqual(route_read_only_tool("retest until enough samples and expand period"), "research_retest")
 
     def test_payload_helpers(self) -> None:
         AutonomousRetestOrchestrator(self.connection, _ReleaseCheckProvider(), _ReleaseCheckBacktestRunner()).run(REQUEST, run_id="unit-payload", min_trades=30, generated_at=NOW)

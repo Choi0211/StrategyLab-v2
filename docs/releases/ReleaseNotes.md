@@ -3,6 +3,33 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 140.1 Telegram Autonomous Retest Routing
+
+Telegram natural-language requests that explicitly ask for automatic retesting,
+sample sufficiency checks, or period expansion now route to the Sprint 131-140
+Autonomous Retest Orchestrator before the older one-shot `krx_real_research`
+path.
+
+Recognized Korean phrases include `재검증`, `다시 검증`, `자동 재검증`,
+`표본이 부족하면`, `충분한 표본`, `기간을 확장`, `더 긴 기간`, `18개월`,
+`3년`, and `5년`. English phrases such as `retest`, `re-test`,
+`expand period`, and `insufficient sample` are also recognized.
+
+The Telegram path is authoritative and deterministic:
+
+```text
+Telegram text
+→ LLMConversationBrain
+→ research_retest safe tool
+→ AutonomousRetestOrchestrator
+→ deterministic Korean report
+→ Telegram response
+```
+
+Provider free-form responses are not used for the final metrics. The route
+preserves no-order, no-auto-promotion, no-approval-bypass, and no Telegram config
+mutation boundaries.
+
 ## Sprint 131-140 Autonomous Retest Pipeline
 
 Gaon now supports an evidence-first autonomous retest workflow for real KRX
