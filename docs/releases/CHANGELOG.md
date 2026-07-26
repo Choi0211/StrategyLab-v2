@@ -1,5 +1,12 @@
 # Changelog
 
+## Hotfix 140.1 - Telegram Autonomous Retest Routing
+
+- Added explicit autonomous retest natural-language routing for Korean and English requests such as `재검증`, `표본이 부족하면`, `기간을 확장`, `18개월`, `3년`, `5년`, `retest`, and `expand period`.
+- Routed explicit retest execution requests to the read-only authoritative `research_retest` tool before the older `krx_real_research` route.
+- Added deterministic Telegram coverage proving provider calls are skipped, `research_retest` is audited, `krx_real_research` is not called, and retest lineage / stop reason are included in the final response.
+- Preserved strict grounding, no trading, no automatic Champion promotion, no approval bypass, and no Telegram config mutation.
+
 ## Sprint 131-140 - Autonomous Retest Pipeline
 
 - Added Retest Trigger Engine for insufficient sample and needs-retest decisions.

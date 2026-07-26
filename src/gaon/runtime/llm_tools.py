@@ -29,7 +29,7 @@ from gaon.research.real_research import (
     market_data_status_payload,
 )
 from gaon.research.krx_real_pipeline import krx_real_research_payload
-from gaon.research.autonomous_retest import research_retest_history_payload, research_retest_status_payload
+from gaon.research.autonomous_retest import research_retest_history_payload, research_retest_payload, research_retest_status_payload
 from gaon.research.operations import SQLiteResearchOperationRepository
 
 
@@ -262,6 +262,10 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry.register(
         ToolDefinition("krx_real_research", "Run the read-only KRX real-research pipeline with explicit source provenance.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol",)),
         lambda args: krx_real_research_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930"))),
+    )
+    registry.register(
+        ToolDefinition("research_retest", "Run the read-only autonomous KRX real-research retest pipeline with deterministic period expansion.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol",)),
+        lambda args: research_retest_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930"))),
     )
     registry.register(
         ToolDefinition("research_operation_status", "Read research quality, recommendation, strategy config, and rollback audit status.", ToolRiskLevel.READ_ONLY, allowed_args=("limit",)),

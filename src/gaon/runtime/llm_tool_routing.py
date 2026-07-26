@@ -9,12 +9,18 @@ def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized or _blocked(normalized):
         return None
-    if _krx_real_research(normalized):
-        return "krx_real_research"
+    if _autonomous_retest_execution_ascii(normalized):
+        return "research_retest"
     if _research_retest_history(normalized):
         return "research_retest_history"
     if _research_retest_status(normalized):
         return "research_retest_status"
+    if _autonomous_retest_ascii(normalized):
+        return "research_retest"
+    if _autonomous_retest(normalized):
+        return "research_retest"
+    if _krx_real_research(normalized):
+        return "krx_real_research"
     if _strategy_critique(normalized):
         return "strategy_critique"
     if _research_memory(normalized):
@@ -44,6 +50,30 @@ def _krx_real_research(value: str) -> bool:
     real_data = ("실제", "실데이터", "real", "yahoo", "krx", "삼성전자", "005930")
     research = ("백테스트", "backtest", "분석", "개선후보", "비교", "연구")
     return _contains_any(value, real_data) and _contains_any(value, research)
+
+
+def _autonomous_retest(value: str) -> bool:
+    retest = (
+        "재검증",
+        "다시검증",
+        "자동재검증",
+        "표본이부족",
+        "충분한표본",
+        "기간을확장",
+        "기간확장",
+        "더긴기간",
+        "18개월",
+        "3년",
+        "5년",
+        "충분한표본이나올때까지",
+        "retest",
+        "re-test",
+        "expandperiod",
+        "insufficientsample",
+        "enoughsamples",
+    )
+    research = ("백테스트", "backtest", "검증", "연구", "분석", "삼성전자", "005930", "krx", "실제")
+    return _contains_any(value, retest) and _contains_any(value, research)
 
 
 def _research_retest_status(value: str) -> bool:
@@ -118,6 +148,47 @@ def _blocked(value: str) -> bool:
 
 def _contains_any(value: str, tokens: tuple[str, ...]) -> bool:
     return any(token in value for token in tokens)
+
+
+def _autonomous_retest_ascii(value: str) -> bool:
+    retest = (
+        "\uc7ac\uac80\uc99d",
+        "\ub2e4\uc2dc\uac80\uc99d",
+        "\uc790\ub3d9\uc7ac\uac80\uc99d",
+        "\ud45c\ubcf8\uc774\ubd80\uc871",
+        "\ucda9\ubd84\ud55c\ud45c\ubcf8",
+        "\uae30\uac04\uc744\ud655\uc7a5",
+        "\uae30\uac04\ud655\uc7a5",
+        "\ub354\uae34\uae30\uac04",
+        "18\uac1c\uc6d4",
+        "3\ub144",
+        "5\ub144",
+        "\ucda9\ubd84\ud55c\ud45c\ubcf8\uc774\ub098\uc62c\ub54c\uae4c\uc9c0",
+        "retest",
+        "re-test",
+        "expandperiod",
+        "insufficientsample",
+        "enoughsamples",
+    )
+    research = ("\ubc31\ud14c\uc2a4\ud2b8", "backtest", "\uac80\uc99d", "\uc5f0\uad6c", "\ubd84\uc11d", "\uc0bc\uc131\uc804\uc790", "005930", "krx", "\uc2e4\uc81c", "period", "samples")
+    return _contains_any(value, retest) and _contains_any(value, research)
+
+
+def _autonomous_retest_execution_ascii(value: str) -> bool:
+    action = (
+        "\ud574\uc918",
+        "\uc9c4\ud589",
+        "\ubc31\ud14c\uc2a4\ud2b8",
+        "\ub2e4\uc2dc\ubc31\ud14c\uc2a4\ud2b8",
+        "\ud655\uc7a5\ud574\uc11c",
+        "\uae30\uac04\uc744\ud655\uc7a5",
+        "\uc790\ub3d9\uc7ac\uac80\uc99d",
+        "run",
+        "execute",
+        "backtest",
+        "expand",
+    )
+    return _autonomous_retest_ascii(value) and _contains_any(value, action)
 
 
 def _normalize(text: str) -> str:

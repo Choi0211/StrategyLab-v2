@@ -2,6 +2,19 @@
 
 Status: Passed
 
+## Hotfix 140.1 Telegram Autonomous Retest Routing
+
+- Unit: `tests.unit.test_autonomous_retest`
+  - explicit Korean retest execution requests route to `research_retest`
+  - English `retest` / `expand period` requests route to `research_retest`
+  - status/history requests remain read-only status/history routes
+- Integration: `tests.integration.test_telegram_conversation_agent`
+  - production-equivalent Korean Telegram retest request uses `tool_read_only_authoritative`
+  - provider calls remain `0`
+  - `research_retest` audit is appended
+  - `krx_real_research` is not called
+  - final response includes stop reason, period evidence, real provenance, and TESTED candidate comparison
+
 ## Sprint 131-140 Autonomous Retest Pipeline
 
 - Unit: `tests.unit.test_autonomous_retest`

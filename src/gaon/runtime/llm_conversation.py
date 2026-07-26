@@ -873,6 +873,8 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
         return {"query": text[:120]}
     if tool_name == "krx_real_research":
         return {"request_text": text, "symbol": "005930"}
+    if tool_name == "research_retest":
+        return {"request_text": text, "symbol": "005930"}
     if tool_name in {"data_quality_check", "backtest_strategy"}:
         return {"symbol": "005930"}
     return {}

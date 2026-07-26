@@ -21,6 +21,7 @@ RESEARCH_TOOLS = {
     "compare_backtests",
     "krx_market_data",
     "krx_real_research",
+    "research_retest",
 }
 
 FIXTURE_LEAKAGE_TOKENS = (
@@ -166,6 +167,8 @@ def sanitize_research_tool_output(tool_name: str, output: dict[str, object], use
 def format_grounded_tool_response(tool_name: str, output: dict[str, object], user_text: str = "") -> str | None:
     if tool_name == "krx_real_research":
         return _format_krx_real_research(output)
+    if tool_name == "research_retest":
+        return _format_research_retest(output)
     if tool_name == "research_memory_search":
         return _format_memory(output)
     if tool_name == "strategy_critique":
@@ -184,7 +187,7 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
 
 
 def is_strict_real_research_tool(tool_name: str) -> bool:
-    return tool_name == "krx_real_research"
+    return tool_name in {"krx_real_research", "research_retest"}
 
 
 def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]) -> bool:
@@ -193,6 +196,8 @@ def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]
 
 def strict_real_research_grounding_violations(text: str, output: dict[str, object]) -> tuple[str, ...]:
     """Return fail-closed grounding violations for user-facing real research text."""
+    if _is_retest_output(output):
+        return _strict_retest_grounding_violations(text, output)
     allowed = _strict_real_research_allowed_tokens(output)
     suspicious = (
         "fixed risk=1.0",
@@ -253,6 +258,29 @@ def _format_memory(output: dict[str, object]) -> str:
             if isinstance(item, dict):
                 lines.append(f"- {item.get('memory_id') or item.get('run_id') or 'memory'} / {item.get('strategy_family') or item.get('family') or 'unknown'}")
     lines.append("\uc815\uc131 \ubd84\uc11d: \uc704 \ud56d\ubaa9\uc740 \uc800\uc7a5\ub41c \uc5f0\uad6c \uae30\uc5b5\uc744 \uae30\uc900\uc73c\ub85c\ub9cc \uc694\uc57d\ud588\uc2b5\ub2c8\ub2e4.")
+    return "\n".join(lines)
+
+
+def _format_research_retest(output: dict[str, object]) -> str:
+    report = str(output.get("korean_report") or "").strip()
+    if report:
+        return strip_response_wrappers(report)
+    evidence = _as_list(output.get("evidence"))
+    lines = [
+        "[자동 재검증 결과]",
+        f"- stop_reason={output.get('stop_reason', 'unknown')}",
+        f"- recommendation={output.get('final_recommendation', 'unknown')}",
+        "- 자동 주문/KIS 주문/Broker 주문/Champion 자동 승격/승인 없는 config 변경은 수행하지 않았습니다.",
+        "",
+        "[기간별 증거]",
+    ]
+    for item in evidence:
+        data = _as_dict(item)
+        period = _as_dict(data.get("period"))
+        lines.append(
+            f"- {period.get('label', 'period')}: {period.get('start_date', 'unknown')}~{period.get('end_date', 'unknown')} "
+            f"trade_count={data.get('trade_count', 'unknown')} quality={data.get('quality_status', 'unknown')} confidence={data.get('confidence_level', 'unknown')}"
+        )
     return "\n".join(lines)
 
 
@@ -552,6 +580,29 @@ def _quality_finding_dates(quality: dict[str, object], code: str) -> tuple[str, 
         if match:
             dates.append(match.group(0))
     return tuple(dates)
+
+
+def _is_retest_output(output: dict[str, object]) -> bool:
+    return "stop_reason" in output and "evidence" in output and "final_recommendation" in output
+
+
+def _strict_retest_grounding_violations(text: str, output: dict[str, object]) -> tuple[str, ...]:
+    evidence_counts = {int(item.get("trade_count", -1)) for item in (_as_dict(raw) for raw in _as_list(output.get("evidence"))) if "trade_count" in item}
+    candidate_counts = set()
+    for candidate in _as_list(output.get("candidates")):
+        result = _as_dict(_as_dict(candidate).get("backtest_result"))
+        metrics = _as_dict(result.get("metrics"))
+        if "trade_count" in metrics:
+            candidate_counts.add(int(metrics["trade_count"]))
+    allowed_counts = evidence_counts | candidate_counts
+    violations: list[str] = []
+    for match in re.finditer(r"(?:trade_count|trades|거래\s*수)\s*[=:]?\s*(\d+)", text, flags=re.IGNORECASE):
+        value = int(match.group(1))
+        if value not in allowed_counts:
+            violations.append(f"retest_trade_count_not_authoritative:{value}")
+    if any(token in text for token in ("자동 승격했습니다", "자동승격했습니다", "주문 실행했습니다", "KIS 주문 실행", "Broker 주문 실행")):
+        violations.append("retest_forbidden_action_claim")
+    return tuple(violations)
 
 
 def _strict_real_research_allowed_tokens(output: dict[str, object]) -> set[str]:
