@@ -3,6 +3,40 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 140.3 Historical KRX Trading Calendar Accuracy
+
+KRX daily data-quality checks now use a broader historical trading calendar for
+the current five-year retest horizon. The calendar keeps weekends, government
+holidays, election days, Labor Day, temporary holidays, KRX-designated closures,
+and year-end market closures separate from provider-specific data gaps.
+
+For the Samsung Electronics production window `2023-07-25` through
+`2026-07-24`, the deterministic historical calendar excludes the known 2023 and
+2024 market closures and leaves `2025-09-19` as the only Yahoo KRX historical
+provider gap. That date remains an exchange-open day and is not added as a KRX
+holiday.
+
+Verification:
+
+```bash
+python -m gaon.runtime.cli historical-krx-calendar-release-check --db <db>
+python -m gaon.runtime.cli krx-trading-calendar-release-check --db <db>
+python -m gaon.runtime.cli provider-gap-release-check --db <db>
+python -m gaon.runtime.cli autonomous-retest-release-check --db <db>
+```
+
+Production real-provider verification:
+
+```bash
+GAON_REAL_MARKET_DATA_ENABLED=true \
+GAON_MARKET_DATA_PROVIDER=yahoo-chart \
+python -m gaon.runtime.cli real-krx-data-release-check \
+  --db /var/lib/strategylab/gaon-runtime.sqlite \
+  --symbol 005930 \
+  --start 2023-07-25 \
+  --end 2026-07-24
+```
+
 ## Hotfix 140.2 Telegram Retest Persistence Visibility
 
 Telegram autonomous retest runs are now visible through the same production

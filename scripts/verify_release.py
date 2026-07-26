@@ -15,6 +15,8 @@ def _test_env(root: Path) -> dict[str, str]:
     if existing:
         paths.append(existing)
     env["PYTHONPATH"] = os.pathsep.join(paths)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 
@@ -29,6 +31,8 @@ def main() -> int:
             env=env,
             text=True,
             capture_output=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if tests.returncode != 0:
             print(f"{name} tests failed")
@@ -41,6 +45,8 @@ def main() -> int:
         env=env,
         text=True,
         capture_output=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if cli.returncode != 0:
         print("CLI importability check failed")

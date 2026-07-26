@@ -15,6 +15,7 @@ from gaon.research.krx_real_pipeline import (
     YahooKRXHistoricalDataProvider,
     build_market_data_provider_from_env,
     default_execution_assumptions,
+    historical_krx_calendar_release_check,
     krx_trading_calendar_release_check,
     provider_gap_release_check,
     real_krx_data_release_check,
@@ -60,8 +61,9 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         calendar = KRXTradingCalendar()
         self.assertNotIn("2026-07-04", calendar.expected_open_dates(start_date="2026-07-03", end_date="2026-07-06"))
         self.assertNotIn("2026-01-01", calendar.expected_open_dates(start_date="2026-01-01", end_date="2026-01-05"))
+        self.assertIn("2026-01-02", calendar.expected_open_dates(start_date="2026-01-01", end_date="2026-01-05"))
         self.assertIn("2025-09-19", calendar.expected_open_dates(start_date="2025-09-19", end_date="2025-09-19"))
-        self.assertEqual(len(calendar.expected_open_dates(start_date="2025-01-02", end_date="2026-07-24")), 378)
+        self.assertEqual(len(calendar.expected_open_dates(start_date="2025-01-02", end_date="2026-07-24")), 379)
         weekend_report = DataQualityEngine().validate(_quality_dataset("weekend", "2026-07-03", "2026-07-06", ("2026-07-03", "2026-07-06")), min_bars=1, calendar=calendar)
         holiday_start_report = DataQualityEngine().validate(_quality_dataset("holiday-start", "2026-01-01", "2026-01-05", ("2026-01-02", "2026-01-05")), min_bars=1, calendar=calendar)
         weekend_end_report = DataQualityEngine().validate(_quality_dataset("weekend-end", "2026-07-03", "2026-07-05", ("2026-07-03",)), min_bars=1, calendar=calendar)
@@ -123,6 +125,50 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertTrue(result["weekend_excluded"])
         self.assertTrue(result["holiday_excluded"])
         self.assertTrue(result["missing_trading_day_detected"])
+
+    def test_historical_krx_calendar_excludes_2023_2024_market_holidays(self) -> None:
+        calendar = KRXTradingCalendar()
+        historical_closed = (
+            "2023-08-15",
+            "2023-09-28",
+            "2023-09-29",
+            "2023-10-02",
+            "2023-10-03",
+            "2023-10-09",
+            "2023-12-25",
+            "2023-12-29",
+            "2024-01-01",
+            "2024-02-09",
+            "2024-02-12",
+            "2024-03-01",
+            "2024-04-10",
+            "2024-05-01",
+            "2024-05-06",
+            "2024-05-15",
+            "2024-06-06",
+            "2024-08-15",
+            "2024-09-16",
+            "2024-09-17",
+            "2024-09-18",
+            "2024-10-01",
+            "2024-10-03",
+            "2024-10-09",
+            "2024-12-25",
+            "2024-12-31",
+        )
+        for day in historical_closed:
+            self.assertNotIn(day, calendar.expected_open_dates(start_date=day, end_date=day))
+        self.assertIn("2025-09-19", calendar.expected_open_dates(start_date="2025-09-19", end_date="2025-09-19"))
+
+    def test_historical_yahoo_3y_gap_is_only_provider_gap(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        migrate(connection)
+        result = historical_krx_calendar_release_check(connection)
+        self.assertEqual(result["schema_version"], 33)
+        self.assertEqual(result["provider_gap_dates"], ("2025-09-19",))
+        self.assertEqual(result["blocking_findings"], 0)
+        self.assertEqual(result["expected_3y"] - result["actual_3y_without_provider_gap"], 1)
+        self.assertGreater(result["expected_5y"], result["expected_3y"])
 
     def test_provider_gap_release_check_preserves_schema_and_provenance(self) -> None:
         connection = sqlite3.connect(":memory:")

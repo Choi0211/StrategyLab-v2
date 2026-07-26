@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 140.3 - Historical KRX Trading Calendar Accuracy
+
+- Expanded `KRXTradingCalendar` historical closure coverage for 2021-2026 with annual market-closure overrides.
+- Added 2023/2024 historical KRX closures for public holidays, election day, Labor Day, temporary holidays, and year-end exchange closures.
+- Kept `2025-09-19` as an exchange-open date and preserved its `real:yahoo-chart` provider-gap classification.
+- Added `historical-krx-calendar-release-check`, verifying 3-year Samsung-like Yahoo data leaves only `2025-09-19` as a non-blocking provider gap.
+- Preserved schema v35, no trading, no automatic Champion promotion, no approval bypass, and release/demo isolation.
+
 ## Hotfix 140.2 - Telegram Retest Persistence Visibility
 
 - Fixed retest history/status hiding production `autonomous-retest:*` runs because the artifact filter matched the broad `test:` substring inside `retest`.

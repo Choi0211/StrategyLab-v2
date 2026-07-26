@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Hotfix 140.3 Historical KRX Trading Calendar Accuracy
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - 2023/2024 public holidays, election day, Labor Day, temporary holidays, and year-end closures are excluded from expected KRX trading dates
+  - `2025-09-19` remains exchange-open and is not treated as a KRX holiday
+  - historical Yahoo 3-year sample leaves only `2025-09-19` as `provider_gap`
+  - unknown historical missing trading days remain blocking
+- Integration: `tests.integration.test_krx_real_research_pipeline_flow`
+  - `historical-krx-calendar-release-check` repeats on one persistent SQLite DB
+- CLI release check:
+  - `python -m gaon.runtime.cli historical-krx-calendar-release-check --db <db>`
+
 ## Hotfix 140.2 Telegram Retest Persistence Visibility
 
 - Unit: `tests.unit.test_autonomous_retest`
