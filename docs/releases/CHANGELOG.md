@@ -1,5 +1,16 @@
 # Changelog
 
+## Sprint 131-140 - Autonomous Retest Pipeline
+
+- Added Retest Trigger Engine for insufficient sample and needs-retest decisions.
+- Added deterministic adaptive period expansion from 6 months to 18 months, 3 years, and 5 years.
+- Added real-market re-fetch / re-backtest orchestration that preserves strategy and execution-assumptions fingerprints.
+- Added multi-period retest evidence lineage, stop policy, candidate re-evaluation, and advisory recommendation refresh.
+- Added schema v35 tables: `research_retest_runs`, `research_retest_evidence`, and `research_period_plans`.
+- Added read-only safe tools `research_retest_status` and `research_retest_history`.
+- Added CLI commands `research-retest-demo`, `autonomous-retest-release-check`, `research-retest-status`, and `research-retest-history`.
+- Preserved safety boundaries: no live trading, no KIS orders, no broker orders, no automatic Champion promotion, no approval bypass, no Telegram config mutation, no arbitrary shell/SQL, and no private repository dependency.
+
 ## Hotfix 130.1 - Research Operations State Isolation
 
 - Isolated `research-ops-release-check` fixture writes from the target production SQLite database.

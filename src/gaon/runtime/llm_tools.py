@@ -29,6 +29,7 @@ from gaon.research.real_research import (
     market_data_status_payload,
 )
 from gaon.research.krx_real_pipeline import krx_real_research_payload
+from gaon.research.autonomous_retest import research_retest_history_payload, research_retest_status_payload
 from gaon.research.operations import SQLiteResearchOperationRepository
 
 
@@ -265,6 +266,14 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry.register(
         ToolDefinition("research_operation_status", "Read research quality, recommendation, strategy config, and rollback audit status.", ToolRiskLevel.READ_ONLY, allowed_args=("limit",)),
         lambda args: _research_operation_status(connection, int(args.get("limit", 5))),
+    )
+    registry.register(
+        ToolDefinition("research_retest_status", "Read autonomous retest run status without approving or applying strategy changes.", ToolRiskLevel.READ_ONLY, allowed_args=("limit",)),
+        lambda args: research_retest_status_payload(connection, limit=int(args.get("limit", 5))),
+    )
+    registry.register(
+        ToolDefinition("research_retest_history", "Read autonomous retest evidence lineage without mutating strategy state.", ToolRiskLevel.READ_ONLY, allowed_args=("run_id", "limit")),
+        lambda args: research_retest_history_payload(connection, run_id=str(args["run_id"]) if "run_id" in args else None, limit=int(args.get("limit", 20))),
     )
     return registry
 

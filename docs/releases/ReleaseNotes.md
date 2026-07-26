@@ -3,6 +3,35 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 131-140 Autonomous Retest Pipeline
+
+Gaon now supports an evidence-first autonomous retest workflow for real KRX
+research. When the initial result has insufficient sample size, the system can
+expand the research period deterministically, re-fetch market data, re-run the
+same strategy and execution assumptions, preserve period lineage, re-evaluate
+tested candidates, and refresh the advisory recommendation.
+
+Schema advances to v35 with `research_retest_runs`,
+`research_retest_evidence`, and `research_period_plans`.
+
+New CLI commands:
+
+```bash
+python -m gaon.runtime.cli research-retest-demo --db <db>
+python -m gaon.runtime.cli autonomous-retest-release-check --db <db>
+python -m gaon.runtime.cli research-retest-status --db <db>
+python -m gaon.runtime.cli research-retest-history --db <db>
+```
+
+New read-only safe tools:
+
+- `research_retest_status`
+- `research_retest_history`
+
+The workflow remains advisory. It does not place orders, call KIS/brokers,
+promote Champions automatically, bypass approval, mutate Telegram
+configuration, or apply strategy config changes.
+
 ## Hotfix 130.1 Research Operations State Isolation
 
 Research Operations release-check and demo fixture data no longer contaminates

@@ -2,6 +2,24 @@
 
 Status: Passed
 
+## Sprint 131-140 Autonomous Retest Pipeline
+
+- Unit: `tests.unit.test_autonomous_retest`
+  - insufficient sample triggers a retest decision
+  - adaptive period planner expands deterministically through 6m, 18m, 3y, and 5y
+  - explicit user period boundaries stop silent expansion
+  - orchestrator preserves strategy and assumptions fingerprints
+  - final release-check retest reaches `min_trades`
+  - candidate A/B/C results are TESTED and remain advisory
+  - read-only safe tools `research_retest_status` and `research_retest_history` expose no order/promotion/apply capability
+- Integration: `tests.integration.test_autonomous_retest_flow`
+  - `autonomous-retest-release-check` repeats three times on one persistent SQLite DB
+  - release-check fixture writes are isolated and leave production retest state unchanged
+  - schema v35 stores retest runs, period plans, and retest evidence for explicit persisted diagnostic/demo runs without applying strategy config
+  - `research-retest-demo --persist`, `research-retest-status`, and `research-retest-history` CLI smoke paths pass
+- CLI release check:
+  - `python -m gaon.runtime.cli autonomous-retest-release-check --db <db>`
+
 ## Sprint 121-130 Research Operations
 
 - Unit: `tests.unit.test_research_operations`

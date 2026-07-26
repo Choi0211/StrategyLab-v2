@@ -94,6 +94,13 @@ from gaon.research.krx_real_pipeline import (
     provider_gap_release_check,
     real_krx_data_release_check,
 )
+from gaon.research.autonomous_retest import (
+    AutonomousRetestOrchestrator,
+    SQLiteAutonomousRetestRepository,
+    autonomous_retest_release_check,
+    research_retest_history_payload,
+    research_retest_status_payload,
+)
 from gaon.research.operations import (
     ApprovalStatus as ResearchConfigApprovalStatus,
     QualityStatus,
@@ -295,6 +302,23 @@ def main(argv: list[str] | None = None) -> int:
     research_ops_cleanup.add_argument("--dry-run", action="store_true", default=False)
     research_ops_cleanup.add_argument("--apply", action="store_true", default=False)
     research_ops_cleanup.add_argument("--json", action="store_true")
+    retest_demo = sub.add_parser("research-retest-demo")
+    retest_demo.add_argument("--db", default=":memory:")
+    retest_demo.add_argument("--request", default="20일 고가 돌파 종가 > MA20 > MA60 거래량 20일 평균 이상 손절 -5% 10일 저점 이탈 청산")
+    retest_demo.add_argument("--symbol", default="005930")
+    retest_demo.add_argument("--persist", action="store_true", default=False)
+    retest_demo.add_argument("--json", action="store_true")
+    retest_release = sub.add_parser("autonomous-retest-release-check")
+    retest_release.add_argument("--db", default=":memory:")
+    retest_status = sub.add_parser("research-retest-status")
+    retest_status.add_argument("--db", default=":memory:")
+    retest_status.add_argument("--limit", type=int, default=5)
+    retest_status.add_argument("--json", action="store_true")
+    retest_history = sub.add_parser("research-retest-history")
+    retest_history.add_argument("--db", default=":memory:")
+    retest_history.add_argument("--run-id", default=None)
+    retest_history.add_argument("--limit", type=int, default=20)
+    retest_history.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1684,6 +1708,55 @@ def _run(args: argparse.Namespace) -> int:
                 )
         finally:
             store.close()
+    elif args.command == "research-retest-demo":
+        store = RuntimeStateStore(args.db if args.persist else ":memory:")
+        try:
+            run = AutonomousRetestOrchestrator(store._connection).run(f"{args.request}", run_id=f"research-retest-demo:{uuid4().hex}", symbol=args.symbol, generated_at=_utc_now())
+            print(_dumps_json(run.to_json()) if args.json else run.korean_report)
+        finally:
+            store.close()
+    elif args.command == "autonomous-retest-release-check":
+        target_store = RuntimeStateStore(args.db)
+        try:
+            target_schema = target_store.status().schema_version
+            target_counts_before = _retest_table_counts(target_store._connection)
+        finally:
+            target_store.close()
+        store = RuntimeStateStore(":memory:")
+        try:
+            run = autonomous_retest_release_check(store._connection)
+            evidence = run["evidence"]
+            final = evidence[-1]
+            target_store = RuntimeStateStore(args.db)
+            try:
+                target_counts_after = _retest_table_counts(target_store._connection)
+            finally:
+                target_store.close()
+            if target_counts_after != target_counts_before:
+                raise ConfigurationError("autonomous retest release check modified target retest state")
+            print(
+                "autonomous-retest-release-check: PASS "
+                f"schema_version={target_schema} isolated=true run_id={run['run_id']} "
+                f"periods={len(evidence)} final_trade_count={final['trade_count']} "
+                f"stop_reason={run['stop_reason']} recommendation={run['final_recommendation']} "
+                f"strategy_fingerprint=stable assumptions_fingerprint=stable source=real fixture_backed=false"
+            )
+        finally:
+            store.close()
+    elif args.command == "research-retest-status":
+        store = RuntimeStateStore(args.db)
+        try:
+            payload = research_retest_status_payload(store._connection, limit=args.limit)
+            print(_dumps_json(payload) if args.json else "\n".join(str(item) for item in payload["runs"]) or "현재 저장된 자동 재검증 결과가 없습니다.")
+        finally:
+            store.close()
+    elif args.command == "research-retest-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            payload = research_retest_history_payload(store._connection, run_id=args.run_id, limit=args.limit)
+            print(_dumps_json(payload) if args.json else "\n".join(str(item) for item in payload["evidence"]) or "현재 저장된 자동 재검증 이력이 없습니다.")
+        finally:
+            store.close()
     elif args.command == "backup":
         store = RuntimeStateStore(args.db)
         try:
@@ -2648,6 +2721,15 @@ def _research_ops_table_counts(connection: Any) -> dict[str, int]:
         "research_config_approvals",
         "strategy_config_versions",
         "strategy_config_audit",
+    )
+    return {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in tables}
+
+
+def _retest_table_counts(connection: Any) -> dict[str, int]:
+    tables = (
+        "research_retest_runs",
+        "research_retest_evidence",
+        "research_period_plans",
     )
     return {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in tables}
 

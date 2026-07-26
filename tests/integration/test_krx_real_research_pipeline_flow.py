@@ -4,7 +4,7 @@ import unittest
 
 from gaon.runtime.cli import main as cli_main
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest, default_tool_registry
-from gaon.runtime.migrations import migrate
+from gaon.runtime.migrations import SCHEMA_VERSION, migrate
 
 
 NOW = "2026-07-25T00:00:00Z"
@@ -30,7 +30,7 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
             connection = sqlite3.connect(db_path)
             try:
                 version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
-                self.assertEqual(version, 34)
+                self.assertEqual(version, SCHEMA_VERSION)
                 self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM market_datasets").fetchone()[0], 1)
             finally:
                 connection.close()
@@ -43,7 +43,7 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
             connection = sqlite3.connect(db_path)
             try:
                 version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
-                self.assertEqual(version, 34)
+                self.assertEqual(version, SCHEMA_VERSION)
                 self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM market_datasets").fetchone()[0], 1)
             finally:
                 connection.close()
@@ -56,7 +56,7 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
             connection = sqlite3.connect(db_path)
             try:
                 version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
-                self.assertEqual(version, 34)
+                self.assertEqual(version, SCHEMA_VERSION)
                 rows = connection.execute("SELECT content FROM conversation_messages WHERE route='provider_tool_call'").fetchall()
                 self.assertEqual(len(rows), 3)
                 self.assertTrue(all("trade_count=3" in str(row[0]) for row in rows))
@@ -72,7 +72,7 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
             connection = sqlite3.connect(db_path)
             try:
                 version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
-                self.assertEqual(version, 34)
+                self.assertEqual(version, SCHEMA_VERSION)
             finally:
                 connection.close()
 
@@ -84,7 +84,7 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
             connection = sqlite3.connect(db_path)
             try:
                 version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
-                self.assertEqual(version, 34)
+                self.assertEqual(version, SCHEMA_VERSION)
             finally:
                 connection.close()
 
@@ -96,7 +96,7 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
             connection = sqlite3.connect(db_path)
             try:
                 version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
-                self.assertEqual(version, 34)
+                self.assertEqual(version, SCHEMA_VERSION)
                 rows = connection.execute("SELECT COUNT(*) FROM llm_tool_audit WHERE tool_name='krx_real_research'").fetchone()[0]
                 self.assertEqual(rows, 3)
             finally:

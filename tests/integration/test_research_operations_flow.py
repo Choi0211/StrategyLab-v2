@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from gaon.runtime.cli import main as cli_main
+from gaon.runtime.migrations import SCHEMA_VERSION
 
 
 class ResearchOperationsFlowTests(unittest.TestCase):
@@ -14,7 +15,7 @@ class ResearchOperationsFlowTests(unittest.TestCase):
             connection = sqlite3.connect(db_path)
             try:
                 version = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()[0]
-                self.assertEqual(version, 34)
+                self.assertEqual(version, SCHEMA_VERSION)
                 reports = connection.execute("SELECT COUNT(*) FROM research_operation_reports").fetchone()[0]
                 approvals = connection.execute("SELECT COUNT(*) FROM research_config_approvals").fetchone()[0]
                 configs = connection.execute("SELECT COUNT(*) FROM strategy_config_versions").fetchone()[0]
