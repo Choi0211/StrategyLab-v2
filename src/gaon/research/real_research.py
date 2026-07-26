@@ -25,6 +25,7 @@ REAL_RESEARCH_SCHEMA_VERSION = 1
 ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:\-]{1,127}$")
+OHLC_FLOAT_TOLERANCE = 1e-6
 
 
 class DataQualityStatus(str, Enum):
@@ -260,8 +261,15 @@ class DataQualityEngine:
             previous = bar.timestamp
             if bar.symbol not in expected:
                 findings.append(DataQualityFinding("symbol_mismatch", "error", f"bar symbol {bar.symbol} is not in dataset symbols"))
-            if not (bar.low <= bar.open <= bar.high and bar.low <= bar.close <= bar.high):
-                findings.append(DataQualityFinding("invalid_ohlc", "error", "OHLC values are inconsistent"))
+            if not _valid_ohlc(bar):
+                findings.append(
+                    DataQualityFinding(
+                        "invalid_ohlc",
+                        "error",
+                        f"OHLC values are inconsistent: symbol={bar.symbol} date={bar.timestamp} "
+                        f"open={bar.open} high={bar.high} low={bar.low} close={bar.close}",
+                    )
+                )
             if bar.volume < 0 or bar.trading_value < 0:
                 findings.append(DataQualityFinding("negative_volume", "error", "volume and trading_value must be non-negative"))
             elif bar.volume == 0:
@@ -816,6 +824,14 @@ def _date_range(start: str, end: str) -> list[str]:
         days.append(current.date().isoformat())
         current += timedelta(days=1)
     return days
+
+
+def _valid_ohlc(bar: MarketBar) -> bool:
+    return (
+        bar.low - OHLC_FLOAT_TOLERANCE <= bar.open <= bar.high + OHLC_FLOAT_TOLERANCE
+        and bar.low - OHLC_FLOAT_TOLERANCE <= bar.close <= bar.high + OHLC_FLOAT_TOLERANCE
+        and bar.low <= bar.high + OHLC_FLOAT_TOLERANCE
+    )
 
 
 def _validate_date(value: str) -> None:
