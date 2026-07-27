@@ -9,7 +9,9 @@ description = "AI-assisted quantitative strategy research platform"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "StrategyLab" }]
-dependencies = []
+dependencies = [
+    "tzdata>=2024.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

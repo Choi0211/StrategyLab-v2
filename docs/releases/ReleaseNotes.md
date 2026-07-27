@@ -3,6 +3,26 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 140.7 Yahoo KRX Zero Volume Anomaly Classification
+
+Samsung Electronics (`005930`) 5-year Yahoo inspection identified 11
+zero-volume rows where Yahoo returned `volume=0`, `trading_value=0`, and
+`open=high=low=close` on KRX open dates. Those rows are now classified as
+symbol-specific `provider_zero_volume_anomaly` entries for `real:yahoo-chart`.
+
+Registered anomaly rows are excluded from backtest input and preserved as
+quality warnings. Unregistered zero-volume rows remain blocking, so the release
+policy stays fail-closed.
+
+Verification:
+
+```bash
+python -m gaon.runtime.cli historical-krx-data-quality-release-check --db <db>
+GAON_REAL_MARKET_DATA_ENABLED=true GAON_MARKET_DATA_PROVIDER=yahoo-chart \
+python -m gaon.runtime.cli historical-krx-data-quality-inspect \
+  --symbol 005930 --start 2021-07-25 --end 2026-07-24
+```
+
 ## Hotfix 140.6 Historical KRX Data Quality Classification
 
 Historical KRX daily quality now distinguishes exchange closures from
@@ -974,3 +994,14 @@ The Telegram response does not expose Python exception text or stack traces.
 Authoritative `krx_real_research` failures remain fail-closed. If market data
 or backtest execution fails, Gaon returns the classified error message and does
 not ask the provider to invent a replacement research report.
+
+# Hotfix 140.7.1
+
+Gaon now declares the first-party `tzdata` package as a runtime dependency.
+This keeps IANA timezone lookups such as `Asia/Seoul` available on Windows
+GitHub Actions and Windows user installations, while preserving the existing
+`ZoneInfo` semantics used by Yahoo KRX diagnostics.
+
+No schema migration is included. Hotfix 140.7 zero-volume anomaly handling
+remains unchanged: only evidence-backed provider anomalies are excluded and
+reported as warnings; unregistered zero-volume bars remain fail-closed.

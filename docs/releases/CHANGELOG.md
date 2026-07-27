@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 140.7 - Yahoo KRX Zero Volume Anomaly Classification
+
+- Registered 11 Samsung Electronics (`005930`) Yahoo zero-volume anomalies from production 5-year inspection.
+- Excluded registered zero-volume anomaly bars from backtest input and reported them as `provider_zero_volume_anomaly`.
+- Kept unregistered zero-volume bars blocking and fail-closed.
+- Extended `historical-krx-data-quality-release-check` output with `provider_zero_volume_anomaly_dates`.
+- Preserved schema v35, strict OHLC validation, no trading, no Champion auto-promotion, and no approval bypass.
+
 ## Hotfix 140.6 - Historical KRX Data Quality Classification
 
 - Added `2023-05-29` as a KRX closure while keeping `2022-01-03`, `2022-05-09`, and `2025-09-19` as exchange-open dates.
@@ -604,3 +612,9 @@
 - Telegram research failures now log traceback server-side while returning Korean user-facing messages without Python exception text or fabricated research results.
 - Authoritative real research tool failures remain fail-closed and do not fall back to provider free-form answers.
 - Added `telegram-real-research-failure-routing-release-check`.
+
+# Hotfix 140.7.1
+
+- Added `tzdata` as a runtime dependency so `ZoneInfo("Asia/Seoul")` works consistently on Windows and Linux installations.
+- Added a timezone dependency regression test for the Yahoo KRX debug path and other IANA timezone consumers.
+- Preserved schema v35 and Hotfix 140.7 zero-volume anomaly fail-closed policy.

@@ -1609,6 +1609,7 @@ def _run(args: argparse.Namespace) -> int:
                 f"fixture_backed={str(result['fixture_backed']).lower()} "
                 f"provider_gap_dates={','.join(result['provider_gap_dates'])} "
                 f"provider_ohlc_anomaly_dates={','.join(result['provider_ohlc_anomaly_dates'])} "
+                f"provider_zero_volume_anomaly_dates={','.join(result['provider_zero_volume_anomaly_dates'])} "
                 f"zero_volume_policy={result['zero_volume_policy']} "
                 f"blocking_findings={result['blocking_findings']} "
                 f"symbol_specific_gap_isolated={str(result['symbol_specific_gap_isolated']).lower()}"
