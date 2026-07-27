@@ -94,6 +94,7 @@ from gaon.research.krx_real_pipeline import (
     krx_trading_calendar_release_check,
     provider_gap_release_check,
     real_krx_data_release_check,
+    yahoo_krx_bar_debug,
 )
 from gaon.research.autonomous_retest import (
     AutonomousRetestOrchestrator,
@@ -296,6 +297,9 @@ def main(argv: list[str] | None = None) -> int:
     historical_krx_calendar_release.add_argument("--db", default=":memory:")
     provider_gap_release = sub.add_parser("provider-gap-release-check")
     provider_gap_release.add_argument("--db", default=":memory:")
+    yahoo_bar_debug = sub.add_parser("yahoo-krx-bar-debug")
+    yahoo_bar_debug.add_argument("--symbol", default="005930")
+    yahoo_bar_debug.add_argument("--date", required=True)
     research_ops_demo = sub.add_parser("research-ops-demo")
     research_ops_demo.add_argument("--db", default=":memory:")
     research_ops_demo.add_argument("--insufficient-sample", action="store_true")
@@ -1573,7 +1577,9 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} source={result['source']} "
                 f"fixture_backed={str(result['fixture_backed']).lower()} provider={result['provider']} "
                 f"symbol={result['symbol']} rows={result['rows']} quality={result['quality']} "
-                f"provider_gaps={result['provider_gaps']} blocking_findings={result['blocking_findings']} "
+                f"provider_gaps={result['provider_gaps']} provider_gap_dates={','.join(result['provider_gap_dates'])} "
+                f"provider_ohlc_anomalies={result['provider_ohlc_anomalies']} provider_ohlc_anomaly_dates={','.join(result['provider_ohlc_anomaly_dates'])} "
+                f"blocking_findings={result['blocking_findings']} "
                 f"trades={result['trades']} validation={result['validation']}"
             )
         except RealMarketDataUnavailable as exc:
@@ -1637,6 +1643,11 @@ def _run(args: argparse.Namespace) -> int:
             raise ConfigurationError(str(exc)) from exc
         finally:
             store.close()
+    elif args.command == "yahoo-krx-bar-debug":
+        try:
+            print(_dumps_json(yahoo_krx_bar_debug(args.symbol, args.date)))
+        except RealMarketDataUnavailable as exc:
+            raise ConfigurationError(str(exc)) from exc
     elif args.command == "research-ops-demo":
         store = RuntimeStateStore(args.db if args.persist else ":memory:")
         try:
