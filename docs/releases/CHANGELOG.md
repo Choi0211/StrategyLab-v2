@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 140.6 - Historical KRX Data Quality Classification
+
+- Added `2023-05-29` as a KRX closure while keeping `2022-01-03`, `2022-05-09`, and `2025-09-19` as exchange-open dates.
+- Added Yahoo `005930` symbol-specific provider-gap classification for `2022-01-03` and `2022-05-09`.
+- Added provider-specific zero-volume classification plumbing while keeping unregistered zero-volume bars blocking.
+- Added `historical-krx-data-quality-release-check` and `historical-krx-data-quality-inspect`.
+- Preserved schema v35, strict OHLC validation, no trading, no Champion auto-promotion, and no approval bypass.
+
 ## Hotfix 140.3 - Historical KRX Trading Calendar Accuracy
 
 - Expanded `KRXTradingCalendar` historical closure coverage for 2021-2026 with annual market-closure overrides.

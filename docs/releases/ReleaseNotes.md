@@ -3,6 +3,28 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 140.6 Historical KRX Data Quality Classification
+
+Historical KRX daily quality now distinguishes exchange closures from
+Yahoo-specific historical data anomalies over the five-year research window.
+The calendar treats `2023-05-29` as a KRX closure, while `2022-01-03`,
+`2022-05-09`, and `2025-09-19` remain exchange-open dates. For
+`real:yahoo-chart` and `005930`, `2022-01-03` and `2022-05-09` are classified
+as symbol-specific provider gaps when absent from the payload.
+
+Zero-volume bars remain blocking unless a dated provider anomaly is registered
+with evidence. The new inspection CLI reports exact zero-volume dates and raw
+OHLCV details from the configured provider without persisting production state.
+
+Verification:
+
+```bash
+python -m gaon.runtime.cli historical-krx-data-quality-release-check --db <db>
+GAON_REAL_MARKET_DATA_ENABLED=true GAON_MARKET_DATA_PROVIDER=yahoo-chart \
+python -m gaon.runtime.cli historical-krx-data-quality-inspect \
+  --symbol 005930 --start 2021-07-25 --end 2026-07-24
+```
+
 ## Hotfix 140.3 Historical KRX Trading Calendar Accuracy
 
 KRX daily data-quality checks now use a broader historical trading calendar for

@@ -90,6 +90,8 @@ from gaon.research.krx_real_pipeline import (
     WalkForwardValidator,
     build_market_data_provider_from_env,
     default_execution_assumptions,
+    historical_krx_data_quality_inspect,
+    historical_krx_data_quality_release_check,
     historical_krx_calendar_release_check,
     krx_trading_calendar_release_check,
     provider_gap_release_check,
@@ -295,11 +297,17 @@ def main(argv: list[str] | None = None) -> int:
     krx_calendar_release.add_argument("--db", default=":memory:")
     historical_krx_calendar_release = sub.add_parser("historical-krx-calendar-release-check")
     historical_krx_calendar_release.add_argument("--db", default=":memory:")
+    historical_krx_data_quality_release = sub.add_parser("historical-krx-data-quality-release-check")
+    historical_krx_data_quality_release.add_argument("--db", default=":memory:")
     provider_gap_release = sub.add_parser("provider-gap-release-check")
     provider_gap_release.add_argument("--db", default=":memory:")
     yahoo_bar_debug = sub.add_parser("yahoo-krx-bar-debug")
     yahoo_bar_debug.add_argument("--symbol", default="005930")
     yahoo_bar_debug.add_argument("--date", required=True)
+    historical_krx_data_quality_inspection = sub.add_parser("historical-krx-data-quality-inspect")
+    historical_krx_data_quality_inspection.add_argument("--symbol", default="005930")
+    historical_krx_data_quality_inspection.add_argument("--start", required=True)
+    historical_krx_data_quality_inspection.add_argument("--end", required=True)
     research_ops_demo = sub.add_parser("research-ops-demo")
     research_ops_demo.add_argument("--db", default=":memory:")
     research_ops_demo.add_argument("--insufficient-sample", action="store_true")
@@ -1579,8 +1587,31 @@ def _run(args: argparse.Namespace) -> int:
                 f"symbol={result['symbol']} rows={result['rows']} quality={result['quality']} "
                 f"provider_gaps={result['provider_gaps']} provider_gap_dates={','.join(result['provider_gap_dates'])} "
                 f"provider_ohlc_anomalies={result['provider_ohlc_anomalies']} provider_ohlc_anomaly_dates={','.join(result['provider_ohlc_anomaly_dates'])} "
+                f"zero_volume_warnings={result['zero_volume_warnings']} zero_volume_dates={','.join(result['zero_volume_dates'])} "
+                f"provider_zero_volume_anomalies={result['provider_zero_volume_anomalies']} "
+                f"provider_zero_volume_anomaly_dates={','.join(result['provider_zero_volume_anomaly_dates'])} "
                 f"blocking_findings={result['blocking_findings']} "
                 f"trades={result['trades']} validation={result['validation']}"
+            )
+        except RealMarketDataUnavailable as exc:
+            raise ConfigurationError(str(exc)) from exc
+        finally:
+            store.close()
+    elif args.command == "historical-krx-data-quality-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = historical_krx_data_quality_release_check(store._connection)
+            if store.status().schema_version < 33:
+                raise ConfigurationError("historical KRX data quality release check requires schema v33 or later")
+            print(
+                "historical-krx-data-quality-release-check: PASS "
+                f"schema_version={store.status().schema_version} provider={result['provider']} "
+                f"fixture_backed={str(result['fixture_backed']).lower()} "
+                f"provider_gap_dates={','.join(result['provider_gap_dates'])} "
+                f"provider_ohlc_anomaly_dates={','.join(result['provider_ohlc_anomaly_dates'])} "
+                f"zero_volume_policy={result['zero_volume_policy']} "
+                f"blocking_findings={result['blocking_findings']} "
+                f"symbol_specific_gap_isolated={str(result['symbol_specific_gap_isolated']).lower()}"
             )
         except RealMarketDataUnavailable as exc:
             raise ConfigurationError(str(exc)) from exc
@@ -1646,6 +1677,12 @@ def _run(args: argparse.Namespace) -> int:
     elif args.command == "yahoo-krx-bar-debug":
         try:
             print(_dumps_json(yahoo_krx_bar_debug(args.symbol, args.date)))
+        except RealMarketDataUnavailable as exc:
+            raise ConfigurationError(str(exc)) from exc
+    elif args.command == "historical-krx-data-quality-inspect":
+        try:
+            provider = build_market_data_provider_from_env(os.environ)
+            print(_dumps_json(historical_krx_data_quality_inspect(args.symbol, args.start, args.end, provider=provider)))
         except RealMarketDataUnavailable as exc:
             raise ConfigurationError(str(exc)) from exc
     elif args.command == "research-ops-demo":

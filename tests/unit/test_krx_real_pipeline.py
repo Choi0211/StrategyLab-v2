@@ -17,11 +17,14 @@ from gaon.research.krx_real_pipeline import (
     YAHOO_KRX_ANOMALY_POLICY,
     build_market_data_provider_from_env,
     default_execution_assumptions,
+    historical_krx_data_quality_inspect,
+    historical_krx_data_quality_release_check,
     historical_krx_calendar_release_check,
     krx_trading_calendar_release_check,
     provider_gap_release_check,
     real_krx_data_release_check,
     yahoo_krx_bar_debug,
+    _blocking_quality_findings,
     _parse_yahoo_chart_payload,
 )
 from gaon.research.real_research import DataQualityEngine, DataQualityStatus, MarketBar, MarketDataMetadata, MarketDataset, MarketSymbol
@@ -215,6 +218,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
     def test_historical_krx_calendar_excludes_2023_2024_market_holidays(self) -> None:
         calendar = KRXTradingCalendar()
         historical_closed = (
+            "2023-05-29",
             "2023-08-15",
             "2023-09-28",
             "2023-09-29",
@@ -245,6 +249,8 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         for day in historical_closed:
             self.assertNotIn(day, calendar.expected_open_dates(start_date=day, end_date=day))
         self.assertIn("2025-09-19", calendar.expected_open_dates(start_date="2025-09-19", end_date="2025-09-19"))
+        self.assertIn("2022-01-03", calendar.expected_open_dates(start_date="2022-01-03", end_date="2022-01-03"))
+        self.assertIn("2022-05-09", calendar.expected_open_dates(start_date="2022-05-09", end_date="2022-05-09"))
 
     def test_historical_yahoo_3y_gap_is_only_provider_gap(self) -> None:
         connection = sqlite3.connect(":memory:")
@@ -255,6 +261,38 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertEqual(result["blocking_findings"], 0)
         self.assertEqual(result["expected_3y"] - result["actual_3y_without_provider_gap"], 1)
         self.assertGreater(result["expected_5y"], result["expected_3y"])
+
+    def test_historical_data_quality_release_check_classifies_known_provider_anomalies(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        migrate(connection)
+        result = historical_krx_data_quality_release_check(connection)
+        self.assertEqual(result["schema_version"], 33)
+        self.assertEqual(result["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2025-09-19"))
+        self.assertEqual(result["provider_ohlc_anomaly_dates"], ("2024-10-14",))
+        self.assertEqual(result["zero_volume_policy"], "unregistered_zero_volume_blocks")
+        self.assertEqual(result["blocking_findings"], 0)
+        self.assertTrue(result["symbol_specific_gap_isolated"])
+
+    def test_yahoo_symbol_specific_005930_gap_does_not_leak_to_other_symbols(self) -> None:
+        calendar = KRXTradingCalendar()
+        dates = tuple(day for day in calendar.expected_open_dates(start_date="2022-01-03", end_date="2022-01-05") if day != "2022-01-03")
+        samsung = _quality_dataset("samsung-symbol-gap", "2022-01-03", "2022-01-05", dates, source="real:yahoo-chart", symbol="005930")
+        hynix = _quality_dataset("hynix-symbol-gap", "2022-01-03", "2022-01-05", dates, source="real:yahoo-chart", symbol="000660")
+        samsung_report = KRXDatasetBuilder(None, _StaticProvider(samsung)).build("005930", start_date="2022-01-03", end_date="2022-01-05")[1]
+        hynix_report = KRXDatasetBuilder(None, _StaticProvider(hynix)).build("000660", start_date="2022-01-03", end_date="2022-01-05")[1]
+        self.assertTrue(any(item.code == "provider_gap" and "2022-01-03" in item.message for item in samsung_report.findings))
+        self.assertFalse(any(item.code == "unknown_missing_trading_day" for item in samsung_report.findings))
+        self.assertTrue(any(item.code == "unknown_missing_trading_day" and "2022-01-03" in item.message for item in hynix_report.findings))
+
+    def test_unregistered_zero_volume_remains_blocking_and_inspectable(self) -> None:
+        dates = KRXTradingCalendar().expected_open_dates(start_date="2026-01-02", end_date="2026-01-06")
+        dataset = _quality_dataset("zero-volume-inspect", "2026-01-02", "2026-01-06", dates, source="real:yahoo-chart", zero_volume_dates=frozenset({"2026-01-05"}))
+        report = KRXDatasetBuilder(None, _StaticProvider(dataset)).build("005930", start_date="2026-01-02", end_date="2026-01-06")[1]
+        self.assertTrue(any(item.code == "zero_volume" and "2026-01-05" in item.message for item in report.findings))
+        self.assertTrue(any(item.code == "zero_volume" for item in _blocking_quality_findings(report)))
+        inspection = historical_krx_data_quality_inspect("005930", "2026-01-02", "2026-01-06", provider=_StaticProvider(dataset))
+        self.assertEqual(inspection["zero_volume_dates"], ("2026-01-05",))
+        self.assertTrue(any(item["code"] == "zero_volume" for item in inspection["blocking_findings"]))
 
     def test_provider_gap_release_check_preserves_schema_and_provenance(self) -> None:
         connection = sqlite3.connect(":memory:")
@@ -332,7 +370,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertIn("공급자 데이터 누락", report.korean_report)
 
 
-def _quality_dataset(name: str, start: str, end: str, dates: tuple[str, ...], *, invalid_ohlc: bool = False, source: str = "real:test-calendar", symbol: str = "005930") -> MarketDataset:
+def _quality_dataset(name: str, start: str, end: str, dates: tuple[str, ...], *, invalid_ohlc: bool = False, source: str = "real:test-calendar", symbol: str = "005930", zero_volume_dates: frozenset[str] = frozenset()) -> MarketDataset:
     bars = []
     for index, day in enumerate(dates):
         close = 100.0 + index
@@ -340,7 +378,8 @@ def _quality_dataset(name: str, start: str, end: str, dates: tuple[str, ...], *,
         low = close - 1.0
         if invalid_ohlc:
             high = close - 2.0
-        bars.append(MarketBar(day, symbol, close, high, low, close, 1_000_000 + index, int(close * 1_000_000)))
+        volume = 0 if day in zero_volume_dates else 1_000_000 + index
+        bars.append(MarketBar(day, symbol, close, high, low, close, volume, int(close * volume)))
     metadata = MarketDataMetadata(source, "KOSPI", "daily", start, end, True, "2026-07-25T00:00:00Z", False)
     return MarketDataset(f"dataset:test:{name}:{start}:{end}", (MarketSymbol(symbol, symbol, "KOSPI"),), tuple(bars), metadata)
 

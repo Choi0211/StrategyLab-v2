@@ -26,8 +26,15 @@ must not be added as exchange holidays.
 Missing trading dates can be classified as:
 
 - `provider_gap`: known provider anomaly such as Yahoo KRX `2025-09-19`
+- `provider_ohlc_anomaly`: provider returned an inconsistent same-index OHLC bar that is excluded without weakening OHLC validation
+- `provider_zero_volume_anomaly`: provider-specific zero-volume anomaly only when a dated registry entry exists
 - `unknown_missing_trading_day`: missing bar not explained by calendar or provider anomaly registry
 
-Release checks allow `provider_gap` warnings only when no blocking findings are
-present. Unknown missing trading days, malformed OHLCV, duplicate bars, and
-errors remain blocking.
+`real:yahoo-chart` also has symbol-specific provider gaps for Samsung
+Electronics (`005930`) on `2022-01-03` and `2022-05-09`. These dates remain KRX
+open dates and are not exchange holidays. The substitute holiday `2023-05-29`
+is modeled as a KRX closure.
+
+Release checks allow only explainable provider anomaly warnings when no
+blocking findings are present. Unknown missing trading days, unregistered
+zero-volume bars, malformed OHLCV, duplicate bars, and errors remain blocking.
