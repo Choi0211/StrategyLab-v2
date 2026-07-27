@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 141-150 - Multi-Symbol Autonomous Research
+
+- Added multi-symbol KRX research contracts, explicit/curated universe provenance, per-symbol evidence, cross-symbol aggregation, concentration analysis, sample sufficiency, and candidate generalization.
+- Added schema v36 tables for multi-symbol runs, symbol evidence, candidate evidence, and universe snapshots.
+- Added read-only safe tools `multi_symbol_research`, `multi_symbol_research_status`, and `multi_symbol_research_history`.
+- Added CLI commands `multi-symbol-research-demo`, `multi-symbol-research-release-check`, `telegram-multi-symbol-research-release-check`, `multi-symbol-research-status`, and `multi-symbol-research-history`.
+- Preserved Hotfix 130.1 style release-check/demo isolation and all no-trading/no-auto-promotion/no-approval-bypass boundaries.
+
 ## Hotfix 140.7 - Yahoo KRX Zero Volume Anomaly Classification
 
 - Registered 11 Samsung Electronics (`005930`) Yahoo zero-volume anomalies from production 5-year inspection.

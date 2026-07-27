@@ -19,6 +19,12 @@ def route_read_only_tool(text: str) -> str | None:
         return "research_retest"
     if _autonomous_retest(normalized):
         return "research_retest"
+    if _multi_symbol_history(normalized):
+        return "multi_symbol_research_history"
+    if _multi_symbol_status(normalized):
+        return "multi_symbol_research_status"
+    if _multi_symbol_research_ascii(normalized):
+        return "multi_symbol_research"
     if _krx_real_research(normalized):
         return "krx_real_research"
     if _strategy_critique(normalized):
@@ -50,6 +56,60 @@ def _krx_real_research(value: str) -> bool:
     real_data = ("실제", "실데이터", "real", "yahoo", "krx", "삼성전자", "005930")
     research = ("백테스트", "backtest", "분석", "개선후보", "비교", "연구")
     return _contains_any(value, real_data) and _contains_any(value, research)
+
+
+def _multi_symbol_research_ascii(value: str) -> bool:
+    explicit_universe = (
+        "여러종목",
+        "다중종목",
+        "복수종목",
+        "모든종목",
+        "모두",
+        "종목들",
+        "universe",
+        "multisymbol",
+        "multi-symbol",
+        "crosssymbol",
+        "cross-symbol",
+    )
+    symbols = {
+        "삼성전자": ("삼성전자", "005930"),
+        "sk하이닉스": ("sk하이닉스", "하이닉스", "000660"),
+        "현대차": ("현대차", "005380"),
+        "naver": ("naver", "035420"),
+        "lg화학": ("lg화학", "051910"),
+    }
+    generalize = (
+        "일반화",
+        "여러종목",
+        "모두검증",
+        "모두",
+        "검증",
+        "검증해줘",
+        "연구해줘",
+        "연구",
+        "실제데이터",
+        "실제",
+        "realdata",
+        "generalized",
+        "generalization",
+        "compare",
+        "candidate",
+    )
+    if not _contains_any(value, generalize):
+        return False
+    if _contains_any(value, explicit_universe):
+        return True
+    mentioned = sum(1 for aliases in symbols.values() if _contains_any(value, aliases))
+    return mentioned >= 2
+
+
+def _multi_symbol_status(value: str) -> bool:
+    return _contains_any(value, ("다중종목", "여러종목", "multisymbol", "multi-symbol")) and _contains_any(value, ("상태", "status", "최근", "조회"))
+
+
+def _multi_symbol_history(value: str) -> bool:
+    return _contains_any(value, ("다중종목", "여러종목", "multisymbol", "multi-symbol")) and _contains_any(value, ("이력", "history", "기록", "과정"))
 
 
 def _autonomous_retest(value: str) -> bool:

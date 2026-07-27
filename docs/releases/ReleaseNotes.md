@@ -3,6 +3,38 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 141-150 Multi-Symbol Autonomous Research
+
+Gaon can now run bounded multi-symbol KRX research. A single user strategy and
+one execution-assumption set are applied across an explicit or curated universe,
+with per-symbol data quality, backtest evidence, candidate evidence,
+cross-symbol aggregation, concentration analysis, sample confidence, and
+generalization judgment.
+
+The first production universe is explicit and bounded to:
+
+`005930, 000660, 005380, 035420, 051910`
+
+This is not a dynamic historical top-volume universe. Reports preserve universe
+provenance so survivorship-bias assumptions are visible.
+
+Verification:
+
+```bash
+python -m gaon.runtime.cli multi-symbol-research-release-check --db <db>
+python -m gaon.runtime.cli telegram-multi-symbol-research-release-check --db <db>
+```
+
+Real Yahoo KRX VPS smoke:
+
+```bash
+GAON_REAL_MARKET_DATA_ENABLED=true GAON_MARKET_DATA_PROVIDER=yahoo-chart \
+python -m gaon.runtime.cli multi-symbol-research-demo \
+  --db /var/lib/strategylab/gaon-runtime.sqlite \
+  --persist \
+  --symbols 005930,000660,005380,035420,051910
+```
+
 ## Hotfix 140.7 Yahoo KRX Zero Volume Anomaly Classification
 
 Samsung Electronics (`005930`) 5-year Yahoo inspection identified 11

@@ -1328,3 +1328,18 @@ The failure routing release check verifies market-data unavailable, backtest
 failure, actual provider timeout, and unexpected internal exception cases. It
 also verifies that authoritative route failures do not call the provider and do
 not leak fabricated research metrics.
+
+# Sprint 141-150
+
+Targeted verification:
+
+- `tests.unit.test_multi_symbol_research`: PASS, 6 tests
+- `tests.integration.test_multi_symbol_research_flow`: PASS, 2 tests
+- `multi-symbol-research-release-check`: PASS, schema v36
+- `telegram-multi-symbol-research-release-check`: PASS, schema v36
+
+The release checks verify explicit five-symbol universe handling, stable
+strategy and assumption fingerprints, per-symbol evidence, aggregation,
+concentration, sample sufficiency, candidate generalization, persistence,
+release/demo isolation, and Telegram authoritative routing with
+`provider_calls=0`.
