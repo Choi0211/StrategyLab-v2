@@ -612,3 +612,9 @@
 - Telegram research failures now log traceback server-side while returning Korean user-facing messages without Python exception text or fabricated research results.
 - Authoritative real research tool failures remain fail-closed and do not fall back to provider free-form answers.
 - Added `telegram-real-research-failure-routing-release-check`.
+
+# Hotfix 140.7.1
+
+- Added `tzdata` as a runtime dependency so `ZoneInfo("Asia/Seoul")` works consistently on Windows and Linux installations.
+- Added a timezone dependency regression test for the Yahoo KRX debug path and other IANA timezone consumers.
+- Preserved schema v35 and Hotfix 140.7 zero-volume anomaly fail-closed policy.

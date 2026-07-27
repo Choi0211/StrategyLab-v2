@@ -5,6 +5,7 @@ Status: Sprint 1 Foundation
 ## Requirements
 
 - Python 3.11 or newer
+- The package installs `tzdata` so IANA timezones such as `Asia/Seoul` work on Windows and Linux.
 - No broker credential is required
 - No `.env` file is required
 

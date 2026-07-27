@@ -994,3 +994,14 @@ The Telegram response does not expose Python exception text or stack traces.
 Authoritative `krx_real_research` failures remain fail-closed. If market data
 or backtest execution fails, Gaon returns the classified error message and does
 not ask the provider to invent a replacement research report.
+
+# Hotfix 140.7.1
+
+Gaon now declares the first-party `tzdata` package as a runtime dependency.
+This keeps IANA timezone lookups such as `Asia/Seoul` available on Windows
+GitHub Actions and Windows user installations, while preserving the existing
+`ZoneInfo` semantics used by Yahoo KRX diagnostics.
+
+No schema migration is included. Hotfix 140.7 zero-volume anomaly handling
+remains unchanged: only evidence-backed provider anomalies are excluded and
+reported as warnings; unregistered zero-volume bars remain fail-closed.
