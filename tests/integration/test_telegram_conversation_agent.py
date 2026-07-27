@@ -14,6 +14,12 @@ from gaon.runtime.telegram_agent import TelegramConversationAgent
 from gaon.research import autonomous_retest
 from gaon.research.autonomous_retest import autonomous_retest_release_check, research_retest_history_payload, research_retest_status_payload
 from gaon.research.krx_real_pipeline import RealMarketDataUnavailable
+from gaon.research.multi_symbol import (
+    DEFAULT_CURATED_SYMBOLS,
+    PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT,
+    AutonomousMultiSymbolResearchOrchestrator,
+)
+from gaon.research.autonomous_retest import _ReleaseCheckBacktestRunner, _ReleaseCheckProvider
 
 
 class FakeTelegramClient:
@@ -349,6 +355,78 @@ class TelegramConversationAgentTests(unittest.TestCase):
             autonomous_retest.SQLiteAutonomousRetestRepository.add_run = original
             store.close()
 
+    def test_production_korean_multi_symbol_request_uses_authoritative_route_and_persists(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_production_multi_symbol_update(),))
+        provider = _HallucinatingRealResearchProvider()
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition(
+                "multi_symbol_research",
+                "Run read-only multi-symbol KRX real research.",
+                ToolRiskLevel.READ_ONLY,
+                required_args=("request_text",),
+                allowed_args=("symbols", "universe_type", "start_date", "end_date"),
+            ),
+            lambda args: AutonomousMultiSymbolResearchOrchestrator(store._connection, _ReleaseCheckProvider(), _ReleaseCheckBacktestRunner()).run(
+                str(args["request_text"]),
+                symbols=tuple(args.get("symbols", DEFAULT_CURATED_SYMBOLS)),
+                universe_type=str(args.get("universe_type", "explicit")),
+                start_date=str(args.get("start_date", "2021-07-25")),
+                end_date=str(args.get("end_date", "2026-07-24")),
+            ).to_json(),
+        )
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(
+                    _config(assistant_enabled=True, assistant_provider="openai-compatible"),
+                    store._connection,
+                    assistant_provider=provider,
+                    tool_executor=SafeToolExecutor(registry, store.tool_audit),
+                ),
+                allowed_chat_ids=("100",),
+            )
+            result = process_update(parse_update_result(client.updates[0], received_at="2026-07-28T00:00:00Z"), runtime, client)
+
+            self.assertEqual(result.status, "sent")
+            self.assertEqual(provider.calls, 0)
+            self.assertEqual(len(store.tool_audit.list(tool_name="multi_symbol_research")), 1)
+            self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM multi_symbol_research_runs").fetchone()[0], 1)
+            self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM multi_symbol_symbol_evidence").fetchone()[0], 5)
+            self.assertGreater(store._connection.execute("SELECT COUNT(*) FROM multi_symbol_candidate_evidence").fetchone()[0], 0)
+            audit = store.tool_audit.list(tool_name="multi_symbol_research")[0]
+            self.assertEqual(tuple(audit.request["arguments"]["symbols"]), DEFAULT_CURATED_SYMBOLS)
+            self.assertEqual(audit.request["arguments"]["start_date"], "2021-07-25")
+            self.assertEqual(audit.request["arguments"]["end_date"], "2026-07-24")
+            final = client.sent[0][1]
+            self.assertIn("[다중종목 실제 연구]", final)
+            self.assertIn("aggregate_trade_count=", final)
+            self.assertIn("sample_confidence=", final)
+            self.assertIn("concentration=", final)
+            self.assertIn("generalization=", final)
+            self.assertNotIn("현재는 아직 실제 시세", final)
+            self.assertNotIn("5.32%", final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "tool_read_only_authoritative")
+            self.assertEqual(assistant[-1].tool_calls, ("multi_symbol_research",))
+        finally:
+            store.close()
+
+    def test_production_korean_multi_symbol_duplicate_message_does_not_store_second_run(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_production_multi_symbol_update(),))
+        try:
+            config = _config(assistant_enabled=True, assistant_provider="openai-compatible")
+            first = poll_once(client, config, offset=None, received_at="2026-07-28T00:00:00Z", state=store.telegram, runtime_store=store)
+            second = poll_once(client, config, offset=None, received_at="2026-07-28T00:00:01Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual(first[0].status, "sent")
+            self.assertEqual(second[0].status, "duplicate")
+            self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM multi_symbol_research_runs").fetchone()[0], 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="multi_symbol_research")), 1)
+        finally:
+            store.close()
+
     def test_authoritative_market_data_failure_is_transparent_and_provider_free_form_is_blocked(self) -> None:
         store = RuntimeStateStore(":memory:")
         client = FakeTelegramClient((_production_real_research_update(),))
@@ -477,6 +555,10 @@ def _production_autonomous_retest_update() -> dict:
         "각 기간의 거래 수와 결과를 기록하고, 충분한 표본이 확보되거나 최대 기간에 도달할 때까지 진행해줘.\n"
         "마지막에는 원본 전략과 TESTED 개선 후보들을 비교하고 최종 연구 판단을 알려줘.",
     )
+
+
+def _production_multi_symbol_update() -> dict:
+    return _update(93, 93, PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT)
 
 
 if __name__ == "__main__":

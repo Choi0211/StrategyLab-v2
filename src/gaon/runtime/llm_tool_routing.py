@@ -9,6 +9,12 @@ def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized or _blocked(normalized):
         return None
+    if _multi_symbol_history(normalized):
+        return "multi_symbol_research_history"
+    if _multi_symbol_status(normalized):
+        return "multi_symbol_research_status"
+    if _multi_symbol_research_ascii(normalized):
+        return "multi_symbol_research"
     if _autonomous_retest_execution_ascii(normalized):
         return "research_retest"
     if _research_retest_history(normalized):
@@ -19,12 +25,6 @@ def route_read_only_tool(text: str) -> str | None:
         return "research_retest"
     if _autonomous_retest(normalized):
         return "research_retest"
-    if _multi_symbol_history(normalized):
-        return "multi_symbol_research_history"
-    if _multi_symbol_status(normalized):
-        return "multi_symbol_research_status"
-    if _multi_symbol_research_ascii(normalized):
-        return "multi_symbol_research"
     if _krx_real_research(normalized):
         return "krx_real_research"
     if _strategy_critique(normalized):
@@ -66,11 +66,16 @@ def _multi_symbol_research_ascii(value: str) -> bool:
         "모든종목",
         "모두",
         "종목들",
+        "5개종목",
+        "오개종목",
+        "여러종목에서",
+        "일반화",
         "universe",
         "multisymbol",
         "multi-symbol",
         "crosssymbol",
         "cross-symbol",
+        "robustness",
     )
     symbols = {
         "삼성전자": ("삼성전자", "005930"),
@@ -95,9 +100,15 @@ def _multi_symbol_research_ascii(value: str) -> bool:
         "generalization",
         "compare",
         "candidate",
+        "tested",
+        "robustness",
+        "backtest",
     )
+    code_count = len({token for token in re.findall(r"\d{6}", value) if token in {"005930", "000660", "005380", "035420", "051910"}})
     if not _contains_any(value, generalize):
         return False
+    if code_count >= 2:
+        return True
     if _contains_any(value, explicit_universe):
         return True
     mentioned = sum(1 for aliases in symbols.values() if _contains_any(value, aliases))

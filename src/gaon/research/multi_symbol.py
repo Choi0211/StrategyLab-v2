@@ -57,6 +57,29 @@ DEFAULT_REQUEST_TEXT = (
     "20일 고가 돌파, 종가 > MA20 > MA60, 거래량 20일 평균 이상, "
     "손절 -5%, 10일 저점 이탈 청산"
 )
+PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT = """가온아 아래 5개 종목의 실제 KRX 데이터를 사용해서
+이 전략이 여러 종목에서도 일반적으로 유효한지 다중종목 연구해줘.
+
+005930 삼성전자
+000660 SK하이닉스
+005380 현대차
+035420 NAVER
+051910 LG화학
+
+2021-07-25 ~ 2026-07-24
+
+20일 고가 돌파
+종가 > MA20 > MA60
+거래량 20일 평균 이상
+손절 -5%
+10일 저점 이탈 청산
+
+동일 전략/동일 가정으로 종목별 백테스트,
+cross-symbol robustness,
+TESTED A/B/C 비교,
+sample confidence,
+concentration,
+generalization을 알려줘"""
 
 
 class UniverseType(str, Enum):
@@ -768,14 +791,26 @@ def telegram_multi_symbol_research_release_check(connection: sqlite3.Connection,
 
     brain = LLMConversationBrain(config, SQLiteConversationRepository(connection), tool_executor=executor, tool_result_repository=SQLiteConversationToolResultRepository(connection))
     run_id = f"telegram-multi-symbol-research-release-check:{uuid4().hex}"
-    request_text = "가온아 이 전략을 삼성전자, SK하이닉스, 현대차, NAVER, LG화학 실제 데이터에서 모두 검증해줘."
+    request_text = PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT
     response = brain.respond(LLMConversationRequest(run_id, "release-check", "telegram", request_text, utc_now(), f"{run_id}:message"))
     if response.route != "tool_read_only_authoritative" or "multi_symbol_research" not in response.tool_calls:
         raise RealMarketDataUnavailable("real_data_unavailable: Telegram multi-symbol route was not authoritative")
     if "자동 주문 없음" not in response.text:
         raise RealMarketDataUnavailable("real_data_unavailable: deterministic safety report missing")
-    audits = connection.execute("SELECT COUNT(*) FROM llm_tool_audit WHERE tool_name = 'multi_symbol_research'").fetchone()[0]
-    return {"schema_version": 36, "run_id": run_id, "route": response.route, "tool_calls": list(response.tool_calls), "provider_calls": 0, "audit_count": int(audits)}
+    audit_rows = connection.execute("SELECT request_json FROM llm_tool_audit WHERE tool_name = 'multi_symbol_research' ORDER BY created_at, audit_id").fetchall()
+    if not audit_rows:
+        raise RealMarketDataUnavailable("real_data_unavailable: Telegram multi-symbol audit missing")
+    request_payload = json.loads(str(audit_rows[-1][0]))
+    arguments = dict(request_payload.get("arguments", {}))
+    symbols = tuple(arguments.get("symbols", ()))
+    if symbols != DEFAULT_CURATED_SYMBOLS:
+        raise RealMarketDataUnavailable("real_data_unavailable: Telegram multi-symbol symbol extraction failed")
+    if arguments.get("start_date") != "2021-07-25" or arguments.get("end_date") != "2026-07-24":
+        raise RealMarketDataUnavailable("real_data_unavailable: Telegram multi-symbol period extraction failed")
+    persisted = connection.execute("SELECT COUNT(*) FROM multi_symbol_research_runs WHERE run_id LIKE 'multi-symbol-research:%'").fetchone()[0]
+    if int(persisted) < 1:
+        raise RealMarketDataUnavailable("real_data_unavailable: Telegram multi-symbol persistence missing")
+    return {"schema_version": 36, "run_id": run_id, "route": response.route, "tool_calls": list(response.tool_calls), "provider_calls": 0, "audit_count": len(audit_rows), "symbols": list(symbols), "persisted_runs": int(persisted)}
 
 
 def _blocked_symbol_evidence(run_id: str, symbol: str, dataset: MarketDataset, quality: DataQualityReport, blocking: tuple[object, ...], at: str) -> SymbolResearchEvidence:

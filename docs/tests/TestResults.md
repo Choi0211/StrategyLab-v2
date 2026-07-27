@@ -2,6 +2,21 @@
 
 Status: Passed
 
+## Hotfix 150.1 Telegram Multi-Symbol Routing
+
+- Unit: `tests.unit.test_multi_symbol_research`
+  - production Korean multi-symbol request routes to `multi_symbol_research`
+  - explicit KRX symbols are extracted as `005930,000660,005380,035420,051910`
+  - request period is extracted as `2021-07-25~2026-07-24`
+  - single-symbol retest and real-research routing remain unchanged
+- Integration: `tests.integration.test_telegram_conversation_agent`
+  - production Telegram multi-symbol request uses `tool_read_only_authoritative`
+  - `provider_calls=0`
+  - multi-symbol run, per-symbol evidence, candidate evidence, and universe snapshot persist
+  - duplicate Telegram message idempotency prevents a second persisted run
+- CLI release check:
+  - `python -m gaon.runtime.cli telegram-multi-symbol-research-release-check --db <db>`
+
 ## Hotfix 140.7 Yahoo KRX Zero Volume Anomaly Classification
 
 - Unit: `tests.unit.test_krx_real_pipeline`
