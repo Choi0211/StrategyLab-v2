@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 140.7 - Yahoo KRX Zero Volume Anomaly Classification
+
+- Registered 11 Samsung Electronics (`005930`) Yahoo zero-volume anomalies from production 5-year inspection.
+- Excluded registered zero-volume anomaly bars from backtest input and reported them as `provider_zero_volume_anomaly`.
+- Kept unregistered zero-volume bars blocking and fail-closed.
+- Extended `historical-krx-data-quality-release-check` output with `provider_zero_volume_anomaly_dates`.
+- Preserved schema v35, strict OHLC validation, no trading, no Champion auto-promotion, and no approval bypass.
+
 ## Hotfix 140.6 - Historical KRX Data Quality Classification
 
 - Added `2023-05-29` as a KRX closure while keeping `2022-01-03`, `2022-05-09`, and `2025-09-19` as exchange-open dates.

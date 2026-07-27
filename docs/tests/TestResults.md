@@ -2,6 +2,15 @@
 
 Status: Passed
 
+## Hotfix 140.7 Yahoo KRX Zero Volume Anomaly Classification
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - registered `005930` Yahoo zero-volume anomaly bars are excluded from backtest input
+  - registered anomalies are reported as `provider_zero_volume_anomaly`
+  - unregistered zero-volume bars remain blocking
+- CLI release check:
+  - `python -m gaon.runtime.cli historical-krx-data-quality-release-check --db <db>`
+
 ## Hotfix 140.6 Historical KRX Data Quality Classification
 
 - Unit: `tests.unit.test_krx_real_pipeline`

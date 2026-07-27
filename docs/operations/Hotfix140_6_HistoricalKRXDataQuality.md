@@ -21,6 +21,32 @@ unless it is explicitly registered as a dated provider anomaly with evidence.
 Use the inspection CLI below to extract the exact dates and raw normalized
 values from production Yahoo data.
 
+## Hotfix 140.7 Zero Volume Findings
+
+Production 5-year inspection for `005930` found 11 Yahoo rows where
+`volume=0`, `trading_value=0`, and `open=high=low=close` on KRX open dates:
+
+- `2022-01-26`
+- `2022-02-08`
+- `2022-02-09`
+- `2022-02-21`
+- `2022-02-22`
+- `2022-02-23`
+- `2022-02-28`
+- `2022-03-04`
+- `2022-03-10`
+- `2022-03-15`
+- `2022-03-17`
+
+These dates are registered as `real:yahoo-chart` / `005930`
+`provider_zero_volume_anomaly` entries. The bars are excluded from backtest
+input and disclosed as warnings. The policy is intentionally symbol-specific:
+the anomaly does not apply to `000660`, `005380`, `035420`, `051910`, or any
+future provider unless separately verified.
+
+Unregistered zero-volume rows remain blocking and must not be silently
+reclassified.
+
 ## Commands
 
 Deterministic release check:

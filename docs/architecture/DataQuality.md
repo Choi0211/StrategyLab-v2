@@ -35,6 +35,12 @@ Electronics (`005930`) on `2022-01-03` and `2022-05-09`. These dates remain KRX
 open dates and are not exchange holidays. The substitute holiday `2023-05-29`
 is modeled as a KRX closure.
 
+Samsung Electronics (`005930`) Yahoo zero-volume anomalies are registered only
+for dated production findings where Yahoo returned `volume=0`, `trading_value=0`,
+and `open=high=low=close`. Registered zero-volume anomaly bars are excluded
+from backtest input and reported as `provider_zero_volume_anomaly`. Any
+unregistered zero-volume bar remains blocking.
+
 Release checks allow only explainable provider anomaly warnings when no
 blocking findings are present. Unknown missing trading days, unregistered
 zero-volume bars, malformed OHLCV, duplicate bars, and errors remain blocking.

@@ -269,7 +269,23 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertEqual(result["schema_version"], 33)
         self.assertEqual(result["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2025-09-19"))
         self.assertEqual(result["provider_ohlc_anomaly_dates"], ("2024-10-14",))
-        self.assertEqual(result["zero_volume_policy"], "unregistered_zero_volume_blocks")
+        self.assertEqual(
+            result["provider_zero_volume_anomaly_dates"],
+            (
+                "2022-01-26",
+                "2022-02-08",
+                "2022-02-09",
+                "2022-02-21",
+                "2022-02-22",
+                "2022-02-23",
+                "2022-02-28",
+                "2022-03-04",
+                "2022-03-10",
+                "2022-03-15",
+                "2022-03-17",
+            ),
+        )
+        self.assertEqual(result["zero_volume_policy"], "registered_zero_volume_excluded_unregistered_blocks")
         self.assertEqual(result["blocking_findings"], 0)
         self.assertTrue(result["symbol_specific_gap_isolated"])
 
@@ -293,6 +309,18 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         inspection = historical_krx_data_quality_inspect("005930", "2026-01-02", "2026-01-06", provider=_StaticProvider(dataset))
         self.assertEqual(inspection["zero_volume_dates"], ("2026-01-05",))
         self.assertTrue(any(item["code"] == "zero_volume" for item in inspection["blocking_findings"]))
+
+    def test_registered_zero_volume_anomaly_is_excluded_and_reported(self) -> None:
+        dates = KRXTradingCalendar().expected_open_dates(start_date="2022-01-24", end_date="2022-04-29")
+        dataset = _quality_dataset("registered-zero-volume", "2022-01-24", "2022-04-29", dates, source="real:yahoo-chart", zero_volume_dates=frozenset({"2022-01-26"}))
+        normalized, report, _inserted = KRXDatasetBuilder(None, _StaticProvider(dataset)).build("005930", start_date="2022-01-24", end_date="2022-04-29")
+        self.assertNotIn("2022-01-26", tuple(bar.timestamp for bar in normalized.bars))
+        self.assertTrue(any(item.code == "provider_zero_volume_anomaly" and "2022-01-26" in item.message for item in report.findings))
+        self.assertFalse(any(item.code == "zero_volume" for item in report.findings))
+        self.assertFalse(_blocking_quality_findings(report))
+        inspection = historical_krx_data_quality_inspect("005930", "2022-01-24", "2022-04-29", provider=_StaticProvider(dataset))
+        self.assertEqual(tuple(item["date"] for item in inspection["registered_provider_zero_volume_bars"]), ("2022-01-26",))
+        self.assertEqual(inspection["zero_volume_dates"], ())
 
     def test_provider_gap_release_check_preserves_schema_and_provenance(self) -> None:
         connection = sqlite3.connect(":memory:")

@@ -536,6 +536,9 @@ class ProviderAnomalyPolicy:
         symbol_gaps = self.symbol_provider_gap_dates.get(symbol_upper, frozenset())
         if day in self.provider_gap_dates or day in symbol_gaps:
             return DataQualityFinding("provider_gap", "warning", f"{self.provider} missing bar on open KRX date {day}; evidence={self.evidence}")
+        zero_volume_anomalies = self.provider_zero_volume_anomaly_dates.get(symbol_upper, frozenset())
+        if day in zero_volume_anomalies:
+            return DataQualityFinding("provider_zero_volume_anomaly", "warning", f"{self.provider} zero-volume bar for {symbol_upper} on open KRX date {day}; bar excluded from backtest input; evidence={self.evidence}")
         symbol_anomalies = self.provider_ohlc_anomaly_dates.get(symbol_upper, frozenset())
         if day in symbol_anomalies:
             return DataQualityFinding("provider_ohlc_anomaly", "warning", f"{self.provider} returned inconsistent same-index OHLC for {symbol_upper} on open KRX date {day}; bar excluded; evidence={self.evidence}")
@@ -561,8 +564,24 @@ YAHOO_KRX_ANOMALY_POLICY = ProviderAnomalyPolicy(
         "005380": frozenset({"2024-01-15"}),
         "051910": frozenset({"2024-10-14", "2024-11-07"}),
     },
-    {},
-    "multi-symbol Yahoo KRX raw chart audit: 005930,000660,005380,035420,051910",
+    {
+        "005930": frozenset(
+            {
+                "2022-01-26",
+                "2022-02-08",
+                "2022-02-09",
+                "2022-02-21",
+                "2022-02-22",
+                "2022-02-23",
+                "2022-02-28",
+                "2022-03-04",
+                "2022-03-10",
+                "2022-03-15",
+                "2022-03-17",
+            }
+        ),
+    },
+    "multi-symbol Yahoo KRX raw chart audit: 005930,000660,005380,035420,051910; production 005930 5y inspection recorded same-index OHLC rows with volume=0/trading_value=0",
 )
 
 
@@ -601,6 +620,7 @@ class KRXDatasetBuilder:
 
     def build(self, symbol: str, *, start_date: str, end_date: str) -> tuple[MarketDataset, DataQualityReport, bool]:
         dataset = self._provider.fetch_bars(symbol, start_date=start_date, end_date=end_date)
+        dataset = _exclude_registered_provider_zero_volume_bars(dataset)
         quality = _validate_krx_daily_dataset(dataset, min_bars=60)
         inserted = False
         if self._connection is not None:
@@ -946,8 +966,13 @@ def real_krx_data_release_check(connection: sqlite3.Connection, *, symbol: str, 
 
 
 def historical_krx_data_quality_inspect(symbol: str, start_date: str, end_date: str, *, provider: KRXHistoricalDataProvider) -> dict[str, object]:
-    dataset, quality, _inserted = KRXDatasetBuilder(None, provider).build(symbol, start_date=start_date, end_date=end_date)
-    zero_volume_bars = tuple(bar for bar in dataset.bars if bar.volume == 0)
+    raw_dataset = provider.fetch_bars(symbol, start_date=start_date, end_date=end_date)
+    policy = _provider_anomaly_policy(raw_dataset.metadata.source)
+    registered_zero_dates = policy.provider_zero_volume_anomaly_dates.get(symbol.upper(), frozenset()) if policy is not None else frozenset()
+    registered_zero_volume_bars = tuple(bar for bar in raw_dataset.bars if bar.volume == 0 and bar.timestamp in registered_zero_dates)
+    unverified_zero_volume_bars = tuple(bar for bar in raw_dataset.bars if bar.volume == 0 and bar.timestamp not in registered_zero_dates)
+    dataset = _exclude_registered_provider_zero_volume_bars(raw_dataset)
+    quality = _validate_krx_daily_dataset(dataset, min_bars=60)
     return {
         "schema_version": 33,
         "symbol": symbol.upper(),
@@ -960,7 +985,19 @@ def historical_krx_data_quality_inspect(symbol: str, start_date: str, end_date: 
         "provider_gap_dates": _finding_dates(_findings_by_code(quality, "provider_gap")),
         "provider_ohlc_anomaly_dates": _finding_dates(_findings_by_code(quality, "provider_ohlc_anomaly")),
         "provider_zero_volume_anomaly_dates": _finding_dates(_findings_by_code(quality, "provider_zero_volume_anomaly")),
-        "zero_volume_dates": tuple(bar.timestamp for bar in zero_volume_bars),
+        "registered_provider_zero_volume_bars": tuple(
+            {
+                "date": bar.timestamp,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume,
+                "trading_value": bar.trading_value,
+            }
+            for bar in registered_zero_volume_bars
+        ),
+        "zero_volume_dates": tuple(bar.timestamp for bar in unverified_zero_volume_bars),
         "zero_volume_bars": tuple(
             {
                 "date": bar.timestamp,
@@ -971,7 +1008,7 @@ def historical_krx_data_quality_inspect(symbol: str, start_date: str, end_date: 
                 "volume": bar.volume,
                 "trading_value": bar.trading_value,
             }
-            for bar in zero_volume_bars
+            for bar in unverified_zero_volume_bars
         ),
         "unknown_missing_trading_dates": _finding_dates(_findings_by_code(quality, "unknown_missing_trading_day")),
         "blocking_findings": tuple(finding.to_json() for finding in _blocking_quality_findings(quality)),
@@ -1065,7 +1102,20 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
             raise RealMarketDataUnavailable(f"real_data_unavailable: provider anomaly date incorrectly marked exchange closed {open_day}")
 
     expected = calendar.expected_open_dates(start_date="2022-01-03", end_date="2025-09-19")
-    missing_yahoo_dates = {"2022-01-03", "2022-05-09", "2024-10-14", "2025-09-19"}
+    zero_volume_dates = {
+        "2022-01-26",
+        "2022-02-08",
+        "2022-02-09",
+        "2022-02-21",
+        "2022-02-22",
+        "2022-02-23",
+        "2022-02-28",
+        "2022-03-04",
+        "2022-03-10",
+        "2022-03-15",
+        "2022-03-17",
+    }
+    missing_yahoo_dates = {"2022-01-03", "2022-05-09", "2024-10-14", "2025-09-19"} | zero_volume_dates
     yahoo_dataset = _quality_fixture_dataset(
         "historical-data-quality-yahoo",
         "2022-01-03",
@@ -1082,6 +1132,9 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
     provider_ohlc_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_ohlc_anomaly"))
     if provider_ohlc_dates != ("2024-10-14",):
         raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical OHLC anomaly was not classified correctly {provider_ohlc_dates}")
+    provider_zero_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_zero_volume_anomaly"))
+    if provider_zero_dates != tuple(sorted(zero_volume_dates)):
+        raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical zero-volume anomalies were not classified correctly {provider_zero_dates}")
     if _blocking_quality_findings(yahoo_quality):
         raise RealMarketDataUnavailable("real_data_unavailable: explained Yahoo historical anomalies were blocking")
 
@@ -1130,7 +1183,8 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
         "fixture_backed": yahoo_dataset.metadata.fixture_backed,
         "provider_gap_dates": provider_gap_dates,
         "provider_ohlc_anomaly_dates": provider_ohlc_dates,
-        "zero_volume_policy": "unregistered_zero_volume_blocks",
+        "provider_zero_volume_anomaly_dates": provider_zero_dates,
+        "zero_volume_policy": "registered_zero_volume_excluded_unregistered_blocks",
         "blocking_findings": len(_blocking_quality_findings(yahoo_quality)),
         "symbol_specific_gap_isolated": True,
         "krx_closed_2023_05_29": True,
@@ -1554,6 +1608,23 @@ def _validate_krx_daily_dataset(dataset: MarketDataset, *, min_bars: int) -> Dat
     classifier = (lambda day: policy.classify_missing_date(day, symbol=symbol)) if policy is not None else _unknown_missing_trading_day
     zero_volume_classifier = (lambda bar: policy.classify_zero_volume(bar)) if policy is not None else None
     return DataQualityEngine().validate(dataset, min_bars=min_bars, calendar=calendar, missing_date_classifier=classifier if calendar is not None else None, zero_volume_classifier=zero_volume_classifier)
+
+
+def _exclude_registered_provider_zero_volume_bars(dataset: MarketDataset) -> MarketDataset:
+    policy = _provider_anomaly_policy(dataset.metadata.source)
+    if policy is None:
+        return dataset
+    filtered = []
+    removed = False
+    for bar in dataset.bars:
+        symbol_dates = policy.provider_zero_volume_anomaly_dates.get(bar.symbol.upper(), frozenset())
+        if bar.timestamp in symbol_dates and bar.volume == 0 and bar.trading_value == 0:
+            removed = True
+            continue
+        filtered.append(bar)
+    if not removed:
+        return dataset
+    return replace(dataset, bars=tuple(filtered))
 
 
 def _provider_anomaly_policy(provider_source: str) -> ProviderAnomalyPolicy | None:
