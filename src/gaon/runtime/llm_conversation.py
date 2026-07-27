@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
+import re
 import sqlite3
 from typing import Protocol
 from uuid import uuid4
@@ -879,12 +880,35 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
     if tool_name == "research_retest":
         return {"request_text": text, "symbol": "005930"}
     if tool_name == "multi_symbol_research":
-        return {"request_text": text, "symbols": ("005930", "000660", "005380", "035420", "051910"), "universe_type": "explicit", "start_date": "2021-07-25", "end_date": "2026-07-24"}
+        start_date, end_date = _extract_date_range(text)
+        return {
+            "request_text": text,
+            "symbols": _extract_krx_symbols(text),
+            "universe_type": "explicit",
+            "start_date": start_date,
+            "end_date": end_date,
+        }
     if tool_name in {"multi_symbol_research_status", "multi_symbol_research_history"}:
         return {"limit": 5}
     if tool_name in {"data_quality_check", "backtest_strategy"}:
         return {"symbol": "005930"}
     return {}
+
+
+def _extract_krx_symbols(text: str) -> tuple[str, ...]:
+    known = {"005930", "000660", "005380", "035420", "051910"}
+    symbols: list[str] = []
+    for token in re.findall(r"(?<!\d)(\d{6})(?!\d)", text):
+        if token in known and token not in symbols:
+            symbols.append(token)
+    return tuple(symbols) if symbols else ("005930", "000660", "005380", "035420", "051910")
+
+
+def _extract_date_range(text: str) -> tuple[str, str]:
+    dates = re.findall(r"\d{4}-\d{2}-\d{2}", text)
+    if len(dates) >= 2:
+        return dates[0], dates[1]
+    return "2021-07-25", "2026-07-24"
 
 
 def _format_tool_response(tool_name: str, output: dict[str, object], user_text: str = "") -> str:

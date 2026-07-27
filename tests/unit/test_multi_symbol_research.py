@@ -4,6 +4,7 @@ import unittest
 from gaon.research.autonomous_retest import _ReleaseCheckBacktestRunner, _ReleaseCheckProvider
 from gaon.research.multi_symbol import (
     DEFAULT_CURATED_SYMBOLS,
+    PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT,
     AutonomousMultiSymbolResearchOrchestrator,
     KRXResearchUniverseResolver,
     aggregate_symbol_evidence,
@@ -12,6 +13,7 @@ from gaon.research.multi_symbol import (
     multi_symbol_research_release_check,
     multi_symbol_research_status_payload,
 )
+from gaon.runtime.llm_conversation import _default_tool_arguments
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest, default_tool_registry
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
@@ -91,6 +93,18 @@ class MultiSymbolResearchTests(unittest.TestCase):
         self.assertEqual(route_read_only_tool("여러 종목 실제 데이터에서 모두 검증해줘"), "multi_symbol_research")
         self.assertEqual(route_read_only_tool("다중종목 연구 상태 알려줘"), "multi_symbol_research_status")
         self.assertEqual(route_read_only_tool("다중종목 연구 이력 보여줘"), "multi_symbol_research_history")
+
+    def test_production_multi_symbol_phrase_routes_and_extracts_symbols(self) -> None:
+        self.assertEqual(route_read_only_tool(PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT), "multi_symbol_research")
+        arguments = _default_tool_arguments("multi_symbol_research", PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT)
+
+        self.assertEqual(arguments["symbols"], DEFAULT_CURATED_SYMBOLS)
+        self.assertEqual(arguments["start_date"], "2021-07-25")
+        self.assertEqual(arguments["end_date"], "2026-07-24")
+
+    def test_single_symbol_retest_and_real_research_priority_are_preserved(self) -> None:
+        self.assertEqual(route_read_only_tool("삼성전자 실제 데이터로 자동 재검증해줘"), "research_retest")
+        self.assertEqual(route_read_only_tool("삼성전자 실제 데이터로 백테스트하고 약점 분석해줘"), "krx_real_research")
 
     def test_release_check_contract(self) -> None:
         result = multi_symbol_research_release_check(self.connection)

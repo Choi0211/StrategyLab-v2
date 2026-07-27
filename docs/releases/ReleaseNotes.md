@@ -3,6 +3,26 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 150.1 Telegram Multi-Symbol Routing
+
+Production Telegram requests that include an explicit five-symbol KRX universe
+now route to the authoritative `multi_symbol_research` safe tool instead of the
+generic stock-analysis fallback. The router recognizes explicit multi-symbol
+evidence such as multiple KRX codes, "여러 종목", "다중종목", "cross-symbol",
+robustness, generalization, and TESTED candidate comparison.
+
+The conversation layer extracts the bounded symbol list and date range from the
+request text, executes the read-only tool first, persists run/evidence rows, and
+returns the deterministic Korean report with `provider_calls=0`.
+
+Verification:
+
+```bash
+python -m gaon.runtime.cli telegram-multi-symbol-research-release-check --db <db>
+python -m gaon.runtime.cli multi-symbol-research-status --db <db> --json
+python -m gaon.runtime.cli multi-symbol-research-history --db <db> --json
+```
+
 ## Sprint 141-150 Multi-Symbol Autonomous Research
 
 Gaon can now run bounded multi-symbol KRX research. A single user strategy and

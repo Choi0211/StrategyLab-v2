@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 150.1 - Telegram Multi-Symbol Routing
+
+- Fixed production Telegram multi-symbol requests with explicit KRX symbol lists routing to generic stock-analysis fallback.
+- Prioritized `multi_symbol_research` for explicit multi-symbol research evidence before retest and single-symbol real-research routes.
+- Added deterministic extraction of KRX symbols and date ranges from the Telegram request text.
+- Strengthened `telegram-multi-symbol-research-release-check` with the production Korean request, symbol extraction, period extraction, authoritative route, persistence, and provider-free execution checks.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and deterministic grounded reporting.
+
 ## Sprint 141-150 - Multi-Symbol Autonomous Research
 
 - Added multi-symbol KRX research contracts, explicit/curated universe provenance, per-symbol evidence, cross-symbol aggregation, concentration analysis, sample sufficiency, and candidate generalization.
