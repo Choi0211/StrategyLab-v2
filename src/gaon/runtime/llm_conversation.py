@@ -38,6 +38,9 @@ TOOL_RESULT_TTL_SECONDS = {
     "backtest_result": 300,
     "compare_backtests": 300,
     "krx_real_research": 300,
+    "multi_symbol_research": 300,
+    "multi_symbol_research_status": 300,
+    "multi_symbol_research_history": 300,
 }
 
 
@@ -875,6 +878,10 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
         return {"request_text": text, "symbol": "005930"}
     if tool_name == "research_retest":
         return {"request_text": text, "symbol": "005930"}
+    if tool_name == "multi_symbol_research":
+        return {"request_text": text, "symbols": ("005930", "000660", "005380", "035420", "051910"), "universe_type": "explicit", "start_date": "2021-07-25", "end_date": "2026-07-24"}
+    if tool_name in {"multi_symbol_research_status", "multi_symbol_research_history"}:
+        return {"limit": 5}
     if tool_name in {"data_quality_check", "backtest_strategy"}:
         return {"symbol": "005930"}
     return {}

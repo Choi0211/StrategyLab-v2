@@ -17,7 +17,7 @@ class AutonomousRetestFlowTests(unittest.TestCase):
                 runs = connection.execute("SELECT COUNT(*) FROM research_retest_runs").fetchone()[0]
                 evidence = connection.execute("SELECT COUNT(*) FROM research_retest_evidence").fetchone()[0]
                 applied_configs = connection.execute("SELECT COUNT(*) FROM strategy_config_versions").fetchone()[0]
-                self.assertEqual(version, 35)
+                self.assertGreaterEqual(version, 35)
                 self.assertEqual(runs, 0)
                 self.assertEqual(evidence, 0)
                 self.assertEqual(applied_configs, 0)

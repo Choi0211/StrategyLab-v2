@@ -43,6 +43,7 @@ Included foundations:
 - Sprint 91-100 Self-Improving Quant Researcher foundation with deterministic research critique, bounded improvement iteration, lineage, memory, knowledge relationships, novelty detection, quality scoring, tournaments, autonomous research orchestration, and read-only safe tools
 - Sprint 101-110 Real Market Backtest Integration foundation with versioned market data, provider contracts, data quality checks, dataset registry/cache, StrategySpec, external backtest JSON contracts, reproducibility comparison, and a fixture-backed Real Research Gateway
 - Sprint 131-140 Autonomous Retest Pipeline with insufficient-sample triggers, deterministic period expansion, real-data re-fetch contracts, repeated re-backtests, candidate re-evaluation, multi-period evidence lineage, advisory recommendation refresh, schema v35 persistence, and read-only retest status/history tools
+- Sprint 141-150 Multi-Symbol Autonomous Research with explicit/curated KRX universe provenance, per-symbol real-data quality isolation, cross-symbol aggregation, concentration analysis, sample sufficiency, TESTED candidate generalization, schema v36 persistence, and read-only multi-symbol research status/history tools
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -126,6 +127,23 @@ Read retest state:
 ```bash
 python -m gaon.runtime.cli research-retest-status --db runtime.sqlite
 python -m gaon.runtime.cli research-retest-history --db runtime.sqlite
+```
+
+Multi-symbol research release check:
+
+```bash
+python -m gaon.runtime.cli multi-symbol-research-release-check --db runtime.sqlite
+python -m gaon.runtime.cli telegram-multi-symbol-research-release-check --db runtime.sqlite
+```
+
+Production real-provider smoke on the explicit five-symbol universe:
+
+```bash
+GAON_REAL_MARKET_DATA_ENABLED=true GAON_MARKET_DATA_PROVIDER=yahoo-chart \
+python -m gaon.runtime.cli multi-symbol-research-demo \
+  --db /var/lib/strategylab/gaon-runtime.sqlite \
+  --persist \
+  --symbols 005930,000660,005380,035420,051910
 ```
 
 ```python

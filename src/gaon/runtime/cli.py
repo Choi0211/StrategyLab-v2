@@ -105,6 +105,14 @@ from gaon.research.autonomous_retest import (
     research_retest_history_payload,
     research_retest_status_payload,
 )
+from gaon.research.multi_symbol import (
+    DEFAULT_CURATED_SYMBOLS,
+    AutonomousMultiSymbolResearchOrchestrator,
+    multi_symbol_research_history_payload,
+    multi_symbol_research_release_check,
+    multi_symbol_research_status_payload,
+    telegram_multi_symbol_research_release_check,
+)
 from gaon.research.operations import (
     ApprovalStatus as ResearchConfigApprovalStatus,
     QualityStatus,
@@ -352,6 +360,27 @@ def main(argv: list[str] | None = None) -> int:
     retest_history.add_argument("--run-id", default=None)
     retest_history.add_argument("--limit", type=int, default=20)
     retest_history.add_argument("--json", action="store_true")
+    multi_symbol_demo = sub.add_parser("multi-symbol-research-demo")
+    multi_symbol_demo.add_argument("--db", default=":memory:")
+    multi_symbol_demo.add_argument("--request", default="20일 고가 돌파 종가 > MA20 > MA60 거래량 20일 평균 이상 손절 -5% 10일 저점 이탈 청산")
+    multi_symbol_demo.add_argument("--symbols", default="005930,000660,005380,035420,051910")
+    multi_symbol_demo.add_argument("--start", default="2021-07-25")
+    multi_symbol_demo.add_argument("--end", default="2026-07-24")
+    multi_symbol_demo.add_argument("--persist", action="store_true", default=False)
+    multi_symbol_demo.add_argument("--json", action="store_true")
+    multi_symbol_release = sub.add_parser("multi-symbol-research-release-check")
+    multi_symbol_release.add_argument("--db", default=":memory:")
+    telegram_multi_symbol_release = sub.add_parser("telegram-multi-symbol-research-release-check")
+    telegram_multi_symbol_release.add_argument("--db", default=":memory:")
+    multi_symbol_status = sub.add_parser("multi-symbol-research-status")
+    multi_symbol_status.add_argument("--db", default=":memory:")
+    multi_symbol_status.add_argument("--limit", type=int, default=5)
+    multi_symbol_status.add_argument("--json", action="store_true")
+    multi_symbol_history = sub.add_parser("multi-symbol-research-history")
+    multi_symbol_history.add_argument("--db", default=":memory:")
+    multi_symbol_history.add_argument("--run-id", default=None)
+    multi_symbol_history.add_argument("--limit", type=int, default=20)
+    multi_symbol_history.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1898,6 +1927,87 @@ def _run(args: argparse.Namespace) -> int:
             print(_dumps_json(payload) if args.json else "\n".join(str(item) for item in payload["evidence"]) or "현재 저장된 자동 재검증 이력이 없습니다.")
         finally:
             store.close()
+    elif args.command == "multi-symbol-research-demo":
+        store = RuntimeStateStore(args.db if args.persist else ":memory:")
+        try:
+            symbols = tuple(item.strip() for item in args.symbols.split(",") if item.strip()) or DEFAULT_CURATED_SYMBOLS
+            run = AutonomousMultiSymbolResearchOrchestrator(store._connection).run(
+                args.request,
+                run_id=f"multi-symbol-research-demo:{uuid4().hex}",
+                symbols=symbols,
+                start_date=args.start,
+                end_date=args.end,
+                generated_at=_utc_now(),
+            )
+            print(_dumps_json(run.to_json()) if args.json else run.korean_report)
+        finally:
+            store.close()
+    elif args.command == "multi-symbol-research-release-check":
+        target_store = RuntimeStateStore(args.db)
+        try:
+            target_schema = target_store.status().schema_version
+            before = _multi_symbol_table_counts(target_store._connection)
+        finally:
+            target_store.close()
+        store = RuntimeStateStore(":memory:")
+        try:
+            run = multi_symbol_research_release_check(store._connection)
+            target_store = RuntimeStateStore(args.db)
+            try:
+                after = _multi_symbol_table_counts(target_store._connection)
+            finally:
+                target_store.close()
+            if after != before:
+                raise ConfigurationError("multi-symbol release check modified target research state")
+            summary = run["summary"]
+            generalization = run["candidate_generalization"]
+            print(
+                "multi-symbol-research-release-check: PASS "
+                f"schema_version={target_schema} isolated=true symbols={summary['total_symbols']} "
+                f"eligible={summary['eligible_symbols']} aggregate_trade_count={summary['aggregate_trade_count']} "
+                f"sample_confidence={summary['sample_confidence']} concentration={summary['concentration_decision']} "
+                f"generalization={generalization['decision']} recommendation={run['final_recommendation']}"
+            )
+        finally:
+            store.close()
+    elif args.command == "telegram-multi-symbol-research-release-check":
+        target_store = RuntimeStateStore(args.db)
+        try:
+            target_schema = target_store.status().schema_version
+            before = _multi_symbol_table_counts(target_store._connection)
+        finally:
+            target_store.close()
+        store = RuntimeStateStore(":memory:")
+        try:
+            result = telegram_multi_symbol_research_release_check(store._connection)
+            target_store = RuntimeStateStore(args.db)
+            try:
+                after = _multi_symbol_table_counts(target_store._connection)
+            finally:
+                target_store.close()
+            if after != before:
+                raise ConfigurationError("telegram multi-symbol release check modified target research state")
+            print(
+                "telegram-multi-symbol-research-release-check: PASS "
+                f"schema_version={target_schema} isolated=true route={result['route']} "
+                f"provider_calls={result['provider_calls']} audit_count={result['audit_count']}"
+            )
+        finally:
+            store.close()
+    elif args.command == "multi-symbol-research-status":
+        store = RuntimeStateStore(args.db)
+        try:
+            payload = multi_symbol_research_status_payload(store._connection, limit=args.limit)
+            print(_dumps_json(payload) if args.json else "\n".join(str(item) for item in payload["runs"]) or "현재 저장된 다중종목 연구 결과가 없습니다.")
+        finally:
+            store.close()
+    elif args.command == "multi-symbol-research-history":
+        store = RuntimeStateStore(args.db)
+        try:
+            payload = multi_symbol_research_history_payload(store._connection, run_id=args.run_id, limit=args.limit)
+            print(_dumps_json(payload) if args.json else "\n".join(str(item) for item in payload["evidence"]) or "현재 저장된 다중종목 연구 이력이 없습니다.")
+        finally:
+            store.close()
     elif args.command == "backup":
         store = RuntimeStateStore(args.db)
         try:
@@ -2871,6 +2981,16 @@ def _retest_table_counts(connection: Any) -> dict[str, int]:
         "research_retest_runs",
         "research_retest_evidence",
         "research_period_plans",
+    )
+    return {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in tables}
+
+
+def _multi_symbol_table_counts(connection: Any) -> dict[str, int]:
+    tables = (
+        "multi_symbol_research_runs",
+        "multi_symbol_symbol_evidence",
+        "multi_symbol_candidate_evidence",
+        "multi_symbol_universe_snapshots",
     )
     return {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in tables}
 

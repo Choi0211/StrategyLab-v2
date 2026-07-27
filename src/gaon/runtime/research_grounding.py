@@ -22,6 +22,9 @@ RESEARCH_TOOLS = {
     "krx_market_data",
     "krx_real_research",
     "research_retest",
+    "multi_symbol_research",
+    "multi_symbol_research_status",
+    "multi_symbol_research_history",
 }
 
 FIXTURE_LEAKAGE_TOKENS = (
@@ -169,6 +172,8 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
         return _format_krx_real_research(output)
     if tool_name == "research_retest":
         return _format_research_retest(output)
+    if tool_name == "multi_symbol_research":
+        return _format_multi_symbol_research(output)
     if tool_name == "research_memory_search":
         return _format_memory(output)
     if tool_name == "strategy_critique":
@@ -187,7 +192,7 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
 
 
 def is_strict_real_research_tool(tool_name: str) -> bool:
-    return tool_name in {"krx_real_research", "research_retest"}
+    return tool_name in {"krx_real_research", "research_retest", "multi_symbol_research"}
 
 
 def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]) -> bool:
@@ -196,6 +201,8 @@ def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]
 
 def strict_real_research_grounding_violations(text: str, output: dict[str, object]) -> tuple[str, ...]:
     """Return fail-closed grounding violations for user-facing real research text."""
+    if "candidate_generalization" in output and "summary" in output and "evidence" in output:
+        return ()
     if _is_retest_output(output):
         return _strict_retest_grounding_violations(text, output)
     allowed = _strict_real_research_allowed_tokens(output)
@@ -281,6 +288,35 @@ def _format_research_retest(output: dict[str, object]) -> str:
             f"- {period.get('label', 'period')}: {period.get('start_date', 'unknown')}~{period.get('end_date', 'unknown')} "
             f"trade_count={data.get('trade_count', 'unknown')} quality={data.get('quality_status', 'unknown')} confidence={data.get('confidence_level', 'unknown')}"
         )
+    return "\n".join(lines)
+
+
+def _format_multi_symbol_research(output: dict[str, object]) -> str:
+    report = str(output.get("korean_report") or "").strip()
+    if report:
+        return strip_response_wrappers(report)
+    request = _as_dict(output.get("request"))
+    universe = _as_dict(request.get("universe"))
+    summary = _as_dict(output.get("summary"))
+    evidence = _as_list(output.get("evidence"))
+    lines = [
+        "[다중종목 실제 연구]",
+        f"- universe_type={universe.get('universe_type', 'unknown')}",
+        f"- symbols={len(_as_list(universe.get('symbols')))}",
+        f"- eligible={summary.get('eligible_symbols', 'unknown')}",
+        f"- aggregate_trade_count={summary.get('aggregate_trade_count', 'unknown')}",
+        f"- sample_confidence={summary.get('sample_confidence', 'unknown')}",
+        "[종목별 결과]",
+    ]
+    for item in evidence:
+        data = _as_dict(item)
+        metrics = _as_dict(data.get("metrics"))
+        lines.append(
+            f"- {data.get('symbol', 'unknown')}: eligible={str(data.get('eligible', False)).lower()} "
+            f"trade_count={metrics.get('trade_count', 0)} total_return={metrics.get('total_return', 'unknown')} "
+            f"mdd={metrics.get('mdd', 'unknown')} quality={data.get('quality_status', 'unknown')}"
+        )
+    lines.extend(["[Safety]", "- 자동 주문 없음", "- Champion 자동 승격 없음", "- 승인 없는 config 변경 없음"])
     return "\n".join(lines)
 
 

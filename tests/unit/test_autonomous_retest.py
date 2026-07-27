@@ -94,7 +94,7 @@ class AutonomousRetestTests(unittest.TestCase):
 
         self.assertEqual(result["stop_reason"], "min_trades_reached")
         self.assertEqual(result["evidence"][-1]["trade_count"], 31)
-        self.assertEqual(SCHEMA_VERSION, 35)
+        self.assertGreaterEqual(SCHEMA_VERSION, 35)
 
     def test_retest_tool_routing(self) -> None:
         self.assertEqual(route_read_only_tool("재검증 상태 알려줘"), "research_retest_status")

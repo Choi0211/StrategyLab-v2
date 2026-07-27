@@ -30,6 +30,7 @@ from gaon.research.real_research import (
 )
 from gaon.research.krx_real_pipeline import krx_real_research_payload
 from gaon.research.autonomous_retest import research_retest_history_payload, research_retest_payload, research_retest_status_payload
+from gaon.research.multi_symbol import multi_symbol_research_history_payload, multi_symbol_research_payload, multi_symbol_research_status_payload
 from gaon.research.operations import SQLiteResearchOperationRepository
 
 
@@ -279,6 +280,25 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         ToolDefinition("research_retest_history", "Read autonomous retest evidence lineage without mutating strategy state.", ToolRiskLevel.READ_ONLY, allowed_args=("run_id", "limit")),
         lambda args: research_retest_history_payload(connection, run_id=str(args["run_id"]) if "run_id" in args else None, limit=int(args.get("limit", 20))),
     )
+    registry.register(
+        ToolDefinition("multi_symbol_research", "Run read-only multi-symbol KRX real research with explicit universe provenance.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbols", "universe_type", "start_date", "end_date")),
+        lambda args: multi_symbol_research_payload(
+            connection,
+            str(args["request_text"]),
+            symbols=_symbols_arg(args.get("symbols")),
+            universe_type=str(args.get("universe_type", "explicit")),
+            start_date=str(args.get("start_date", "2021-07-25")),
+            end_date=str(args.get("end_date", "2026-07-24")),
+        ),
+    )
+    registry.register(
+        ToolDefinition("multi_symbol_research_status", "Read multi-symbol research run status without mutating strategy state.", ToolRiskLevel.READ_ONLY, allowed_args=("limit",)),
+        lambda args: multi_symbol_research_status_payload(connection, limit=int(args.get("limit", 5))),
+    )
+    registry.register(
+        ToolDefinition("multi_symbol_research_history", "Read multi-symbol per-symbol evidence history without mutating strategy state.", ToolRiskLevel.READ_ONLY, allowed_args=("run_id", "limit")),
+        lambda args: multi_symbol_research_history_payload(connection, run_id=str(args["run_id"]) if "run_id" in args else None, limit=int(args.get("limit", 20))),
+    )
     return registry
 
 
@@ -343,6 +363,16 @@ def _real_backtest_result(connection: sqlite3.Connection, result_id: str) -> dic
         raise ToolSecurityError("result_id is too long")
     row = connection.execute("SELECT payload_json FROM real_backtest_results WHERE result_id = ?", (result_id,)).fetchone()
     return {"provider": "sqlite:real_backtest_results", "result": loads_json(str(row[0])) if row else None, "automatic_promotion": False}
+
+
+def _symbols_arg(value: object) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return tuple(item.strip() for item in value.split(",") if item.strip())
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    return None
 
 
 def _research_operation_status(connection: sqlite3.Connection, limit: int) -> dict[str, object]:

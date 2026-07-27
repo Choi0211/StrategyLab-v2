@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -53,6 +53,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         32: _upgrade_v32_to_v33,
         33: _upgrade_v33_to_v34,
         34: _upgrade_v34_to_v35,
+        35: _upgrade_v35_to_v36,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1191,6 +1192,62 @@ def _upgrade_v34_to_v35(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_research_period_plans_run
             ON research_period_plans(run_id, created_at);
+        """
+    )
+
+
+def _upgrade_v35_to_v36(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS multi_symbol_research_runs (
+            run_id TEXT PRIMARY KEY,
+            universe_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            recommendation TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            source TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_multi_symbol_runs_generated
+            ON multi_symbol_research_runs(generated_at, run_id);
+        CREATE INDEX IF NOT EXISTS idx_multi_symbol_runs_recommendation
+            ON multi_symbol_research_runs(recommendation, generated_at);
+        CREATE TABLE IF NOT EXISTS multi_symbol_symbol_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            eligible INTEGER NOT NULL,
+            trade_count INTEGER NOT NULL,
+            quality_status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_multi_symbol_evidence_run
+            ON multi_symbol_symbol_evidence(run_id, created_at, symbol);
+        CREATE INDEX IF NOT EXISTS idx_multi_symbol_evidence_symbol
+            ON multi_symbol_symbol_evidence(symbol, created_at);
+        CREATE TABLE IF NOT EXISTS multi_symbol_candidate_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            eligible INTEGER NOT NULL,
+            trade_count INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_multi_symbol_candidate_run
+            ON multi_symbol_candidate_evidence(run_id, candidate_id, symbol);
+        CREATE TABLE IF NOT EXISTS multi_symbol_universe_snapshots (
+            universe_id TEXT NOT NULL,
+            run_id TEXT PRIMARY KEY,
+            universe_type TEXT NOT NULL,
+            symbols_json TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_multi_symbol_universe_type
+            ON multi_symbol_universe_snapshots(universe_type, created_at);
         """
     )
 
