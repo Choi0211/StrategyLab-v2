@@ -20,6 +20,7 @@ from typing import Callable, Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from gaon.research.real_research import (
     DataQualityEngine,
@@ -40,7 +41,7 @@ KRX_REAL_PIPELINE_SCHEMA_VERSION = 1
 DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 YAHOO_CHART_ENDPOINT = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 HttpOpener = Callable[[Request, float], object]
-ALLOWED_RELEASE_WARNING_CODES = frozenset({"provider_gap"})
+ALLOWED_RELEASE_WARNING_CODES = frozenset({"provider_gap", "provider_ohlc_anomaly"})
 KRX_WON_FLOAT_DRIFT_TOLERANCE = 0.01
 
 
@@ -523,19 +524,29 @@ class KRXTradingCalendar(TradingCalendar):
 class ProviderAnomalyPolicy:
     provider: str
     provider_gap_dates: frozenset[str]
+    provider_ohlc_anomaly_dates: dict[str, frozenset[str]]
     evidence: str
 
-    def classify_missing_date(self, day: str) -> DataQualityFinding:
+    def classify_missing_date(self, day: str, *, symbol: str) -> DataQualityFinding:
         _validate_date(day)
         if day in self.provider_gap_dates:
             return DataQualityFinding("provider_gap", "warning", f"{self.provider} missing bar on open KRX date {day}; evidence={self.evidence}")
+        symbol_anomalies = self.provider_ohlc_anomaly_dates.get(symbol.upper(), frozenset())
+        if day in symbol_anomalies:
+            return DataQualityFinding("provider_ohlc_anomaly", "warning", f"{self.provider} returned inconsistent same-index OHLC for {symbol.upper()} on open KRX date {day}; bar excluded; evidence={self.evidence}")
         return DataQualityFinding("unknown_missing_trading_day", "warning", f"missing KRX trading date {day} is not explained by calendar or provider anomaly registry")
 
 
 YAHOO_KRX_ANOMALY_POLICY = ProviderAnomalyPolicy(
     "real:yahoo-chart",
     frozenset({"2025-09-19"}),
-    "multi-symbol Yahoo KRX quorum: 005930,000660,005380,035420,051910",
+    {
+        "005930": frozenset({"2024-10-14"}),
+        "000660": frozenset({"2024-10-14"}),
+        "005380": frozenset({"2024-01-15"}),
+        "051910": frozenset({"2024-10-14", "2024-11-07"}),
+    },
+    "multi-symbol Yahoo KRX raw chart audit: 005930,000660,005380,035420,051910",
 )
 
 
@@ -851,6 +862,36 @@ def build_market_data_provider_from_env(env: dict[str, str]) -> KRXHistoricalDat
     raise RealMarketDataUnavailable(f"real_data_unavailable: unsupported provider {provider}")
 
 
+def yahoo_krx_bar_debug(symbol: str, day: str, *, opener: HttpOpener | None = None, timeout_seconds: float = 20.0) -> dict[str, object]:
+    _validate_date(day)
+    yahoo_symbol = _to_yahoo_symbol(symbol)
+    target = datetime.fromisoformat(day)
+    start_date = (target - timedelta(days=4)).date().isoformat()
+    end_date = (target + timedelta(days=4)).date().isoformat()
+    period1 = int(datetime.fromisoformat(start_date).replace(tzinfo=UTC).timestamp())
+    period2 = int((datetime.fromisoformat(end_date) + timedelta(days=1)).replace(tzinfo=UTC).timestamp())
+    query = urlencode({"period1": period1, "period2": period2, "interval": "1d", "events": "history", "includeAdjustedClose": "true"})
+    url = f"{YAHOO_CHART_ENDPOINT.format(symbol=yahoo_symbol)}?{query}"
+    request = Request(url, headers={"User-Agent": "StrategyLab-v2 Gaon research data check"})
+    try:
+        response = (opener or _default_urlopen)(request, timeout_seconds)
+        payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic command reports provider state explicitly.
+        raise RealMarketDataUnavailable(f"real_data_unavailable: {exc.__class__.__name__}") from exc
+    rows = _debug_yahoo_chart_rows(payload, symbol.upper())
+    target_rows = tuple(row for row in rows if row["date_kst"] == day or row["date_utc"] == day)
+    return {
+        "schema_version": KRX_REAL_PIPELINE_SCHEMA_VERSION,
+        "provider": "real:yahoo-chart",
+        "symbol": symbol.upper(),
+        "yahoo_symbol": yahoo_symbol,
+        "target_date": day,
+        "url": url,
+        "rows": target_rows,
+        "neighbor_rows": rows,
+    }
+
+
 def real_krx_data_release_check(connection: sqlite3.Connection, *, symbol: str, start_date: str, end_date: str, provider: KRXHistoricalDataProvider) -> dict[str, object]:
     dataset, quality, _inserted = KRXDatasetBuilder(connection, provider).build(symbol, start_date=start_date, end_date=end_date)
     if dataset.metadata.fixture_backed:
@@ -875,6 +916,8 @@ def real_krx_data_release_check(connection: sqlite3.Connection, *, symbol: str, 
         "quality": quality.status.value,
         "provider_gaps": len(_findings_by_code(quality, "provider_gap")),
         "provider_gap_dates": _finding_dates(_findings_by_code(quality, "provider_gap")),
+        "provider_ohlc_anomalies": len(_findings_by_code(quality, "provider_ohlc_anomaly")),
+        "provider_ohlc_anomaly_dates": _finding_dates(_findings_by_code(quality, "provider_ohlc_anomaly")),
         "blocking_findings": len(blocking),
         "trades": result.metrics.trade_count,
         "metrics": result.metrics.to_json(),
@@ -1223,9 +1266,71 @@ def _parse_yahoo_chart_payload(payload: dict[str, object], symbol: str) -> tuple
             volume = int(volumes[index] or 0)
         except (TypeError, ValueError, IndexError):
             continue
+        if not _is_yahoo_ohlc_consistent(open_, high, low, close):
+            continue
         day = datetime.fromtimestamp(int(timestamp), UTC).date().isoformat()
         bars.append(MarketBar(day, symbol, open_, high, low, close, volume, int(close * volume)))
     return tuple(sorted(bars, key=lambda bar: bar.timestamp))
+
+
+def _debug_yahoo_chart_rows(payload: dict[str, object], symbol: str) -> tuple[dict[str, object], ...]:
+    chart = payload.get("chart")
+    if not isinstance(chart, dict):
+        raise RealMarketDataUnavailable("real_data_unavailable: missing chart payload")
+    results = chart.get("result")
+    if not isinstance(results, list) or not results or not isinstance(results[0], dict):
+        return ()
+    result = results[0]
+    timestamps = result.get("timestamp")
+    indicators = result.get("indicators")
+    if not isinstance(timestamps, list) or not isinstance(indicators, dict):
+        return ()
+    quotes = indicators.get("quote")
+    if not isinstance(quotes, list) or not quotes or not isinstance(quotes[0], dict):
+        return ()
+    quote = quotes[0]
+    adjclose_rows = indicators.get("adjclose")
+    adjclose = adjclose_rows[0].get("adjclose", []) if isinstance(adjclose_rows, list) and adjclose_rows and isinstance(adjclose_rows[0], dict) else []
+    rows: list[dict[str, object]] = []
+    kst_zone = ZoneInfo("Asia/Seoul")
+    for index, timestamp in enumerate(timestamps):
+        utc_dt = datetime.fromtimestamp(int(timestamp), UTC)
+        kst_dt = utc_dt.astimezone(kst_zone)
+        raw_open = _array_get(quote.get("open"), index)
+        raw_high = _array_get(quote.get("high"), index)
+        raw_low = _array_get(quote.get("low"), index)
+        raw_close = _array_get(quote.get("close"), index)
+        normalized = {
+            "open": _maybe_normalize_yahoo_value(raw_open),
+            "high": _maybe_normalize_yahoo_value(raw_high),
+            "low": _maybe_normalize_yahoo_value(raw_low),
+            "close": _maybe_normalize_yahoo_value(raw_close),
+        }
+        raw_consistent = None
+        if all(value is not None for value in normalized.values()):
+            raw_consistent = _is_yahoo_ohlc_consistent(float(normalized["open"]), float(normalized["high"]), float(normalized["low"]), float(normalized["close"]))
+        rows.append(
+            {
+                "index": index,
+                "symbol": symbol,
+                "timestamp": int(timestamp),
+                "utc_datetime": utc_dt.isoformat(),
+                "kst_datetime": kst_dt.isoformat(),
+                "date_utc": utc_dt.date().isoformat(),
+                "date_kst": kst_dt.date().isoformat(),
+                "raw": {
+                    "open": raw_open,
+                    "high": raw_high,
+                    "low": raw_low,
+                    "close": raw_close,
+                    "adjclose": _array_get(adjclose, index),
+                    "volume": _array_get(quote.get("volume"), index),
+                },
+                "normalized": normalized,
+                "same_index_ohlc_consistent": raw_consistent,
+            }
+        )
+    return tuple(rows)
 
 
 def _normalize_yahoo_krx_ohlc(value: float) -> float:
@@ -1241,6 +1346,29 @@ def _normalize_yahoo_krx_ohlc(value: float) -> float:
     if abs(value - rounded) <= KRX_WON_FLOAT_DRIFT_TOLERANCE:
         return float(rounded)
     return value
+
+
+def _maybe_normalize_yahoo_value(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return _normalize_yahoo_krx_ohlc(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _array_get(value: object, index: int) -> object | None:
+    if not isinstance(value, list) or index >= len(value):
+        return None
+    return value[index]
+
+
+def _is_yahoo_ohlc_consistent(open_: float, high: float, low: float, close: float) -> bool:
+    return (
+        low - KRX_WON_FLOAT_DRIFT_TOLERANCE <= open_ <= high + KRX_WON_FLOAT_DRIFT_TOLERANCE
+        and low - KRX_WON_FLOAT_DRIFT_TOLERANCE <= close <= high + KRX_WON_FLOAT_DRIFT_TOLERANCE
+        and low <= high + KRX_WON_FLOAT_DRIFT_TOLERANCE
+    )
 
 
 def _to_yahoo_symbol(symbol: str) -> str:
@@ -1282,7 +1410,8 @@ def _quality_fixture_dataset(
 def _validate_krx_daily_dataset(dataset: MarketDataset, *, min_bars: int) -> DataQualityReport:
     calendar = KRXTradingCalendar() if dataset.metadata.timeframe == "daily" else None
     policy = _provider_anomaly_policy(dataset.metadata.source)
-    classifier = policy.classify_missing_date if policy is not None else _unknown_missing_trading_day
+    symbol = dataset.symbols[0].symbol if dataset.symbols else ""
+    classifier = (lambda day: policy.classify_missing_date(day, symbol=symbol)) if policy is not None else _unknown_missing_trading_day
     return DataQualityEngine().validate(dataset, min_bars=min_bars, calendar=calendar, missing_date_classifier=classifier if calendar is not None else None)
 
 

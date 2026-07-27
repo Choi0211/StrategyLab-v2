@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import unittest
 from urllib.request import Request
@@ -13,12 +14,14 @@ from gaon.research.krx_real_pipeline import (
     UserStrategyParser,
     WalkForwardValidator,
     YahooKRXHistoricalDataProvider,
+    YAHOO_KRX_ANOMALY_POLICY,
     build_market_data_provider_from_env,
     default_execution_assumptions,
     historical_krx_calendar_release_check,
     krx_trading_calendar_release_check,
     provider_gap_release_check,
     real_krx_data_release_check,
+    yahoo_krx_bar_debug,
     _parse_yahoo_chart_payload,
 )
 from gaon.research.real_research import DataQualityEngine, DataQualityStatus, MarketBar, MarketDataMetadata, MarketDataset, MarketSymbol
@@ -88,6 +91,24 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         dataset = MarketDataset("dataset:test:yahoo-float-drift", (MarketSymbol("005930", "005930", "KOSPI"),), bars, MarketDataMetadata("real:yahoo-chart", "KOSPI", "daily", bars[0].timestamp, bars[0].timestamp, False, "2026-07-25T00:00:00Z", False))
         self.assertEqual(DataQualityEngine().validate(dataset, min_bars=1).status, DataQualityStatus.PASS)
 
+    def test_yahoo_parser_excludes_inconsistent_same_index_ohlc(self) -> None:
+        bars = _parse_yahoo_chart_payload(_yahoo_ohlc_alignment_payload(), "005930")
+        self.assertEqual(tuple(bar.timestamp for bar in bars), ("2024-10-11", "2024-10-15"))
+        dataset = MarketDataset("dataset:test:yahoo-provider-ohlc-anomaly", (MarketSymbol("005930", "005930", "KOSPI"),), bars, MarketDataMetadata("real:yahoo-chart", "KOSPI", "daily", "2024-10-11", "2024-10-15", False, "2026-07-25T00:00:00Z", False))
+        report = DataQualityEngine().validate(dataset, min_bars=1, calendar=KRXTradingCalendar(), missing_date_classifier=lambda day: YAHOO_KRX_ANOMALY_POLICY.classify_missing_date(day, symbol="005930"))
+        self.assertTrue(any(item.code == "provider_ohlc_anomaly" and "2024-10-14" in item.message for item in report.findings))
+        self.assertFalse(any(item.code == "invalid_ohlc" for item in report.findings))
+
+    def test_yahoo_bar_debug_reports_raw_and_normalized_alignment(self) -> None:
+        payload = _yahoo_ohlc_alignment_payload()
+        debug = yahoo_krx_bar_debug("005930", "2024-10-14", opener=_opener(json.dumps(payload)))
+        row = debug["rows"][0]
+        self.assertEqual(row["index"], 1)
+        self.assertEqual(row["date_kst"], "2024-10-14")
+        self.assertEqual(row["raw"]["close"], 59300.0)
+        self.assertEqual(row["raw"]["adjclose"], 57535.75)
+        self.assertFalse(row["same_index_ohlc_consistent"])
+
     def test_data_quality_reports_invalid_ohlc_date_and_values(self) -> None:
         dataset = _quality_dataset("diagnostic-invalid", "2026-01-02", "2026-01-02", ("2026-01-02",), invalid_ohlc=True)
         report = DataQualityEngine().validate(dataset, min_bars=1, calendar=KRXTradingCalendar())
@@ -136,6 +157,23 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertTrue(any(item.code == "unknown_missing_trading_day" for item in report.findings))
         self.assertFalse(any(item.code == "provider_gap" for item in report.findings))
 
+    def test_yahoo_known_ohlc_anomalies_are_provider_specific_non_blocking(self) -> None:
+        calendar = KRXTradingCalendar()
+        cases = {
+            "005930": {"2024-10-14", "2025-09-19"},
+            "000660": {"2024-10-14", "2025-09-19"},
+            "005380": {"2024-01-15", "2025-09-19"},
+            "035420": {"2025-09-19"},
+            "051910": {"2024-10-14", "2024-11-07", "2025-09-19"},
+        }
+        for symbol, missing in cases.items():
+            dates = tuple(day for day in calendar.expected_open_dates(start_date="2024-01-10", end_date="2025-09-23") if day not in missing)
+            dataset = _quality_dataset(f"known-yahoo-anomaly-{symbol}", "2024-01-10", "2025-09-23", dates, source="real:yahoo-chart", symbol=symbol)
+            report = KRXDatasetBuilder(None, _StaticProvider(dataset)).build(symbol, start_date=dataset.metadata.start_date, end_date=dataset.metadata.end_date)[1]
+            self.assertFalse(any(item.code == "invalid_ohlc" for item in report.findings), symbol)
+            self.assertFalse(any(item.code == "unknown_missing_trading_day" for item in report.findings), symbol)
+            self.assertFalse(any(item.severity == "error" for item in report.findings), symbol)
+
     def test_real_release_check_allows_provider_gap_only(self) -> None:
         connection = sqlite3.connect(":memory:")
         migrate(connection)
@@ -144,6 +182,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertEqual(result["quality"], "pass_with_warnings")
         self.assertEqual(result["provider_gaps"], 1)
         self.assertEqual(result["provider_gap_dates"], ("2025-09-19",))
+        self.assertEqual(result["provider_ohlc_anomalies"], 0)
         self.assertEqual(result["blocking_findings"], 0)
 
     def test_real_release_check_blocks_unknown_gap(self) -> None:
@@ -293,7 +332,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertIn("공급자 데이터 누락", report.korean_report)
 
 
-def _quality_dataset(name: str, start: str, end: str, dates: tuple[str, ...], *, invalid_ohlc: bool = False, source: str = "real:test-calendar") -> MarketDataset:
+def _quality_dataset(name: str, start: str, end: str, dates: tuple[str, ...], *, invalid_ohlc: bool = False, source: str = "real:test-calendar", symbol: str = "005930") -> MarketDataset:
     bars = []
     for index, day in enumerate(dates):
         close = 100.0 + index
@@ -301,9 +340,9 @@ def _quality_dataset(name: str, start: str, end: str, dates: tuple[str, ...], *,
         low = close - 1.0
         if invalid_ohlc:
             high = close - 2.0
-        bars.append(MarketBar(day, "005930", close, high, low, close, 1_000_000 + index, int(close * 1_000_000)))
+        bars.append(MarketBar(day, symbol, close, high, low, close, 1_000_000 + index, int(close * 1_000_000)))
     metadata = MarketDataMetadata(source, "KOSPI", "daily", start, end, True, "2026-07-25T00:00:00Z", False)
-    return MarketDataset(f"dataset:test:{name}:{start}:{end}", (MarketSymbol("005930", "005930", "KOSPI"),), tuple(bars), metadata)
+    return MarketDataset(f"dataset:test:{name}:{start}:{end}", (MarketSymbol(symbol, symbol, "KOSPI"),), tuple(bars), metadata)
 
 
 def _large_yahoo_gap_dataset() -> MarketDataset:
@@ -378,9 +417,36 @@ def _sample_yahoo_payload() -> str:
             "error": None,
         }
     }
-    import json
-
     return json.dumps(payload)
+
+
+def _yahoo_ohlc_alignment_payload() -> dict[str, object]:
+    return {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [1728604800, 1728864000, 1728950400],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [59100.0, 59500.0, 61100.0],
+                                "high": [60100.0, 61200.0, 61400.0],
+                                "low": [59000.0, 59400.0, 60100.0],
+                                "close": [59300.0, 59300.0, 61000.0],
+                                "volume": [29623969, 20886249, 22715239],
+                            }
+                        ],
+                        "adjclose": [
+                            {
+                                "adjclose": [57535.75, 57535.75, 59185.17578125],
+                            }
+                        ],
+                    },
+                }
+            ],
+            "error": None,
+        }
+    }
 
 
 if __name__ == "__main__":
