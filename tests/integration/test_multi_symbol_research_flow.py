@@ -2,6 +2,7 @@ import sqlite3
 import tempfile
 import unittest
 
+from gaon.research.multi_symbol import PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT
 from gaon.runtime.cli import main as cli_main
 from gaon.runtime.migrations import SCHEMA_VERSION
 
@@ -33,6 +34,14 @@ class MultiSymbolResearchFlowTests(unittest.TestCase):
                 self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM multi_symbol_symbol_evidence").fetchone()[0], 1)
             finally:
                 connection.close()
+
+    def test_telegram_routing_debug_accepts_production_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            text_path = f"{tempdir}/production-request.txt"
+            with open(text_path, "w", encoding="utf-8") as handle:
+                handle.write(PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT)
+
+            self.assertEqual(cli_main(["telegram-routing-debug", "--text-file", text_path, "--json"]), 0)
 
 
 if __name__ == "__main__":

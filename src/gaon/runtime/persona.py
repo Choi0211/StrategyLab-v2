@@ -61,7 +61,16 @@ def persona_text(intent: Intent) -> str:
 
 def safety_warning(text: str) -> str | None:
     normalized = text.casefold()
+    compact = "".join(normalized.split())
+    if _safe_boundary_negation(compact):
+        return None
     unsafe_tokens = ("매수", "매도", "주문", "실거래", "자동 승인", "approve", "buy", "sell", "order")
     if any(token in normalized for token in unsafe_tokens):
         return "투자 주문, 실거래, 자동 승인은 이 런타임에서 수행하지 않습니다."
     return None
+
+
+def _safe_boundary_negation(value: str) -> bool:
+    safety_terms = ("자동주문", "champion자동승격", "승인없는config변경", "승인없는", "nolivetrading", "noapprovalbypass", "nobroker", "nokis")
+    negation_terms = ("하지말", "하지말고", "하지않", "금지", "없는", "no", "not", "without")
+    return any(term in value for term in safety_terms) and any(term in value for term in negation_terms)

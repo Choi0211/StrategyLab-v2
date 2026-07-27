@@ -3,6 +3,30 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 150.2 Production Multi-Symbol Routing Diagnostics
+
+Production Telegram requests that include both multi-symbol research evidence
+and explicit safety boundaries now keep the safety text as a constraint rather
+than treating it as an unsafe order request. This prevents the conversation
+runtime from falling back to the generic stock-analysis persona when the user
+asks for read-only multi-symbol research.
+
+New routing diagnostic:
+
+```bash
+python -m gaon.runtime.cli telegram-routing-debug \
+  --text-file production-request.txt \
+  --json
+```
+
+The diagnostic reports route/tool selection, detected KRX symbols, requested
+date range, provider allowance, fallback reason, text hash, and normalization
+metadata. It does not log secrets or raw Telegram configuration.
+
+Expected production route:
+
+`Telegram -> LLMConversationBrain -> multi_symbol_research -> deterministic Korean report`
+
 ## Hotfix 150.1 Telegram Multi-Symbol Routing
 
 Production Telegram requests that include an explicit five-symbol KRX universe

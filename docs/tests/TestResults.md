@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Hotfix 150.2 Production Multi-Symbol Routing Diagnostics
+
+- Unit: `tests.unit.test_multi_symbol_research`
+  - production Korean multi-symbol request diagnostic selects `tool_read_only_authoritative`
+  - selected tool is `multi_symbol_research`
+  - explicit five-symbol KRX universe and `2021-07-25~2026-07-24` period are extracted
+  - safety-boundary text does not trigger generic fallback
+- Integration: `tests.integration.test_multi_symbol_research_flow`
+  - `telegram-routing-debug --text-file <production request> --json` runs as a read-only CLI diagnostic
+- CLI release check:
+  - `python -m gaon.runtime.cli telegram-multi-symbol-research-release-check --db <db>`
+
 ## Hotfix 150.1 Telegram Multi-Symbol Routing
 
 - Unit: `tests.unit.test_multi_symbol_research`

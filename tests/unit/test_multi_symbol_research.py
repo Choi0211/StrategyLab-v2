@@ -17,6 +17,7 @@ from gaon.runtime.llm_conversation import _default_tool_arguments
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest, default_tool_registry
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
+from gaon.runtime.routing_debug import telegram_routing_debug_payload
 
 
 NOW = "2026-07-27T00:00:00Z"
@@ -101,6 +102,18 @@ class MultiSymbolResearchTests(unittest.TestCase):
         self.assertEqual(arguments["symbols"], DEFAULT_CURATED_SYMBOLS)
         self.assertEqual(arguments["start_date"], "2021-07-25")
         self.assertEqual(arguments["end_date"], "2026-07-24")
+
+    def test_production_multi_symbol_routing_debug_prefers_authoritative_tool(self) -> None:
+        payload = telegram_routing_debug_payload(PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT)
+
+        self.assertEqual(payload["selected_route"], "tool_read_only_authoritative")
+        self.assertEqual(payload["selected_tool"], "multi_symbol_research")
+        self.assertEqual(tuple(payload["detected_symbols"]), DEFAULT_CURATED_SYMBOLS)
+        self.assertEqual(payload["detected_dates"], {"start": "2021-07-25", "end": "2026-07-24"})
+        self.assertFalse(payload["blocked"])
+        self.assertIsNone(payload["safety_warning"])
+        self.assertFalse(payload["provider_allowed"])
+        self.assertIsNone(payload["fallback_reason"])
 
     def test_single_symbol_retest_and_real_research_priority_are_preserved(self) -> None:
         self.assertEqual(route_read_only_tool("삼성전자 실제 데이터로 자동 재검증해줘"), "research_retest")

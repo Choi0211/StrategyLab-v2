@@ -810,7 +810,20 @@ def telegram_multi_symbol_research_release_check(connection: sqlite3.Connection,
     persisted = connection.execute("SELECT COUNT(*) FROM multi_symbol_research_runs WHERE run_id LIKE 'multi-symbol-research:%'").fetchone()[0]
     if int(persisted) < 1:
         raise RealMarketDataUnavailable("real_data_unavailable: Telegram multi-symbol persistence missing")
-    return {"schema_version": 36, "run_id": run_id, "route": response.route, "tool_calls": list(response.tool_calls), "provider_calls": 0, "audit_count": len(audit_rows), "symbols": list(symbols), "persisted_runs": int(persisted)}
+    return {
+        "schema_version": 36,
+        "run_id": run_id,
+        "route": response.route,
+        "tool_calls": list(response.tool_calls),
+        "provider_calls": 0,
+        "audit_count": len(audit_rows),
+        "symbols": list(symbols),
+        "start_date": arguments.get("start_date"),
+        "end_date": arguments.get("end_date"),
+        "persisted_runs": int(persisted),
+        "generic_fallback": False,
+        "production_language": True,
+    }
 
 
 def _blocked_symbol_evidence(run_id: str, symbol: str, dataset: MarketDataset, quality: DataQualityReport, blocking: tuple[object, ...], at: str) -> SymbolResearchEvidence:
