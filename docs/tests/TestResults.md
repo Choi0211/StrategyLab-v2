@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Hotfix 140.6 Historical KRX Data Quality Classification
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - `2023-05-29` is excluded as a KRX closure
+  - `2022-01-03` and `2022-05-09` remain KRX open dates
+  - Yahoo `005930` symbol-specific provider gaps do not leak into other symbols
+  - unregistered zero-volume bars remain blocking and inspectable
+- Integration: `tests.integration.test_krx_real_research_pipeline_flow`
+  - `historical-krx-data-quality-release-check` repeats on one persistent SQLite DB
+- CLI release check:
+  - `python -m gaon.runtime.cli historical-krx-data-quality-release-check --db <db>`
+
 ## Hotfix 140.3 Historical KRX Trading Calendar Accuracy
 
 - Unit: `tests.unit.test_krx_real_pipeline`

@@ -186,6 +186,7 @@ class TradingCalendar(Protocol):
 
 
 MissingDateClassifier = Callable[[str], "DataQualityFinding"]
+ZeroVolumeClassifier = Callable[[MarketBar], "DataQualityFinding"]
 
 
 class FixtureMarketDataProvider:
@@ -246,6 +247,7 @@ class DataQualityEngine:
         max_stale_days: int = 3650,
         calendar: TradingCalendar | None = None,
         missing_date_classifier: MissingDateClassifier | None = None,
+        zero_volume_classifier: ZeroVolumeClassifier | None = None,
     ) -> DataQualityReport:
         findings: list[DataQualityFinding] = []
         seen: set[tuple[str, str]] = set()
@@ -273,7 +275,7 @@ class DataQualityEngine:
             if bar.volume < 0 or bar.trading_value < 0:
                 findings.append(DataQualityFinding("negative_volume", "error", "volume and trading_value must be non-negative"))
             elif bar.volume == 0:
-                findings.append(DataQualityFinding("zero_volume", "warning", "zero volume bar requires review"))
+                findings.append(zero_volume_classifier(bar) if zero_volume_classifier is not None else DataQualityFinding("zero_volume", "warning", f"zero volume bar requires review: symbol={bar.symbol} date={bar.timestamp} open={bar.open} high={bar.high} low={bar.low} close={bar.close}"))
             elif bar.volume > 100_000_000_000:
                 findings.append(DataQualityFinding("abnormal_volume", "warning", "abnormally high volume"))
         if len(dataset.bars) < min_bars:

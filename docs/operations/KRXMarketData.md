@@ -18,6 +18,9 @@ Current production behavior:
 - weekends and bounded deterministic KRX non-trading dates are not counted as missing bars
 - malformed OHLCV, duplicate bars, stale data, and actual missing trading bars remain quality findings
 - `2025-09-19` remains an exchange-open KRX date; for `real:yahoo-chart` it is classified as `provider_gap`, not as an exchange holiday
+- `2022-01-03` and `2022-05-09` remain exchange-open dates; for `005930` only, they are classified as Yahoo provider gaps when absent from the provider payload
+- `2023-05-29` is a KRX closure because it was the Buddha's Birthday substitute holiday
+- unregistered zero-volume bars are not accepted as benign; inspect and classify them with dated evidence first
 - `real-krx-data-release-check` allows provider-gap-only warnings while still blocking unknown missing trading days and malformed data
 
 Production environment:
@@ -35,6 +38,20 @@ python -m gaon.runtime.cli real-krx-data-release-check \
   --db /var/lib/strategylab/gaon-runtime.sqlite \
   --symbol 005930 \
   --start 2025-01-01 \
+  --end 2026-07-24
+```
+
+Historical quality investigation:
+
+```bash
+python -m gaon.runtime.cli historical-krx-data-quality-release-check \
+  --db /var/lib/strategylab/gaon-runtime.sqlite
+
+GAON_REAL_MARKET_DATA_ENABLED=true \
+GAON_MARKET_DATA_PROVIDER=yahoo-chart \
+python -m gaon.runtime.cli historical-krx-data-quality-inspect \
+  --symbol 005930 \
+  --start 2021-07-25 \
   --end 2026-07-24
 ```
 
