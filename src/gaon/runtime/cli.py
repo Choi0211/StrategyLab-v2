@@ -42,6 +42,7 @@ from gaon.runtime.provider_registry import build_assistant_provider
 from gaon.runtime.research_grounding import contains_fixture_leakage, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, looks_like_english_final, strict_real_research_grounding_violations
 from gaon.runtime.reports import build_daily_report, build_weekly_review
 from gaon.runtime.repositories import TelegramStateRepository
+from gaon.runtime.routing_debug import telegram_routing_debug_payload
 from gaon.runtime.scheduled_automation import ScheduleDefinition, ScheduledAutomationRunner, ScheduledJob, ScheduledJobRepository, record_scheduled_job_metric, scheduled_event
 from gaon.runtime.serialization import dumps_json
 from gaon.runtime.service import GaonRuntimeService
@@ -381,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
     multi_symbol_history.add_argument("--run-id", default=None)
     multi_symbol_history.add_argument("--limit", type=int, default=20)
     multi_symbol_history.add_argument("--json", action="store_true")
+    routing_debug = sub.add_parser("telegram-routing-debug")
+    routing_debug.add_argument("--text", default=None)
+    routing_debug.add_argument("--text-file", default=None)
+    routing_debug.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("--db", default="runtime.sqlite")
     backup.add_argument("--destination", required=True)
@@ -1990,7 +1995,10 @@ def _run(args: argparse.Namespace) -> int:
             print(
                 "telegram-multi-symbol-research-release-check: PASS "
                 f"schema_version={target_schema} isolated=true route={result['route']} "
-                f"provider_calls={result['provider_calls']} audit_count={result['audit_count']}"
+                f"tool=multi_symbol_research production_language=true symbols={len(result.get('symbols', []))} "
+                f"start={result.get('start_date')} end={result.get('end_date')} "
+                f"provider_calls={result['provider_calls']} persisted_runs={result.get('persisted_runs')} "
+                f"generic_fallback=false audit_count={result['audit_count']}"
             )
         finally:
             store.close()
@@ -2008,6 +2016,24 @@ def _run(args: argparse.Namespace) -> int:
             print(_dumps_json(payload) if args.json else "\n".join(str(item) for item in payload["evidence"]) or "현재 저장된 다중종목 연구 이력이 없습니다.")
         finally:
             store.close()
+    elif args.command == "telegram-routing-debug":
+        if args.text_file:
+            with open(args.text_file, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        elif args.text is not None:
+            text = args.text
+        else:
+            raise ConfigurationError("telegram-routing-debug requires --text or --text-file")
+        payload = telegram_routing_debug_payload(text)
+        if args.json:
+            print(_dumps_json(payload))
+        else:
+            print(
+                "telegram-routing-debug: "
+                f"intent={payload['parsed_intent']} route={payload['selected_route']} "
+                f"tool={payload['selected_tool']} symbols={len(payload['detected_symbols'])} "
+                f"provider_allowed={str(payload['provider_allowed']).lower()} fallback={payload['fallback_reason']}"
+            )
     elif args.command == "backup":
         store = RuntimeStateStore(args.db)
         try:

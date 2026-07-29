@@ -195,6 +195,8 @@ def _v5_pipeline_history(value: str) -> bool:
 
 
 def _blocked(value: str) -> bool:
+    if _safe_boundary_negation(value):
+        return False
     return _contains_any(
         value,
         (
@@ -215,6 +217,12 @@ def _blocked(value: str) -> bool:
             "apikey",
         ),
     )
+
+
+def _safe_boundary_negation(value: str) -> bool:
+    safety_terms = ("자동주문", "champion자동승격", "승인없는config변경", "승인없는", "nolivetrading", "noapprovalbypass", "nobroker", "nokis")
+    negation_terms = ("하지말", "하지말고", "하지않", "금지", "없는", "no", "not", "without")
+    return _contains_any(value, safety_terms) and _contains_any(value, negation_terms)
 
 
 def _contains_any(value: str, tokens: tuple[str, ...]) -> bool:

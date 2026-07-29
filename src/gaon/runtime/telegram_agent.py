@@ -119,6 +119,16 @@ class TelegramConversationAgent:
                 provider_metadata={"provider": "deterministic", "path": "telegram_conversation_failure", "failure_stage": failure.stage, "error_type": failure.error_type},
             )
         self._links.resolve(message.conversation_id, now=message.received_at)
+        logger.info(
+            "telegram route selected",
+            extra={
+                "message_id": message.message_id,
+                "intent": response.intent.value,
+                "route": response.route,
+                "tool": response.tool_calls[0] if response.tool_calls else None,
+                "tool_count": len(response.tool_calls),
+            },
+        )
         return _to_conversation_response(response, message)
 
 

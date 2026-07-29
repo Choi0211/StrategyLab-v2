@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 150.2 - Production Multi-Symbol Routing Diagnostics
+
+- Fixed production Telegram multi-symbol research requests that included explicit safety-boundary language being misclassified as unsafe and falling back to the generic stock-analysis persona.
+- Added read-only `telegram-routing-debug` CLI diagnostics with normalized text metadata, intent, symbol/date extraction, route/tool selection, provider allowance, and fallback reason.
+- Preserved priority order: `multi_symbol_research` before autonomous retest, single-symbol real research, and generic stock-analysis fallback.
+- Added Telegram route selection logging without message body, secrets, or raw prompt content.
+- Strengthened `telegram-multi-symbol-research-release-check` output with production-language, symbol/date, route/tool, persistence, provider-call, and generic-fallback fields.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and deterministic grounded reporting.
+
 ## Hotfix 150.1 - Telegram Multi-Symbol Routing
 
 - Fixed production Telegram multi-symbol requests with explicit KRX symbol lists routing to generic stock-analysis fallback.
