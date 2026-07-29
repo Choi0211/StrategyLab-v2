@@ -3,6 +3,24 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 150.4 Yahoo Multi-Symbol Data Quality
+
+Hotfix 150.4 extends the Yahoo KRX anomaly registry from single-symbol Samsung
+verification to the Sprint 141-150 five-symbol research universe:
+`005930`, `000660`, `005380`, `035420`, and `051910`.
+
+The KRX trading calendar remains exchange-only. Missing bars on exchange-open
+dates are classified as provider or symbol-specific Yahoo anomalies only when
+production inspection evidence exists. The common provider gaps are
+`2022-01-03` and `2022-05-09`; extra symbol-specific gaps are isolated to the
+affected symbols. The verified 2022 zero-volume bars are excluded from
+backtest input and disclosed as `provider_zero_volume_anomaly` warnings.
+Unregistered zero-volume rows remain blocking.
+
+No schema migration is included. The hotfix preserves all no-trading,
+no-Champion-auto-promotion, no-approval-bypass, and fail-closed data-quality
+boundaries.
+
 ## Hotfix 150.3 Multi-Symbol History Intent Collision
 
 Production routing diagnostics found that the phrase `기록해줘` inside a

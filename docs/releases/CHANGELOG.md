@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 150.4 - Yahoo Multi-Symbol Data Quality
+
+- Extended `real:yahoo-chart` anomaly classification for the Sprint 141-150 multi-symbol research universe: `005930`, `000660`, `005380`, `035420`, and `051910`.
+- Kept `2022-01-03`, `2022-05-09`, and symbol-specific 2023 missing bars as provider gaps instead of KRX calendar holidays.
+- Registered verified 2022 Yahoo zero-volume anomaly bars for the five-symbol research universe while keeping unregistered zero-volume bars blocking.
+- Strengthened `historical-krx-data-quality-release-check` to validate all five research symbols and preserve symbol-specific anomaly isolation.
+- Preserved schema v36, strict data quality gates, no trading, no Champion auto-promotion, no approval bypass, and no configuration mutation.
+
 ## Hotfix 150.3 - Multi-Symbol History Intent Collision
 
 - Fixed a semantic collision where execution phrases such as `결과를 기록해줘` were misclassified as `multi_symbol_research_history`.

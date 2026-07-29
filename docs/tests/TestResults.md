@@ -2,6 +2,17 @@
 
 Status: Passed
 
+## Hotfix 150.4 Yahoo Multi-Symbol Data Quality
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - `historical_krx_data_quality_release_check` validates the five-symbol Sprint 141-150 research universe
+  - common provider gaps `2022-01-03` and `2022-05-09` remain Yahoo provider gaps, not KRX holidays
+  - symbol-specific provider gaps stay isolated to `000660`, `005380`, and `035420`
+  - verified 2022 zero-volume anomaly bars are excluded for `005930`, `000660`, `005380`, `035420`, and `051910`
+  - unregistered symbols and unregistered zero-volume bars remain blocking
+- CLI release check:
+  - `python -m gaon.runtime.cli historical-krx-data-quality-release-check --db <db>`
+
 ## Hotfix 150.3 Multi-Symbol History Intent Collision
 
 - Unit: `tests.unit.test_multi_symbol_research`

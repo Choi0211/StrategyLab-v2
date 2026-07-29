@@ -18,9 +18,10 @@ Current production behavior:
 - weekends and bounded deterministic KRX non-trading dates are not counted as missing bars
 - malformed OHLCV, duplicate bars, stale data, and actual missing trading bars remain quality findings
 - `2025-09-19` remains an exchange-open KRX date; for `real:yahoo-chart` it is classified as `provider_gap`, not as an exchange holiday
-- `2022-01-03` and `2022-05-09` remain exchange-open dates; for `005930` only, they are classified as Yahoo provider gaps when absent from the provider payload
+- `2022-01-03` and `2022-05-09` remain exchange-open dates; for the Sprint 141-150 research universe they are classified as Yahoo provider gaps when absent from the provider payload
+- additional symbol-specific Yahoo provider gaps are isolated to the affected symbol: `000660` has `2023-02-02` and `2023-02-09`, `005380` has `2023-02-01`, and `035420` has `2023-02-02`
 - `2023-05-29` is a KRX closure because it was the Buddha's Birthday substitute holiday
-- registered `005930` Yahoo zero-volume anomaly bars are excluded from backtest input and disclosed as `provider_zero_volume_anomaly`
+- registered Yahoo zero-volume anomaly bars for `005930`, `000660`, `005380`, `035420`, and `051910` are excluded from backtest input and disclosed as `provider_zero_volume_anomaly`
 - unregistered zero-volume bars are not accepted as benign; inspect and classify them with dated evidence first
 - `real-krx-data-release-check` allows provider-gap-only warnings while still blocking unknown missing trading days and malformed data
 

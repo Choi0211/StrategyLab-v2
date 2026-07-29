@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 import unittest
 from urllib.request import Request
@@ -14,6 +15,8 @@ from gaon.research.krx_real_pipeline import (
     UserStrategyParser,
     WalkForwardValidator,
     YahooKRXHistoricalDataProvider,
+    YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+    YAHOO_KRX_RESEARCH_SYMBOLS,
     YAHOO_KRX_ANOMALY_POLICY,
     build_market_data_provider_from_env,
     default_execution_assumptions,
@@ -267,38 +270,50 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         migrate(connection)
         result = historical_krx_data_quality_release_check(connection)
         self.assertEqual(result["schema_version"], 33)
-        self.assertEqual(result["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2025-09-19"))
-        self.assertEqual(result["provider_ohlc_anomaly_dates"], ("2024-10-14",))
-        self.assertEqual(
-            result["provider_zero_volume_anomaly_dates"],
-            (
-                "2022-01-26",
-                "2022-02-08",
-                "2022-02-09",
-                "2022-02-21",
-                "2022-02-22",
-                "2022-02-23",
-                "2022-02-28",
-                "2022-03-04",
-                "2022-03-10",
-                "2022-03-15",
-                "2022-03-17",
-            ),
-        )
+        self.assertEqual(result["symbols_checked"], YAHOO_KRX_RESEARCH_SYMBOLS)
+        self.assertEqual(result["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2023-02-01", "2023-02-02", "2023-02-09", "2025-09-19"))
+        self.assertEqual(result["provider_ohlc_anomaly_dates"], ("2024-01-15", "2024-10-14", "2024-11-07"))
+        self.assertEqual(result["provider_zero_volume_anomaly_dates"], tuple(sorted(YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES)))
+        symbol_results = result["symbol_results"]
+        self.assertEqual(symbol_results["000660"]["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2023-02-02", "2023-02-09", "2025-09-19"))
+        self.assertEqual(symbol_results["005380"]["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2023-02-01", "2025-09-19"))
+        self.assertEqual(symbol_results["035420"]["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2023-02-02", "2025-09-19"))
+        self.assertEqual(symbol_results["051910"]["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2025-09-19"))
         self.assertEqual(result["zero_volume_policy"], "registered_zero_volume_excluded_unregistered_blocks")
         self.assertEqual(result["blocking_findings"], 0)
         self.assertTrue(result["symbol_specific_gap_isolated"])
 
-    def test_yahoo_symbol_specific_005930_gap_does_not_leak_to_other_symbols(self) -> None:
+    def test_yahoo_symbol_specific_research_gaps_do_not_leak_to_unregistered_symbols(self) -> None:
         calendar = KRXTradingCalendar()
         dates = tuple(day for day in calendar.expected_open_dates(start_date="2022-01-03", end_date="2022-01-05") if day != "2022-01-03")
         samsung = _quality_dataset("samsung-symbol-gap", "2022-01-03", "2022-01-05", dates, source="real:yahoo-chart", symbol="005930")
-        hynix = _quality_dataset("hynix-symbol-gap", "2022-01-03", "2022-01-05", dates, source="real:yahoo-chart", symbol="000660")
+        unregistered = _quality_dataset("unregistered-symbol-gap", "2022-01-03", "2022-01-05", dates, source="real:yahoo-chart", symbol="068270")
         samsung_report = KRXDatasetBuilder(None, _StaticProvider(samsung)).build("005930", start_date="2022-01-03", end_date="2022-01-05")[1]
-        hynix_report = KRXDatasetBuilder(None, _StaticProvider(hynix)).build("000660", start_date="2022-01-03", end_date="2022-01-05")[1]
+        unregistered_report = KRXDatasetBuilder(None, _StaticProvider(unregistered)).build("068270", start_date="2022-01-03", end_date="2022-01-05")[1]
         self.assertTrue(any(item.code == "provider_gap" and "2022-01-03" in item.message for item in samsung_report.findings))
         self.assertFalse(any(item.code == "unknown_missing_trading_day" for item in samsung_report.findings))
-        self.assertTrue(any(item.code == "unknown_missing_trading_day" and "2022-01-03" in item.message for item in hynix_report.findings))
+        self.assertTrue(any(item.code == "unknown_missing_trading_day" and "2022-01-03" in item.message for item in unregistered_report.findings))
+
+    def test_yahoo_research_symbols_classify_production_zero_volume_anomalies(self) -> None:
+        dates = KRXTradingCalendar().expected_open_dates(start_date="2022-01-24", end_date="2022-06-30")
+        for symbol in YAHOO_KRX_RESEARCH_SYMBOLS:
+            with self.subTest(symbol=symbol):
+                dataset = _quality_dataset(
+                    f"registered-zero-volume-{symbol}",
+                    "2022-01-24",
+                    "2022-06-30",
+                    dates,
+                    source="real:yahoo-chart",
+                    symbol=symbol,
+                    zero_volume_dates=YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+                )
+                normalized, report, _inserted = KRXDatasetBuilder(None, _StaticProvider(dataset)).build(symbol, start_date="2022-01-24", end_date="2022-06-30")
+                normalized_dates = tuple(bar.timestamp for bar in normalized.bars)
+                for anomaly_date in YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES:
+                    self.assertNotIn(anomaly_date, normalized_dates)
+                self.assertEqual(_finding_dates_for_test(report, "provider_zero_volume_anomaly"), tuple(sorted(YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES)))
+                self.assertFalse(any(item.code == "zero_volume" for item in report.findings))
+                self.assertFalse(_blocking_quality_findings(report))
 
     def test_unregistered_zero_volume_remains_blocking_and_inspectable(self) -> None:
         dates = KRXTradingCalendar().expected_open_dates(start_date="2026-01-02", end_date="2026-01-06")
@@ -514,6 +529,17 @@ def _yahoo_ohlc_alignment_payload() -> dict[str, object]:
             "error": None,
         }
     }
+
+
+def _finding_dates_for_test(report, code: str) -> tuple[str, ...]:
+    dates = []
+    for finding in report.findings:
+        if finding.code != code:
+            continue
+        match = re.search(r"\d{4}-\d{2}-\d{2}", finding.message)
+        if match:
+            dates.append(match.group(0))
+    return tuple(sorted(dates))
 
 
 if __name__ == "__main__":
