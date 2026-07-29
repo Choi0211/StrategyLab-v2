@@ -46,6 +46,10 @@ def persona_text(intent: Intent) -> str:
             "영하님, 기억 검색 요청으로 이해했습니다. 아직 이 대화 경로에는 실제 Learning Memory 검색기가 연결되지 않았습니다. "
             "검색 요청 자체만 안전하게 분류했습니다."
         ),
+        Intent.MULTI_SYMBOL_RESEARCH: (
+            "영하님, 다중종목 실제 연구 요청으로 이해했습니다. 실제 실행은 read-only safe tool 경로에서만 수행하며 "
+            "자동 주문, Champion 자동 승격, 승인 없는 config 변경은 수행하지 않습니다."
+        ),
         Intent.RESEARCH_STATUS: "영하님, 연구 상태 조회 요청을 확인했습니다. 현재는 저장된 연구 실행 상태를 직접 조회하지 않는 안전 응답입니다.",
         Intent.CONFLICTS: "영하님, 충돌 후보 조회 요청을 확인했습니다. 자동 해결이나 자동 승인은 수행하지 않습니다.",
         Intent.DUPLICATES: "영하님, 중복 후보 조회 요청을 확인했습니다. 자동 병합은 수행하지 않습니다.",

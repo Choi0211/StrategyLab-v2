@@ -3,6 +3,33 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 150.3 Multi-Symbol History Intent Collision
+
+Production routing diagnostics found that the phrase `기록해줘` inside a
+multi-symbol execution request was being treated as a request to read historical
+research records. The router now requires explicit past/history/query semantics
+before selecting `multi_symbol_research_history`.
+
+Expected diagnostic result for the full production Telegram request:
+
+```text
+parsed_intent=multi_symbol_research
+selected_route=tool_read_only_authoritative
+selected_tool=multi_symbol_research
+execution_intent=true
+history_intent=false
+status_intent=false
+provider_allowed=false
+generic_fallback=false
+```
+
+Verification:
+
+```bash
+python -m gaon.runtime.cli telegram-routing-debug --text-file production-request.txt --json
+python -m gaon.runtime.cli telegram-multi-symbol-research-release-check --db <db>
+```
+
 ## Hotfix 150.2 Production Multi-Symbol Routing Diagnostics
 
 Production Telegram requests that include both multi-symbol research evidence

@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 150.3 - Multi-Symbol History Intent Collision
+
+- Fixed a semantic collision where execution phrases such as `결과를 기록해줘` were misclassified as `multi_symbol_research_history`.
+- Split multi-symbol routing into explicit execution, explicit status query, and explicit history query contracts.
+- Added `multi_symbol_research` as a parsed conversation intent for explicit multi-symbol execution requests.
+- Strengthened `telegram-routing-debug` and `telegram-multi-symbol-research-release-check` with `execution_intent`, `history_intent`, and `status_intent` diagnostics.
+- Updated the production multi-symbol regression fixture to the full long Telegram request containing `기록해줘`.
+- Preserved schema v36, read-only safe-tool execution, no trading, no Champion auto-promotion, no approval bypass, and no config mutation.
+
 ## Hotfix 150.2 - Production Multi-Symbol Routing Diagnostics
 
 - Fixed production Telegram multi-symbol research requests that included explicit safety-boundary language being misclassified as unsafe and falling back to the generic stock-analysis persona.

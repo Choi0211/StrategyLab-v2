@@ -9,9 +9,11 @@ def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized or _blocked(normalized):
         return None
-    if _multi_symbol_history(normalized):
+    if _multi_symbol_research_execution(normalized):
+        return "multi_symbol_research"
+    if _explicit_multi_symbol_history_query(normalized):
         return "multi_symbol_research_history"
-    if _multi_symbol_status(normalized):
+    if _explicit_multi_symbol_status_query(normalized):
         return "multi_symbol_research_status"
     if _multi_symbol_research_ascii(normalized):
         return "multi_symbol_research"
@@ -91,6 +93,9 @@ def _multi_symbol_research_ascii(value: str) -> bool:
         "모두",
         "검증",
         "검증해줘",
+        "백테스트",
+        "전략",
+        "기록해줘",
         "연구해줘",
         "연구",
         "실제데이터",
@@ -116,11 +121,57 @@ def _multi_symbol_research_ascii(value: str) -> bool:
 
 
 def _multi_symbol_status(value: str) -> bool:
-    return _contains_any(value, ("다중종목", "여러종목", "multisymbol", "multi-symbol")) and _contains_any(value, ("상태", "status", "최근", "조회"))
+    return _explicit_multi_symbol_status_query(value)
 
 
 def _multi_symbol_history(value: str) -> bool:
-    return _contains_any(value, ("다중종목", "여러종목", "multisymbol", "multi-symbol")) and _contains_any(value, ("이력", "history", "기록", "과정"))
+    return _explicit_multi_symbol_history_query(value)
+
+
+def _multi_symbol_research_execution(value: str) -> bool:
+    return _multi_symbol_research_ascii(value) and _contains_any(
+        value,
+        (
+            "연구해줘",
+            "검증해줘",
+            "백테스트해줘",
+            "비교해줘",
+            "분석해줘",
+            "판단해줘",
+            "기록해줘",
+            "research",
+            "run",
+            "execute",
+            "backtest",
+            "compare",
+            "analyze",
+        ),
+    )
+
+
+def _explicit_multi_symbol_status_query(value: str) -> bool:
+    if not _contains_any(value, ("다중종목", "여러종목", "복수종목", "multisymbol", "multi-symbol")):
+        return False
+    status_terms = ("현재상태", "진행상태", "연구상태", "status")
+    query_terms = ("보여줘", "알려줘", "조회", "확인", "show")
+    return _contains_any(value, status_terms) and _contains_any(value, query_terms)
+
+
+def _explicit_multi_symbol_history_query(value: str) -> bool:
+    if not _contains_any(value, ("다중종목", "여러종목", "복수종목", "multisymbol", "multi-symbol", "researchhistory")):
+        return False
+    history_terms = (
+        "연구이력",
+        "연구기록",
+        "이전연구",
+        "지난연구",
+        "과거연구",
+        "저장된",
+        "history",
+        "historical",
+    )
+    query_terms = ("보여줘", "알려줘", "조회", "찾아", "확인", "show")
+    return _contains_any(value, history_terms) and _contains_any(value, query_terms)
 
 
 def _autonomous_retest(value: str) -> bool:

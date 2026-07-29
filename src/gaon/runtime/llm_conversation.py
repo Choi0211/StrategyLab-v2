@@ -832,6 +832,9 @@ def _base_prompt(text: str, context=None) -> str:
 
 def _requires_manual_boundary(text: str) -> bool:
     normalized = text.casefold()
+    compact = "".join(normalized.split())
+    if _safe_boundary_negation(compact):
+        return False
     blocked = (
         "approve",
         "approval",
@@ -854,6 +857,12 @@ def _requires_manual_boundary(text: str) -> bool:
         "sql",
     )
     return any(token in normalized for token in blocked)
+
+
+def _safe_boundary_negation(value: str) -> bool:
+    safety_terms = ("자동주문", "champion자동승격", "승인없는config변경", "승인없는", "nolivetrading", "noapprovalbypass", "nobroker", "nokis")
+    negation_terms = ("하지마", "하지말", "하지말고", "하지않", "금지", "없는", "no", "not", "without")
+    return any(term in value for term in safety_terms) and any(term in value for term in negation_terms)
 
 
 def _metric_route(route: str) -> str:

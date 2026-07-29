@@ -17,6 +17,7 @@ from gaon.runtime.llm_conversation import (
     LLMConversationResponse,
     SQLiteConversationRepository,
     SQLiteConversationToolResultRepository,
+    _extract_krx_symbols,
 )
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
@@ -119,6 +120,7 @@ class TelegramConversationAgent:
                 provider_metadata={"provider": "deterministic", "path": "telegram_conversation_failure", "failure_stage": failure.stage, "error_type": failure.error_type},
             )
         self._links.resolve(message.conversation_id, now=message.received_at)
+        symbol_count = len(_extract_krx_symbols(message.text)) if "multi_symbol_research" in response.tool_calls else 0
         logger.info(
             "telegram route selected",
             extra={
@@ -127,6 +129,7 @@ class TelegramConversationAgent:
                 "route": response.route,
                 "tool": response.tool_calls[0] if response.tool_calls else None,
                 "tool_count": len(response.tool_calls),
+                "symbol_count": symbol_count,
             },
         )
         return _to_conversation_response(response, message)
