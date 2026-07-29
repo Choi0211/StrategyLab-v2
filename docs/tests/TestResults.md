@@ -2,6 +2,20 @@
 
 Status: Passed
 
+## Hotfix 150.3 Multi-Symbol History Intent Collision
+
+- Unit: `tests.unit.test_multi_symbol_research`
+  - `기록해줘` in a multi-symbol execution request routes to `multi_symbol_research`
+  - explicit history query routes to `multi_symbol_research_history`
+  - explicit status query routes to `multi_symbol_research_status`
+  - production long Telegram request parses as `multi_symbol_research`
+  - production long Telegram request reports `execution_intent=true`, `history_intent=false`, `status_intent=false`
+- Integration: `tests.integration.test_telegram_conversation_agent`
+  - full production Telegram path persists a multi-symbol run, per-symbol evidence, candidate evidence, and universe snapshot
+  - duplicate Telegram message idempotency keeps one persisted run
+- CLI release check:
+  - `python -m gaon.runtime.cli telegram-multi-symbol-research-release-check --db <db>`
+
 ## Hotfix 150.2 Production Multi-Symbol Routing Diagnostics
 
 - Unit: `tests.unit.test_multi_symbol_research`

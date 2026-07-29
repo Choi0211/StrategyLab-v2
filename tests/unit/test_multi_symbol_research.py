@@ -14,6 +14,7 @@ from gaon.research.multi_symbol import (
     multi_symbol_research_status_payload,
 )
 from gaon.runtime.llm_conversation import _default_tool_arguments
+from gaon.runtime.intents import Intent, parse_intent
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest, default_tool_registry
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
@@ -108,12 +109,28 @@ class MultiSymbolResearchTests(unittest.TestCase):
 
         self.assertEqual(payload["selected_route"], "tool_read_only_authoritative")
         self.assertEqual(payload["selected_tool"], "multi_symbol_research")
+        self.assertEqual(payload["parsed_intent"], "multi_symbol_research")
         self.assertEqual(tuple(payload["detected_symbols"]), DEFAULT_CURATED_SYMBOLS)
         self.assertEqual(payload["detected_dates"], {"start": "2021-07-25", "end": "2026-07-24"})
+        self.assertTrue(payload["multi_symbol_evidence"]["execution_intent"])
+        self.assertFalse(payload["multi_symbol_evidence"]["history_intent"])
+        self.assertFalse(payload["multi_symbol_evidence"]["status_intent"])
         self.assertFalse(payload["blocked"])
         self.assertIsNone(payload["safety_warning"])
         self.assertFalse(payload["provider_allowed"])
         self.assertIsNone(payload["fallback_reason"])
+
+    def test_multi_symbol_recording_request_is_execution_not_history(self) -> None:
+        request = "삼성전자와 SK하이닉스를 같은 전략으로 백테스트하고 각 종목 결과를 기록해줘."
+
+        self.assertEqual(route_read_only_tool(request), "multi_symbol_research")
+        self.assertEqual(parse_intent(request), Intent.MULTI_SYMBOL_RESEARCH)
+
+    def test_explicit_multi_symbol_history_query_remains_history(self) -> None:
+        self.assertEqual(route_read_only_tool("지난 다중종목 연구 기록 보여줘"), "multi_symbol_research_history")
+
+    def test_explicit_multi_symbol_status_query_remains_status(self) -> None:
+        self.assertEqual(route_read_only_tool("현재 다중종목 연구 상태 보여줘"), "multi_symbol_research_status")
 
     def test_single_symbol_retest_and_real_research_priority_are_preserved(self) -> None:
         self.assertEqual(route_read_only_tool("삼성전자 실제 데이터로 자동 재검증해줘"), "research_retest")

@@ -1,4 +1,4 @@
-"""Autonomous multi-symbol KRX research for Sprint 141-150.
+﻿"""Autonomous multi-symbol KRX research for Sprint 141-150.
 
 This module applies one user-provided strategy and one execution-assumption set
 to an explicit or curated KRX universe. It records per-symbol evidence,
@@ -57,29 +57,36 @@ DEFAULT_REQUEST_TEXT = (
     "20일 고가 돌파, 종가 > MA20 > MA60, 거래량 20일 평균 이상, "
     "손절 -5%, 10일 저점 이탈 청산"
 )
-PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT = """가온아 아래 5개 종목의 실제 KRX 데이터를 사용해서
-이 전략이 여러 종목에서도 일반적으로 유효한지 다중종목 연구해줘.
+PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT = """가온아 아래 5개 종목의 실제 KRX 데이터를 사용해서 이 전략이 여러 종목에서도 일반적으로 유효한지 다중종목 연구해줘.
 
+대상 종목:
 005930 삼성전자
 000660 SK하이닉스
 005380 현대차
 035420 NAVER
 051910 LG화학
 
+연구 기간:
 2021-07-25 ~ 2026-07-24
 
+전략:
 20일 고가 돌파
 종가 > MA20 > MA60
 거래량 20일 평균 이상
 손절 -5%
 10일 저점 이탈 청산
 
-동일 전략/동일 가정으로 종목별 백테스트,
-cross-symbol robustness,
-TESTED A/B/C 비교,
-sample confidence,
-concentration,
-generalization을 알려줘"""
+모든 종목에 동일한 전략과 동일한 백테스트 가정을 적용해줘.
+
+각 종목별로 실제 데이터 날짜, 거래 횟수, 수익률, MDD, Profit Factor, 승률을 기록해줘.
+
+그리고 전체 5종목을 종합해서 총 거래 표본, 거래가 발생한 종목 수, 수익 종목 비율, median return, median MDD, 종목별 성과 집중도, 특정 종목 의존 여부, 전략의 cross-symbol robustness를 분석해줘.
+
+원본 전략과 TESTED 개선 후보 A/B/C를 동일한 5종목에서 비교해서 어떤 후보가 여러 종목에 가장 잘 일반화되는지 판단해줘.
+
+마지막에는 sample confidence, concentration 판단, generalization 판단, 최종 recommendation을 구조화된 실제 연구 결과만 기준으로 알려줘.
+
+검증되지 않은 숫자나 조건은 만들지 말고 자동 주문, Champion 자동 승격, 승인 없는 config 변경은 하지 마."""
 
 
 class UniverseType(str, Enum):
@@ -784,6 +791,7 @@ def telegram_multi_symbol_research_release_check(connection: sqlite3.Connection,
     from gaon.runtime.config import GaonRuntimeConfig
     from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
     from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
+    from gaon.runtime.routing_debug import telegram_routing_debug_payload
 
     config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
     executor = tool_executor_factory(connection) if tool_executor_factory else SafeToolExecutor(default_tool_registry(connection), SQLiteToolAuditRepository(connection))
@@ -792,6 +800,10 @@ def telegram_multi_symbol_research_release_check(connection: sqlite3.Connection,
     brain = LLMConversationBrain(config, SQLiteConversationRepository(connection), tool_executor=executor, tool_result_repository=SQLiteConversationToolResultRepository(connection))
     run_id = f"telegram-multi-symbol-research-release-check:{uuid4().hex}"
     request_text = PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT
+    routing = telegram_routing_debug_payload(request_text)
+    multi_symbol_evidence = dict(routing.get("multi_symbol_evidence", {}))
+    if not multi_symbol_evidence.get("execution_intent") or multi_symbol_evidence.get("history_intent") or multi_symbol_evidence.get("status_intent"):
+        raise RealMarketDataUnavailable("real_data_unavailable: Telegram multi-symbol execution intent collided with status/history intent")
     response = brain.respond(LLMConversationRequest(run_id, "release-check", "telegram", request_text, utc_now(), f"{run_id}:message"))
     if response.route != "tool_read_only_authoritative" or "multi_symbol_research" not in response.tool_calls:
         raise RealMarketDataUnavailable("real_data_unavailable: Telegram multi-symbol route was not authoritative")
@@ -823,6 +835,9 @@ def telegram_multi_symbol_research_release_check(connection: sqlite3.Connection,
         "persisted_runs": int(persisted),
         "generic_fallback": False,
         "production_language": True,
+        "execution_intent": bool(multi_symbol_evidence.get("execution_intent")),
+        "history_intent": bool(multi_symbol_evidence.get("history_intent")),
+        "status_intent": bool(multi_symbol_evidence.get("status_intent")),
     }
 
 

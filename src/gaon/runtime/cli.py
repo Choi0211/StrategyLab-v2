@@ -1997,6 +1997,9 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={target_schema} isolated=true route={result['route']} "
                 f"tool=multi_symbol_research production_language=true symbols={len(result.get('symbols', []))} "
                 f"start={result.get('start_date')} end={result.get('end_date')} "
+                f"execution_intent={str(result.get('execution_intent')).lower()} "
+                f"history_intent={str(result.get('history_intent')).lower()} "
+                f"status_intent={str(result.get('status_intent')).lower()} "
                 f"provider_calls={result['provider_calls']} persisted_runs={result.get('persisted_runs')} "
                 f"generic_fallback=false audit_count={result['audit_count']}"
             )

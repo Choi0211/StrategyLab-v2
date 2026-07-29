@@ -25,6 +25,7 @@ class Intent(str, Enum):
     WEEKLY_REVIEW = "weekly_review"
     SYNC_NOTION = "sync_notion"
     APPROVAL_STATUS = "approval_status"
+    MULTI_SYMBOL_RESEARCH = "multi_symbol_research"
     UNKNOWN = "unknown"
 
 
@@ -47,6 +48,13 @@ def parse_intent(text: str) -> Intent:
     # Specific task intents are checked before general status/plan intents.
     if "시장" in normalized and any(token in normalized for token in ("어때", "상태", "상황", "분위기")):
         return Intent.MARKET_STATUS
+    try:
+        from gaon.runtime.llm_tool_routing import _multi_symbol_research_execution, _normalize
+
+        if _multi_symbol_research_execution(_normalize(normalized)):
+            return Intent.MULTI_SYMBOL_RESEARCH
+    except Exception:
+        pass
     if any(token in normalized for token in ("분석해줘", "분석해 줘", "분석 부탁", "종목 분석")):
         return Intent.STOCK_ANALYSIS
     if "일정" in normalized and any(token in normalized for token in ("알려", "보여", "확인", "뭐")):
