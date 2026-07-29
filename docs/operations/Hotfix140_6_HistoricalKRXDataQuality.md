@@ -13,6 +13,7 @@ anomalies before Sprint 141-150 starts.
 - `2025-09-19` remains a KRX open trading day and a Yahoo KRX provider gap.
 - For `005930`, `2022-01-03` and `2022-05-09` are tracked as Yahoo symbol-specific provider gaps when absent from the provider payload.
 - `2024-10-14` remains a Yahoo same-index OHLC anomaly for `005930`; the inconsistent bar is excluded and recorded as `provider_ohlc_anomaly`.
+- Hotfix 150.4 extends the Yahoo anomaly registry for the Sprint 141-150 research universe (`005930`, `000660`, `005380`, `035420`, `051910`) based on production five-year inspections. The common exchange-open provider gaps are `2022-01-03` and `2022-05-09`; `000660` additionally has `2023-02-02` and `2023-02-09`, `005380` has `2023-02-01`, and `035420` has `2023-02-02`.
 
 ## Zero Volume Policy
 
@@ -38,11 +39,13 @@ Production 5-year inspection for `005930` found 11 Yahoo rows where
 - `2022-03-15`
 - `2022-03-17`
 
-These dates are registered as `real:yahoo-chart` / `005930`
-`provider_zero_volume_anomaly` entries. The bars are excluded from backtest
-input and disclosed as warnings. The policy is intentionally symbol-specific:
-the anomaly does not apply to `000660`, `005380`, `035420`, `051910`, or any
-future provider unless separately verified.
+Hotfix 150.4 verifies the same Yahoo zero-volume shape for the Sprint 141-150
+multi-symbol research universe. These dates are registered as
+`real:yahoo-chart` symbol-specific `provider_zero_volume_anomaly` entries for
+`005930`, `000660`, `005380`, `035420`, and `051910`. The bars are excluded from
+backtest input and disclosed as warnings. The policy remains symbol-specific:
+the anomaly does not apply to any other symbol or future provider unless
+separately verified.
 
 Unregistered zero-volume rows remain blocking and must not be silently
 reclassified.

@@ -552,11 +552,34 @@ class ProviderAnomalyPolicy:
         return DataQualityFinding("zero_volume", "warning", f"zero volume bar requires provider review: provider={self.provider} symbol={symbol_upper} date={bar.timestamp} open={bar.open} high={bar.high} low={bar.low} close={bar.close}")
 
 
+YAHOO_KRX_RESEARCH_SYMBOLS = ("005930", "000660", "005380", "035420", "051910")
+YAHOO_KRX_COMMON_SYMBOL_PROVIDER_GAP_DATES = frozenset({"2022-01-03", "2022-05-09"})
+YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES = frozenset(
+    {
+        "2022-01-26",
+        "2022-02-08",
+        "2022-02-09",
+        "2022-02-21",
+        "2022-02-22",
+        "2022-02-23",
+        "2022-02-28",
+        "2022-03-04",
+        "2022-03-10",
+        "2022-03-15",
+        "2022-03-17",
+    }
+)
+
+
 YAHOO_KRX_ANOMALY_POLICY = ProviderAnomalyPolicy(
     "real:yahoo-chart",
     frozenset({"2025-09-19"}),
     {
-        "005930": frozenset({"2022-01-03", "2022-05-09"}),
+        "005930": YAHOO_KRX_COMMON_SYMBOL_PROVIDER_GAP_DATES,
+        "000660": YAHOO_KRX_COMMON_SYMBOL_PROVIDER_GAP_DATES | frozenset({"2023-02-02", "2023-02-09"}),
+        "005380": YAHOO_KRX_COMMON_SYMBOL_PROVIDER_GAP_DATES | frozenset({"2023-02-01"}),
+        "035420": YAHOO_KRX_COMMON_SYMBOL_PROVIDER_GAP_DATES | frozenset({"2023-02-02"}),
+        "051910": YAHOO_KRX_COMMON_SYMBOL_PROVIDER_GAP_DATES,
     },
     {
         "005930": frozenset({"2024-10-14"}),
@@ -565,23 +588,13 @@ YAHOO_KRX_ANOMALY_POLICY = ProviderAnomalyPolicy(
         "051910": frozenset({"2024-10-14", "2024-11-07"}),
     },
     {
-        "005930": frozenset(
-            {
-                "2022-01-26",
-                "2022-02-08",
-                "2022-02-09",
-                "2022-02-21",
-                "2022-02-22",
-                "2022-02-23",
-                "2022-02-28",
-                "2022-03-04",
-                "2022-03-10",
-                "2022-03-15",
-                "2022-03-17",
-            }
-        ),
+        "005930": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+        "000660": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+        "005380": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+        "035420": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+        "051910": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
     },
-    "multi-symbol Yahoo KRX raw chart audit: 005930,000660,005380,035420,051910; production 005930 5y inspection recorded same-index OHLC rows with volume=0/trading_value=0",
+    "production Yahoo KRX raw chart audit: multi-symbol 5y inspection for 005930,000660,005380,035420,051910; zero-volume rows have same-index OHLC, volume=0, trading_value=0; listed provider gaps are exchange-open dates missing from Yahoo payload",
 )
 
 
@@ -1097,46 +1110,52 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
     for closed_day in ("2023-05-29", "2023-12-29", "2024-12-31"):
         if closed_day in calendar.expected_open_dates(start_date=closed_day, end_date=closed_day):
             raise RealMarketDataUnavailable(f"real_data_unavailable: KRX closure treated as open {closed_day}")
-    for open_day in ("2022-01-03", "2022-05-09", "2025-09-19"):
+    for open_day in ("2022-01-03", "2022-05-09", "2023-02-01", "2023-02-02", "2023-02-09", "2025-09-19"):
         if open_day not in calendar.expected_open_dates(start_date=open_day, end_date=open_day):
             raise RealMarketDataUnavailable(f"real_data_unavailable: provider anomaly date incorrectly marked exchange closed {open_day}")
 
     expected = calendar.expected_open_dates(start_date="2022-01-03", end_date="2025-09-19")
-    zero_volume_dates = {
-        "2022-01-26",
-        "2022-02-08",
-        "2022-02-09",
-        "2022-02-21",
-        "2022-02-22",
-        "2022-02-23",
-        "2022-02-28",
-        "2022-03-04",
-        "2022-03-10",
-        "2022-03-15",
-        "2022-03-17",
-    }
-    missing_yahoo_dates = {"2022-01-03", "2022-05-09", "2024-10-14", "2025-09-19"} | zero_volume_dates
-    yahoo_dataset = _quality_fixture_dataset(
-        "historical-data-quality-yahoo",
-        "2022-01-03",
-        "2025-09-19",
-        tuple(day for day in expected if day not in missing_yahoo_dates),
-        fixture_backed=False,
-        source="real:yahoo-chart",
-        symbol="005930",
-    )
-    yahoo_quality = _validate_krx_daily_dataset(yahoo_dataset, min_bars=1)
-    provider_gap_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_gap"))
-    if provider_gap_dates != ("2022-01-03", "2022-05-09", "2025-09-19"):
-        raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical provider gaps were not classified correctly {provider_gap_dates}")
-    provider_ohlc_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_ohlc_anomaly"))
-    if provider_ohlc_dates != ("2024-10-14",):
-        raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical OHLC anomaly was not classified correctly {provider_ohlc_dates}")
-    provider_zero_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_zero_volume_anomaly"))
-    if provider_zero_dates != tuple(sorted(zero_volume_dates)):
-        raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical zero-volume anomalies were not classified correctly {provider_zero_dates}")
-    if _blocking_quality_findings(yahoo_quality):
-        raise RealMarketDataUnavailable("real_data_unavailable: explained Yahoo historical anomalies were blocking")
+    checked_symbols: dict[str, dict[str, object]] = {}
+    all_provider_gap_dates: set[str] = set()
+    all_provider_ohlc_dates: set[str] = set()
+    all_provider_zero_dates: set[str] = set()
+    policy = YAHOO_KRX_ANOMALY_POLICY
+    for symbol in YAHOO_KRX_RESEARCH_SYMBOLS:
+        symbol_gaps = policy.symbol_provider_gap_dates.get(symbol, frozenset())
+        symbol_ohlc = policy.provider_ohlc_anomaly_dates.get(symbol, frozenset())
+        missing_yahoo_dates = policy.provider_gap_dates | symbol_gaps | symbol_ohlc | YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES
+        yahoo_dataset = _quality_fixture_dataset(
+            f"historical-data-quality-yahoo-{symbol}",
+            "2022-01-03",
+            "2025-09-19",
+            tuple(day for day in expected if day not in missing_yahoo_dates),
+            fixture_backed=False,
+            source="real:yahoo-chart",
+            symbol=symbol,
+            zero_volume_dates=YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+        )
+        yahoo_dataset = _exclude_registered_provider_zero_volume_bars(yahoo_dataset)
+        yahoo_quality = _validate_krx_daily_dataset(yahoo_dataset, min_bars=1)
+        provider_gap_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_gap"))
+        expected_gap_dates = tuple(sorted(policy.provider_gap_dates | symbol_gaps))
+        if provider_gap_dates != expected_gap_dates:
+            raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical provider gaps were not classified correctly for {symbol}: {provider_gap_dates}")
+        provider_ohlc_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_ohlc_anomaly"))
+        if provider_ohlc_dates != tuple(sorted(symbol_ohlc)):
+            raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical OHLC anomalies were not classified correctly for {symbol}: {provider_ohlc_dates}")
+        provider_zero_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_zero_volume_anomaly"))
+        if provider_zero_dates != tuple(sorted(YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES)):
+            raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical zero-volume anomalies were not classified correctly for {symbol}: {provider_zero_dates}")
+        if _blocking_quality_findings(yahoo_quality):
+            raise RealMarketDataUnavailable(f"real_data_unavailable: explained Yahoo historical anomalies were blocking for {symbol}")
+        checked_symbols[symbol] = {
+            "provider_gap_dates": provider_gap_dates,
+            "provider_ohlc_anomaly_dates": provider_ohlc_dates,
+            "provider_zero_volume_anomaly_dates": provider_zero_dates,
+        }
+        all_provider_gap_dates.update(provider_gap_dates)
+        all_provider_ohlc_dates.update(provider_ohlc_dates)
+        all_provider_zero_dates.update(provider_zero_dates)
 
     other_symbol_dataset = _quality_fixture_dataset(
         "historical-data-quality-other-symbol",
@@ -1145,7 +1164,7 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
         tuple(day for day in calendar.expected_open_dates(start_date="2022-01-03", end_date="2022-01-05") if day != "2022-01-03"),
         fixture_backed=False,
         source="real:yahoo-chart",
-        symbol="000660",
+        symbol="068270",
     )
     other_symbol_quality = _validate_krx_daily_dataset(other_symbol_dataset, min_bars=1)
     if not _has_finding(other_symbol_quality, "unknown_missing_trading_day"):
@@ -1179,13 +1198,15 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
 
     return {
         "schema_version": 33,
-        "provider": yahoo_dataset.metadata.source,
-        "fixture_backed": yahoo_dataset.metadata.fixture_backed,
-        "provider_gap_dates": provider_gap_dates,
-        "provider_ohlc_anomaly_dates": provider_ohlc_dates,
-        "provider_zero_volume_anomaly_dates": provider_zero_dates,
+        "provider": "real:yahoo-chart",
+        "fixture_backed": False,
+        "symbols_checked": YAHOO_KRX_RESEARCH_SYMBOLS,
+        "provider_gap_dates": tuple(sorted(all_provider_gap_dates)),
+        "provider_ohlc_anomaly_dates": tuple(sorted(all_provider_ohlc_dates)),
+        "provider_zero_volume_anomaly_dates": tuple(sorted(all_provider_zero_dates)),
+        "symbol_results": checked_symbols,
         "zero_volume_policy": "registered_zero_volume_excluded_unregistered_blocks",
-        "blocking_findings": len(_blocking_quality_findings(yahoo_quality)),
+        "blocking_findings": 0,
         "symbol_specific_gap_isolated": True,
         "krx_closed_2023_05_29": True,
         "inserted": False,
