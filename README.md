@@ -45,6 +45,7 @@ Included foundations:
 - Sprint 131-140 Autonomous Retest Pipeline with insufficient-sample triggers, deterministic period expansion, real-data re-fetch contracts, repeated re-backtests, candidate re-evaluation, multi-period evidence lineage, advisory recommendation refresh, schema v35 persistence, and read-only retest status/history tools
 - Sprint 141-150 Multi-Symbol Autonomous Research with explicit/curated KRX universe provenance, per-symbol real-data quality isolation, cross-symbol aggregation, concentration analysis, sample sufficiency, TESTED candidate generalization, schema v36 persistence, and read-only multi-symbol research status/history tools
 - Sprint 151 Dynamic KRX Universe Selection with deterministic trading-value ranking, canonical KRX symbol tie-breaks, fixture/real provenance, fail-closed provider handling, and a read-only universe-to-multi-symbol research handoff
+- Sprint 152 Gaon Conversational MVP with deterministic Korean Telegram intents, KRX symbol extraction, human-readable single-symbol and comparison reports, session-scoped follow-up context, and a read-only `gaon-conversation-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

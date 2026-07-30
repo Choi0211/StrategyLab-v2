@@ -28,6 +28,29 @@ This integration connects Gaon Runtime to the Telegram Bot API for research conv
 10. For 24/7 operation, run `gaon.runtime.cli run --db <path>` under systemd.
 11. Return to dry-run mode when smoke testing is complete.
 
+## Conversational MVP Smoke Prompts
+
+Sprint 152 supports deterministic Korean conversational routing for common
+research prompts. After deployment and import-path verification, test:
+
+- `안녕하세요`
+- `삼성전자 분석해줘`
+- `삼성전자와 SK하이닉스 비교해줘`
+- `왜 그렇게 판단했어?`
+- `쉽게 설명해줘`
+- `자세히 보여줘`
+
+The final Telegram response must be Korean, must not expose raw JSON or
+internal IDs, and must not fabricate metrics outside structured safe-tool
+output. If one symbol in a comparison fails, Gaon must say the comparison is
+partial instead of ranking the successful symbol alone.
+
+Release check:
+
+```bash
+python -m gaon.runtime.cli gaon-conversation-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
 ## Windows PowerShell Example
 
 ```powershell

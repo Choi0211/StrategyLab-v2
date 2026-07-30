@@ -26,6 +26,13 @@ class Intent(str, Enum):
     SYNC_NOTION = "sync_notion"
     APPROVAL_STATUS = "approval_status"
     MULTI_SYMBOL_RESEARCH = "multi_symbol_research"
+    SINGLE_SYMBOL_ANALYSIS = "single_symbol_analysis"
+    COMPARE_SYMBOLS = "compare_symbols"
+    MULTI_SYMBOL_ANALYSIS = "multi_symbol_analysis"
+    EXPLAIN_PREVIOUS_RESULT = "explain_previous_result"
+    SIMPLIFY_PREVIOUS_RESULT = "simplify_previous_result"
+    SHOW_DETAILS = "show_details"
+    STATUS_QUERY = "status_query"
     UNKNOWN = "unknown"
 
 
@@ -98,3 +105,40 @@ def _parse_slash_intent(normalized: str) -> Intent | None:
     if normalized == "/approvals":
         return Intent.APPROVAL_STATUS
     return None
+
+
+def _parse_utf8_conversational_mvp(normalized: str) -> Intent | None:
+    compact = normalized.replace(" ", "")
+    if compact in {"안녕", "안녕하세요", "가온", "가온아", "hello", "hi", "gaon"}:
+        return Intent.GREETING
+    if any(token in normalized for token in ("도움말", "뭘 할 수", "무엇을 할 수", "help")):
+        return Intent.HELP
+    if any(token in normalized for token in ("자세히", "원본", "전체 결과", "상세")):
+        return Intent.SHOW_DETAILS
+    if any(token in normalized for token in ("쉽게", "간단히", "요약")):
+        return Intent.SIMPLIFY_PREVIOUS_RESULT
+    if any(token in normalized for token in ("왜", "그렇게 판단", "근거", "이유")):
+        return Intent.EXPLAIN_PREVIOUS_RESULT
+    symbol_count = _known_symbol_count(normalized)
+    if symbol_count >= 2 and any(token in normalized for token in ("비교", "차이", "어느 쪽", "뭐가 더", "와", "랑", "하고")):
+        return Intent.COMPARE_SYMBOLS
+    if symbol_count == 1 and any(token in normalized for token in ("분석", "백테스트", "검증", "연구")):
+        return Intent.SINGLE_SYMBOL_ANALYSIS
+    if any(token in normalized for token in ("상태", "status", "런타임")):
+        return Intent.STATUS_QUERY
+    return None
+
+
+def _known_symbol_count(normalized: str) -> int:
+    aliases = (
+        ("005930", "삼성전자", "삼성 전자"),
+        ("000660", "sk하이닉스", "sk 하이닉스", "하이닉스"),
+        ("005380", "현대차", "현대자동차"),
+        ("035420", "naver", "네이버"),
+        ("051910", "lg화학", "lg 화학"),
+    )
+    count = 0
+    for group in aliases:
+        if any(alias.casefold() in normalized for alias in group):
+            count += 1
+    return count
