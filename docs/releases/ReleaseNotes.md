@@ -5,6 +5,20 @@ Base: StrategyLab v1.0 Stable Release
 
 ## Hotfix 150.5 Production Multi-Symbol Yahoo Registry Alignment
 
+Status: COMPLETE.
+
+Final production verification was completed on merge commit `5f6ad1d` with
+implementation commit `519692c`. The deployed module is now imported from
+`/opt/strategylab-v2/src/gaon/research/krx_real_pipeline.py` after reinstalling
+StrategyLab v2 in editable mode and restarting `strategylab-gaon`.
+
+The closeout root cause was deployment packaging, not research logic: the VPS
+service was using a stale copied `gaon` package from
+`.venv/lib/python3.12/site-packages` instead of the Git working tree under
+`/opt/strategylab-v2/src/gaon`. Future deployments must run
+`.venv/bin/pip install -e .` and verify `deployment-import-path-check` before
+service restart verification.
+
 Production inspection showed that Hotfix 150.4 did not fully exercise the
 production-equivalent registry path. The live Yahoo data for `000660`,
 `005380`, `035420`, and `051910` includes the common 2022 zero-volume anomaly

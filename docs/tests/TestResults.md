@@ -4,6 +4,9 @@ Status: Passed
 
 ## Hotfix 150.5 Production Multi-Symbol Yahoo Registry Alignment
 
+- Closeout unit: `tests.unit.test_runtime_service`
+  - `deployment-import-path-check` passes when `gaon` imports from the project `src/gaon`
+  - `deployment-import-path-check` fails closed when the expected source path does not match
 - Unit: `tests.unit.test_krx_real_pipeline`
   - production inspection path canonicalizes Yahoo suffix symbols before registry lookup
   - `000660.KS` classifies `2022-01-03` and `2022-05-09` as provider gaps

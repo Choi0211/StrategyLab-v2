@@ -31,6 +31,25 @@ Linux/macOS bash:
 python3.11 scripts/verify_release.py
 ```
 
+## VPS Deployment Verification
+
+Production deployments must refresh the editable package and verify the module
+path before restarting the long-running service:
+
+```bash
+cd /opt/strategylab-v2
+git pull origin main
+.venv/bin/pip install -e .
+.venv/bin/python -m gaon.runtime.cli deployment-import-path-check \
+  --expected-source /opt/strategylab-v2/src/gaon
+sudo systemctl restart strategylab-gaon
+sudo systemctl status strategylab-gaon
+```
+
+The import-path check must show `actual=/opt/strategylab-v2/src/gaon`. A
+`.venv/lib/python*/site-packages/gaon` path means the VPS is running a stale
+copied package and the service must not be treated as upgraded.
+
 ## Phase A Diagnostics
 
 ```powershell
