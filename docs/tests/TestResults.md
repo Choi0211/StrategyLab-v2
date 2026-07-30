@@ -2,6 +2,32 @@
 
 Status: Passed
 
+## Sprint 151 Dynamic KRX Universe Selection
+
+- Unit: `tests.unit.test_krx_universe`
+  - trading-value ranking is descending and deterministic
+  - equal trading values use canonical symbol ascending tie-breaks
+  - invalid market, invalid date, invalid metric, invalid size, and non-trading selection date fail closed
+  - zero-volume rows, zero-trading-value rows, duplicate symbols, and user exclusions are removed with explicit reasons
+  - Yahoo-style suffix symbols canonicalize to six-digit KRX symbols
+  - provider failure fails closed
+  - explicit symbols keep priority over a dynamic universe result
+  - dynamic universe result connects to multi-symbol research
+  - read-only `krx_universe_select` safe tool succeeds without trading side effects
+- Integration: `tests.integration.test_krx_universe_flow`
+  - `krx-universe-select --json` returns readable deterministic JSON
+  - `krx-universe-release-check` passes
+  - existing explicit `multi-symbol-research-release-check` remains compatible
+- Full verification:
+  - `python -m unittest discover -s tests/unit`: PASS, 548 tests
+  - `python -m unittest discover -s tests/integration`: PASS, 118 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli krx-universe-release-check`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source ./src/gaon`: PASS
+  - `git diff --check`: PASS
+- Note: `python -m pytest ...` was not executed because pytest is not installed in the bundled Python runtime.
+- Production real-universe provider validation: PENDING PRODUCTION VERIFICATION.
+
 ## Hotfix 150.5 Production Multi-Symbol Yahoo Registry Alignment
 
 - Closeout unit: `tests.unit.test_runtime_service`

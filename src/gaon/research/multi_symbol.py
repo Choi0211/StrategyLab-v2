@@ -40,6 +40,7 @@ from gaon.research.krx_real_pipeline import (
     utc_now,
 )
 from gaon.research.real_research import DataQualityReport, DataQualityStatus, MarketDataset, MarketSymbol
+from gaon.research.krx_universe import KRXUniverseResult
 
 
 MULTI_SYMBOL_SCHEMA_VERSION = 1
@@ -327,11 +328,13 @@ class MultiSymbolResearchRun:
 
 
 class KRXResearchUniverseResolver:
-    def resolve(self, symbols: tuple[str, ...] | None = None, *, universe_type: str = "explicit", created_at: str | None = None) -> KRXResearchUniverse:
+    def resolve(self, symbols: tuple[str, ...] | None = None, *, universe_type: str = "explicit", universe_result: KRXUniverseResult | None = None, created_at: str | None = None) -> KRXResearchUniverse:
         at = created_at or utc_now()
         if symbols:
             normalized = _normalize_symbols(symbols)
             return KRXResearchUniverse(f"universe:explicit:{_sha({'symbols': normalized})[:12]}", UniverseType.EXPLICIT, normalized, "explicit_user_provided", False, at)
+        if universe_result is not None:
+            return KRXResearchUniverse(universe_result.universe_id, UniverseType.CURATED, universe_result.symbols, f"dynamic_{universe_result.request.ranking_metric}", universe_result.fixture_backed, at)
         if universe_type == "curated":
             return KRXResearchUniverse("universe:curated:krx-largecap-v1", UniverseType.CURATED, DEFAULT_CURATED_SYMBOLS, "curated_static_research_universe_v1", False, at)
         return KRXResearchUniverse(f"universe:explicit:{_sha({'symbols': DEFAULT_CURATED_SYMBOLS})[:12]}", UniverseType.EXPLICIT, DEFAULT_CURATED_SYMBOLS, "explicit_default_release_universe", False, at)
@@ -461,6 +464,7 @@ class AutonomousMultiSymbolResearchOrchestrator:
         *,
         symbols: tuple[str, ...] | None = None,
         universe_type: str = "explicit",
+        universe_result: KRXUniverseResult | None = None,
         start_date: str = "2021-07-25",
         end_date: str = "2026-07-24",
         run_id: str | None = None,
@@ -468,7 +472,7 @@ class AutonomousMultiSymbolResearchOrchestrator:
     ) -> MultiSymbolResearchRun:
         at = generated_at or utc_now()
         rid = run_id or f"multi-symbol-research:{uuid4().hex}"
-        universe = KRXResearchUniverseResolver().resolve(symbols, universe_type=universe_type, created_at=at)
+        universe = KRXResearchUniverseResolver().resolve(symbols, universe_type=universe_type, universe_result=universe_result, created_at=at)
         if not universe.symbols:
             raise RealMarketDataUnavailable("real_data_unavailable: universe has no symbols")
         strategy = UserStrategyParser().parse(request_text or DEFAULT_REQUEST_TEXT, symbol=universe.symbols[0], created_at=at)
