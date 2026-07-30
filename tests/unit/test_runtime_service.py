@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 from gaon.runtime.cli import main as cli_main
@@ -65,6 +65,20 @@ class RuntimeServiceTest(unittest.TestCase):
         with redirect_stdout(output):
             self.assertEqual(cli_main(["status"]), 0)
         self.assertIn("running=False", output.getvalue())
+
+    def test_deployment_import_path_check_requires_project_source(self) -> None:
+        expected = os.path.abspath(os.path.join(os.getcwd(), "src", "gaon"))
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(cli_main(["deployment-import-path-check", "--expected-source", expected]), 0)
+        self.assertIn("deployment-import-path-check: PASS", output.getvalue())
+        self.assertIn(expected, output.getvalue())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                self.assertEqual(cli_main(["deployment-import-path-check", "--expected-source", os.path.join(tmp, "src", "gaon")]), 1)
+            self.assertIn("unexpected gaon import path", stderr.getvalue())
 
     def test_telegram_runtime_tick_polls_and_reuses_persisted_offset(self) -> None:
         store = RuntimeStateStore(":memory:")

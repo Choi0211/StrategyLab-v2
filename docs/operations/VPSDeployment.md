@@ -34,15 +34,42 @@ Do not place secrets in Git. Do not run as root. Do not connect private trading 
 ## v5 Safe Upgrade Procedure
 
 1. Pull latest `main` into the source working copy.
-2. Run unit tests, integration tests, and `python scripts/verify_release.py`.
-3. Back up the runtime SQLite DB.
-4. Sync release code to the production location.
-5. Rebuild or refresh the virtual environment if dependencies changed.
+2. Refresh the editable installation with `.venv/bin/pip install -e .`.
+3. Verify the imported module path with `.venv/bin/python -m gaon.runtime.cli deployment-import-path-check --expected-source /opt/strategylab-v2/src/gaon`.
+4. Run unit tests, integration tests, and `.venv/bin/python scripts/verify_release.py`.
+5. Back up the runtime SQLite DB.
 6. Check the environment file outside Git.
-7. Run `python -m gaon.runtime.cli db-check --db /var/lib/strategylab/gaon-runtime.sqlite`.
+7. Run `.venv/bin/python -m gaon.runtime.cli db-check --db /var/lib/strategylab/gaon-runtime.sqlite`.
 8. Restart `strategylab-gaon.service`.
-9. Run health, Telegram check, and `v5-status`.
-10. If the upgrade fails, stop the service, restore the DB backup, restore the previous code version, and restart.
+9. Run health, Telegram check, import-path check, and `v5-status`.
+10. If the upgrade fails, stop the service, restore the DB backup, restore the previous code version, reinstall editable mode, and restart.
+
+## Editable Install Requirement
+
+Production must execute Gaon from the reviewed source tree, not from a stale
+copied package under `.venv/lib/python*/site-packages`. Every VPS deployment
+therefore requires:
+
+```bash
+cd /opt/strategylab-v2
+git pull origin main
+.venv/bin/pip install -e .
+.venv/bin/python -m gaon.runtime.cli deployment-import-path-check \
+  --expected-source /opt/strategylab-v2/src/gaon
+sudo systemctl restart strategylab-gaon
+sudo systemctl status strategylab-gaon
+```
+
+Expected import-path output:
+
+```text
+deployment-import-path-check: PASS actual=/opt/strategylab-v2/src/gaon expected=/opt/strategylab-v2/src/gaon editable_source=true
+```
+
+If the command reports `site-packages` or any path outside
+`/opt/strategylab-v2/src/gaon`, stop the service, reinstall with
+`.venv/bin/pip install -e .`, and restart before running production Telegram or
+market-data verification.
 
 The public repository documents the adapter contract only. A real v1 production
 deployment adapter must provide health check, active strategy discovery,

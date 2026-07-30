@@ -10,6 +10,7 @@ python -m gaon.runtime.cli provider-gap-release-check --db runtime.sqlite
 
 Current production behavior:
 
+- Hotfix 150.5 is COMPLETE after VPS verification on merge commit `5f6ad1d` and implementation commit `519692c`
 - real provider boundary exists
 - real public KRX fetcher can be enabled through Yahoo chart historical data
 - unavailable real data reports `real_data_unavailable`
@@ -35,6 +36,14 @@ GAON_MARKET_DATA_TIMEOUT_SECONDS=20
 ```
 
 Production live-data check:
+
+Before live checks, verify the VPS is importing the editable source tree:
+
+```bash
+cd /opt/strategylab-v2
+.venv/bin/python -m gaon.runtime.cli deployment-import-path-check \
+  --expected-source /opt/strategylab-v2/src/gaon
+```
 
 ```bash
 python -m gaon.runtime.cli real-krx-data-release-check \

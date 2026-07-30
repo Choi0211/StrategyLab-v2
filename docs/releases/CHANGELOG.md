@@ -2,6 +2,10 @@
 
 ## Hotfix 150.5 - Production Multi-Symbol Yahoo Registry Alignment
 
+- Closeout: marked Hotfix 150.5 COMPLETE after production merge `5f6ad1d` and implementation commit `519692c` were verified on VPS.
+- Documented the production deployment root cause: the service was importing a stale copied `gaon` package from `.venv/lib/python3.12/site-packages` instead of `/opt/strategylab-v2/src/gaon`.
+- Added `deployment-import-path-check` so deployments fail fast when Gaon is imported from outside the intended source tree.
+- Updated VPS deployment and incident runbooks to require `git pull origin main`, `.venv/bin/pip install -e .`, import-path verification, and `systemctl restart strategylab-gaon`.
 - Fixed the Hotfix 150.4 test gap where production-equivalent inspection did not verify the common zero-volume anomaly set plus each symbol's additional production evidence.
 - Added symbol canonicalization for Yahoo anomaly lookups so `000660`, `000660.KS`, and equivalent KQ-prefixed forms resolve to the same registry key.
 - Updated Yahoo zero-volume anomaly dates for `000660`, `005380`, `035420`, and `051910` to include the common 2022 provider anomaly set plus VPS-confirmed symbol-specific additions.

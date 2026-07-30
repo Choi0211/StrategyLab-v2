@@ -129,6 +129,32 @@ TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
 
 
+def _deployment_import_path_payload(expected_source: str | None = None) -> dict[str, object]:
+    import gaon
+
+    module_file = getattr(gaon, "__file__", None)
+    if not module_file:
+        raise ConfigurationError("gaon import path unavailable")
+    actual_dir = os.path.abspath(os.path.dirname(module_file))
+    expected_dir = os.path.abspath(expected_source or os.path.join(os.getcwd(), "src", "gaon"))
+    actual_norm = os.path.normcase(actual_dir)
+    expected_norm = os.path.normcase(expected_dir)
+    try:
+        under_expected = os.path.commonpath([actual_norm, expected_norm]) == expected_norm
+    except ValueError:
+        under_expected = False
+    stale_site_packages = any(part == "site-packages" for part in actual_norm.replace("\\", "/").split("/"))
+    if not under_expected:
+        reason = "stale site-packages import" if stale_site_packages else "unexpected gaon import path"
+        raise ConfigurationError(f"{reason}: actual={actual_dir} expected={expected_dir}")
+    return {
+        "actual": actual_dir,
+        "expected": expected_dir,
+        "site_packages": stale_site_packages,
+        "editable_source": True,
+    }
+
+
 def _configure_cli_text_streams() -> None:
     _configure_text_stream(sys.stdout)
     _configure_text_stream(sys.stderr)
@@ -149,6 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gaon.runtime")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("config-check")
+    import_path_check = sub.add_parser("deployment-import-path-check")
+    import_path_check.add_argument("--expected-source", default=None)
+    import_path_check.add_argument("--json", action="store_true")
     db_check = sub.add_parser("db-check")
     db_check.add_argument("--db", default=":memory:")
     health = sub.add_parser("health")
@@ -714,6 +743,12 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args: argparse.Namespace) -> int:
     if args.command == "config-check":
         print(load_runtime_config(os.environ).__repr__())
+    elif args.command == "deployment-import-path-check":
+        payload = _deployment_import_path_payload(args.expected_source)
+        if args.json:
+            print(_dumps_json(payload))
+        else:
+            print(f"deployment-import-path-check: PASS actual={payload['actual']} expected={payload['expected']} editable_source=true")
     elif args.command in {"health", "readiness", "db-check"}:
         store = RuntimeStateStore(args.db)
         try:
