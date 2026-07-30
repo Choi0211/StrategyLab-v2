@@ -39,13 +39,22 @@ Production 5-year inspection for `005930` found 11 Yahoo rows where
 - `2022-03-15`
 - `2022-03-17`
 
-Hotfix 150.4 verifies the same Yahoo zero-volume shape for the Sprint 141-150
-multi-symbol research universe. These dates are registered as
-`real:yahoo-chart` symbol-specific `provider_zero_volume_anomaly` entries for
-`005930`, `000660`, `005380`, `035420`, and `051910`. The bars are excluded from
-backtest input and disclosed as warnings. The policy remains symbol-specific:
-the anomaly does not apply to any other symbol or future provider unless
-separately verified.
+Hotfix 150.5 corrects the Hotfix 150.4 test gap by registering the common
+production zero-volume anomaly set for every affected research symbol, plus
+symbol-specific additional dates:
+
+- `005930`: `2022-01-26`, `2022-02-08`, `2022-02-09`, `2022-02-21`, `2022-02-22`, `2022-02-23`, `2022-02-28`, `2022-03-04`, `2022-03-10`, `2022-03-15`, `2022-03-17`
+- `000660`: common set plus `2022-03-11`, `2022-03-16`, `2022-03-21`
+- `005380`: common set plus `2022-01-28`, `2022-03-11`, `2022-03-16`, `2022-03-21`
+- `035420`: common set plus `2022-03-11`, `2022-03-16`, `2022-03-21`
+- `051910`: common set plus `2022-03-21`
+
+These dates are registered as `real:yahoo-chart` symbol-specific
+`provider_zero_volume_anomaly` entries. The bars are excluded from backtest
+input and disclosed as warnings. The policy remains symbol-specific: the
+anomaly does not apply to any other symbol or future provider unless separately
+verified. Registry lookups canonicalize Yahoo suffixes such as `.KS` and `.KQ`
+so production inspection and tests use the same anomaly policy.
 
 Unregistered zero-volume rows remain blocking and must not be silently
 reclassified.

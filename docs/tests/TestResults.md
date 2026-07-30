@@ -2,6 +2,16 @@
 
 Status: Passed
 
+## Hotfix 150.5 Production Multi-Symbol Yahoo Registry Alignment
+
+- Unit: `tests.unit.test_krx_real_pipeline`
+  - production inspection path canonicalizes Yahoo suffix symbols before registry lookup
+  - `000660.KS` classifies `2022-01-03` and `2022-05-09` as provider gaps
+  - `000660.KS` classifies the common 2022 zero-volume anomaly set plus `2022-03-11`, `2022-03-16`, and `2022-03-21` as registered provider zero-volume anomalies
+  - per-symbol zero-volume anomaly dates are tested from VPS production evidence as common dates plus symbol-specific additions
+- CLI release check:
+  - `python -m gaon.runtime.cli historical-krx-data-quality-release-check --db <db>`
+
 ## Hotfix 150.4 Yahoo Multi-Symbol Data Quality
 
 - Unit: `tests.unit.test_krx_real_pipeline`

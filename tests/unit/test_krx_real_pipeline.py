@@ -15,8 +15,9 @@ from gaon.research.krx_real_pipeline import (
     UserStrategyParser,
     WalkForwardValidator,
     YahooKRXHistoricalDataProvider,
-    YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+    YAHOO_KRX_ALL_ZERO_VOLUME_ANOMALY_DATES,
     YAHOO_KRX_RESEARCH_SYMBOLS,
+    YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL,
     YAHOO_KRX_ANOMALY_POLICY,
     build_market_data_provider_from_env,
     default_execution_assumptions,
@@ -273,12 +274,17 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertEqual(result["symbols_checked"], YAHOO_KRX_RESEARCH_SYMBOLS)
         self.assertEqual(result["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2023-02-01", "2023-02-02", "2023-02-09", "2025-09-19"))
         self.assertEqual(result["provider_ohlc_anomaly_dates"], ("2024-01-15", "2024-10-14", "2024-11-07"))
-        self.assertEqual(result["provider_zero_volume_anomaly_dates"], tuple(sorted(YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES)))
+        self.assertEqual(result["provider_zero_volume_anomaly_dates"], tuple(sorted(YAHOO_KRX_ALL_ZERO_VOLUME_ANOMALY_DATES)))
         symbol_results = result["symbol_results"]
         self.assertEqual(symbol_results["000660"]["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2023-02-02", "2023-02-09", "2025-09-19"))
         self.assertEqual(symbol_results["005380"]["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2023-02-01", "2025-09-19"))
         self.assertEqual(symbol_results["035420"]["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2023-02-02", "2025-09-19"))
         self.assertEqual(symbol_results["051910"]["provider_gap_dates"], ("2022-01-03", "2022-05-09", "2025-09-19"))
+        self.assertEqual(symbol_results["005930"]["provider_zero_volume_anomaly_dates"], tuple(sorted(YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["005930"])))
+        self.assertEqual(symbol_results["000660"]["provider_zero_volume_anomaly_dates"], tuple(sorted(YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["000660"])))
+        self.assertEqual(symbol_results["005380"]["provider_zero_volume_anomaly_dates"], tuple(sorted(YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["005380"])))
+        self.assertEqual(symbol_results["035420"]["provider_zero_volume_anomaly_dates"], tuple(sorted(YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["035420"])))
+        self.assertEqual(symbol_results["051910"]["provider_zero_volume_anomaly_dates"], tuple(sorted(YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["051910"])))
         self.assertEqual(result["zero_volume_policy"], "registered_zero_volume_excluded_unregistered_blocks")
         self.assertEqual(result["blocking_findings"], 0)
         self.assertTrue(result["symbol_specific_gap_isolated"])
@@ -298,6 +304,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         dates = KRXTradingCalendar().expected_open_dates(start_date="2022-01-24", end_date="2022-06-30")
         for symbol in YAHOO_KRX_RESEARCH_SYMBOLS:
             with self.subTest(symbol=symbol):
+                zero_volume_dates = YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL[symbol]
                 dataset = _quality_dataset(
                     f"registered-zero-volume-{symbol}",
                     "2022-01-24",
@@ -305,15 +312,35 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
                     dates,
                     source="real:yahoo-chart",
                     symbol=symbol,
-                    zero_volume_dates=YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+                    zero_volume_dates=zero_volume_dates,
                 )
                 normalized, report, _inserted = KRXDatasetBuilder(None, _StaticProvider(dataset)).build(symbol, start_date="2022-01-24", end_date="2022-06-30")
                 normalized_dates = tuple(bar.timestamp for bar in normalized.bars)
-                for anomaly_date in YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES:
+                for anomaly_date in zero_volume_dates:
                     self.assertNotIn(anomaly_date, normalized_dates)
-                self.assertEqual(_finding_dates_for_test(report, "provider_zero_volume_anomaly"), tuple(sorted(YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES)))
+                self.assertEqual(_finding_dates_for_test(report, "provider_zero_volume_anomaly"), tuple(sorted(zero_volume_dates)))
                 self.assertFalse(any(item.code == "zero_volume" for item in report.findings))
                 self.assertFalse(_blocking_quality_findings(report))
+
+    def test_production_inspect_path_normalizes_yahoo_suffix_symbols(self) -> None:
+        dates = KRXTradingCalendar().expected_open_dates(start_date="2022-01-03", end_date="2022-06-30")
+        zero_volume_dates = YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["000660"]
+        dataset = _quality_dataset(
+            "hynix-production-suffix",
+            "2022-01-03",
+            "2022-06-30",
+            tuple(day for day in dates if day not in {"2022-01-03", "2022-05-09"}),
+            source="real:yahoo-chart",
+            symbol="000660.KS",
+            zero_volume_dates=zero_volume_dates,
+        )
+        inspection = historical_krx_data_quality_inspect("000660.KS", "2022-01-03", "2022-06-30", provider=_StaticProvider(dataset))
+        self.assertIn("2022-01-03", inspection["provider_gap_dates"])
+        self.assertIn("2022-05-09", inspection["provider_gap_dates"])
+        self.assertEqual(inspection["provider_zero_volume_anomaly_dates"], tuple(sorted(zero_volume_dates)))
+        self.assertEqual(inspection["unknown_missing_trading_dates"], ())
+        self.assertEqual(inspection["zero_volume_dates"], ())
+        self.assertEqual(inspection["blocking_findings"], ())
 
     def test_unregistered_zero_volume_remains_blocking_and_inspectable(self) -> None:
         dates = KRXTradingCalendar().expected_open_dates(start_date="2026-01-02", end_date="2026-01-06")

@@ -3,6 +3,23 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 150.5 Production Multi-Symbol Yahoo Registry Alignment
+
+Production inspection showed that Hotfix 150.4 did not fully exercise the
+production-equivalent registry path. The live Yahoo data for `000660`,
+`005380`, `035420`, and `051910` includes the common 2022 zero-volume anomaly
+set plus symbol-specific additional dates, so the common dates remained
+blocking for non-`005930` symbols.
+
+The fix stores the common anomaly set and each symbol's additional VPS
+inspection evidence, then normalizes Yahoo-style symbols before anomaly lookup.
+This keeps `000660`, `000660.KS`, and `KQ:<symbol>` forms from bypassing the
+same provider registry.
+
+The KRX calendar is unchanged. `2022-01-03`, `2022-05-09`, the symbol-specific
+2023 gaps, and `2025-09-19` remain exchange-open provider anomalies. Unknown
+missing dates and unregistered zero-volume bars remain blocking.
+
 ## Hotfix 150.4 Yahoo Multi-Symbol Data Quality
 
 Hotfix 150.4 extends the Yahoo KRX anomaly registry from single-symbol Samsung

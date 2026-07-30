@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 150.5 - Production Multi-Symbol Yahoo Registry Alignment
+
+- Fixed the Hotfix 150.4 test gap where production-equivalent inspection did not verify the common zero-volume anomaly set plus each symbol's additional production evidence.
+- Added symbol canonicalization for Yahoo anomaly lookups so `000660`, `000660.KS`, and equivalent KQ-prefixed forms resolve to the same registry key.
+- Updated Yahoo zero-volume anomaly dates for `000660`, `005380`, `035420`, and `051910` to include the common 2022 provider anomaly set plus VPS-confirmed symbol-specific additions.
+- Preserved KRX calendar boundaries: provider gaps remain provider anomalies, not exchange holidays.
+- Kept unregistered zero-volume bars, unknown missing trading days, malformed OHLCV, and duplicate bars fail-closed.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no configuration mutation.
+
 ## Hotfix 150.4 - Yahoo Multi-Symbol Data Quality
 
 - Extended `real:yahoo-chart` anomaly classification for the Sprint 141-150 multi-symbol research universe: `005930`, `000660`, `005380`, `035420`, and `051910`.

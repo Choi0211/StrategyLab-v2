@@ -21,7 +21,8 @@ Current production behavior:
 - `2022-01-03` and `2022-05-09` remain exchange-open dates; for the Sprint 141-150 research universe they are classified as Yahoo provider gaps when absent from the provider payload
 - additional symbol-specific Yahoo provider gaps are isolated to the affected symbol: `000660` has `2023-02-02` and `2023-02-09`, `005380` has `2023-02-01`, and `035420` has `2023-02-02`
 - `2023-05-29` is a KRX closure because it was the Buddha's Birthday substitute holiday
-- registered Yahoo zero-volume anomaly bars for `005930`, `000660`, `005380`, `035420`, and `051910` are excluded from backtest input and disclosed as `provider_zero_volume_anomaly`
+- registered Yahoo zero-volume anomaly bars for `005930`, `000660`, `005380`, `035420`, and `051910` are symbol-specific, excluded from backtest input, and disclosed as `provider_zero_volume_anomaly`
+- Yahoo suffix forms such as `.KS` and `.KQ` are canonicalized before anomaly lookup so production inspection uses the same registry as tests
 - unregistered zero-volume bars are not accepted as benign; inspect and classify them with dated evidence first
 - `real-krx-data-release-check` allows provider-gap-only warnings while still blocking unknown missing trading days and malformed data
 
