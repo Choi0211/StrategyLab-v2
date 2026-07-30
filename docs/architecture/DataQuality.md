@@ -40,9 +40,16 @@ The substitute holiday `2023-05-29` is modeled as a KRX closure.
 Yahoo zero-volume anomalies are registered only for dated production findings
 where Yahoo returned `volume=0`, `trading_value=0`, and `open=high=low=close`.
 The registered Sprint 141-150 symbols are `005930`, `000660`, `005380`,
-`035420`, and `051910`. Registered zero-volume anomaly bars are excluded from
-backtest input and reported as `provider_zero_volume_anomaly`. Any unregistered
-zero-volume bar remains blocking.
+`035420`, and `051910`; each symbol keeps a dated evidence set made from the
+common 2022 Yahoo zero-volume anomaly dates plus any symbol-specific additional
+dates from production inspection. Registered zero-volume anomaly bars are
+excluded from backtest input and reported as
+`provider_zero_volume_anomaly`. Any unregistered zero-volume bar remains
+blocking.
+
+Yahoo anomaly lookup canonicalizes suffix forms such as `.KS` and `.KQ` before
+registry matching, so production inspection and test paths use the same
+provider anomaly registry.
 
 Release checks allow only explainable provider anomaly warnings when no
 blocking findings are present. Unknown missing trading days, unregistered

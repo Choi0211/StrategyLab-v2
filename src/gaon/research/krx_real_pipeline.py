@@ -532,7 +532,7 @@ class ProviderAnomalyPolicy:
 
     def classify_missing_date(self, day: str, *, symbol: str) -> DataQualityFinding:
         _validate_date(day)
-        symbol_upper = symbol.upper()
+        symbol_upper = _canonical_krx_symbol(symbol)
         symbol_gaps = self.symbol_provider_gap_dates.get(symbol_upper, frozenset())
         if day in self.provider_gap_dates or day in symbol_gaps:
             return DataQualityFinding("provider_gap", "warning", f"{self.provider} missing bar on open KRX date {day}; evidence={self.evidence}")
@@ -545,7 +545,7 @@ class ProviderAnomalyPolicy:
         return DataQualityFinding("unknown_missing_trading_day", "warning", f"missing KRX trading date {day} is not explained by calendar or provider anomaly registry")
 
     def classify_zero_volume(self, bar: MarketBar) -> DataQualityFinding:
-        symbol_upper = bar.symbol.upper()
+        symbol_upper = _canonical_krx_symbol(bar.symbol)
         symbol_anomalies = self.provider_zero_volume_anomaly_dates.get(symbol_upper, frozenset())
         if bar.timestamp in symbol_anomalies:
             return DataQualityFinding("provider_zero_volume_anomaly", "warning", f"{self.provider} zero-volume bar for {symbol_upper} on open KRX date {bar.timestamp}; evidence={self.evidence}")
@@ -569,8 +569,18 @@ YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES = frozenset(
         "2022-03-17",
     }
 )
-
-
+YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL = {
+    "005930": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+    "000660": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES | frozenset({"2022-03-11", "2022-03-16", "2022-03-21"}),
+    "005380": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES | frozenset({"2022-01-28", "2022-03-11", "2022-03-16", "2022-03-21"}),
+    "035420": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES | frozenset({"2022-03-11", "2022-03-16", "2022-03-21"}),
+    "051910": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES | frozenset({"2022-03-21"}),
+}
+YAHOO_KRX_ALL_ZERO_VOLUME_ANOMALY_DATES = frozenset(
+    day
+    for dates in YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL.values()
+    for day in dates
+)
 YAHOO_KRX_ANOMALY_POLICY = ProviderAnomalyPolicy(
     "real:yahoo-chart",
     frozenset({"2025-09-19"}),
@@ -588,11 +598,11 @@ YAHOO_KRX_ANOMALY_POLICY = ProviderAnomalyPolicy(
         "051910": frozenset({"2024-10-14", "2024-11-07"}),
     },
     {
-        "005930": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
-        "000660": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
-        "005380": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
-        "035420": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
-        "051910": YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+        "005930": YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["005930"],
+        "000660": YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["000660"],
+        "005380": YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["005380"],
+        "035420": YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["035420"],
+        "051910": YAHOO_KRX_ZERO_VOLUME_ANOMALY_DATES_BY_SYMBOL["051910"],
     },
     "production Yahoo KRX raw chart audit: multi-symbol 5y inspection for 005930,000660,005380,035420,051910; zero-volume rows have same-index OHLC, volume=0, trading_value=0; listed provider gaps are exchange-open dates missing from Yahoo payload",
 )
@@ -981,7 +991,7 @@ def real_krx_data_release_check(connection: sqlite3.Connection, *, symbol: str, 
 def historical_krx_data_quality_inspect(symbol: str, start_date: str, end_date: str, *, provider: KRXHistoricalDataProvider) -> dict[str, object]:
     raw_dataset = provider.fetch_bars(symbol, start_date=start_date, end_date=end_date)
     policy = _provider_anomaly_policy(raw_dataset.metadata.source)
-    registered_zero_dates = policy.provider_zero_volume_anomaly_dates.get(symbol.upper(), frozenset()) if policy is not None else frozenset()
+    registered_zero_dates = policy.provider_zero_volume_anomaly_dates.get(_canonical_krx_symbol(symbol), frozenset()) if policy is not None else frozenset()
     registered_zero_volume_bars = tuple(bar for bar in raw_dataset.bars if bar.volume == 0 and bar.timestamp in registered_zero_dates)
     unverified_zero_volume_bars = tuple(bar for bar in raw_dataset.bars if bar.volume == 0 and bar.timestamp not in registered_zero_dates)
     dataset = _exclude_registered_provider_zero_volume_bars(raw_dataset)
@@ -1123,7 +1133,8 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
     for symbol in YAHOO_KRX_RESEARCH_SYMBOLS:
         symbol_gaps = policy.symbol_provider_gap_dates.get(symbol, frozenset())
         symbol_ohlc = policy.provider_ohlc_anomaly_dates.get(symbol, frozenset())
-        missing_yahoo_dates = policy.provider_gap_dates | symbol_gaps | symbol_ohlc | YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES
+        symbol_zero_volume = policy.provider_zero_volume_anomaly_dates.get(symbol, frozenset())
+        missing_yahoo_dates = policy.provider_gap_dates | symbol_gaps | symbol_ohlc | symbol_zero_volume
         yahoo_dataset = _quality_fixture_dataset(
             f"historical-data-quality-yahoo-{symbol}",
             "2022-01-03",
@@ -1132,7 +1143,7 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
             fixture_backed=False,
             source="real:yahoo-chart",
             symbol=symbol,
-            zero_volume_dates=YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES,
+            zero_volume_dates=symbol_zero_volume,
         )
         yahoo_dataset = _exclude_registered_provider_zero_volume_bars(yahoo_dataset)
         yahoo_quality = _validate_krx_daily_dataset(yahoo_dataset, min_bars=1)
@@ -1144,7 +1155,7 @@ def historical_krx_data_quality_release_check(connection: sqlite3.Connection) ->
         if provider_ohlc_dates != tuple(sorted(symbol_ohlc)):
             raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical OHLC anomalies were not classified correctly for {symbol}: {provider_ohlc_dates}")
         provider_zero_dates = _finding_dates(_findings_by_code(yahoo_quality, "provider_zero_volume_anomaly"))
-        if provider_zero_dates != tuple(sorted(YAHOO_KRX_COMMON_ZERO_VOLUME_ANOMALY_DATES)):
+        if provider_zero_dates != tuple(sorted(symbol_zero_volume)):
             raise RealMarketDataUnavailable(f"real_data_unavailable: Yahoo historical zero-volume anomalies were not classified correctly for {symbol}: {provider_zero_dates}")
         if _blocking_quality_findings(yahoo_quality):
             raise RealMarketDataUnavailable(f"real_data_unavailable: explained Yahoo historical anomalies were blocking for {symbol}")
@@ -1592,6 +1603,16 @@ def _to_yahoo_symbol(symbol: str) -> str:
     return f"{upper}.KS"
 
 
+def _canonical_krx_symbol(symbol: str) -> str:
+    upper = symbol.upper().strip()
+    if upper.startswith("KQ:"):
+        upper = upper[3:]
+    for suffix in (".KS", ".KQ"):
+        if upper.endswith(suffix):
+            return upper[: -len(suffix)]
+    return upper
+
+
 def _default_urlopen(request: Request, timeout: float) -> object:
     return urlopen(request, timeout=timeout)
 
@@ -1638,7 +1659,7 @@ def _exclude_registered_provider_zero_volume_bars(dataset: MarketDataset) -> Mar
     filtered = []
     removed = False
     for bar in dataset.bars:
-        symbol_dates = policy.provider_zero_volume_anomaly_dates.get(bar.symbol.upper(), frozenset())
+        symbol_dates = policy.provider_zero_volume_anomaly_dates.get(_canonical_krx_symbol(bar.symbol), frozenset())
         if bar.timestamp in symbol_dates and bar.volume == 0 and bar.trading_value == 0:
             removed = True
             continue
