@@ -3,6 +3,38 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 151 Dynamic KRX Universe Selection
+
+Sprint 151 adds a read-only dynamic KRX universe selector. It ranks an approved
+provider universe snapshot by `trading_value`, breaks ties by canonical
+six-digit KRX symbol, records fixture/real provenance, and returns an auditable
+deterministic result.
+
+The selector can feed the existing multi-symbol research orchestrator through a
+`KRXUniverseResult`. Explicit user-provided symbols remain the highest priority
+and are not silently replaced by an automatically selected universe.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli krx-universe-select \
+  --market ALL \
+  --date 2026-07-30 \
+  --metric trading_value \
+  --size 5 \
+  --json
+
+python -m gaon.runtime.cli krx-universe-release-check
+```
+
+The release check is deterministic and fixture-backed. Production real-universe
+selection is pending an approved provider universe snapshot; Yahoo historical
+bars alone are not treated as a full-market universe source.
+
+Safety boundaries are unchanged: no live trading, no broker/KIS order, no
+automatic Champion promotion, no approval bypass, and no strategy config
+mutation.
+
 ## Hotfix 150.5 Production Multi-Symbol Yahoo Registry Alignment
 
 Status: COMPLETE.

@@ -114,6 +114,12 @@ from gaon.research.multi_symbol import (
     multi_symbol_research_status_payload,
     telegram_multi_symbol_research_release_check,
 )
+from gaon.research.krx_universe import (
+    KRXUniverseRequest,
+    KRXUniverseSelector,
+    krx_universe_release_check,
+    render_krx_universe_result,
+)
 from gaon.research.operations import (
     ApprovalStatus as ResearchConfigApprovalStatus,
     QualityStatus,
@@ -346,6 +352,14 @@ def main(argv: list[str] | None = None) -> int:
     historical_krx_data_quality_inspection.add_argument("--symbol", default="005930")
     historical_krx_data_quality_inspection.add_argument("--start", required=True)
     historical_krx_data_quality_inspection.add_argument("--end", required=True)
+    krx_universe_select = sub.add_parser("krx-universe-select")
+    krx_universe_select.add_argument("--market", default="ALL")
+    krx_universe_select.add_argument("--date", required=True)
+    krx_universe_select.add_argument("--metric", default="trading_value")
+    krx_universe_select.add_argument("--size", type=int, required=True)
+    krx_universe_select.add_argument("--exclude", default="")
+    krx_universe_select.add_argument("--json", action="store_true")
+    sub.add_parser("krx-universe-release-check")
     research_ops_demo = sub.add_parser("research-ops-demo")
     research_ops_demo.add_argument("--db", default=":memory:")
     research_ops_demo.add_argument("--insufficient-sample", action="store_true")
@@ -1753,6 +1767,26 @@ def _run(args: argparse.Namespace) -> int:
         try:
             provider = build_market_data_provider_from_env(os.environ)
             print(_dumps_json(historical_krx_data_quality_inspect(args.symbol, args.start, args.end, provider=provider)))
+        except RealMarketDataUnavailable as exc:
+            raise ConfigurationError(str(exc)) from exc
+    elif args.command == "krx-universe-select":
+        try:
+            exclusions = tuple(item.strip() for item in str(args.exclude).split(",") if item.strip())
+            request = KRXUniverseRequest(args.market, args.date, args.metric, args.size, exclusions=exclusions)
+            result = KRXUniverseSelector().select(request)
+            print(_dumps_json(result.to_json()) if args.json else render_krx_universe_result(result))
+        except (RealMarketDataUnavailable, ValueError) as exc:
+            raise ConfigurationError(str(exc)) from exc
+    elif args.command == "krx-universe-release-check":
+        try:
+            result = krx_universe_release_check()
+            print(
+                "krx-universe-release-check: PASS "
+                f"source={result['source']} fixture_backed={str(result['fixture_backed']).lower()} "
+                f"market={result['request']['market']} metric={result['request']['ranking_metric']} "
+                f"requested_size={result['requested_size']} selected_size={result['selected_size']} "
+                f"symbols={','.join(result['symbols'])}"
+            )
         except RealMarketDataUnavailable as exc:
             raise ConfigurationError(str(exc)) from exc
     elif args.command == "research-ops-demo":

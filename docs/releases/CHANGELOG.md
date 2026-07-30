@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 151 - Dynamic KRX Universe Selection
+
+- Added immutable `KRXUniverseRequest`, `KRXUniverseEntry`, `KRXUniverseExclusion`, `KRXUniversePolicy`, and `KRXUniverseResult` contracts.
+- Added deterministic KRX universe selection by `trading_value` with canonical six-digit symbol tie-breaks.
+- Added read-only `krx_universe_select` safe tool and CLI commands `krx-universe-select` and `krx-universe-release-check`.
+- Connected explicit universe results into the existing multi-symbol research orchestrator while preserving explicit user-provided symbols as the highest priority.
+- Kept provider universe selection fail-closed: unsupported markets, invalid dates, non-trading dates, provider failures, empty universes, zero-volume rows, and zero-trading-value rows are not silently accepted.
+- Preserved schema v36, fixture/real provenance, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 150.5 - Production Multi-Symbol Yahoo Registry Alignment
 
 - Closeout: marked Hotfix 150.5 COMPLETE after production merge `5f6ad1d` and implementation commit `519692c` were verified on VPS.

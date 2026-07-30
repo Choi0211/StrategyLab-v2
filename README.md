@@ -44,6 +44,7 @@ Included foundations:
 - Sprint 101-110 Real Market Backtest Integration foundation with versioned market data, provider contracts, data quality checks, dataset registry/cache, StrategySpec, external backtest JSON contracts, reproducibility comparison, and a fixture-backed Real Research Gateway
 - Sprint 131-140 Autonomous Retest Pipeline with insufficient-sample triggers, deterministic period expansion, real-data re-fetch contracts, repeated re-backtests, candidate re-evaluation, multi-period evidence lineage, advisory recommendation refresh, schema v35 persistence, and read-only retest status/history tools
 - Sprint 141-150 Multi-Symbol Autonomous Research with explicit/curated KRX universe provenance, per-symbol real-data quality isolation, cross-symbol aggregation, concentration analysis, sample sufficiency, TESTED candidate generalization, schema v36 persistence, and read-only multi-symbol research status/history tools
+- Sprint 151 Dynamic KRX Universe Selection with deterministic trading-value ranking, canonical KRX symbol tie-breaks, fixture/real provenance, fail-closed provider handling, and a read-only universe-to-multi-symbol research handoff
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
@@ -135,6 +136,22 @@ Multi-symbol research release check:
 python -m gaon.runtime.cli multi-symbol-research-release-check --db runtime.sqlite
 python -m gaon.runtime.cli telegram-multi-symbol-research-release-check --db runtime.sqlite
 ```
+
+Dynamic KRX universe selection:
+
+```bash
+python -m gaon.runtime.cli krx-universe-release-check
+python -m gaon.runtime.cli krx-universe-select \
+  --market ALL \
+  --date 2026-07-30 \
+  --metric trading_value \
+  --size 5 \
+  --json
+```
+
+Sprint 151 supports `trading_value` ranking only. Production real-universe
+selection requires an approved provider universe snapshot; the deterministic
+release check is fixture-backed and explicitly reports `fixture_backed=true`.
 
 Production real-provider smoke on the explicit five-symbol universe:
 

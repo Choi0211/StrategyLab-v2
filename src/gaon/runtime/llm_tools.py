@@ -29,6 +29,7 @@ from gaon.research.real_research import (
     market_data_status_payload,
 )
 from gaon.research.krx_real_pipeline import krx_real_research_payload
+from gaon.research.krx_universe import KRXUniverseRequest, KRXUniverseSelector
 from gaon.research.autonomous_retest import research_retest_history_payload, research_retest_payload, research_retest_status_payload
 from gaon.research.multi_symbol import multi_symbol_research_history_payload, multi_symbol_research_payload, multi_symbol_research_status_payload
 from gaon.research.operations import SQLiteResearchOperationRepository
@@ -298,6 +299,18 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry.register(
         ToolDefinition("multi_symbol_research_history", "Read multi-symbol per-symbol evidence history without mutating strategy state.", ToolRiskLevel.READ_ONLY, allowed_args=("run_id", "limit")),
         lambda args: multi_symbol_research_history_payload(connection, run_id=str(args["run_id"]) if "run_id" in args else None, limit=int(args.get("limit", 20))),
+    )
+    registry.register(
+        ToolDefinition("krx_universe_select", "Select a deterministic read-only KRX research universe from an approved provider snapshot.", ToolRiskLevel.READ_ONLY, required_args=("market", "selection_date", "size"), allowed_args=("market", "selection_date", "metric", "size", "exclude")),
+        lambda args: KRXUniverseSelector().select(
+            KRXUniverseRequest(
+                str(args["market"]),
+                str(args["selection_date"]),
+                str(args.get("metric", "trading_value")),
+                int(args["size"]),
+                exclusions=_symbols_arg(args.get("exclude")) or (),
+            )
+        ).to_json(),
     )
     return registry
 

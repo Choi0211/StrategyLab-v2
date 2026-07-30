@@ -3,6 +3,7 @@
 Use fixture-backed checks locally:
 
 ```bash
+python -m gaon.runtime.cli krx-universe-release-check
 python -m gaon.runtime.cli krx-real-research-release-check --db runtime.sqlite
 python -m gaon.runtime.cli krx-trading-calendar-release-check --db runtime.sqlite
 python -m gaon.runtime.cli provider-gap-release-check --db runtime.sqlite
@@ -26,6 +27,7 @@ Current production behavior:
 - Yahoo suffix forms such as `.KS` and `.KQ` are canonicalized before anomaly lookup so production inspection uses the same registry as tests
 - unregistered zero-volume bars are not accepted as benign; inspect and classify them with dated evidence first
 - `real-krx-data-release-check` allows provider-gap-only warnings while still blocking unknown missing trading days and malformed data
+- dynamic KRX universe selection ranks only explicit provider universe snapshots by `trading_value`; Yahoo historical bars alone are not treated as a full-market universe source
 
 Production environment:
 
@@ -70,6 +72,22 @@ python -m gaon.runtime.cli historical-krx-data-quality-inspect \
 Expected successful output includes `source=real`, `fixture_backed=false`,
 `provider=real:yahoo-chart`, row count, `provider_gaps`, `blocking_findings`,
 and either `quality=pass` or provider-gap-only `quality=pass_with_warnings`.
+
+Dynamic universe selection:
+
+```bash
+python -m gaon.runtime.cli krx-universe-select \
+  --market ALL \
+  --date 2026-07-30 \
+  --metric trading_value \
+  --size 5 \
+  --json
+```
+
+The local release check is fixture-backed and explicitly reports
+`fixture_backed=true`. Production real-universe validation is pending an
+approved KRX universe snapshot provider. Do not present fixture universe output
+as live production market selection.
 
 Do not place credentials, private API clients, or broker connections in this
 public repository.
