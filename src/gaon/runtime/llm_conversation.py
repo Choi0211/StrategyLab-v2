@@ -12,6 +12,18 @@ from uuid import uuid4
 
 from gaon.runtime.assistant_provider import AssistantProvider, AssistantProviderResponse, AssistantRequest, AssistantToolResult, ProviderError, validate_provider_response
 from gaon.runtime.config import GaonRuntimeConfig
+from gaon.runtime.conversational_mvp import (
+    ConversationalMVPContext,
+    ConversationalMVPIntent,
+    classify_conversational_route,
+    render_follow_up,
+    render_greeting,
+    render_help,
+    render_single_symbol_summary,
+    render_status,
+    render_symbol_comparison,
+    render_unknown,
+)
 from gaon.runtime.errors import ConfigurationError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.intents import Intent, parse_intent
@@ -319,6 +331,7 @@ class LLMConversationBrain:
         self._assistant_provider = assistant_provider
         self._event_store = event_store
         self._metrics = metrics or MetricsCollector()
+        self._mvp_contexts: dict[str, ConversationalMVPContext] = {}
 
     def respond(self, request: LLMConversationRequest) -> LLMConversationResponse:
         text = request.text.strip()
@@ -398,9 +411,14 @@ class LLMConversationBrain:
         if warning:
             approval_required = True
             warnings = (warning,)
-        if not self._config.assistant_enabled or approval_required:
+        if approval_required:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
+            return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
+        mvp = self._try_conversational_mvp(request, warnings, references)
+        if mvp is not None:
+            return mvp
+        if not self._config.assistant_enabled:
             return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
         authoritative = self._try_authoritative_research_tool(request, warnings, references)
         if authoritative is not None:
@@ -574,6 +592,96 @@ class LLMConversationBrain:
             _dedupe((*references, f"tool:{tool_name}")),
             "deterministic",
             (tool_name,),
+        )
+
+    def _try_conversational_mvp(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        if not _is_conversational_mvp_source(request):
+            return None
+        if not _contains_supported_conversational_mvp_token(request.text):
+            return None
+        route = classify_conversational_route(request.text)
+        existing_tool = route_read_only_tool(request.text)
+        if existing_tool in {"research_retest", "multi_symbol_research", "multi_symbol_research_status", "multi_symbol_research_history", "champion_status", "runtime_status", "v5_pipeline_history"}:
+            return None
+        if route.intent in {ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS, ConversationalMVPIntent.COMPARE_SYMBOLS} and not _is_simple_conversational_research_request(request.text):
+            return None
+        if route.intent is ConversationalMVPIntent.GREETING:
+            return render_greeting(), "conversation_mvp_greeting", _dedupe(warnings), references, "deterministic", ()
+        if route.intent is ConversationalMVPIntent.HELP:
+            return render_help(), "conversation_mvp_help", _dedupe(warnings), references, "deterministic", ()
+        if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text):
+            return render_status(), "conversation_mvp_status", _dedupe(warnings), references, "deterministic", ()
+        if route.intent in {ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT, ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT, ConversationalMVPIntent.SHOW_DETAILS}:
+            context = self._mvp_contexts.get(request.session_id)
+            if context is None:
+                if self._tool_result_repository is not None and self._tool_result_repository.latest(request.session_id) is not None:
+                    return None
+                return render_unknown(route.symbols), "conversation_mvp_missing_context", _dedupe(warnings), references, "deterministic", ()
+            return render_follow_up(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe(warnings), references, "deterministic", ()
+        if route.intent is ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS:
+            if self._tool_executor is None:
+                return None
+            if not route.symbols:
+                return render_unknown(route.symbols), "conversation_mvp_invalid_symbol", _dedupe(warnings), references, "deterministic", ()
+            result = self._execute_mvp_real_research(request, route.symbols[0].symbol)
+            if result.status != "success":
+                failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+                return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", ("krx_real_research",)
+            text = render_single_symbol_summary(result.output, user_text=request.text)
+            self._remember_mvp_context(request, route.intent, (result.output,), text)
+            return text, "conversation_mvp_single_symbol", _dedupe((*warnings, "human readable deterministic research response")), _dedupe((*references, "tool:krx_real_research")), "deterministic", ("krx_real_research",)
+        if route.intent is ConversationalMVPIntent.COMPARE_SYMBOLS:
+            if self._tool_executor is None:
+                return None
+            if len(route.symbols) < 2:
+                return render_unknown(route.symbols), "conversation_mvp_invalid_symbol", _dedupe(warnings), references, "deterministic", ()
+            outputs: list[dict[str, object]] = []
+            for symbol in route.symbols:
+                result = self._execute_mvp_real_research(request, symbol.symbol)
+                if result.status != "success":
+                    outputs.append({"status": "failure", "symbol": symbol.symbol, "message": result.output.get("message")})
+                    continue
+                outputs.append(result.output)
+            text = render_symbol_comparison(tuple(outputs), user_text=request.text)
+            if any(output.get("status") == "failure" for output in outputs):
+                route_name = "conversation_mvp_compare_partial_failure"
+            else:
+                self._remember_mvp_context(request, route.intent, tuple(outputs), text)
+                route_name = "conversation_mvp_compare_symbols"
+            return text, route_name, _dedupe((*warnings, "same-assumption symbol comparison")), _dedupe((*references, "tool:krx_real_research")), "deterministic", ("krx_real_research",)
+        if route.intent is ConversationalMVPIntent.UNKNOWN and route.symbols:
+            return render_unknown(route.symbols), "conversation_mvp_unknown", _dedupe(warnings), references, "deterministic", ()
+        return None
+
+    def _execute_mvp_real_research(self, request: LLMConversationRequest, symbol: str):
+        result = self._tool_executor.execute(ToolRequest("krx_real_research", {"request_text": request.text, "symbol": symbol}, request.user_ref, request.received_at))
+        self._record_tool_result(request.session_id, result, request.received_at)
+        return result
+
+    def _remember_mvp_context(self, request: LLMConversationRequest, intent: ConversationalMVPIntent, payloads: tuple[dict[str, object], ...], text: str) -> None:
+        result_ids: list[str] = []
+        symbols: list[str] = []
+        for payload in payloads:
+            backtest = payload.get("backtest")
+            if isinstance(backtest, dict):
+                result_id = backtest.get("result_id")
+                if result_id is not None:
+                    result_ids.append(str(result_id))
+            dataset = payload.get("dataset")
+            if isinstance(dataset, dict):
+                raw_symbols = dataset.get("symbols")
+                if isinstance(raw_symbols, list):
+                    for item in raw_symbols:
+                        if isinstance(item, dict) and item.get("symbol") is not None:
+                            symbols.append(str(item["symbol"]))
+        self._mvp_contexts[request.session_id] = ConversationalMVPContext(
+            last_intent=intent.value,
+            last_symbols=tuple(dict.fromkeys(symbols)),
+            last_research_result_ids=tuple(dict.fromkeys(result_ids)),
+            last_rendered_result=text,
+            last_payloads=payloads,
+            detail_level="summary",
+            created_at=request.received_at,
         )
 
     def _continue_provider_response(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, initial_response, references: tuple[str, ...]):
@@ -863,6 +971,49 @@ def _safe_boundary_negation(value: str) -> bool:
     safety_terms = ("자동주문", "champion자동승격", "승인없는config변경", "승인없는", "nolivetrading", "noapprovalbypass", "nobroker", "nokis")
     negation_terms = ("하지마", "하지말", "하지말고", "하지않", "금지", "없는", "no", "not", "without")
     return any(term in value for term in safety_terms) and any(term in value for term in negation_terms)
+
+
+def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
+    return (request.source == "telegram" and str(request.message_id or "").startswith("telegram:")) or request.session_id.startswith("gaon-conversation-release-check:")
+
+
+def _contains_supported_conversational_mvp_token(text: str) -> bool:
+    tokens = (
+        "안녕",
+        "안녕하세요",
+        "가온아",
+        "도움말",
+        "삼성전자",
+        "SK하이닉스",
+        "SK 하이닉스",
+        "현대차",
+        "네이버",
+        "LG화학",
+        "분석해줘",
+        "비교해줘",
+        "왜 그렇게",
+        "쉽게",
+        "자세히",
+        "원본",
+        "전체 결과",
+    )
+    normalized = text.casefold()
+    return any(token.casefold() in normalized for token in tokens)
+
+
+def _is_simple_conversational_research_request(text: str) -> bool:
+    if "\n" in text or len(text.strip()) > 80:
+        return False
+    blocked_detail_terms = ("아래 전략", "손절", "청산", "충분한 표본", "기간을 확장", "TESTED", "Champion", "자동 재검증")
+    return not any(token.casefold() in text.casefold() for token in blocked_detail_terms)
+
+
+def _is_simple_conversational_status_request(text: str) -> bool:
+    normalized = text.strip().casefold()
+    if len(normalized) > 40:
+        return False
+    tool = route_read_only_tool(text)
+    return tool is None
 
 
 def _metric_route(route: str) -> str:

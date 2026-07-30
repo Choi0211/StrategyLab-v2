@@ -1,5 +1,15 @@
 # Changelog
 
+## Sprint 152 - Gaon Conversational MVP
+
+- Added deterministic Telegram-facing conversational intents for greeting, help, single-symbol analysis, symbol comparison, follow-up explanation, simplification, detail view, status query, and unknown fallback.
+- Added Korean KRX symbol extraction for supported public symbols including `005930` Samsung Electronics and `000660` SK Hynix.
+- Added human-readable deterministic research summaries that show total return, MDD, trade count, data period, quality status, reliability warnings, and next actions while hiding internal IDs and raw structured fields by default.
+- Added fail-closed two-symbol comparison behavior: if any requested symbol fails, Gaon does not infer a ranking from partial success.
+- Added session-scoped immediate follow-up context for Telegram chats without cross-chat leakage.
+- Added `gaon-conversation-release-check` and Telegram regression coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Sprint 151 - Dynamic KRX Universe Selection
 
 - Added immutable `KRXUniverseRequest`, `KRXUniverseEntry`, `KRXUniverseExclusion`, `KRXUniversePolicy`, and `KRXUniverseResult` contracts.

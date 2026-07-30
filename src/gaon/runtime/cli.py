@@ -212,6 +212,9 @@ def main(argv: list[str] | None = None) -> int:
     conversation_release = sub.add_parser("conversation-release-check")
     conversation_release.add_argument("--db", default=":memory:")
     conversation_release.add_argument("--run-id", default=None)
+    gaon_conversation_release = sub.add_parser("gaon-conversation-release-check")
+    gaon_conversation_release.add_argument("--db", default=":memory:")
+    gaon_conversation_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -868,6 +871,42 @@ def _run(args: argparse.Namespace) -> int:
                 "conversation-release-check: PASS "
                 f"schema_version={store.status().schema_version} provider={config.assistant_provider} "
                 f"free_only={config.free_only_mode} tools={len(tools)} run_id={run_id}"
+            )
+        finally:
+            store.close()
+    elif args.command == "gaon-conversation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            check_config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+            brain = LLMConversationBrain(
+                check_config,
+                store.conversations,
+                tool_executor=SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            run_id = args.run_id or f"gaon-conversation-release-check:{uuid4().hex}"
+            checks = (
+                brain.respond(LLMConversationRequest(f"{run_id}:greeting", "cli", "cli", "안녕하세요", _utc_now(), f"{run_id}:message:greeting")),
+                brain.respond(LLMConversationRequest(f"{run_id}:single", "cli", "cli", "삼성전자 분석해줘", _utc_now(), f"{run_id}:message:single")),
+                brain.respond(LLMConversationRequest(f"{run_id}:compare", "cli", "cli", "삼성전자와 SK하이닉스 비교해줘", _utc_now(), f"{run_id}:message:compare")),
+                brain.respond(LLMConversationRequest(f"{run_id}:single", "cli", "cli", "왜 그렇게 판단했어?", _utc_now(), f"{run_id}:message:explain")),
+                brain.respond(LLMConversationRequest(f"{run_id}:single", "cli", "cli", "자세히 보여줘", _utc_now(), f"{run_id}:message:detail")),
+            )
+            combined = "\n".join(response.text for response in checks)
+            required = ("영하님", "삼성전자", "SK하이닉스", "거래 수", "MDD")
+            forbidden = ("validation_id", "fixture_backed", "None", "<output>", "<response>", "유니")
+            if not all(token in combined for token in required):
+                raise ConfigurationError("gaon conversation release check missed required Korean summary terms")
+            if any(token in combined for token in forbidden):
+                raise ConfigurationError("gaon conversation release check exposed internal fields")
+            if checks[1].tool_calls != ("krx_real_research",) or checks[2].tool_calls != ("krx_real_research",):
+                raise ConfigurationError("gaon conversation release check did not use safe research tools")
+            print(
+                "gaon-conversation-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "greeting=pass single=pass compare=pass followup=pass"
             )
         finally:
             store.close()

@@ -3,6 +3,33 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 152 Gaon Conversational MVP
+
+Sprint 152 adds a deterministic Telegram conversational MVP. Clear Korean
+messages such as `안녕하세요`, `삼성전자 분석해줘`, `삼성전자와 SK하이닉스 비교해줘`,
+`왜 그렇게 판단했어?`, `쉽게 설명해줘`, and `자세히 보여줘` route through a
+bounded safe path.
+
+Gaon now renders verified `krx_real_research` output as a human-readable Korean
+summary with target symbol, data period, one-line conclusion, total return,
+MDD, trade count, quality status, reliability warnings, risks, and next
+possible actions. Internal IDs, raw fixture booleans, Python `None`, raw class
+names, and raw JSON are hidden by default.
+
+Two-symbol comparisons execute each requested symbol under the same strategy
+text and assumptions. If one symbol fails, Gaon does not rank the remaining
+successful symbol as if the comparison were complete.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-conversation-release-check --db :memory:
+```
+
+No schema migration is included. Sprint 152 does not add live trading,
+broker/KIS orders, automatic Champion promotion, approval bypass, or strategy
+configuration mutation.
+
 ## Sprint 151 Dynamic KRX Universe Selection
 
 Sprint 151 adds a read-only dynamic KRX universe selector. It ranks an approved

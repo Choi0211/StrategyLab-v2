@@ -457,6 +457,98 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_telegram_failure_routing_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["telegram-real-research-failure-routing-release-check", "--db", ":memory:"]), 0)
 
+    def test_sprint152_greeting_is_natural_korean_without_status_dump(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(200, 200, "안녕하세요"),))
+        try:
+            result = poll_once(client, _config(assistant_enabled=False), offset=None, received_at="2026-07-30T00:00:00Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual(result[0].status, "sent")
+            final = client.sent[0][1]
+            self.assertIn("영하님의 AI 연구 파트너 가온", final)
+            self.assertNotIn("유니", final)
+            self.assertNotIn("run_id", final)
+            self.assertNotIn("schema_version", final)
+            self.assertEqual(store.tool_audit.list(), ())
+        finally:
+            store.close()
+
+    def test_sprint152_single_symbol_analysis_is_human_readable(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(201, 201, "삼성전자 분석해줘"),))
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store)),
+                allowed_chat_ids=("100",),
+            )
+            result = process_update(parse_update_result(client.updates[0], received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(result.status, "sent")
+            final = client.sent[0][1]
+            self.assertIn("삼성전자(005930)", final)
+            self.assertIn("총 수익률", final)
+            self.assertIn("MDD", final)
+            self.assertIn("거래 수: 1회", final)
+            self.assertIn("주의: 거래 표본이 1건뿐이므로", final)
+            for forbidden in ("validation_id", "fixture_backed", "None", " inf", "<output>", "RealBacktestResult"):
+                self.assertNotIn(forbidden, final)
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+        finally:
+            store.close()
+
+    def test_sprint152_compare_symbols_analyzes_both_requested_symbols(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(202, 202, "삼성전자와 SK하이닉스 비교해줘"),))
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store)),
+                allowed_chat_ids=("100",),
+            )
+            result = process_update(parse_update_result(client.updates[0], received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(result.status, "sent")
+            final = client.sent[0][1]
+            self.assertIn("삼성전자(005930)", final)
+            self.assertIn("SK하이닉스(000660)", final)
+            self.assertIn("동일 조건", final)
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 2)
+        finally:
+            store.close()
+
+    def test_sprint152_followups_use_same_chat_context_only(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(203, 203, "삼성전자 분석해줘"), _update(204, 204, "왜 그렇게 판단했어?"), _update(205, 205, "왜 그렇게 판단했어?", chat_id=101)))
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store)),
+                allowed_chat_ids=("100", "101"),
+            )
+            for raw in client.updates:
+                process_update(parse_update_result(raw, received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertIn("구조화된 백테스트 지표", client.sent[1][1])
+            self.assertIn("정확히 이해하지 못했습니다", client.sent[2][1])
+        finally:
+            store.close()
+
+    def test_sprint152_partial_compare_failure_is_fail_closed(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(206, 206, "삼성전자와 SK하이닉스 비교해줘"),))
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fail_symbol="000660")),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(client.updates[0], received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertIn("일부 종목 연구가 실패했습니다", client.sent[0][1])
+            self.assertIn("성공한 종목만으로 우열을 만들지 않겠습니다", client.sent[0][1])
+        finally:
+            store.close()
+
+    def test_sprint152_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-conversation-release-check", "--db", ":memory:"]), 0)
+
 
 class _FakeOllamaToolProvider:
     def __init__(self) -> None:
@@ -506,6 +598,67 @@ class _HallucinatingRealResearchProvider:
             ),
             provider_name="openai-compatible",
         )
+
+
+def _sprint152_tool_executor(store: RuntimeStateStore, *, fail_symbol: str | None = None) -> SafeToolExecutor:
+    registry = ToolRegistry()
+
+    def handle(args):
+        symbol = str(args.get("symbol", "005930"))
+        if fail_symbol == symbol:
+            raise RealMarketDataUnavailable(f"real_data_unavailable: synthetic failure for {symbol}")
+        return _sprint152_payload(symbol)
+
+    registry.register(
+        ToolDefinition(
+            "krx_real_research",
+            "Run the read-only KRX real-research pipeline with explicit source provenance.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol",),
+        ),
+        handle,
+    )
+    return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _sprint152_payload(symbol: str) -> dict[str, object]:
+    trades = {"005930": 1, "000660": 7}.get(symbol, 3)
+    total_return = {"005930": 0.0123, "000660": 0.061}.get(symbol, 0.02)
+    mdd = {"005930": 0.044, "000660": 0.091}.get(symbol, 0.05)
+    profit_factor = "inf" if symbol == "005930" else 1.42
+    return {
+        "schema_version": 33,
+        "dataset": {
+            "symbols": [{"symbol": symbol, "name": symbol}],
+            "metadata": {
+                "source": "fixture:sprint152",
+                "market": "KOSPI",
+                "timeframe": "daily",
+                "start_date": "2026-01-02",
+                "end_date": "2026-07-10",
+                "fixture_backed": True,
+            },
+        },
+        "quality": {"status": "pass", "findings": []},
+        "strategy": {"fingerprint": f"strategy:{symbol}"},
+        "backtest": {
+            "result_id": f"backtest:{symbol}",
+            "metrics": {
+                "total_return": total_return,
+                "mdd": mdd,
+                "trade_count": trades,
+                "profit_factor": profit_factor,
+                "win_rate": 1.0 if symbol == "005930" else 0.571429,
+                "cagr": total_return,
+                "sharpe": 0.42,
+                "expectancy": 0.01,
+                "exposure": 0.2,
+            },
+        },
+        "automatic_order": False,
+        "automatic_champion_promotion": False,
+    }
 
 
 def _config(*, assistant_enabled: bool = False, assistant_provider: str = "deterministic") -> GaonRuntimeConfig:
