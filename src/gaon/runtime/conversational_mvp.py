@@ -37,11 +37,19 @@ class ConversationalRoute:
 class ConversationalMVPContext:
     last_intent: str
     last_symbols: tuple[str, ...]
+    last_result_kind: str
     last_research_result_ids: tuple[str, ...]
     last_rendered_result: str
     last_payloads: tuple[dict[str, object], ...]
+    last_structured_results: tuple[dict[str, object], ...]
+    last_summary: str
+    last_detail_payload: dict[str, object]
+    last_source: str
+    last_fixture_backed: bool
+    last_quality_status: str
     detail_level: str
     created_at: str
+    updated_at: str
 
 
 SYMBOL_ALIASES: dict[str, tuple[str, ...]] = {
@@ -60,13 +68,13 @@ SYMBOL_NAMES = {
     "051910": "LG화학",
 }
 
-COMPARISON_TOKENS = ("비교", "차이", "어느 쪽", "뭐가 더", "와", "랑", "하고", " vs ", "versus", "compare")
-ANALYSIS_TOKENS = ("분석", "백테스트", "검증", "연구", "살펴", "봐줘", "알려줘", "analysis", "backtest")
+COMPARISON_TOKENS = ("비교", "차이", "어느 쪽", "뭐가 더", "대", "와", "과", " vs ", "versus", "compare")
+ANALYSIS_TOKENS = ("분석", "백테스트", "검증", "연구", "어때", "봐줘", "알려줘", "analysis", "backtest")
 MULTI_SYMBOL_TOKENS = ("여러 종목", "다종목", "전체 종목", "유니버스", "상위", "universe", "multi-symbol", "multisymbol")
 DETAIL_TOKENS = ("자세히", "원본", "전체 결과", "상세", "detail", "raw")
 SIMPLIFY_TOKENS = ("쉽게", "간단히", "요약", "초등", "쉽게 설명", "simple")
 EXPLAIN_TOKENS = ("왜", "이유", "판단", "근거", "그렇게", "explain")
-STATUS_TOKENS = ("상태", "status", "정상", "런타임")
+STATUS_TOKENS = ("상태", "status", "정상", "하고 있어")
 
 
 def extract_symbol_entities(text: str) -> tuple[SymbolEntity, ...]:
@@ -116,13 +124,13 @@ def render_greeting() -> str:
 def render_help() -> str:
     return "\n".join(
         [
-            "영하님, 지금은 다음 대화를 안전하게 도와드릴 수 있습니다.",
+            "영하님, 지금은 다음 요청을 안전하게 지원할 수 있습니다.",
             "- 삼성전자 분석해줘",
             "- 삼성전자와 SK하이닉스 비교해줘",
             "- 왜 그렇게 판단했어?",
             "- 쉽게 설명해줘",
             "- 자세히 보여줘",
-            "실거래 주문, 자동 승인, Champion 자동 승격은 수행하지 않습니다.",
+            "주문, 자동 승인, Champion 자동 승격은 수행하지 않습니다.",
         ]
     )
 
@@ -130,12 +138,16 @@ def render_help() -> str:
 def render_unknown(symbols: tuple[SymbolEntity, ...] = ()) -> str:
     if symbols:
         names = ", ".join(f"{item.name}({item.symbol})" for item in symbols)
-        return f"영하님, {names}는 인식했지만 요청 의도를 정확히 판단하지 못했습니다. '분석해줘' 또는 '비교해줘'처럼 말씀해 주세요."
-    return "죄송하지만 요청을 정확히 이해하지 못했습니다, 영하님. 예: '삼성전자 분석해줘', '삼성전자와 SK하이닉스 비교해줘'처럼 말씀해 주세요."
+        return f"영하님, {names}은 인식했지만 요청 의도를 정확히 판단하지 못했습니다. '분석해줘' 또는 '비교해줘'처럼 말씀해 주세요."
+    return "죄송하지만 요청을 정확히 이해하지 못했습니다, 영하님. '삼성전자 분석해줘', '삼성전자와 SK하이닉스 비교해줘'처럼 말씀해 주세요."
 
 
 def render_status() -> str:
-    return "가온 대화 런타임은 응답 가능합니다, 영하님. 다만 실제 연구는 데이터 품질 검증과 safe tool 경계를 통과한 결과만 말씀드리겠습니다."
+    return "가온은 현재 응답 가능합니다, 영하님. 다만 실제 연구는 데이터 품질 검증과 safe tool 경계를 통과한 결과만 말씀드립니다."
+
+
+def render_missing_context() -> str:
+    return "직전에 설명할 분석 결과가 없습니다. 먼저 종목 분석이나 비교를 요청해 주세요."
 
 
 def render_single_symbol_summary(payload: dict[str, object], *, user_text: str, detail_level: str = "summary") -> str:
@@ -220,14 +232,132 @@ def render_symbol_comparison(payloads: tuple[dict[str, object], ...], *, user_te
 
 
 def render_follow_up(context: ConversationalMVPContext, intent: ConversationalMVPIntent) -> str:
+    payloads = context.last_structured_results or context.last_payloads
     if intent is ConversationalMVPIntent.SHOW_DETAILS:
-        if context.last_payloads:
-            return render_single_symbol_summary(context.last_payloads[0], user_text="", detail_level="detail")
-        return context.last_rendered_result
+        if context.last_result_kind == "symbol_comparison" and payloads:
+            return render_symbol_comparison_detail(payloads)
+        if payloads:
+            return render_single_symbol_summary(payloads[0], user_text="", detail_level="detail")
+        return _sanitize_final(context.last_summary or context.last_rendered_result)
     if intent is ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT:
-        symbols = ", ".join(context.last_symbols) or "직전 결과"
-        return f"영하님, 쉽게 말하면 {symbols} 연구는 '성과 숫자보다 표본 수와 데이터 품질을 먼저 봐야 하는 결과'입니다. 거래 수가 적으면 수익률이나 승률이 좋아 보여도 신뢰하기 어렵습니다."
-    return "영하님, 그렇게 판단한 이유는 구조화된 백테스트 지표, 거래 수, MDD, 데이터 품질 상태를 함께 봤기 때문입니다. 가온은 저장된 결과에 없는 성과 숫자는 만들지 않습니다."
+        if context.last_result_kind == "symbol_comparison" and payloads:
+            return render_symbol_comparison_simple(payloads)
+        if payloads:
+            return render_single_symbol_simple(payloads[0])
+        return _sanitize_final(context.last_summary or context.last_rendered_result)
+    if context.last_result_kind == "symbol_comparison" and payloads:
+        return render_symbol_comparison_explanation(payloads, context)
+    if payloads:
+        return render_single_symbol_explanation(payloads[0], context)
+    return _sanitize_final(context.last_summary or context.last_rendered_result)
+
+
+def render_single_symbol_explanation(payload: dict[str, object], context: ConversationalMVPContext | None = None) -> str:
+    symbol = _symbol_from_payload(payload)
+    name = SYMBOL_NAMES.get(symbol, symbol)
+    metadata = _dict(_dict(payload.get("dataset")).get("metadata"))
+    quality = _dict(payload.get("quality"))
+    metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    lines = [
+        f"영하님, 직전 {name}({symbol}) 분석 판단 근거는 저장된 구조화 결과입니다.",
+        f"- 데이터: {_source_label(metadata)}",
+        f"- 데이터 품질: quality_status={quality.get('status', 'unknown')}입니다. 이것은 데이터 검사를 통과했다는 뜻이지, 전략 성과가 검증됐다는 뜻은 아닙니다.",
+        f"- 거래 수: {_format_int(metrics.get('trade_count'))}회",
+        f"- 총 수익률: {_format_percent(metrics.get('total_return'))}",
+        f"- MDD: {_format_percent(metrics.get('mdd'))}",
+    ]
+    warnings = _reliability_warnings(payload)
+    if warnings:
+        lines.extend(["", "[신뢰도 주의]", *[f"- {warning}" for warning in warnings]])
+    lines.extend(["", "따라서 성과 숫자만 보지 않고 표본 수, 손실 폭, 데이터 품질을 함께 본 것입니다."])
+    return _sanitize_final("\n".join(lines))
+
+
+def render_symbol_comparison_explanation(payloads: tuple[dict[str, object], ...], context: ConversationalMVPContext | None = None) -> str:
+    lines = ["영하님, 직전 비교 판단은 각 종목을 같은 조건으로 실행한 구조화 결과만 기준으로 설명드립니다.", ""]
+    for payload in payloads:
+        symbol = _symbol_from_payload(payload)
+        name = SYMBOL_NAMES.get(symbol, symbol)
+        metadata = _dict(_dict(payload.get("dataset")).get("metadata"))
+        quality = _dict(payload.get("quality"))
+        metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+        lines.extend(
+            [
+                f"[{name}({symbol})]",
+                f"- 데이터: {_source_label(metadata)}",
+                f"- quality_status={quality.get('status', 'unknown')}: 데이터 품질 상태이며 전략 유효성 판정이 아닙니다.",
+                f"- 거래 수: {_format_int(metrics.get('trade_count'))}회",
+                f"- 총 수익률: {_format_percent(metrics.get('total_return'))}",
+                f"- MDD: {_format_percent(metrics.get('mdd'))}",
+            ]
+        )
+        warnings = _reliability_warnings(payload)
+        if warnings:
+            lines.extend([f"- 주의: {warning}" for warning in warnings])
+        lines.append("")
+    lines.append("이 판단에는 직전 비교 결과가 아닌 다른 상태 조회나 과거 테스트 결과를 섞지 않았습니다.")
+    return _sanitize_final("\n".join(lines))
+
+
+def render_single_symbol_simple(payload: dict[str, object]) -> str:
+    symbol = _symbol_from_payload(payload)
+    name = SYMBOL_NAMES.get(symbol, symbol)
+    quality = _dict(payload.get("quality"))
+    metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    lines = [
+        f"영하님, 쉽게 말하면 직전 {name}({symbol}) 결과는 이렇게 보면 됩니다.",
+        f"- 실제로 확인된 거래는 {_format_int(metrics.get('trade_count'))}회입니다.",
+        f"- 데이터 품질은 quality_status={quality.get('status', 'unknown')}입니다.",
+        "- 표본이 적으면 수익률이나 승률이 좋아 보여도 믿을 수 있는 전략이라고 말할 수 없습니다.",
+    ]
+    warnings = _reliability_warnings(payload)
+    if warnings:
+        lines.append(f"- 핵심 주의점: {warnings[0]}")
+    return _sanitize_final("\n".join(lines))
+
+
+def render_symbol_comparison_simple(payloads: tuple[dict[str, object], ...]) -> str:
+    lines = ["영하님, 쉽게 말하면 직전 비교는 같은 조건으로 종목별 결과를 나란히 본 것입니다."]
+    for payload in payloads:
+        symbol = _symbol_from_payload(payload)
+        name = SYMBOL_NAMES.get(symbol, symbol)
+        quality = _dict(payload.get("quality"))
+        metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+        lines.append(
+            f"- {name}({symbol}): 거래 {_format_int(metrics.get('trade_count'))}회, "
+            f"총 수익률 {_format_percent(metrics.get('total_return'))}, quality_status={quality.get('status', 'unknown')}"
+        )
+    lines.append("- 이 설명은 직전 비교 결과만 사용하며, 다른 상태 조회나 과거 fixture 결과를 섞지 않습니다.")
+    return _sanitize_final("\n".join(lines))
+
+
+def render_symbol_comparison_detail(payloads: tuple[dict[str, object], ...]) -> str:
+    lines = ["영하님, 직전 비교의 상세 구조화 결과입니다.", ""]
+    for payload in payloads:
+        symbol = _symbol_from_payload(payload)
+        name = SYMBOL_NAMES.get(symbol, symbol)
+        metadata = _dict(_dict(payload.get("dataset")).get("metadata"))
+        quality = _dict(payload.get("quality"))
+        strategy = _dict(payload.get("strategy"))
+        metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+        lines.extend(
+            [
+                f"[{name}({symbol})]",
+                f"- 기간: {metadata.get('start_date', 'unknown')} ~ {metadata.get('end_date', 'unknown')}",
+                f"- 데이터: {_source_label(metadata)}",
+                f"- quality_status={quality.get('status', 'unknown')}",
+                f"- 총 수익률: {_format_percent(metrics.get('total_return'))}",
+                f"- MDD: {_format_percent(metrics.get('mdd'))}",
+                f"- 거래 수: {_format_int(metrics.get('trade_count'))}회",
+                f"- Profit Factor: {_format_profit_factor(metrics.get('profit_factor'), metrics.get('trade_count'))}",
+                *_detail_lines(payload, strategy, metrics),
+            ]
+        )
+        warnings = _reliability_warnings(payload)
+        if warnings:
+            lines.extend(["- 종목별 주의:", *[f"  - {warning}" for warning in warnings]])
+        lines.append("")
+    return _sanitize_final("\n".join(lines))
 
 
 def _is_simple_greeting(normalized: str) -> bool:
@@ -281,7 +411,7 @@ def _reliability_warnings(payload: dict[str, object]) -> list[str]:
         warnings.append("거래 표본이 20건 미만이라 통계적 신뢰도가 낮습니다.")
     profit_factor = metrics.get("profit_factor")
     if _is_inf(profit_factor):
-        warnings.append("Profit Factor는 손실 거래가 없어서 계산상 무한대로 보일 수 있으며, 강한 성과 근거로 해석하지 않습니다.")
+        warnings.append("Profit Factor는 손실 거래가 없어서 계산상 무한대로 보일 수 있으며 강한 성과 근거로 해석하지 않습니다.")
     if _as_float(metrics.get("win_rate")) == 1.0 and trade_count < 20:
         warnings.append("승률 100%처럼 보이지만 거래 수가 적어 신뢰하기 어렵습니다.")
     if metadata.get("fixture_backed") is True:
@@ -299,21 +429,20 @@ def _risk_lines(payload: dict[str, object]) -> list[str]:
 
 
 def _detail_lines(payload: dict[str, object], strategy: dict[str, object], metrics: dict[str, object]) -> list[str]:
-    lines = [
+    return [
         f"- strategy_fingerprint={strategy.get('fingerprint', 'unknown')}",
         f"- CAGR={_format_percent(metrics.get('cagr'))}",
         f"- Sharpe={_format_number(metrics.get('sharpe'))}",
         f"- Expectancy={_format_percent(metrics.get('expectancy'))}",
         f"- Exposure={_format_percent(metrics.get('exposure'))}",
     ]
-    return lines
 
 
 def _comparison_conclusion(rows: list[tuple[str, str, dict[str, object], dict[str, object], list[str]]]) -> str:
     if any(warnings for *_, warnings in rows):
-        return "표본 또는 데이터 품질 경고가 있어 단정적 우열은 보류합니다."
+        return "표본 또는 데이터 품질 경고가 있어 확정적 서열은 보류합니다."
     ranked = sorted(rows, key=lambda row: (_as_float(row[2].get("total_return")) or -999.0, -(_as_float(row[2].get("mdd")) or 999.0)), reverse=True)
-    return f"구조화된 지표만 보면 {ranked[0][1]}({ranked[0][0]})가 상대적으로 앞서지만, 주문이나 승격 판단은 아닙니다."
+    return f"구조화된 지표만 보면 {ranked[0][1]}({ranked[0][0]})가 상대적으로 앞서지만 주문이나 승격 판단은 아닙니다."
 
 
 def _format_percent(value: object) -> str:

@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 152.1 - Conversational Follow-up Context Integrity
+
+- Strengthened Sprint 152 follow-up handling so "why", "simple explanation", and "details" requests use the immediately previous research result from the same Telegram chat.
+- Expanded `ConversationalMVPContext` with result kind, structured results, detail payload, source, fixture flag, quality status, and update timestamp.
+- Added deterministic Korean missing-context fallback that does not call unrelated tools.
+- Fixed comparison detail/simplification to preserve all compared symbols instead of rendering only the first payload.
+- Added `gaon-conversation-context-release-check` plus Telegram integration coverage for chat isolation, context replacement, fixture warning conditions, and quality-status wording.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Sprint 152 - Gaon Conversational MVP
 
 - Added deterministic Telegram-facing conversational intents for greeting, help, single-symbol analysis, symbol comparison, follow-up explanation, simplification, detail view, status query, and unknown fallback.

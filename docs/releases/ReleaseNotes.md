@@ -3,6 +3,32 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 152.1 Conversational Follow-up Context Integrity
+
+Hotfix 152.1 makes Sprint 152 follow-up prompts context-safe. When a Telegram
+chat asks `왜 그렇게 판단했어?`, `쉽게 설명해줘`, or `자세히 보여줘`, Gaon now
+uses the immediately previous research result from that same chat/session.
+
+If there is no prior research context, Gaon returns:
+
+```text
+직전에 설명할 분석 결과가 없습니다. 먼저 종목 분석이나 비교를 요청해 주세요.
+```
+
+and does not call unrelated tools. Comparison follow-ups preserve all compared
+symbols and per-symbol warnings. `quality_status=pass` is described only as a
+data-quality pass, not as strategy validity or performance confidence.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-conversation-context-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged: no live
+trading, no broker/KIS order, no automatic Champion promotion, no approval
+bypass, and no strategy config mutation.
+
 ## Sprint 152 Gaon Conversational MVP
 
 Sprint 152 adds a deterministic Telegram conversational MVP. Clear Korean

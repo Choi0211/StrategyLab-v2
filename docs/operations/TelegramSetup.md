@@ -51,6 +51,17 @@ Release check:
 python -m gaon.runtime.cli gaon-conversation-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
 ```
 
+Hotfix 152.1 follow-up context release check:
+
+```bash
+python -m gaon.runtime.cli gaon-conversation-context-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This check verifies that follow-up prompts such as `왜 그렇게 판단했어?`,
+`쉽게 설명해줘`, and `자세히 보여줘` use the prior research result from the
+same Telegram chat only. A missing-context follow-up must not call unrelated
+status, history, Champion, or pipeline tools.
+
 ## Windows PowerShell Example
 
 ```powershell
