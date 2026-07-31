@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import hashlib
 import json
+import logging
 import re
 import sqlite3
 from typing import Protocol
@@ -39,6 +41,7 @@ from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
 
 CONVERSATION_SCHEMA_VERSION = 1
+CONVERSATION_MVP_CONTEXT_VERSION = 1
 MAX_CONVERSATION_INPUT_CHARS = 4096
 TOOL_RESULT_TTL_SECONDS = {
     "runtime_status": 60,
@@ -56,6 +59,8 @@ TOOL_RESULT_TTL_SECONDS = {
     "multi_symbol_research_status": 300,
     "multi_symbol_research_history": 300,
 }
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -380,6 +385,7 @@ class LLMConversationBrain:
                 generated_at,
             )
         )
+        session = self._repository.get_session(session.session_id)
         self._repository.upsert_session(
             LLMConversationSession(session.session_id, session.user_ref, session.source, "active", session.created_at, generated_at, session.metadata)
         )
@@ -598,26 +604,35 @@ class LLMConversationBrain:
     def _try_conversational_mvp(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if not _is_conversational_mvp_source(request):
             return None
-        if not _contains_supported_conversational_mvp_token(request.text):
-            return None
         route = classify_conversational_route(request.text)
+        if not _contains_supported_conversational_mvp_token(request.text) and route.intent not in {
+            ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
+            ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT,
+            ConversationalMVPIntent.SHOW_DETAILS,
+        }:
+            return None
         existing_tool = route_read_only_tool(request.text)
         if existing_tool in {"research_retest", "multi_symbol_research", "multi_symbol_research_status", "multi_symbol_research_history", "champion_status", "runtime_status", "v5_pipeline_history"}:
             return None
         if route.intent in {ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS, ConversationalMVPIntent.COMPARE_SYMBOLS} and not _is_simple_conversational_research_request(request.text):
             return None
         if route.intent is ConversationalMVPIntent.GREETING:
+            self._remember_mvp_response_context(request, route.intent, "conversation_mvp_greeting")
             return render_greeting(), "conversation_mvp_greeting", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.HELP:
+            self._remember_mvp_response_context(request, route.intent, "conversation_mvp_help")
             return render_help(), "conversation_mvp_help", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text):
+            self._remember_mvp_response_context(request, route.intent, "conversation_mvp_status")
             return render_status(), "conversation_mvp_status", _dedupe(warnings), references, "deterministic", ()
         if route.intent in {ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT, ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT, ConversationalMVPIntent.SHOW_DETAILS}:
-            context = self._mvp_contexts.get(request.session_id)
+            context = self._mvp_context_for(request.session_id)
             if context is None:
                 if self._tool_result_repository is not None and self._tool_result_repository.latest(request.session_id) is not None and _is_explicit_tool_result_synthesis_request(request.text):
                     return None
+                self._remember_mvp_response_context(request, route.intent, "conversation_mvp_missing_context")
                 return render_missing_context(), "conversation_mvp_missing_context", _dedupe(warnings), references, "deterministic", ()
+            self._remember_mvp_response_context(request, route.intent, f"conversation_mvp_{route.intent.value}")
             return render_follow_up(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS:
             if self._tool_executor is None:
@@ -651,6 +666,7 @@ class LLMConversationBrain:
                 route_name = "conversation_mvp_compare_symbols"
             return text, route_name, _dedupe((*warnings, "same-assumption symbol comparison")), _dedupe((*references, "tool:krx_real_research")), "deterministic", ("krx_real_research",)
         if route.intent is ConversationalMVPIntent.UNKNOWN and route.symbols:
+            self._remember_mvp_response_context(request, route.intent, "conversation_mvp_unknown")
             return render_unknown(route.symbols), "conversation_mvp_unknown", _dedupe(warnings), references, "deterministic", ()
         return None
 
@@ -708,6 +724,64 @@ class LLMConversationBrain:
             detail_level="summary",
             created_at=request.received_at,
             updated_at=request.received_at,
+        )
+        self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route=f"conversation_mvp_{intent.value}")
+
+    def _mvp_context_for(self, session_id: str) -> ConversationalMVPContext | None:
+        context = self._mvp_contexts.get(session_id)
+        if context is not None:
+            return context
+        try:
+            session = self._repository.get_session(session_id)
+        except KeyError:
+            return None
+        context = _mvp_context_from_metadata(session.metadata)
+        if context is not None:
+            self._mvp_contexts[session_id] = context
+        return context
+
+    def _remember_mvp_response_context(self, request: LLMConversationRequest, intent: ConversationalMVPIntent, route: str) -> None:
+        try:
+            session = self._repository.get_session(request.session_id)
+        except KeyError:
+            return
+        metadata = dict(session.metadata)
+        payload = _mvp_metadata_root(metadata)
+        payload["last_response_context"] = {
+            "last_intent": intent.value,
+            "last_text": _bounded_context_text(request.text),
+            "detail_level": "detail" if intent is ConversationalMVPIntent.SHOW_DETAILS else "summary",
+            "route": route,
+            "updated_at": request.received_at,
+        }
+        metadata["conversation_mvp"] = payload
+        self._repository.upsert_session(LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, request.received_at, metadata))
+
+    def _store_mvp_context(self, session_id: str, context: ConversationalMVPContext, request: LLMConversationRequest, *, route: str) -> None:
+        try:
+            session = self._repository.get_session(session_id)
+        except KeyError:
+            return
+        metadata = dict(session.metadata)
+        payload = _mvp_metadata_root(metadata)
+        payload["last_research_context"] = _mvp_context_to_json(context)
+        payload["last_response_context"] = {
+            "last_intent": context.last_intent,
+            "last_text": _bounded_context_text(request.text),
+            "detail_level": context.detail_level,
+            "route": route,
+            "updated_at": request.received_at,
+        }
+        metadata["conversation_mvp"] = payload
+        self._repository.upsert_session(LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, request.received_at, metadata))
+        logger.debug(
+            "conversation mvp context updated",
+            extra={
+                "context_key_hash": _context_key_hash(session_id),
+                "last_result_kind": context.last_result_kind,
+                "context_updated": True,
+                "renderer_selected": route,
+            },
         )
 
     def _continue_provider_response(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, initial_response, references: tuple[str, ...]):
@@ -1022,13 +1096,96 @@ def _contains_supported_conversational_mvp_token(text: str) -> bool:
         "분석해줘",
         "비교해줘",
         "왜 그렇게",
+        "왜 그절",
+        "판간",
+        "이유가 뭐야",
         "쉽게",
+        "쉽개",
+        "간단하게",
         "자세히",
+        "자세하게",
+        "상세히",
         "원본",
         "전체 결과",
     )
     normalized = text.casefold()
     return any(token.casefold() in normalized for token in tokens)
+
+
+def _mvp_metadata_root(metadata: dict[str, object]) -> dict[str, object]:
+    existing = metadata.get("conversation_mvp")
+    if isinstance(existing, dict) and existing.get("schema_version") == CONVERSATION_MVP_CONTEXT_VERSION:
+        return dict(existing)
+    return {"schema_version": CONVERSATION_MVP_CONTEXT_VERSION}
+
+
+def _mvp_context_to_json(context: ConversationalMVPContext) -> dict[str, object]:
+    return {
+        "last_intent": context.last_intent,
+        "last_symbols": list(context.last_symbols),
+        "last_result_kind": context.last_result_kind,
+        "last_research_result_ids": list(context.last_research_result_ids),
+        "last_rendered_result": _bounded_context_text(context.last_rendered_result),
+        "last_payloads": list(context.last_payloads),
+        "last_structured_results": list(context.last_structured_results),
+        "last_summary": _bounded_context_text(context.last_summary),
+        "last_detail_payload": dict(context.last_detail_payload),
+        "last_source": context.last_source,
+        "last_fixture_backed": context.last_fixture_backed,
+        "last_quality_status": context.last_quality_status,
+        "detail_level": context.detail_level,
+        "created_at": context.created_at,
+        "updated_at": context.updated_at,
+    }
+
+
+def _mvp_context_from_metadata(metadata: dict[str, object]) -> ConversationalMVPContext | None:
+    root = metadata.get("conversation_mvp")
+    if not isinstance(root, dict) or root.get("schema_version") != CONVERSATION_MVP_CONTEXT_VERSION:
+        return None
+    raw = root.get("last_research_context")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return ConversationalMVPContext(
+            last_intent=str(raw["last_intent"]),
+            last_symbols=_tuple_of_str(raw.get("last_symbols")),
+            last_result_kind=str(raw["last_result_kind"]),
+            last_research_result_ids=_tuple_of_str(raw.get("last_research_result_ids")),
+            last_rendered_result=str(raw.get("last_rendered_result", "")),
+            last_payloads=_tuple_of_dict(raw.get("last_payloads")),
+            last_structured_results=_tuple_of_dict(raw.get("last_structured_results")),
+            last_summary=str(raw.get("last_summary", "")),
+            last_detail_payload=dict(raw.get("last_detail_payload")) if isinstance(raw.get("last_detail_payload"), dict) else {},
+            last_source=str(raw.get("last_source", "unknown")),
+            last_fixture_backed=bool(raw.get("last_fixture_backed", False)),
+            last_quality_status=str(raw.get("last_quality_status", "unknown")),
+            detail_level=str(raw.get("detail_level", "summary")),
+            created_at=str(raw.get("created_at", "")),
+            updated_at=str(raw.get("updated_at", "")),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _tuple_of_dict(value: object) -> tuple[dict[str, object], ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(dict(item) for item in value if isinstance(item, dict))
+
+
+def _tuple_of_str(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _bounded_context_text(text: str) -> str:
+    return text[:4000]
+
+
+def _context_key_hash(session_id: str) -> str:
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
 
 
 def _is_explicit_tool_result_synthesis_request(text: str) -> bool:

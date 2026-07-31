@@ -655,6 +655,66 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_sprint152_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversation-release-check", "--db", ":memory:"]), 0)
 
+    def test_hotfix1522_followup_context_persists_across_runtime_recreation(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        texts = (
+            "삼성전자와 sk하이닉스 비교해줘",
+            "왜 그절? 판간했어?",
+            "왜 그렇게 판단했어?",
+            "쉽게 설명해줘",
+            "자세히 보여줘",
+        )
+        try:
+            for index, text in enumerate(texts, 1):
+                runtime = TelegramRuntime(
+                    TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False, zero_trade_symbols=("000660",))),
+                    allowed_chat_ids=("100",),
+                )
+                process_update(parse_update_result(_update(300 + index, 300 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 2)
+            for text in (sent_text for _chat_id, sent_text in client.sent[1:]):
+                self.assertIn("삼성전자(005930)", text)
+                self.assertIn("SK하이닉스(000660)", text)
+                self.assertNotIn("직전 연구/비교 결과가 없습니다", text)
+                for forbidden in ("champion", "v5", "fixture", "19.23", "시장 조건", "outperforms"):
+                    self.assertNotIn(forbidden, text.casefold())
+            self.assertIn("거래 0회", "\n".join(text for _chat_id, text in client.sent))
+            session = store.conversations.get_session("telegram:100")
+            metadata = session.metadata["conversation_mvp"]
+            self.assertEqual(metadata["last_research_context"]["last_result_kind"], "symbol_comparison")
+        finally:
+            store.close()
+
+    def test_hotfix1522_unknown_and_help_do_not_erase_persisted_research_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        texts = (
+            "삼성전자와 SK하이닉스 비교해줘",
+            "무슨말인지 모르겠네",
+            "도움말",
+            "왜 그렇게 판단했어?",
+        )
+        try:
+            for index, text in enumerate(texts, 1):
+                runtime = TelegramRuntime(
+                    TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                    allowed_chat_ids=("100",),
+                )
+                process_update(parse_update_result(_update(320 + index, 320 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 2)
+            final = client.sent[-1][1]
+            self.assertIn("삼성전자(005930)", final)
+            self.assertIn("SK하이닉스(000660)", final)
+            self.assertNotIn("직전 연구/비교 결과가 없습니다", final)
+        finally:
+            store.close()
+
+    def test_hotfix1522_telegram_followup_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-telegram-followup-release-check", "--db", ":memory:"]), 0)
+
 
 class _FakeOllamaToolProvider:
     def __init__(self) -> None:
@@ -706,14 +766,20 @@ class _HallucinatingRealResearchProvider:
         )
 
 
-def _sprint152_tool_executor(store: RuntimeStateStore, *, fail_symbol: str | None = None, fixture_backed: bool = True) -> SafeToolExecutor:
+def _sprint152_tool_executor(
+    store: RuntimeStateStore,
+    *,
+    fail_symbol: str | None = None,
+    fixture_backed: bool = True,
+    zero_trade_symbols: tuple[str, ...] = (),
+) -> SafeToolExecutor:
     registry = ToolRegistry()
 
     def handle(args):
         symbol = str(args.get("symbol", "005930"))
         if fail_symbol == symbol:
             raise RealMarketDataUnavailable(f"real_data_unavailable: synthetic failure for {symbol}")
-        return _sprint152_payload(symbol, fixture_backed=fixture_backed)
+        return _sprint152_payload(symbol, fixture_backed=fixture_backed, zero_trade_symbols=zero_trade_symbols)
 
     registry.register(
         ToolDefinition(
@@ -728,11 +794,22 @@ def _sprint152_tool_executor(store: RuntimeStateStore, *, fail_symbol: str | Non
     return SafeToolExecutor(registry, store.tool_audit)
 
 
-def _sprint152_payload(symbol: str, *, fixture_backed: bool = True) -> dict[str, object]:
+def _sprint152_payload(symbol: str, *, fixture_backed: bool = True, zero_trade_symbols: tuple[str, ...] = ()) -> dict[str, object]:
     trades = {"005930": 1, "000660": 7}.get(symbol, 3)
     total_return = {"005930": 0.0123, "000660": 0.061}.get(symbol, 0.02)
     mdd = {"005930": 0.044, "000660": 0.091}.get(symbol, 0.05)
     profit_factor = "inf" if symbol == "005930" else 1.42
+    win_rate = 1.0 if symbol == "005930" else 0.571429
+    expectancy = 0.01
+    exposure = 0.2
+    if symbol in zero_trade_symbols:
+        trades = 0
+        total_return = 0.0
+        mdd = 0.0
+        profit_factor = None
+        win_rate = 0.0
+        expectancy = 0.0
+        exposure = 0.0
     return {
         "schema_version": 33,
         "dataset": {
@@ -755,11 +832,11 @@ def _sprint152_payload(symbol: str, *, fixture_backed: bool = True) -> dict[str,
                 "mdd": mdd,
                 "trade_count": trades,
                 "profit_factor": profit_factor,
-                "win_rate": 1.0 if symbol == "005930" else 0.571429,
+                "win_rate": win_rate,
                 "cagr": total_return,
                 "sharpe": 0.42,
-                "expectancy": 0.01,
-                "exposure": 0.2,
+                "expectancy": expectancy,
+                "exposure": exposure,
             },
         },
         "automatic_order": False,

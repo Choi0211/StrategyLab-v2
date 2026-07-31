@@ -3,6 +3,38 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 152.2 Telegram Follow-up Persistence and Typo Tolerance
+
+Hotfix 152.2 makes Telegram follow-up context durable across polling ticks.
+Gaon now stores the last authoritative conversational research/comparison
+context in existing SQLite conversation session metadata and restores it when a
+new `TelegramConversationAgent` or `LLMConversationBrain` is created.
+
+This protects production sequences such as:
+
+```text
+삼성전자와 sk하이닉스 비교해줘
+왜 그절? 판간했어?
+왜 그렇게 판단했어?
+쉽게 설명해줘
+자세히 보여줘
+```
+
+The typo handling is intentionally narrow and only applies to follow-up
+phrases. Greeting, help, status, typo, and unknown messages preserve the last
+research context instead of deleting it. Comparison responses with one trade
+versus zero trades remain conservative and do not claim a stable winner.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-telegram-followup-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged: no live
+trading, no broker/KIS order, no automatic Champion promotion, no approval
+bypass, and no strategy config mutation.
+
 ## Hotfix 152.1 Conversational Follow-up Context Integrity
 
 Hotfix 152.1 makes Sprint 152 follow-up prompts context-safe. When a Telegram
