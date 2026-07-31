@@ -215,6 +215,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_conversation_release = sub.add_parser("gaon-conversation-release-check")
     gaon_conversation_release.add_argument("--db", default=":memory:")
     gaon_conversation_release.add_argument("--run-id", default=None)
+    gaon_conversation_context_release = sub.add_parser("gaon-conversation-context-release-check")
+    gaon_conversation_context_release.add_argument("--db", default=":memory:")
+    gaon_conversation_context_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -907,6 +910,68 @@ def _run(args: argparse.Namespace) -> int:
                 "gaon-conversation-release-check: PASS "
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "greeting=pass single=pass compare=pass followup=pass"
+            )
+        finally:
+            store.close()
+    elif args.command == "gaon-conversation-context-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            registry = ToolRegistry()
+
+            def handle_research(tool_args):
+                return _conversation_context_release_payload(str(tool_args.get("symbol", "005930")), fixture_backed=False)
+
+            registry.register(
+                ToolDefinition(
+                    "krx_real_research",
+                    "Run deterministic conversation context release-check research.",
+                    ToolRiskLevel.READ_ONLY,
+                    required_args=("request_text",),
+                    allowed_args=("symbol",),
+                ),
+                handle_research,
+            )
+            check_config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+            brain = LLMConversationBrain(
+                check_config,
+                store.conversations,
+                tool_executor=SafeToolExecutor(registry, store.tool_audit),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            run_id = args.run_id or f"gaon-conversation-context-release-check:{uuid4().hex}"
+
+            single = brain.respond(LLMConversationRequest(f"{run_id}:chat-a", "cli", "cli", "삼성전자 분석해줘", _utc_now(), f"{run_id}:message:single"))
+            single_audits = len(store.tool_audit.list(tool_name="krx_real_research"))
+            explain = brain.respond(LLMConversationRequest(f"{run_id}:chat-a", "cli", "cli", "왜 그렇게 판단했어?", _utc_now(), f"{run_id}:message:explain"))
+            after_explain_audits = len(store.tool_audit.list(tool_name="krx_real_research"))
+            compare = brain.respond(LLMConversationRequest(f"{run_id}:chat-a", "cli", "cli", "삼성전자와 SK하이닉스 비교해줘", _utc_now(), f"{run_id}:message:compare"))
+            compare_audits = len(store.tool_audit.list(tool_name="krx_real_research"))
+            simple = brain.respond(LLMConversationRequest(f"{run_id}:chat-a", "cli", "cli", "쉽게 설명해줘", _utc_now(), f"{run_id}:message:simple"))
+            detail = brain.respond(LLMConversationRequest(f"{run_id}:chat-a", "cli", "cli", "자세히 보여줘", _utc_now(), f"{run_id}:message:detail"))
+            missing = brain.respond(LLMConversationRequest(f"{run_id}:chat-b", "cli", "cli", "쉽게 설명해줘", _utc_now(), f"{run_id}:message:missing"))
+            greeting = brain.respond(LLMConversationRequest(f"{run_id}:chat-a", "cli", "cli", "안녕하세요", _utc_now(), f"{run_id}:message:greeting"))
+            after_greeting = brain.respond(LLMConversationRequest(f"{run_id}:chat-a", "cli", "cli", "왜 그렇게 판단했어?", _utc_now(), f"{run_id}:message:after-greeting"))
+            final_audits = len(store.tool_audit.list(tool_name="krx_real_research"))
+
+            if single_audits != 1 or after_explain_audits != 1 or compare_audits != 3 or final_audits != 3:
+                raise ConfigurationError("follow-up context release check triggered unexpected research tool calls")
+            combined_followups = "\n".join((explain.text, simple.text, detail.text, missing.text, after_greeting.text))
+            required_terms = ("직전", "삼성전자", "SK하이닉스", "quality_status=pass", "직전에 설명할 분석 결과가 없습니다")
+            forbidden_terms = ("champion", "v5", "fixture:sprint152", "fixture:krx-market-data", "2026-07-01", "validation_id", "fixture_backed", "<output>", "<response>")
+            if not all(term in combined_followups for term in required_terms):
+                raise ConfigurationError("conversation context release check missed required grounded follow-up terms")
+            if any(term in combined_followups for term in forbidden_terms):
+                raise ConfigurationError("conversation context release check leaked unrelated or internal context")
+            if "전략 성과가 검증됐다는 뜻은 아닙니다" not in explain.text:
+                raise ConfigurationError("quality pass was not separated from strategy validity")
+            if missing.tool_calls:
+                raise ConfigurationError("missing-context follow-up must not call tools")
+            print(
+                "gaon-conversation-context-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "single=pass compare=pass explain=pass simplify=pass detail=pass isolation=pass"
             )
         finally:
             store.close()
@@ -3297,6 +3362,46 @@ def _failure_tool_executor(store: RuntimeStateStore, exc: Exception) -> SafeTool
         raise_failure,
     )
     return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _conversation_context_release_payload(symbol: str, *, fixture_backed: bool) -> dict[str, object]:
+    trades = {"005930": 1, "000660": 7}.get(symbol, 3)
+    total_return = {"005930": 0.0123, "000660": 0.061}.get(symbol, 0.02)
+    mdd = {"005930": 0.044, "000660": 0.091}.get(symbol, 0.05)
+    profit_factor: object = "inf" if symbol == "005930" else 1.42
+    source = "fixture:conversation-context" if fixture_backed else "real:yahoo-chart"
+    return {
+        "schema_version": 33,
+        "dataset": {
+            "symbols": [{"symbol": symbol, "name": symbol}],
+            "metadata": {
+                "source": source,
+                "market": "KOSPI",
+                "timeframe": "daily",
+                "start_date": "2021-07-25",
+                "end_date": "2026-07-24",
+                "fixture_backed": fixture_backed,
+            },
+        },
+        "quality": {"status": "pass", "findings": []},
+        "strategy": {"fingerprint": f"strategy:{symbol}:conversation-context"},
+        "backtest": {
+            "result_id": f"backtest:{symbol}:conversation-context",
+            "metrics": {
+                "total_return": total_return,
+                "mdd": mdd,
+                "trade_count": trades,
+                "profit_factor": profit_factor,
+                "win_rate": 1.0 if symbol == "005930" else 0.571429,
+                "cagr": total_return,
+                "sharpe": 0.42,
+                "expectancy": 0.01,
+                "exposure": 0.2,
+            },
+        },
+        "automatic_order": False,
+        "automatic_champion_promotion": False,
+    }
 
 
 def _run_telegram_failure_case(store: RuntimeStateStore, run_id: str, suffix: str, tool_executor, provider, text: str) -> str:

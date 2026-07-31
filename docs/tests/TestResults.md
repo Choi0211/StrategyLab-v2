@@ -2,6 +2,22 @@
 
 Status: Passed
 
+## Hotfix 152.1 Conversational Follow-up Context Integrity
+
+- Targeted local verification:
+  - `tests.unit.test_conversational_mvp`: PASS, 7 tests
+  - Hotfix 152.1 Telegram targeted integration tests: PASS, 7 tests
+  - `python -m gaon.runtime.cli gaon-conversation-context-release-check --db :memory:`: PASS, schema v36
+  - `python -m gaon.runtime.cli gaon-conversation-release-check --db :memory:`: PASS, schema v36
+- Full verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 555 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 130 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source ./src/gaon`: PASS
+  - `python -m gaon.runtime.cli gaon-conversation-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-conversation-context-release-check --db :memory:`: PASS
+  - `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only
+
 ## Sprint 152 Gaon Conversational MVP
 
 - Targeted local verification:

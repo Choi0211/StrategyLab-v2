@@ -1,9 +1,12 @@
 import unittest
 
 from gaon.runtime.conversational_mvp import (
+    ConversationalMVPContext,
     ConversationalMVPIntent,
     classify_conversational_route,
     extract_symbol_entities,
+    render_follow_up,
+    render_missing_context,
     render_single_symbol_summary,
 )
 
@@ -41,6 +44,38 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertIn("손실 거래 없음으로 해석 제한", text)
         for forbidden in ("validation_id", "fixture_backed", "None", " inf", "<output>", "유니"):
             self.assertNotIn(forbidden, text)
+
+    def test_followup_context_preserves_real_source_without_fixture_warning(self) -> None:
+        payload = _payload("005930", trade_count=1, profit_factor="inf")
+        payload["dataset"]["metadata"]["source"] = "real:yahoo-chart"
+        payload["dataset"]["metadata"]["fixture_backed"] = False
+        context = ConversationalMVPContext(
+            last_intent=ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS.value,
+            last_symbols=("005930",),
+            last_result_kind="single_symbol_research",
+            last_research_result_ids=("backtest:005930",),
+            last_rendered_result="summary",
+            last_payloads=(payload,),
+            last_structured_results=(payload,),
+            last_summary="summary",
+            last_detail_payload=payload,
+            last_source="real:yahoo-chart",
+            last_fixture_backed=False,
+            last_quality_status="pass",
+            detail_level="summary",
+            created_at="2026-07-30T00:00:00Z",
+            updated_at="2026-07-30T00:00:00Z",
+        )
+
+        text = render_follow_up(context, ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT)
+
+        self.assertIn("real:yahoo-chart", text)
+        self.assertIn("quality_status=pass", text)
+        self.assertIn("전략 성과가 검증됐다는 뜻은 아닙니다", text)
+        self.assertNotIn("fixture 데이터 기반", text)
+
+    def test_missing_context_response_is_deterministic(self) -> None:
+        self.assertEqual(render_missing_context(), "직전에 설명할 분석 결과가 없습니다. 먼저 종목 분석이나 비교를 요청해 주세요.")
 
 
 def _payload(symbol: str, *, trade_count: int = 3, profit_factor=1.2) -> dict[str, object]:

@@ -19,6 +19,7 @@ from gaon.runtime.conversational_mvp import (
     render_follow_up,
     render_greeting,
     render_help,
+    render_missing_context,
     render_single_symbol_summary,
     render_status,
     render_symbol_comparison,
@@ -614,9 +615,9 @@ class LLMConversationBrain:
         if route.intent in {ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT, ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT, ConversationalMVPIntent.SHOW_DETAILS}:
             context = self._mvp_contexts.get(request.session_id)
             if context is None:
-                if self._tool_result_repository is not None and self._tool_result_repository.latest(request.session_id) is not None:
+                if self._tool_result_repository is not None and self._tool_result_repository.latest(request.session_id) is not None and _is_explicit_tool_result_synthesis_request(request.text):
                     return None
-                return render_unknown(route.symbols), "conversation_mvp_missing_context", _dedupe(warnings), references, "deterministic", ()
+                return render_missing_context(), "conversation_mvp_missing_context", _dedupe(warnings), references, "deterministic", ()
             return render_follow_up(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS:
             if self._tool_executor is None:
@@ -661,6 +662,9 @@ class LLMConversationBrain:
     def _remember_mvp_context(self, request: LLMConversationRequest, intent: ConversationalMVPIntent, payloads: tuple[dict[str, object], ...], text: str) -> None:
         result_ids: list[str] = []
         symbols: list[str] = []
+        sources: list[str] = []
+        quality_statuses: list[str] = []
+        fixture_backed = False
         for payload in payloads:
             backtest = payload.get("backtest")
             if isinstance(backtest, dict):
@@ -674,14 +678,36 @@ class LLMConversationBrain:
                     for item in raw_symbols:
                         if isinstance(item, dict) and item.get("symbol") is not None:
                             symbols.append(str(item["symbol"]))
+                metadata = dataset.get("metadata")
+                if isinstance(metadata, dict):
+                    if metadata.get("source") is not None:
+                        sources.append(str(metadata["source"]))
+                    fixture_backed = fixture_backed or metadata.get("fixture_backed") is True
+            quality = payload.get("quality")
+            if isinstance(quality, dict) and quality.get("status") is not None:
+                quality_statuses.append(str(quality["status"]))
+        result_kind = "symbol_comparison" if intent is ConversationalMVPIntent.COMPARE_SYMBOLS or len(payloads) > 1 else "single_symbol_research"
+        detail_payload: dict[str, object]
+        if len(payloads) == 1:
+            detail_payload = dict(payloads[0])
+        else:
+            detail_payload = {"results": [dict(payload) for payload in payloads]}
         self._mvp_contexts[request.session_id] = ConversationalMVPContext(
             last_intent=intent.value,
             last_symbols=tuple(dict.fromkeys(symbols)),
+            last_result_kind=result_kind,
             last_research_result_ids=tuple(dict.fromkeys(result_ids)),
             last_rendered_result=text,
             last_payloads=payloads,
+            last_structured_results=payloads,
+            last_summary=text,
+            last_detail_payload=detail_payload,
+            last_source=",".join(dict.fromkeys(sources)) if sources else "unknown",
+            last_fixture_backed=fixture_backed,
+            last_quality_status=",".join(dict.fromkeys(quality_statuses)) if quality_statuses else "unknown",
             detail_level="summary",
             created_at=request.received_at,
+            updated_at=request.received_at,
         )
 
     def _continue_provider_response(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, initial_response, references: tuple[str, ...]):
@@ -974,7 +1000,11 @@ def _safe_boundary_negation(value: str) -> bool:
 
 
 def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
-    return (request.source == "telegram" and str(request.message_id or "").startswith("telegram:")) or request.session_id.startswith("gaon-conversation-release-check:")
+    return (
+        (request.source == "telegram" and str(request.message_id or "").startswith("telegram:"))
+        or request.session_id.startswith("gaon-conversation-release-check:")
+        or request.session_id.startswith("gaon-conversation-context-release-check:")
+    )
 
 
 def _contains_supported_conversational_mvp_token(text: str) -> bool:
@@ -999,6 +1029,11 @@ def _contains_supported_conversational_mvp_token(text: str) -> bool:
     )
     normalized = text.casefold()
     return any(token.casefold() in normalized for token in tokens)
+
+
+def _is_explicit_tool_result_synthesis_request(text: str) -> bool:
+    normalized = text.casefold()
+    return any(token in normalized for token in ("방금", "앞에서", "이전", "최근", "종합", "summary", "previous"))
 
 
 def _is_simple_conversational_research_request(text: str) -> bool:

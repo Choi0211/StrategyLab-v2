@@ -8,6 +8,7 @@ from gaon.integrations.telegram.transport import parse_update_result
 from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall
 from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, _failure_tool_executor, _strict_real_research_payload, main as cli_main, poll_once
 from gaon.runtime.config import GaonRuntimeConfig
+from gaon.runtime.conversational_mvp import render_single_symbol_summary
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
@@ -526,10 +527,115 @@ class TelegramConversationAgentTests(unittest.TestCase):
             for raw in client.updates:
                 process_update(parse_update_result(raw, received_at="2026-07-30T00:00:00Z"), runtime, client)
 
-            self.assertIn("구조화된 백테스트 지표", client.sent[1][1])
-            self.assertIn("정확히 이해하지 못했습니다", client.sent[2][1])
+            self.assertIn("저장된 구조화 결과", client.sent[1][1])
+            self.assertIn("직전에 설명할 분석 결과가 없습니다", client.sent[2][1])
         finally:
             store.close()
+
+    def test_hotfix1521_followup_explains_previous_real_single_without_new_tool_call(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(240, 240, "삼성전자 분석해줘"), _update(241, 241, "왜 그렇게 판단했어?")))
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for raw in client.updates:
+                process_update(parse_update_result(raw, received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            final = client.sent[1][1]
+            self.assertIn("직전 삼성전자(005930) 분석 판단 근거", final)
+            self.assertIn("real:yahoo-chart", final)
+            self.assertIn("quality_status=pass", final)
+            self.assertIn("전략 성과가 검증됐다는 뜻은 아닙니다", final)
+            self.assertNotIn("fixture", final)
+            self.assertNotIn("champion", final.casefold())
+            self.assertNotIn("v5", final.casefold())
+        finally:
+            store.close()
+
+    def test_hotfix1521_compare_followups_use_both_symbols_without_unrelated_tools(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(
+            (
+                _update(242, 242, "삼성전자와 SK하이닉스 비교해줘"),
+                _update(243, 243, "쉽게 설명해줘"),
+                _update(244, 244, "자세히 보여줘"),
+            )
+        )
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for raw in client.updates:
+                process_update(parse_update_result(raw, received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 2)
+            simple = client.sent[1][1]
+            detail = client.sent[2][1]
+            for text in (simple, detail):
+                self.assertIn("삼성전자(005930)", text)
+                self.assertIn("SK하이닉스(000660)", text)
+                self.assertNotIn("fixture:krx-market-data", text)
+                self.assertNotIn("2026-07-01", text)
+                self.assertNotIn("champion", text.casefold())
+                self.assertNotIn("v5", text.casefold())
+            self.assertIn("직전 비교의 상세 구조화 결과", detail)
+        finally:
+            store.close()
+
+    def test_hotfix1521_greeting_preserves_previous_research_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(245, 245, "삼성전자 분석해줘"), _update(246, 246, "안녕하세요"), _update(247, 247, "왜 그렇게 판단했어?")))
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for raw in client.updates:
+                process_update(parse_update_result(raw, received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertIn("직전 삼성전자(005930) 분석 판단 근거", client.sent[2][1])
+        finally:
+            store.close()
+
+    def test_hotfix1521_compare_replaces_single_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(
+            (
+                _update(248, 248, "삼성전자 분석해줘"),
+                _update(249, 249, "삼성전자와 SK하이닉스 비교해줘"),
+                _update(250, 250, "왜 그렇게 판단했어?"),
+            )
+        )
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for raw in client.updates:
+                process_update(parse_update_result(raw, received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 3)
+            final = client.sent[2][1]
+            self.assertIn("직전 비교 판단", final)
+            self.assertIn("삼성전자(005930)", final)
+            self.assertIn("SK하이닉스(000660)", final)
+        finally:
+            store.close()
+
+    def test_hotfix1521_fixture_warning_is_conditional(self) -> None:
+        real_text = render_single_symbol_summary(_sprint152_payload("005930", fixture_backed=False), user_text="삼성전자 분석해줘")
+        fixture_text = render_single_symbol_summary(_sprint152_payload("005930", fixture_backed=True), user_text="삼성전자 분석해줘")
+
+        self.assertNotIn("fixture 데이터 기반", real_text)
+        self.assertIn("fixture 데이터 기반", fixture_text)
+
+    def test_hotfix1521_context_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-conversation-context-release-check", "--db", ":memory:"]), 0)
 
     def test_sprint152_partial_compare_failure_is_fail_closed(self) -> None:
         store = RuntimeStateStore(":memory:")
@@ -600,14 +706,14 @@ class _HallucinatingRealResearchProvider:
         )
 
 
-def _sprint152_tool_executor(store: RuntimeStateStore, *, fail_symbol: str | None = None) -> SafeToolExecutor:
+def _sprint152_tool_executor(store: RuntimeStateStore, *, fail_symbol: str | None = None, fixture_backed: bool = True) -> SafeToolExecutor:
     registry = ToolRegistry()
 
     def handle(args):
         symbol = str(args.get("symbol", "005930"))
         if fail_symbol == symbol:
             raise RealMarketDataUnavailable(f"real_data_unavailable: synthetic failure for {symbol}")
-        return _sprint152_payload(symbol)
+        return _sprint152_payload(symbol, fixture_backed=fixture_backed)
 
     registry.register(
         ToolDefinition(
@@ -622,7 +728,7 @@ def _sprint152_tool_executor(store: RuntimeStateStore, *, fail_symbol: str | Non
     return SafeToolExecutor(registry, store.tool_audit)
 
 
-def _sprint152_payload(symbol: str) -> dict[str, object]:
+def _sprint152_payload(symbol: str, *, fixture_backed: bool = True) -> dict[str, object]:
     trades = {"005930": 1, "000660": 7}.get(symbol, 3)
     total_return = {"005930": 0.0123, "000660": 0.061}.get(symbol, 0.02)
     mdd = {"005930": 0.044, "000660": 0.091}.get(symbol, 0.05)
@@ -632,12 +738,12 @@ def _sprint152_payload(symbol: str) -> dict[str, object]:
         "dataset": {
             "symbols": [{"symbol": symbol, "name": symbol}],
             "metadata": {
-                "source": "fixture:sprint152",
+                "source": "fixture:sprint152" if fixture_backed else "real:yahoo-chart",
                 "market": "KOSPI",
                 "timeframe": "daily",
                 "start_date": "2026-01-02",
                 "end_date": "2026-07-10",
-                "fixture_backed": True,
+                "fixture_backed": fixture_backed,
             },
         },
         "quality": {"status": "pass", "findings": []},
