@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 152.2 - Telegram Follow-up Persistence and Typo Tolerance
+
+- Persisted Sprint 152 conversational MVP research context in existing versioned conversation session metadata so Telegram follow-ups survive runtime/Brain recreation across polling ticks.
+- Split `last_research_context` from `last_response_context`; greeting, help, status, typo, and unknown messages no longer erase the prior research/comparison context.
+- Added narrow deterministic typo tolerance for follow-up phrases such as `왜 그절? 판간했어?`, while keeping arbitrary research/tool/order routing fail-closed.
+- Strengthened comparison wording for `trade_count=1` versus `trade_count=0` so Gaon does not claim stable superiority or fabricate confidence.
+- Added `gaon-telegram-followup-release-check` plus unit and Telegram integration coverage for persisted context, typo follow-up, help/unknown preservation, chat-scoped metadata, and no unrelated tool calls.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 152.1 - Conversational Follow-up Context Integrity
 
 - Strengthened Sprint 152 follow-up handling so "why", "simple explanation", and "details" requests use the immediately previous research result from the same Telegram chat.

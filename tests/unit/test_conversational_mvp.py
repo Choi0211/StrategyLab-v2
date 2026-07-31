@@ -35,6 +35,19 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertEqual(route.intent, ConversationalMVPIntent.GREETING)
         self.assertEqual(route.symbols, ())
 
+    def test_followup_typo_is_narrowly_classified_as_explanation(self) -> None:
+        route = classify_conversational_route("왜 그절? 판간했어?")
+
+        self.assertEqual(route.intent, ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT)
+        self.assertEqual(route.symbols, ())
+
+    def test_followup_simplify_and_detail_phrases_are_classified(self) -> None:
+        simple = classify_conversational_route("쉽게 설명해줘")
+        detail = classify_conversational_route("자세히 보여줘")
+
+        self.assertEqual(simple.intent, ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT)
+        self.assertEqual(detail.intent, ConversationalMVPIntent.SHOW_DETAILS)
+
     def test_single_renderer_hides_internal_fields_and_warns_for_one_trade(self) -> None:
         text = render_single_symbol_summary(_payload("005930", trade_count=1, profit_factor="inf"), user_text="삼성전자 분석해줘")
 

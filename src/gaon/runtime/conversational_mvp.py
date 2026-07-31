@@ -54,7 +54,7 @@ class ConversationalMVPContext:
 
 SYMBOL_ALIASES: dict[str, tuple[str, ...]] = {
     "005930": ("005930", "삼성전자", "삼성 전자", "samsung electronics", "samsung"),
-    "000660": ("000660", "SK하이닉스", "SK 하이닉스", "에스케이하이닉스", "하이닉스", "sk hynix", "hynix"),
+    "000660": ("000660", "SK하이닉스", "SK 하이닉스", "sk하이닉스", "에스케이하이닉스", "하이닉스", "sk hynix", "hynix"),
     "005380": ("005380", "현대차", "현대자동차", "hyundai motor", "hyundai"),
     "035420": ("035420", "NAVER", "네이버", "naver"),
     "051910": ("051910", "LG화학", "LG 화학", "lg chem"),
@@ -71,10 +71,38 @@ SYMBOL_NAMES = {
 COMPARISON_TOKENS = ("비교", "차이", "어느 쪽", "뭐가 더", "대", "와", "과", " vs ", "versus", "compare")
 ANALYSIS_TOKENS = ("분석", "백테스트", "검증", "연구", "어때", "봐줘", "알려줘", "analysis", "backtest")
 MULTI_SYMBOL_TOKENS = ("여러 종목", "다종목", "전체 종목", "유니버스", "상위", "universe", "multi-symbol", "multisymbol")
-DETAIL_TOKENS = ("자세히", "원본", "전체 결과", "상세", "detail", "raw")
-SIMPLIFY_TOKENS = ("쉽게", "간단히", "요약", "초등", "쉽게 설명", "simple")
-EXPLAIN_TOKENS = ("왜", "이유", "판단", "근거", "그렇게", "explain")
+DETAIL_TOKENS = ("자세히", "자세하게", "상세히", "상세하게", "원본", "전체 결과", "상세", "detail", "raw")
+SIMPLIFY_TOKENS = ("쉽게", "쉽개", "간단히", "간단하게", "요약", "초등", "쉽게 설명", "simple")
+EXPLAIN_TOKENS = ("왜", "이유", "판단", "판간", "근거", "그렇게", "그절", "그런", "explain")
 STATUS_TOKENS = ("상태", "status", "정상", "하고 있어")
+
+_EXPLAIN_ALIASES = (
+    "왜 그렇게 판단했어",
+    "왜 그렇게 판단한 거야",
+    "왜 그런 판단을 했어",
+    "왜 그절 판단했어",
+    "왜 그렇게 판간했어",
+    "왜 그절 판간했어",
+    "이유가 뭐야",
+    "왜 그런 거야",
+)
+_SIMPLIFY_ALIASES = (
+    "쉽게 설명해줘",
+    "쉽게설명해줘",
+    "쉽게 알려줘",
+    "쉽게 말해줘",
+    "간단히 설명해줘",
+    "간단하게 말해줘",
+    "쉽개 설명해줘",
+)
+_DETAIL_ALIASES = (
+    "자세히 보여줘",
+    "자세하게 보여줘",
+    "상세히 보여줘",
+    "전체 내용 보여줘",
+    "자세한 결과 보여줘",
+    "원본 결과 보여줘",
+)
 
 
 def extract_symbol_entities(text: str) -> tuple[SymbolEntity, ...]:
@@ -96,6 +124,9 @@ def classify_conversational_route(text: str) -> ConversationalRoute:
     symbols = extract_symbol_entities(text)
     if not normalized:
         return ConversationalRoute(ConversationalMVPIntent.UNKNOWN, ())
+    typo_followup = _classify_followup_typo(normalized)
+    if typo_followup is not None:
+        return ConversationalRoute(typo_followup, symbols)
     if _is_simple_greeting(normalized):
         return ConversationalRoute(ConversationalMVPIntent.GREETING, ())
     if any(token in normalized for token in ("도움말", "뭘 할 수", "무엇을 할 수", "help", "/help", "/start")):
@@ -276,21 +307,7 @@ def render_single_symbol_explanation(payload: dict[str, object], context: Conver
 def render_symbol_comparison_explanation(payloads: tuple[dict[str, object], ...], context: ConversationalMVPContext | None = None) -> str:
     lines = ["영하님, 직전 비교 판단은 각 종목을 같은 조건으로 실행한 구조화 결과만 기준으로 설명드립니다.", ""]
     for payload in payloads:
-        symbol = _symbol_from_payload(payload)
-        name = SYMBOL_NAMES.get(symbol, symbol)
-        metadata = _dict(_dict(payload.get("dataset")).get("metadata"))
-        quality = _dict(payload.get("quality"))
-        metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
-        lines.extend(
-            [
-                f"[{name}({symbol})]",
-                f"- 데이터: {_source_label(metadata)}",
-                f"- quality_status={quality.get('status', 'unknown')}: 데이터 품질 상태이며 전략 유효성 판정이 아닙니다.",
-                f"- 거래 수: {_format_int(metrics.get('trade_count'))}회",
-                f"- 총 수익률: {_format_percent(metrics.get('total_return'))}",
-                f"- MDD: {_format_percent(metrics.get('mdd'))}",
-            ]
-        )
+        lines.extend(_comparison_explanation_lines(payload))
         warnings = _reliability_warnings(payload)
         if warnings:
             lines.extend([f"- 주의: {warning}" for warning in warnings])
@@ -304,12 +321,16 @@ def render_single_symbol_simple(payload: dict[str, object]) -> str:
     name = SYMBOL_NAMES.get(symbol, symbol)
     quality = _dict(payload.get("quality"))
     metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    trade_count = _as_int(metrics.get("trade_count"))
     lines = [
         f"영하님, 쉽게 말하면 직전 {name}({symbol}) 결과는 이렇게 보면 됩니다.",
-        f"- 실제로 확인된 거래는 {_format_int(metrics.get('trade_count'))}회입니다.",
+        f"- 실제로 확인된 거래는 {trade_count}회입니다.",
         f"- 데이터 품질은 quality_status={quality.get('status', 'unknown')}입니다.",
-        "- 표본이 적으면 수익률이나 승률이 좋아 보여도 믿을 수 있는 전략이라고 말할 수 없습니다.",
     ]
+    if trade_count == 0:
+        lines.append("- 거래가 없어 전략 성과를 직접 평가할 수 없습니다.")
+    else:
+        lines.append("- 표본이 적으면 수익률이나 승률이 좋아 보여도 믿을 수 있는 전략이라고 말할 수 없습니다.")
     warnings = _reliability_warnings(payload)
     if warnings:
         lines.append(f"- 핵심 주의점: {warnings[0]}")
@@ -323,11 +344,13 @@ def render_symbol_comparison_simple(payloads: tuple[dict[str, object], ...]) -> 
         name = SYMBOL_NAMES.get(symbol, symbol)
         quality = _dict(payload.get("quality"))
         metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
-        lines.append(
-            f"- {name}({symbol}): 거래 {_format_int(metrics.get('trade_count'))}회, "
-            f"총 수익률 {_format_percent(metrics.get('total_return'))}, quality_status={quality.get('status', 'unknown')}"
-        )
-    lines.append("- 이 설명은 직전 비교 결과만 사용하며, 다른 상태 조회나 과거 fixture 결과를 섞지 않습니다.")
+        trade_count = _as_int(metrics.get("trade_count"))
+        if trade_count == 0:
+            metric_text = "거래 0회, 성과 평가 불가"
+        else:
+            metric_text = f"거래 {trade_count}회, 관측된 총 수익률 {_format_percent(metrics.get('total_return'))}"
+        lines.append(f"- {name}({symbol}): {metric_text}, quality_status={quality.get('status', 'unknown')}")
+    lines.append("- 표본이 부족하므로 어느 종목이 더 좋다고 확정하지 않습니다.")
     return _sanitize_final("\n".join(lines))
 
 
@@ -360,9 +383,77 @@ def render_symbol_comparison_detail(payloads: tuple[dict[str, object], ...]) -> 
     return _sanitize_final("\n".join(lines))
 
 
+def _comparison_explanation_lines(payload: dict[str, object]) -> list[str]:
+    symbol = _symbol_from_payload(payload)
+    name = SYMBOL_NAMES.get(symbol, symbol)
+    metadata = _dict(_dict(payload.get("dataset")).get("metadata"))
+    quality = _dict(payload.get("quality"))
+    metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    trade_count = _as_int(metrics.get("trade_count"))
+    lines = [
+        f"[{name}({symbol})]",
+        f"- 데이터: {_source_label(metadata)}",
+        f"- quality_status={quality.get('status', 'unknown')}: 데이터 품질 상태이며 전략 유효성 판정이 아닙니다.",
+        f"- 거래 수: {trade_count}회",
+    ]
+    if trade_count == 0:
+        lines.append("- 진입 신호가 없어 성과 수치와 위험 수치를 직접 비교할 수 없습니다.")
+    else:
+        lines.extend(
+            [
+                f"- 관측된 총 수익률: {_format_percent(metrics.get('total_return'))}",
+                f"- MDD: {_format_percent(metrics.get('mdd'))}",
+            ]
+        )
+    return lines
+
+
 def _is_simple_greeting(normalized: str) -> bool:
     compact = re.sub(r"\s+", "", normalized)
     return compact in {"안녕", "안녕하세요", "가온", "가온아", "hello", "hi", "gaon"}
+
+
+def _classify_followup_typo(normalized: str) -> ConversationalMVPIntent | None:
+    compact = _compact_followup_text(normalized)
+    if _matches_any(compact, _DETAIL_ALIASES):
+        return ConversationalMVPIntent.SHOW_DETAILS
+    if _matches_any(compact, _SIMPLIFY_ALIASES):
+        return ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT
+    if _matches_any(compact, _EXPLAIN_ALIASES) or ("왜" in compact and any(token in compact for token in ("판단", "판간", "그렇", "그런", "그절", "이유"))):
+        return ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT
+    return None
+
+
+def _compact_followup_text(value: str) -> str:
+    return re.sub(r"[\s\?\!\.\,\~\ㅠ\ㅜ]+", "", value.casefold())
+
+
+def _matches_any(compact: str, aliases: tuple[str, ...]) -> bool:
+    for alias in aliases:
+        candidate = _compact_followup_text(alias)
+        if candidate and candidate in compact:
+            return True
+        if candidate and _levenshtein_limited(compact, candidate, 2) <= 2:
+            return True
+    return False
+
+
+def _levenshtein_limited(left: str, right: str, limit: int) -> int:
+    if abs(len(left) - len(right)) > limit:
+        return limit + 1
+    previous = list(range(len(right) + 1))
+    for i, char_left in enumerate(left, 1):
+        current = [i]
+        row_min = i
+        for j, char_right in enumerate(right, 1):
+            cost = 0 if char_left == char_right else 1
+            value = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+            current.append(value)
+            row_min = min(row_min, value)
+        if row_min > limit:
+            return limit + 1
+        previous = current
+    return previous[-1]
 
 
 def _dict(value: object) -> dict[str, object]:
@@ -389,6 +480,8 @@ def _one_line_conclusion(metrics: dict[str, object]) -> str:
     trade_count = _as_int(metrics.get("trade_count"))
     total_return = _as_float(metrics.get("total_return"))
     mdd = _as_float(metrics.get("mdd"))
+    if trade_count == 0:
+        return "거래가 없어 전략 성과를 직접 평가할 수 없습니다."
     if trade_count < 5:
         return "거래 표본이 매우 적어 성과 판단보다 추가 검증이 우선입니다."
     if total_return is not None and total_return > 0 and (mdd is None or mdd < 0.2):
@@ -403,16 +496,18 @@ def _reliability_warnings(payload: dict[str, object]) -> list[str]:
     metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
     trade_count = _as_int(metrics.get("trade_count"))
     warnings: list[str] = []
-    if trade_count == 1:
+    if trade_count == 0:
+        warnings.append("거래가 없어 수익률, MDD, 승률, Profit Factor를 전략 성과로 해석할 수 없습니다.")
+    elif trade_count == 1:
         warnings.append("주의: 거래 표본이 1건뿐이므로 수익률, 승률, CAGR과 Profit Factor를 신뢰하기 어렵습니다.")
     elif trade_count < 5:
         warnings.append("거래 표본이 5건 미만이라 통계적 신뢰도가 매우 낮습니다.")
     elif trade_count < 20:
         warnings.append("거래 표본이 20건 미만이라 통계적 신뢰도가 낮습니다.")
     profit_factor = metrics.get("profit_factor")
-    if _is_inf(profit_factor):
+    if trade_count > 0 and _is_inf(profit_factor):
         warnings.append("Profit Factor는 손실 거래가 없어서 계산상 무한대로 보일 수 있으며 강한 성과 근거로 해석하지 않습니다.")
-    if _as_float(metrics.get("win_rate")) == 1.0 and trade_count < 20:
+    if trade_count > 0 and _as_float(metrics.get("win_rate")) == 1.0 and trade_count < 20:
         warnings.append("승률 100%처럼 보이지만 거래 수가 적어 신뢰하기 어렵습니다.")
     if metadata.get("fixture_backed") is True:
         warnings.append("fixture 데이터 기반 결과이므로 실제 시장 결과처럼 해석하지 않습니다.")
@@ -439,8 +534,10 @@ def _detail_lines(payload: dict[str, object], strategy: dict[str, object], metri
 
 
 def _comparison_conclusion(rows: list[tuple[str, str, dict[str, object], dict[str, object], list[str]]]) -> str:
+    if any(_as_int(row[2].get("trade_count")) == 0 for row in rows):
+        return "거래가 없는 종목이 있어 직접 비교가 불가능합니다. 어느 종목이 더 좋다고 확정하지 않습니다."
     if any(warnings for *_, warnings in rows):
-        return "표본 또는 데이터 품질 경고가 있어 확정적 서열은 보류합니다."
+        return "표본 또는 데이터 품질 경고가 있어 확정적 우열은 보류합니다."
     ranked = sorted(rows, key=lambda row: (_as_float(row[2].get("total_return")) or -999.0, -(_as_float(row[2].get("mdd")) or 999.0)), reverse=True)
     return f"구조화된 지표만 보면 {ranked[0][1]}({ranked[0][0]})가 상대적으로 앞서지만 주문이나 승격 판단은 아닙니다."
 
@@ -464,10 +561,12 @@ def _format_number(value: object) -> str:
 
 
 def _format_profit_factor(value: object, trade_count: object) -> str:
+    if _as_int(trade_count) == 0:
+        return "거래 없음으로 계산 불가"
     if _is_inf(value):
         return "손실 거래 없음으로 해석 제한"
     numeric = _as_float(value)
-    if numeric is None or _as_int(trade_count) == 0:
+    if numeric is None:
         return "계산 불가"
     return f"{numeric:.2f}"
 

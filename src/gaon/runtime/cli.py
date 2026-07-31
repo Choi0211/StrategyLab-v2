@@ -218,6 +218,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_conversation_context_release = sub.add_parser("gaon-conversation-context-release-check")
     gaon_conversation_context_release.add_argument("--db", default=":memory:")
     gaon_conversation_context_release.add_argument("--run-id", default=None)
+    gaon_telegram_followup_release = sub.add_parser("gaon-telegram-followup-release-check")
+    gaon_telegram_followup_release.add_argument("--db", default=":memory:")
+    gaon_telegram_followup_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -972,6 +975,52 @@ def _run(args: argparse.Namespace) -> int:
                 "gaon-conversation-context-release-check: PASS "
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "single=pass compare=pass explain=pass simplify=pass detail=pass isolation=pass"
+            )
+        finally:
+            store.close()
+    elif args.command == "gaon-telegram-followup-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"gaon-telegram-followup-release-check:{uuid4().hex}"
+            audit_before = len(store.tool_audit.list(tool_name="krx_real_research"))
+            sent = _run_telegram_followup_release_sequence(store, run_id)
+            audit_after = len(store.tool_audit.list(tool_name="krx_real_research"))
+            combined_followups = "\n".join(sent[1:])
+            forbidden = (
+                "champion",
+                "v5",
+                "fixture",
+                "19.23",
+                "시장 조건",
+                "우수합니다",
+                "안정적입니다",
+                "outperforms",
+                "<output>",
+                "<response>",
+            )
+            required = ("삼성전자(005930)", "SK하이닉스(000660)", "거래 0회", "확정하지 않습니다")
+            if audit_after - audit_before != 2:
+                raise ConfigurationError("telegram follow-up release check executed unexpected research tool calls")
+            if any("직전 연구/비교 결과가 없습니다" in text for text in sent[1:]):
+                raise ConfigurationError("telegram follow-up context was lost between polling ticks")
+            if not all(term in combined_followups for term in required):
+                raise ConfigurationError("telegram follow-up release check missed required grounded comparison terms")
+            if any(term in combined_followups for term in forbidden):
+                raise ConfigurationError("telegram follow-up release check leaked unrelated or fabricated context")
+            messages = store.conversations.list_messages("telegram:100")
+            assistant_routes = tuple(message.route for message in messages if message.role == "assistant")
+            if not any(route == "conversation_mvp_explain_previous_result" for route in assistant_routes):
+                raise ConfigurationError("telegram follow-up release check did not route typo/corrected explanation deterministically")
+            session = store.conversations.get_session("telegram:100")
+            context = session.metadata.get("conversation_mvp")
+            if not isinstance(context, dict) or not isinstance(context.get("last_research_context"), dict):
+                raise ConfigurationError("telegram follow-up release check did not persist research context metadata")
+            if context["last_research_context"].get("last_result_kind") != "symbol_comparison":
+                raise ConfigurationError("telegram follow-up release check persisted the wrong research context kind")
+            print(
+                "gaon-telegram-followup-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "context=persistent typo=pass followups=pass audit_count=2"
             )
         finally:
             store.close()
@@ -3364,11 +3413,22 @@ def _failure_tool_executor(store: RuntimeStateStore, exc: Exception) -> SafeTool
     return SafeToolExecutor(registry, store.tool_audit)
 
 
-def _conversation_context_release_payload(symbol: str, *, fixture_backed: bool) -> dict[str, object]:
+def _conversation_context_release_payload(symbol: str, *, fixture_backed: bool, zero_trade_symbols: tuple[str, ...] = ()) -> dict[str, object]:
     trades = {"005930": 1, "000660": 7}.get(symbol, 3)
     total_return = {"005930": 0.0123, "000660": 0.061}.get(symbol, 0.02)
     mdd = {"005930": 0.044, "000660": 0.091}.get(symbol, 0.05)
     profit_factor: object = "inf" if symbol == "005930" else 1.42
+    win_rate = 1.0 if symbol == "005930" else 0.571429
+    expectancy = 0.01
+    exposure = 0.2
+    if symbol in zero_trade_symbols:
+        trades = 0
+        total_return = 0.0
+        mdd = 0.0
+        profit_factor = None
+        win_rate = 0.0
+        expectancy = 0.0
+        exposure = 0.0
     source = "fixture:conversation-context" if fixture_backed else "real:yahoo-chart"
     return {
         "schema_version": 33,
@@ -3392,16 +3452,66 @@ def _conversation_context_release_payload(symbol: str, *, fixture_backed: bool) 
                 "mdd": mdd,
                 "trade_count": trades,
                 "profit_factor": profit_factor,
-                "win_rate": 1.0 if symbol == "005930" else 0.571429,
+                "win_rate": win_rate,
                 "cagr": total_return,
                 "sharpe": 0.42,
-                "expectancy": 0.01,
-                "exposure": 0.2,
+                "expectancy": expectancy,
+                "exposure": exposure,
             },
         },
         "automatic_order": False,
         "automatic_champion_promotion": False,
     }
+
+
+def _telegram_followup_release_tool_executor(store: RuntimeStateStore) -> SafeToolExecutor:
+    registry = ToolRegistry()
+
+    def handle_research(tool_args):
+        return _conversation_context_release_payload(str(tool_args.get("symbol", "005930")), fixture_backed=False, zero_trade_symbols=("000660",))
+
+    registry.register(
+        ToolDefinition(
+            "krx_real_research",
+            "Run deterministic Telegram follow-up release-check research.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol",),
+        ),
+        handle_research,
+    )
+    return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _run_telegram_followup_release_sequence(store: RuntimeStateStore, run_id: str) -> tuple[str, ...]:
+    config = GaonRuntimeConfig(
+        mode="execute",
+        dry_run=False,
+        telegram_enabled=True,
+        telegram_bot_token="synthetic-token",
+        telegram_allowed_chat_ids=("100",),
+        approval_signing_secret="synthetic-approval-secret",
+        assistant_enabled=True,
+        assistant_provider="deterministic",
+    )
+    client = _ReleaseCheckTelegramClient()
+    texts = (
+        "삼성전자와 sk하이닉스 비교해줘",
+        "왜 그절? 판간했어?",
+        "왜 그렇게 판단했어?",
+        "쉽게 설명해줘",
+        "자세히 보여줘",
+    )
+    for index, text in enumerate(texts, 1):
+        update = parse_update_result(_telegram_update_with_text(run_id, f"followup-{index}", text), received_at=_utc_now())
+        runtime = TelegramRuntime(
+            TelegramConversationAgent(config, store._connection, tool_executor=_telegram_followup_release_tool_executor(store)),
+            allowed_chat_ids=("100",),
+        )
+        result = process_update(update, runtime, client)
+        if result.status != "sent":
+            raise ConfigurationError(f"telegram follow-up release check failed to send step {index}: {result.status}")
+    return tuple(text for _chat_id, text in client.sent)
 
 
 def _run_telegram_failure_case(store: RuntimeStateStore, run_id: str, suffix: str, tool_executor, provider, text: str) -> str:

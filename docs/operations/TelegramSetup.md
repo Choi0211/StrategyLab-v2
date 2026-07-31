@@ -62,6 +62,26 @@ This check verifies that follow-up prompts such as `왜 그렇게 판단했어?`
 same Telegram chat only. A missing-context follow-up must not call unrelated
 status, history, Champion, or pipeline tools.
 
+Hotfix 152.2 persistent Telegram follow-up release check:
+
+```bash
+python -m gaon.runtime.cli gaon-telegram-followup-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This check simulates separate Telegram polling ticks by recreating the runtime
+agent for each message while reusing the same SQLite store. The sequence is:
+
+- `삼성전자와 sk하이닉스 비교해줘`
+- `왜 그절? 판간했어?`
+- `왜 그렇게 판단했어?`
+- `쉽게 설명해줘`
+- `자세히 보여줘`
+
+All follow-ups must use the prior comparison context from the same chat. The
+response must not claim a stable winner when one symbol has only one trade and
+the other has zero trades, and it must not fall back to Champion, V5, market
+condition speculation, or fixture context.
+
 ## Windows PowerShell Example
 
 ```powershell
