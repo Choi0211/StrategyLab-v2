@@ -17,7 +17,11 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.conversational_mvp import (
     ConversationalMVPContext,
     ConversationalMVPIntent,
+    ExplanationLevel,
     classify_conversational_route,
+    explanation_level_for_text,
+    render_reasoning_from_payloads,
+    render_rerun_boundary,
     render_follow_up,
     render_greeting,
     render_help,
@@ -605,10 +609,31 @@ class LLMConversationBrain:
         if not _is_conversational_mvp_source(request):
             return None
         route = classify_conversational_route(request.text)
+        reasoning_followup_intents = {
+            ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
+            ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT,
+            ConversationalMVPIntent.PROFESSIONAL_EXPLANATION,
+            ConversationalMVPIntent.SHOW_DETAILS,
+            ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION,
+            ConversationalMVPIntent.RISK_QUESTION,
+            ConversationalMVPIntent.STRATEGY_QUESTION,
+            ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST,
+            ConversationalMVPIntent.RERUN_REQUEST,
+            ConversationalMVPIntent.RECOMMENDATION_REQUEST,
+            ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
+        }
         if not _contains_supported_conversational_mvp_token(request.text) and route.intent not in {
             ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
             ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT,
+            ConversationalMVPIntent.PROFESSIONAL_EXPLANATION,
             ConversationalMVPIntent.SHOW_DETAILS,
+            ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION,
+            ConversationalMVPIntent.RISK_QUESTION,
+            ConversationalMVPIntent.STRATEGY_QUESTION,
+            ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST,
+            ConversationalMVPIntent.RERUN_REQUEST,
+            ConversationalMVPIntent.RECOMMENDATION_REQUEST,
+            ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
         }:
             return None
         existing_tool = route_read_only_tool(request.text)
@@ -625,14 +650,35 @@ class LLMConversationBrain:
         if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text):
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_status")
             return render_status(), "conversation_mvp_status", _dedupe(warnings), references, "deterministic", ()
-        if route.intent in {ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT, ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT, ConversationalMVPIntent.SHOW_DETAILS}:
+        if route.intent in reasoning_followup_intents:
             context = self._mvp_context_for(request.session_id)
             if context is None:
+                if route.symbols and route.intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST, ConversationalMVPIntent.RISK_QUESTION, ConversationalMVPIntent.STRATEGY_QUESTION} and self._tool_executor is not None:
+                    result = self._execute_mvp_real_research(request, route.symbols[0].symbol)
+                    if result.status != "success":
+                        failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+                        return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", ("krx_real_research",)
+                    level = explanation_level_for_text(request.text, route.intent)
+                    text = render_reasoning_from_payloads((result.output,), intent=route.intent, level=level, user_text=request.text)
+                    self._remember_mvp_context(request, route.intent, (result.output,), text)
+                    return text, f"conversation_reasoning_{route.intent.value}", _dedupe((*warnings, "evidence-bound reasoning response")), _dedupe((*references, "tool:krx_real_research")), "deterministic", ("krx_real_research",)
                 if self._tool_result_repository is not None and self._tool_result_repository.latest(request.session_id) is not None and _is_explicit_tool_result_synthesis_request(request.text):
                     return None
                 self._remember_mvp_response_context(request, route.intent, "conversation_mvp_missing_context")
                 return render_missing_context(), "conversation_mvp_missing_context", _dedupe(warnings), references, "deterministic", ()
             self._remember_mvp_response_context(request, route.intent, f"conversation_mvp_{route.intent.value}")
+            if route.intent in {ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, ConversationalMVPIntent.RERUN_REQUEST}:
+                return render_rerun_boundary(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe((*warnings, "rerun request requires explicit authoritative rerun")), references, "deterministic", ()
+            if route.intent in {
+                ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION,
+                ConversationalMVPIntent.RISK_QUESTION,
+                ConversationalMVPIntent.STRATEGY_QUESTION,
+                ConversationalMVPIntent.RECOMMENDATION_REQUEST,
+                ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
+                ConversationalMVPIntent.PROFESSIONAL_EXPLANATION,
+            }:
+                level = explanation_level_for_text(request.text, route.intent)
+                return render_reasoning_from_payloads(context.last_structured_results or context.last_payloads, intent=route.intent, level=level, user_text=request.text), f"conversation_reasoning_{route.intent.value}", _dedupe((*warnings, "evidence-bound reasoning response")), references, "deterministic", ()
             return render_follow_up(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS:
             if self._tool_executor is None:
@@ -1078,6 +1124,7 @@ def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
         (request.source == "telegram" and str(request.message_id or "").startswith("telegram:"))
         or request.session_id.startswith("gaon-conversation-release-check:")
         or request.session_id.startswith("gaon-conversation-context-release-check:")
+        or request.session_id.startswith("gaon-conversational-reasoning-release-check:")
     )
 
 
@@ -1107,6 +1154,16 @@ def _contains_supported_conversational_mvp_token(text: str) -> bool:
         "상세히",
         "원본",
         "전체 결과",
+        "지금 사도",
+        "매수해도",
+        "추천",
+        "위험",
+        "리스크",
+        "전략",
+        "전문적으로",
+        "다시 분석",
+        "다시 검증",
+        "기간",
     )
     normalized = text.casefold()
     return any(token.casefold() in normalized for token in tokens)

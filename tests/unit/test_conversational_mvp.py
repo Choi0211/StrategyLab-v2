@@ -3,8 +3,12 @@ import unittest
 from gaon.runtime.conversational_mvp import (
     ConversationalMVPContext,
     ConversationalMVPIntent,
+    ExplanationLevel,
+    build_reasoning_result,
     classify_conversational_route,
+    explanation_level_for_text,
     extract_symbol_entities,
+    render_reasoning_from_payloads,
     render_follow_up,
     render_missing_context,
     render_single_symbol_summary,
@@ -47,6 +51,17 @@ class ConversationalMVPTests(unittest.TestCase):
 
         self.assertEqual(simple.intent, ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT)
         self.assertEqual(detail.intent, ConversationalMVPIntent.SHOW_DETAILS)
+
+    def test_sprint153_reasoning_intents_are_classified(self) -> None:
+        self.assertEqual(classify_conversational_route("삼성전자 지금 사도 돼?").intent, ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION)
+        self.assertEqual(classify_conversational_route("위험은 어느 정도야?").intent, ConversationalMVPIntent.RISK_QUESTION)
+        self.assertEqual(classify_conversational_route("전문적으로 설명해줘").intent, ConversationalMVPIntent.PROFESSIONAL_EXPLANATION)
+        self.assertEqual(classify_conversational_route("3년 기간으로 다시 해줘").intent, ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST)
+
+    def test_sprint153_explanation_level_model(self) -> None:
+        self.assertEqual(explanation_level_for_text("쉽게 설명해줘", ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT), ExplanationLevel.SIMPLE)
+        self.assertEqual(explanation_level_for_text("전문적으로 설명해줘", ConversationalMVPIntent.PROFESSIONAL_EXPLANATION), ExplanationLevel.PROFESSIONAL)
+        self.assertEqual(explanation_level_for_text("자세히 보여줘", ConversationalMVPIntent.SHOW_DETAILS), ExplanationLevel.DETAILED)
 
     def test_single_renderer_hides_internal_fields_and_warns_for_one_trade(self) -> None:
         text = render_single_symbol_summary(_payload("005930", trade_count=1, profit_factor="inf"), user_text="삼성전자 분석해줘")
@@ -119,6 +134,42 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertIn("거래가 없어", text)
         self.assertNotIn("위험 없음", text)
         self.assertNotIn("주의: 주의:", text)
+
+    def test_sprint153_investment_question_is_evidence_bound_and_guarded(self) -> None:
+        payload = _payload("005930", trade_count=1, profit_factor="inf")
+        text = render_reasoning_from_payloads((payload,), intent=ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, level=ExplanationLevel.STANDARD, user_text="삼성전자 지금 사도 돼?")
+
+        self.assertIn("[결론]", text)
+        self.assertIn("매수", text)
+        self.assertIn("거래 표본", text)
+        self.assertIn("데이터 무결성", text)
+        self.assertIn("재검증", text)
+        self.assertNotIn("지금 사세요", text)
+        self.assertNotIn("quality_status=", text)
+        self.assertNotIn("strategy_fingerprint", text)
+
+    def test_sprint153_zero_trade_risk_is_not_described_as_safe(self) -> None:
+        payload = _payload("000660", trade_count=0, profit_factor=None)
+        payload["backtest"]["metrics"]["mdd"] = 0.0
+        text = render_reasoning_from_payloads((payload,), intent=ConversationalMVPIntent.RISK_QUESTION, level=ExplanationLevel.PROFESSIONAL, user_text="위험은 어느 정도야?")
+
+        self.assertIn("MDD", text)
+        self.assertIn("Sharpe", text)
+        self.assertIn("Profit Factor", text)
+        self.assertIn("Exposure", text)
+        self.assertIn("거래가 없", text)
+        self.assertIn("위험 없음", text)
+        self.assertNotIn("안정적", text)
+
+    def test_sprint153_reasoning_result_is_typed(self) -> None:
+        payload = _payload("005930", trade_count=3, profit_factor=1.2)
+        result = build_reasoning_result((payload,), intent=ConversationalMVPIntent.RISK_QUESTION, level=ExplanationLevel.STANDARD, user_text="위험은?")
+
+        self.assertEqual(result.intent, ConversationalMVPIntent.RISK_QUESTION)
+        self.assertEqual(result.symbols, ("005930",))
+        self.assertTrue(result.evidence_points)
+        self.assertTrue(result.limitations)
+        self.assertIn("매수 또는 매도 추천", result.unsupported_claims_blocked)
 
 
 def _payload(symbol: str, *, trade_count: int = 3, profit_factor=1.2) -> dict[str, object]:

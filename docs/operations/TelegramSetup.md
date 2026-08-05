@@ -93,6 +93,24 @@ units, render expectancy as a capital-denominated amount, hide internal
 fingerprints and raw provenance keys, use Korean data-quality/source labels, and
 deduplicate warning prefixes.
 
+Sprint 153 conversational reasoning release check:
+
+```bash
+python -m gaon.runtime.cli gaon-conversational-reasoning-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This check verifies evidence-bound follow-up explanations for prompts such as:
+
+- `삼성전자 지금 사도 돼?`
+- `위험은 어느 정도야?`
+- `쉽게 설명해줘`
+- `전문적으로 설명해줘`
+- `3년 기간으로 다시 해줘`
+
+Gaon must not expose hidden chain-of-thought, must not recommend buying or
+selling from insufficient evidence, and must not rerun or mutate strategy
+parameters without an explicit authoritative request.
+
 ## Windows PowerShell Example
 
 ```powershell

@@ -2,6 +2,25 @@
 
 Status: Passed
 
+## Sprint 153 Conversational Reasoning & Explanation Engine
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_conversational_mvp -v`: PASS, 16 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent -v`: PASS, 35 tests
+  - `python -m gaon.runtime.cli gaon-conversational-reasoning-release-check --db :memory:`: PASS, schema v36
+- Full verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 564 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 137 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `python -m gaon.runtime.cli gaon-conversation-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-conversation-context-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-telegram-followup-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-result-presentation-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-conversational-reasoning-release-check --db :memory:`: PASS
+  - `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only
+- Note: `python -m pytest ...` was not executed in this local desktop runtime because pytest is not installed in the bundled Python environment; equivalent `unittest` commands are used for local verification.
+
 ## Hotfix 152.3 Result Units and Presentation Integrity
 
 - Targeted local verification:

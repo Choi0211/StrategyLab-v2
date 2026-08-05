@@ -642,6 +642,65 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_hotfix1523_result_presentation_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-result-presentation-release-check", "--db", ":memory:"]), 0)
 
+    def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
+
+    def test_sprint153_telegram_reasoning_followups_reuse_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        texts = (
+            "삼성전자 분석해줘",
+            "그럼 지금 사도 돼?",
+            "왜?",
+            "쉽게 설명해줘",
+            "전문적으로 설명해줘",
+            "위험은 어느 정도야?",
+            "자세히 보여줘",
+        )
+        try:
+            for index, text in enumerate(texts, 1):
+                runtime = TelegramRuntime(
+                    TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                    allowed_chat_ids=("100",),
+                )
+                process_update(parse_update_result(_update(360 + index, 360 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            decision = client.sent[1][1]
+            professional = client.sent[4][1]
+            risk = client.sent[5][1]
+            for text in client.sent[1:]:
+                final = text[1]
+                self.assertIn("삼성전자", final)
+                self.assertNotIn("quality_status=", final)
+                self.assertNotIn("source=", final)
+                self.assertNotIn("strategy_fingerprint", final)
+                self.assertNotIn("validation_id", final)
+            self.assertIn("매수", decision)
+            self.assertIn("어렵", decision)
+            self.assertIn("거래 표본", decision)
+            self.assertIn("Sharpe", professional)
+            self.assertIn("Profit Factor", professional)
+            self.assertIn("Exposure", professional)
+            self.assertIn("MDD", risk)
+        finally:
+            store.close()
+
+    def test_sprint153_missing_context_risk_followup_is_deterministic(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(390, 390, "그럼 위험은?"),))
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(client.updates[0], received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertIn("직전에 설명할 분석 결과가 없습니다", client.sent[0][1])
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 0)
+        finally:
+            store.close()
+
     def test_sprint152_partial_compare_failure_is_fail_closed(self) -> None:
         store = RuntimeStateStore(":memory:")
         client = FakeTelegramClient((_update(206, 206, "삼성전자와 SK하이닉스 비교해줘"),))

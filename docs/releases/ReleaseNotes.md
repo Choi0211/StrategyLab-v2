@@ -3,6 +3,30 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 153 Conversational Reasoning & Explanation Engine
+
+Sprint 153 adds a deterministic evidence-bound reasoning layer for Telegram
+conversation. Gaon can now answer decision-style and explanation-style prompts
+such as `삼성전자 지금 사도 돼?`, `위험은 어느 정도야?`, `쉽게 설명해줘`,
+`전문적으로 설명해줘`, and `3년 기간으로 다시 해줘` while preserving the
+previous structured research context.
+
+Responses are rendered as user-facing reasoning summaries, not hidden
+chain-of-thought. The default structure separates conclusion, core evidence,
+limitations, risk, unsupported claims, and next validation steps. Professional
+explanations include MDD, Sharpe, Profit Factor, exposure, and sample-size
+reliability notes.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-conversational-reasoning-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged: no live
+trading, no broker/KIS order, no automatic Champion promotion, no approval
+bypass, and no strategy config mutation.
+
 ## Hotfix 152.3 Result Units and Presentation Integrity
 
 Hotfix 152.3 makes conversational research reports preserve metric units.

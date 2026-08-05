@@ -16,9 +16,78 @@ class ConversationalMVPIntent(str, Enum):
     MULTI_SYMBOL_ANALYSIS = "multi_symbol_analysis"
     EXPLAIN_PREVIOUS_RESULT = "explain_previous_result"
     SIMPLIFY_PREVIOUS_RESULT = "simplify_previous_result"
+    PROFESSIONAL_EXPLANATION = "professional_explanation"
     SHOW_DETAILS = "show_details"
+    INVESTMENT_DECISION_QUESTION = "investment_decision_question"
+    RISK_QUESTION = "risk_question"
+    STRATEGY_QUESTION = "strategy_question"
+    TIMEFRAME_CHANGE_REQUEST = "timeframe_change_request"
+    RERUN_REQUEST = "rerun_request"
+    RECOMMENDATION_REQUEST = "recommendation_request"
+    CONTEXTUAL_FOLLOWUP = "contextual_followup"
     STATUS_QUERY = "status_query"
     UNKNOWN = "unknown"
+
+
+class ExplanationLevel(str, Enum):
+    SIMPLE = "simple"
+    STANDARD = "standard"
+    PROFESSIONAL = "professional"
+    DETAILED = "detailed"
+
+
+@dataclass(frozen=True)
+class EvidencePoint:
+    label: str
+    value: str
+    interpretation: str
+
+
+@dataclass(frozen=True)
+class Limitation:
+    message: str
+
+
+@dataclass(frozen=True)
+class RiskPoint:
+    message: str
+
+
+@dataclass(frozen=True)
+class NextAction:
+    message: str
+
+
+@dataclass(frozen=True)
+class DecisionBoundary:
+    can_answer: bool
+    message: str
+
+
+@dataclass(frozen=True)
+class ConversationReasoningRequest:
+    intent: ConversationalMVPIntent
+    symbols: tuple[SymbolEntity, ...]
+    user_text: str
+    explanation_level: ExplanationLevel = ExplanationLevel.STANDARD
+
+
+@dataclass(frozen=True)
+class ConversationReasoningResult:
+    intent: ConversationalMVPIntent
+    symbols: tuple[str, ...]
+    conclusion: str
+    evidence_points: tuple[EvidencePoint, ...]
+    limitations: tuple[Limitation, ...]
+    risks: tuple[RiskPoint, ...]
+    next_actions: tuple[NextAction, ...]
+    explanation_level: ExplanationLevel
+    source: str
+    fixture_backed: bool
+    quality_status: str
+    confidence: str
+    unsupported_claims_blocked: tuple[str, ...]
+    decision_boundary: DecisionBoundary
 
 
 @dataclass(frozen=True)
@@ -75,6 +144,14 @@ DETAIL_TOKENS = ("자세히", "자세하게", "상세히", "상세하게", "원�
 SIMPLIFY_TOKENS = ("쉽게", "쉽개", "간단히", "간단하게", "요약", "초등", "쉽게 설명", "simple")
 EXPLAIN_TOKENS = ("왜", "이유", "판단", "판간", "근거", "그렇게", "그절", "그런", "explain")
 STATUS_TOKENS = ("상태", "status", "정상", "하고 있어")
+PROFESSIONAL_TOKENS = ("전문적으로", "전문가처럼", "전문 설명", "professional", "technical")
+INVESTMENT_DECISION_TOKENS = ("지금 사도", "매수해도", "사도 돼", "사야", "팔아야", "매도해야", "buy now", "should buy", "sell now")
+RISK_TOKENS = ("위험", "리스크", "손실", "mdd", "낙폭", "risk", "drawdown")
+STRATEGY_TOKENS = ("전략", "조건", "진입", "청산", "손절", "strategy", "entry", "exit")
+TIMEFRAME_TOKENS = ("기간", "3년", "5년", "18개월", "6개월", "더 긴", "longer period", "timeframe")
+RERUN_TOKENS = ("다시 분석", "다시 검증", "다시 해", "재검증", "최신 데이터", "조건을 바꿔", "rerun", "re-run", "retest")
+RECOMMENDATION_TOKENS = ("추천", "권해", "좋아", "유리", "recommend", "recommendation")
+CONTEXTUAL_TOKENS = ("그럼", "그러면", "반도체 중에서는", "그 종목", "그 전략", "then", "what about")
 
 RATIO_METRICS = frozenset({"total_return", "cagr", "mdd", "win_rate", "exposure"})
 CURRENCY_METRICS = frozenset({"average_trade", "average_win", "average_loss", "expectancy", "ending_equity", "initial_capital"})
@@ -140,6 +217,22 @@ def classify_conversational_route(text: str) -> ConversationalRoute:
         return ConversationalRoute(ConversationalMVPIntent.SHOW_DETAILS, symbols)
     if any(token in normalized for token in SIMPLIFY_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT, symbols)
+    if any(token in normalized for token in PROFESSIONAL_TOKENS):
+        return ConversationalRoute(ConversationalMVPIntent.PROFESSIONAL_EXPLANATION, symbols)
+    if any(token in normalized for token in INVESTMENT_DECISION_TOKENS):
+        return ConversationalRoute(ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, symbols)
+    if any(token in normalized for token in TIMEFRAME_TOKENS) and any(token in normalized for token in ("다시", "해줘", "검증", "분석", "돌려", "rerun", "retest")):
+        return ConversationalRoute(ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, symbols)
+    if any(token in normalized for token in RERUN_TOKENS):
+        return ConversationalRoute(ConversationalMVPIntent.RERUN_REQUEST, symbols)
+    if any(token in normalized for token in RISK_TOKENS):
+        return ConversationalRoute(ConversationalMVPIntent.RISK_QUESTION, symbols)
+    if any(token in normalized for token in STRATEGY_TOKENS) and not any(token in normalized for token in ANALYSIS_TOKENS):
+        return ConversationalRoute(ConversationalMVPIntent.STRATEGY_QUESTION, symbols)
+    if any(token in normalized for token in RECOMMENDATION_TOKENS):
+        return ConversationalRoute(ConversationalMVPIntent.RECOMMENDATION_REQUEST, symbols)
+    if any(token in normalized for token in CONTEXTUAL_TOKENS):
+        return ConversationalRoute(ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, symbols)
     if any(token in normalized for token in EXPLAIN_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT, symbols)
     if len(symbols) >= 2 and any(token in normalized for token in COMPARISON_TOKENS):
@@ -269,6 +362,18 @@ def render_symbol_comparison(payloads: tuple[dict[str, object], ...], *, user_te
 
 def render_follow_up(context: ConversationalMVPContext, intent: ConversationalMVPIntent) -> str:
     payloads = context.last_structured_results or context.last_payloads
+    if intent is ConversationalMVPIntent.PROFESSIONAL_EXPLANATION:
+        return render_reasoning_from_payloads(payloads, intent=intent, level=ExplanationLevel.PROFESSIONAL, user_text="")
+    if intent in {
+        ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION,
+        ConversationalMVPIntent.RISK_QUESTION,
+        ConversationalMVPIntent.STRATEGY_QUESTION,
+        ConversationalMVPIntent.RECOMMENDATION_REQUEST,
+        ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
+    }:
+        return render_reasoning_from_payloads(payloads, intent=intent, level=ExplanationLevel.STANDARD, user_text="")
+    if intent in {ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, ConversationalMVPIntent.RERUN_REQUEST}:
+        return render_rerun_boundary(context, intent)
     if intent is ConversationalMVPIntent.SHOW_DETAILS:
         if context.last_result_kind == "symbol_comparison" and payloads:
             return render_symbol_comparison_detail(payloads)
@@ -286,6 +391,131 @@ def render_follow_up(context: ConversationalMVPContext, intent: ConversationalMV
     if payloads:
         return render_single_symbol_explanation(payloads[0], context)
     return _sanitize_final(context.last_summary or context.last_rendered_result)
+
+
+def explanation_level_for_text(text: str, intent: ConversationalMVPIntent) -> ExplanationLevel:
+    normalized = text.casefold()
+    if intent is ConversationalMVPIntent.SHOW_DETAILS or any(token in normalized for token in DETAIL_TOKENS):
+        return ExplanationLevel.DETAILED
+    if intent is ConversationalMVPIntent.PROFESSIONAL_EXPLANATION or any(token in normalized for token in PROFESSIONAL_TOKENS):
+        return ExplanationLevel.PROFESSIONAL
+    if intent is ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT or any(token in normalized for token in SIMPLIFY_TOKENS):
+        return ExplanationLevel.SIMPLE
+    return ExplanationLevel.STANDARD
+
+
+def render_reasoning_from_payloads(payloads: tuple[dict[str, object], ...], *, intent: ConversationalMVPIntent, level: ExplanationLevel, user_text: str) -> str:
+    result = build_reasoning_result(payloads, intent=intent, level=level, user_text=user_text)
+    return render_reasoning_result(result)
+
+
+def build_reasoning_result(payloads: tuple[dict[str, object], ...], *, intent: ConversationalMVPIntent, level: ExplanationLevel, user_text: str) -> ConversationReasoningResult:
+    if not payloads:
+        return ConversationReasoningResult(
+            intent,
+            (),
+            "직전에 설명할 연구 결과가 없습니다.",
+            (),
+            (Limitation("먼저 종목 분석이나 비교를 실행해야 합니다."),),
+            (),
+            (NextAction("분석할 종목과 전략 조건을 다시 알려 주세요."),),
+            level,
+            "unknown",
+            False,
+            "unknown",
+            "판단 보류",
+            ("no_prior_research_context",),
+            DecisionBoundary(False, "근거가 없어 판단하지 않습니다."),
+        )
+    symbols = tuple(_symbol_from_payload(payload) for payload in payloads)
+    first_metadata = _dict(_dict(payloads[0].get("dataset")).get("metadata"))
+    source = _source_label(first_metadata)
+    fixture_backed = any(_dict(_dict(payload.get("dataset")).get("metadata")).get("fixture_backed") is True for payload in payloads)
+    quality_statuses = tuple(str(_dict(payload.get("quality")).get("status", "unknown")) for payload in payloads)
+    confidence = _reasoning_confidence(payloads)
+    evidence = tuple(point for payload in payloads for point in _reasoning_evidence_points(payload))
+    limitations = tuple(dict.fromkeys(limitation for payload in payloads for limitation in _reasoning_limitations(payload, intent)))
+    risks = tuple(dict.fromkeys(risk for payload in payloads for risk in _reasoning_risks(payload)))
+    next_actions = tuple(dict.fromkeys(action for payload in payloads for action in _reasoning_next_actions(payload, intent)))
+    blocked = _blocked_claims(intent)
+    boundary = _decision_boundary(intent, payloads)
+    return ConversationReasoningResult(
+        intent=intent,
+        symbols=symbols,
+        conclusion=_reasoning_conclusion(intent, payloads),
+        evidence_points=evidence,
+        limitations=tuple(Limitation(item) for item in limitations),
+        risks=tuple(RiskPoint(item) for item in risks),
+        next_actions=tuple(NextAction(item) for item in next_actions),
+        explanation_level=level,
+        source=source,
+        fixture_backed=fixture_backed,
+        quality_status=",".join(dict.fromkeys(quality_statuses)),
+        confidence=confidence,
+        unsupported_claims_blocked=blocked,
+        decision_boundary=boundary,
+    )
+
+
+def render_reasoning_result(result: ConversationReasoningResult) -> str:
+    if result.explanation_level is ExplanationLevel.SIMPLE:
+        lines = [
+            f"[결론] {result.conclusion}",
+            f"[이유] {result.evidence_points[0].interpretation if result.evidence_points else '구조화된 근거가 부족합니다.'}",
+            f"[한계] {result.limitations[0].message if result.limitations else result.decision_boundary.message}",
+            f"[다음 단계] {result.next_actions[0].message if result.next_actions else '추가 검증 후 다시 판단해야 합니다.'}",
+        ]
+        return _sanitize_final("\n".join(lines))
+    lines = [
+        "[결론]",
+        f"- {result.conclusion}",
+        "",
+        "[핵심 근거]",
+    ]
+    for point in result.evidence_points[: _reasoning_limit(result.explanation_level, default=4)]:
+        lines.append(f"- {point.label}: {point.value}. {point.interpretation}")
+    lines.extend(["", "[주의할 점]"])
+    for limitation in result.limitations[: _reasoning_limit(result.explanation_level, default=4)]:
+        lines.append(f"- {limitation.message}")
+    if result.risks:
+        lines.extend(["", "[위험]", *[f"- {risk.message}" for risk in result.risks[: _reasoning_limit(result.explanation_level, default=4)]]])
+    if result.explanation_level in {ExplanationLevel.PROFESSIONAL, ExplanationLevel.DETAILED}:
+        lines.extend(
+            [
+                "",
+                "[전문 지표 해석]",
+                "- MDD는 백테스트 중 고점 대비 최대 자산 감소 폭입니다.",
+                "- Sharpe는 위험 대비 수익률 지표이지만, 거래 표본이 적으면 신뢰도 있게 해석하기 어렵습니다.",
+                "- Profit Factor는 총이익 대비 총손실 비율이며, 손실 거래가 없으면 강한 근거가 아니라 해석 제한으로 봅니다.",
+                "- Exposure는 시장에 투자되어 있던 기간의 비율입니다.",
+            ]
+        )
+    lines.extend(["", "[현재 결과로 말할 수 없는 것]"])
+    for claim in result.unsupported_claims_blocked:
+        lines.append(f"- {claim}")
+    lines.extend(["", "[다음 검증 또는 가능한 행동]"])
+    for action in result.next_actions[: _reasoning_limit(result.explanation_level, default=4)]:
+        lines.append(f"- {action.message}")
+    return _sanitize_final("\n".join(lines))
+
+
+def render_rerun_boundary(context: ConversationalMVPContext, intent: ConversationalMVPIntent) -> str:
+    symbols = ", ".join(context.last_symbols) if context.last_symbols else "직전 종목"
+    return _sanitize_final(
+        "\n".join(
+            [
+                "[결론]",
+                f"- {symbols}에 대한 재검증 요청으로 이해했습니다. 다만 이번 답변에서는 기존 결과를 임의로 다시 계산하거나 전략 조건을 바꾸지 않겠습니다.",
+                "",
+                "[필요한 확인]",
+                "- 재검증할 기간을 명확히 지정해 주세요. 예: 3년, 5년, 2021-07-25~2026-07-24.",
+                "- 변경할 전략 조건이 있다면 사용자 제공 조건으로 분리해서 알려 주세요.",
+                "",
+                "[안전 경계]",
+                "- 사용자 승인 없는 전략 변경, Champion 승격, 주문 실행은 하지 않습니다.",
+            ]
+        )
+    )
 
 
 def render_single_symbol_explanation(payload: dict[str, object], context: ConversationalMVPContext | None = None) -> str:
@@ -588,6 +818,154 @@ def _detail_lines(payload: dict[str, object], strategy: dict[str, object], metri
         f"- 노출 비율: {_format_metric('exposure', metrics.get('exposure'))}",
         f"- 최종 자산: {_format_metric('ending_equity', metrics.get('ending_equity'))}",
     ]
+
+
+def _reasoning_evidence_points(payload: dict[str, object]) -> tuple[EvidencePoint, ...]:
+    symbol = _symbol_from_payload(payload)
+    name = SYMBOL_NAMES.get(symbol, symbol)
+    metadata = _dict(_dict(payload.get("dataset")).get("metadata"))
+    quality = _dict(payload.get("quality"))
+    metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    trade_count = _as_int(metrics.get("trade_count"))
+    points = [
+        EvidencePoint(f"{name} 거래 표본", f"{trade_count}회", _trade_count_interpretation(trade_count)),
+        EvidencePoint(f"{name} 총 수익률", _format_percent(metrics.get("total_return")), "관측된 백테스트 결과이며 미래 성과 보장이 아닙니다."),
+        EvidencePoint(f"{name} 최대 낙폭(MDD)", _format_percent(metrics.get("mdd")), _mdd_interpretation(metrics.get("mdd"), trade_count)),
+        EvidencePoint(f"{name} 데이터", _source_label(metadata), f"{_quality_label(quality.get('status'))}. 데이터 검사를 통과해도 전략 유효성이 검증된 것은 아닙니다."),
+    ]
+    if trade_count > 0:
+        points.extend(
+            [
+                EvidencePoint(f"{name} 승률", _format_percent(metrics.get("win_rate")), "표본 수와 함께 해석해야 합니다."),
+                EvidencePoint(f"{name} Profit Factor", _format_profit_factor(metrics.get("profit_factor"), trade_count), "손실 거래가 적거나 없으면 과대 해석하면 안 됩니다."),
+            ]
+        )
+    if any(key in metrics for key in ("sharpe", "exposure")):
+        points.extend(
+            [
+                EvidencePoint(f"{name} Sharpe", _format_metric("sharpe", metrics.get("sharpe")), "거래 표본이 적으면 위험 조정 성과 근거가 약합니다."),
+                EvidencePoint(f"{name} Exposure", _format_metric("exposure", metrics.get("exposure")), "시장에 투자되어 있던 기간의 비율입니다."),
+            ]
+        )
+    return tuple(points)
+
+
+def _reasoning_limitations(payload: dict[str, object], intent: ConversationalMVPIntent) -> tuple[str, ...]:
+    metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    quality = _dict(payload.get("quality"))
+    trade_count = _as_int(metrics.get("trade_count"))
+    items: list[str] = []
+    if trade_count == 0:
+        items.append("해당 기간에는 전략 진입 신호가 없어 수익률과 위험 지표를 충분한 근거로 볼 수 없습니다.")
+    elif trade_count < 5:
+        items.append("거래 표본이 5건 미만이므로 승률, Profit Factor, CAGR은 일반화하기 어렵습니다.")
+    elif trade_count < 20:
+        items.append("거래 표본이 20건 미만이므로 통계적 신뢰도는 제한적입니다.")
+    if quality.get("status") == "pass":
+        items.append("데이터 무결성 검토 통과는 입력 데이터 품질 의미이며, 전략 성과 검증과는 별개입니다.")
+    elif quality.get("status") not in {None, "pass"}:
+        items.append("데이터 품질 경고가 있으므로 경고 날짜와 원인을 함께 확인해야 합니다.")
+    if intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST}:
+        items.append("현재 근거만으로 매수, 매도, 보유 같은 투자 결정을 권하지 않습니다.")
+    return tuple(items)
+
+
+def _reasoning_risks(payload: dict[str, object]) -> tuple[str, ...]:
+    metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    trade_count = _as_int(metrics.get("trade_count"))
+    risks = list(_reliability_warnings(payload))
+    if trade_count == 0:
+        risks.append("0% 수익률이나 0% MDD를 위험이 낮다는 뜻으로 해석할 수 없습니다.")
+    mdd = _as_float(metrics.get("mdd"))
+    if mdd is not None and mdd > 0:
+        risks.append(f"백테스트 중 고점 대비 최대 {_format_percent(mdd)}의 자산 감소가 관측됐습니다.")
+    return tuple(_dedupe_warnings(risks))
+
+
+def _reasoning_next_actions(payload: dict[str, object], intent: ConversationalMVPIntent) -> tuple[str, ...]:
+    metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    trade_count = _as_int(metrics.get("trade_count"))
+    actions = ["더 긴 기간과 여러 시장 구간에서 재검증해 거래 표본을 늘려야 합니다."]
+    if trade_count == 0:
+        actions.append("진입 조건이 너무 엄격한지 사용자 제공 전략 조건을 분리해 다시 점검해야 합니다.")
+    if intent is ConversationalMVPIntent.RISK_QUESTION:
+        actions.append("MDD, 손실 거래, 노출 기간을 함께 보고 위험을 다시 평가해야 합니다.")
+    if intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST}:
+        actions.append("매수 판단 전에 기간 확장, 다종목 검증, 개선 후보의 TESTED 결과를 확인해야 합니다.")
+    return tuple(actions)
+
+
+def _reasoning_confidence(payloads: tuple[dict[str, object], ...]) -> str:
+    trade_counts = [_as_int(_dict(_dict(payload.get("backtest")).get("metrics")).get("trade_count")) for payload in payloads]
+    if not trade_counts or min(trade_counts) < 5:
+        return "낮음"
+    if min(trade_counts) < 20:
+        return "보통"
+    return "높음"
+
+
+def _blocked_claims(intent: ConversationalMVPIntent) -> tuple[str, ...]:
+    claims = [
+        "매수 또는 매도 추천",
+        "전략이 검증됐다는 확정 표현",
+        "표본 부족 상태에서 우월성 확정",
+        "주문 실행 또는 자동 승인",
+    ]
+    if intent is ConversationalMVPIntent.RISK_QUESTION:
+        claims.append("거래 0건 또는 표본 부족을 위험 없음으로 해석")
+    return tuple(claims)
+
+
+def _decision_boundary(intent: ConversationalMVPIntent, payloads: tuple[dict[str, object], ...]) -> DecisionBoundary:
+    if intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST}:
+        return DecisionBoundary(False, "가온은 현재 근거만으로 투자 주문이나 매수/매도 추천을 하지 않습니다.")
+    if not payloads:
+        return DecisionBoundary(False, "직전 연구 근거가 없어 판단하지 않습니다.")
+    return DecisionBoundary(True, "구조화된 백테스트 근거 안에서만 설명합니다.")
+
+
+def _reasoning_conclusion(intent: ConversationalMVPIntent, payloads: tuple[dict[str, object], ...]) -> str:
+    if not payloads:
+        return "직전에 설명할 연구 결과가 없습니다."
+    if intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST}:
+        return "현재 구조화된 근거만으로 매수나 추천을 확정하기는 어렵습니다."
+    if intent is ConversationalMVPIntent.RISK_QUESTION:
+        return "위험은 주로 거래 표본 부족, MDD, 데이터 품질 의미의 오해에서 발생합니다."
+    if intent is ConversationalMVPIntent.STRATEGY_QUESTION:
+        return "전략 조건은 사용자 제공 조건과 백테스트 관측 결과를 분리해서 봐야 합니다."
+    if len(payloads) > 1:
+        return "직전 비교 결과는 같은 조건의 관측값 비교이며, 우열 확정 근거는 아닙니다."
+    metrics = _dict(_dict(payloads[0].get("backtest")).get("metrics"))
+    return _one_line_conclusion(metrics)
+
+
+def _trade_count_interpretation(trade_count: int) -> str:
+    if trade_count == 0:
+        return "진입 신호가 없어 성과와 위험을 일반화할 수 없습니다."
+    if trade_count < 5:
+        return "표본이 매우 적어 반복적으로 작동했다고 보기 어렵습니다."
+    if trade_count < 20:
+        return "관측값은 있으나 통계적 신뢰도는 제한적입니다."
+    return "표본 수는 기본 해석이 가능한 수준입니다."
+
+
+def _mdd_interpretation(value: object, trade_count: int) -> str:
+    if trade_count == 0:
+        return "거래가 없으면 0% MDD도 위험 없음이라는 뜻이 아닙니다."
+    mdd = _as_float(value)
+    if mdd is None:
+        return "MDD가 계산되지 않았습니다."
+    return f"백테스트 중 고점 대비 최대 {_format_percent(mdd)}의 자산 감소가 관측됐습니다."
+
+
+def _reasoning_limit(level: ExplanationLevel, *, default: int) -> int:
+    if level is ExplanationLevel.SIMPLE:
+        return 1
+    if level is ExplanationLevel.STANDARD:
+        return default
+    if level is ExplanationLevel.PROFESSIONAL:
+        return max(default, 6)
+    return 20
 
 
 def _comparison_conclusion(rows: list[tuple[str, str, dict[str, object], dict[str, object], list[str]]]) -> str:

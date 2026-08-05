@@ -224,6 +224,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_result_presentation_release = sub.add_parser("gaon-result-presentation-release-check")
     gaon_result_presentation_release.add_argument("--db", default=":memory:")
     gaon_result_presentation_release.add_argument("--run-id", default=None)
+    gaon_reasoning_release = sub.add_parser("gaon-conversational-reasoning-release-check")
+    gaon_reasoning_release.add_argument("--db", default=":memory:")
+    gaon_reasoning_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1086,6 +1089,75 @@ def _run(args: argparse.Namespace) -> int:
                 "gaon-result-presentation-release-check: PASS "
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "units=pass expectancy=currency fingerprint=hidden warnings=deduped"
+            )
+        finally:
+            store.close()
+    elif args.command == "gaon-conversational-reasoning-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+            brain = LLMConversationBrain(
+                config,
+                store.conversations,
+                tool_executor=_telegram_followup_release_tool_executor(store),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            run_id = args.run_id or f"gaon-conversational-reasoning-release-check:{uuid4().hex}"
+            messages = (
+                ("single", "삼성전자 분석해줘"),
+                ("decision", "삼성전자 지금 사도 돼?"),
+                ("risk", "위험은 어느 정도야?"),
+                ("simple", "쉽게 설명해줘"),
+                ("professional", "전문적으로 설명해줘"),
+                ("rerun", "3년 기간으로 다시 해줘"),
+                ("missing", "위험은 어느 정도야?"),
+            )
+            responses: dict[str, str] = {}
+            for label, text in messages[:-1]:
+                response = brain.respond(LLMConversationRequest(f"{run_id}:chat-a", "cli", "cli", text, _utc_now(), f"{run_id}:message:{label}"))
+                responses[label] = response.text
+            missing = brain.respond(LLMConversationRequest(f"{run_id}:chat-b", "cli", "cli", messages[-1][1], _utc_now(), f"{run_id}:message:missing"))
+            responses["missing"] = missing.text
+            combined = "\n".join(responses.values())
+            required = (
+                "[결론]",
+                "[핵심 근거]",
+                "[주의할 점]",
+                "[다음 검증 또는 가능한 행동]",
+                "매수",
+                "거래 표본",
+                "MDD",
+                "Sharpe",
+                "Profit Factor",
+                "Exposure",
+                "직전에 설명할 분석 결과가 없습니다",
+            )
+            forbidden = (
+                "strategy_fingerprint",
+                "quality_status=",
+                "source=",
+                "fixture_backed",
+                "run_id",
+                "validation_id",
+                "<output>",
+                "<response>",
+                "지금 사세요",
+                "확실히 좋습니다",
+            )
+            if not all(token in combined for token in required):
+                raise ConfigurationError("conversational reasoning release check missed required explanation structure")
+            if any(token in combined for token in forbidden):
+                raise ConfigurationError("conversational reasoning release check leaked metadata or unsafe wording")
+            if "재검증 요청으로 이해했습니다" not in responses["rerun"] or "기간을 명확히 지정" not in responses["rerun"]:
+                raise ConfigurationError("rerun boundary did not request explicit authoritative parameters")
+            if len(store.tool_audit.list(tool_name="krx_real_research")) != 1:
+                raise ConfigurationError("reasoning follow-ups should reuse context without repeated research tool calls")
+            print(
+                "gaon-conversational-reasoning-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "intents=pass levels=pass evidence_bound=true recommendation_guard=true context=pass"
             )
         finally:
             store.close()
