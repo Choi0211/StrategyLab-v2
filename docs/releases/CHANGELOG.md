@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 153 - Conversational Reasoning & Explanation Engine
+
+- Added deterministic conversational reasoning intents for investment-decision questions, risk questions, strategy questions, professional explanations, timeframe/rerun requests, recommendation requests, and contextual follow-ups.
+- Added typed immutable reasoning contracts: `ConversationReasoningRequest`, `ConversationReasoningResult`, `EvidencePoint`, `Limitation`, `RiskPoint`, `NextAction`, `ExplanationLevel`, and `DecisionBoundary`.
+- Added evidence-bound Korean renderers that separate conclusion, core evidence, limitations, risk, unsupported claims, and next validation steps without exposing chain-of-thought.
+- Added recommendation and investment-decision guards so insufficient samples never become buy/sell advice.
+- Added `gaon-conversational-reasoning-release-check` plus unit and Telegram integration coverage for context reuse, professional metric explanation, missing-context fallback, rerun boundary handling, and metadata suppression.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 152.3 - Result Units and Presentation Integrity
 
 - Added metric-semantics-aware conversational formatting so `expectancy`, average trade, average win/loss, ending equity, and initial capital are treated as capital-denominated amounts instead of percentages.
