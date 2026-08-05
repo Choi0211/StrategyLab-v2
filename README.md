@@ -50,6 +50,7 @@ Included foundations:
 - Hotfix 152.2 Telegram follow-up persistence with versioned SQLite session metadata, narrow typo tolerance for follow-up phrases, runtime-recreation-safe context restore, and `gaon-telegram-followup-release-check`
 - Hotfix 152.3 result presentation integrity with metric-unit aware rendering, currency expectancy handling, hidden internal fingerprints, Korean provenance labels, warning deduplication, and `gaon-result-presentation-release-check`
 - Sprint 153 Conversational Reasoning & Explanation Engine with deterministic decision/risk/professional explanation intents, typed evidence-bound reasoning results, rerun boundary handling, recommendation guardrails, and `gaon-conversational-reasoning-release-check`
+- Sprint 154 Natural Conversation & Teaching Engine with style/depth/length presentation contracts, direct-answer-first Korean rendering, grounded analogies, exact numeric examples, session-scoped presentation preference, and `gaon-natural-conversation-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

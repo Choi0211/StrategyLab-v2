@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 154 - Natural Conversation & Teaching Engine
+
+- Added deterministic natural presentation on top of Sprint 153 evidence-bound reasoning.
+- Added typed immutable presentation contracts: `ConversationStyle`, `ExplanationDepth`, `ResponseLength`, `ConversationPresentationRequest`, `ConversationPresentationResult`, `PresentationPreference`, `Analogy`, and `ExampleCalculation`.
+- Added session-scoped Telegram presentation preference for concise, conversational, explanatory, teaching, professional, and report styles.
+- Added grounded teaching analogies and exact MDD example calculations without adding unsupported metrics or investment recommendations.
+- Added `gaon-natural-conversation-release-check` plus unit and Telegram integration coverage for direct-answer-first rendering, one-line responses, teaching examples, professional terminology, context reuse, metadata suppression, and recommendation guard behavior.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Sprint 153 - Conversational Reasoning & Explanation Engine
 
 - Added deterministic conversational reasoning intents for investment-decision questions, risk questions, strategy questions, professional explanations, timeframe/rerun requests, recommendation requests, and contextual follow-ups.

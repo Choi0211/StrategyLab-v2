@@ -642,6 +642,51 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_hotfix1523_result_presentation_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-result-presentation-release-check", "--db", ":memory:"]), 0)
 
+
+    def test_sprint154_natural_conversation_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-natural-conversation-release-check", "--db", ":memory:"]), 0)
+
+    def test_sprint154_telegram_presentation_followups_reuse_context_and_preferences(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        texts = (
+            "삼성전자 분석해줘",
+            "지금 사도 돼?",
+            "한 줄로 말해줘",
+            "비유해서 설명해줘",
+            "예를 들어 설명해줘",
+            "전문적으로 설명해줘",
+            "전문용어 빼줘",
+        )
+        try:
+            for index, text in enumerate(texts, 1):
+                runtime = TelegramRuntime(
+                    TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                    allowed_chat_ids=("100",),
+                )
+                process_update(parse_update_result(_update(540 + index, 540 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            decision = client.sent[1][1]
+            one_line = client.sent[2][1]
+            teaching = client.sent[3][1]
+            example = client.sent[4][1]
+            professional = client.sent[5][1]
+            simple = client.sent[6][1]
+            self.assertTrue(decision.startswith("현재 결과만으로는 매수를 추천하기 어렵습니다."))
+            self.assertLessEqual(len([line for line in one_line.splitlines() if line.strip()]), 1)
+            self.assertIn("시험 문제", teaching)
+            self.assertIn("1,000,000원", example)
+            for token in ("MDD", "Sharpe", "Profit Factor", "Exposure", "trade_count"):
+                self.assertIn(token, professional)
+            self.assertNotIn("quality_status=", "\n".join(item[1] for item in client.sent))
+            self.assertNotIn("strategy_fingerprint", "\n".join(item[1] for item in client.sent))
+            self.assertNotIn("fixture_backed", "\n".join(item[1] for item in client.sent))
+            self.assertNotIn("매수하세요", "\n".join(item[1] for item in client.sent))
+            self.assertIn("거래", simple)
+        finally:
+            store.close()
+
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
 
@@ -889,6 +934,7 @@ def _sprint152_payload(symbol: str, *, fixture_backed: bool = True, zero_trade_s
         },
         "quality": {"status": "pass", "findings": []},
         "strategy": {"fingerprint": f"strategy:{symbol}"},
+        "assumptions": {"initial_capital": {"value": 1000000.0, "provenance": "test"}},
         "backtest": {
             "result_id": f"backtest:{symbol}",
             "metrics": {

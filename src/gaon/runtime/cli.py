@@ -227,6 +227,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_reasoning_release = sub.add_parser("gaon-conversational-reasoning-release-check")
     gaon_reasoning_release.add_argument("--db", default=":memory:")
     gaon_reasoning_release.add_argument("--run-id", default=None)
+    gaon_natural_release = sub.add_parser("gaon-natural-conversation-release-check")
+    gaon_natural_release.add_argument("--db", default=":memory:")
+    gaon_natural_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1161,6 +1164,64 @@ def _run(args: argparse.Namespace) -> int:
             )
         finally:
             store.close()
+    elif args.command == "gaon-natural-conversation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+            brain = LLMConversationBrain(
+                config,
+                store.conversations,
+                tool_executor=_telegram_followup_release_tool_executor(store),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            run_id = args.run_id or f"gaon-natural-conversation-release-check:{uuid4().hex}"
+            chat = f"{run_id}:chat-a"
+            messages = (
+                ("analysis", "\uc0bc\uc131\uc804\uc790 \ubd84\uc11d\ud574\uc918"),
+                ("decision", "\uc9c0\uae08 \uc0ac\ub3c4 \ub3fc?"),
+                ("one_line", "\ud55c \uc904\ub85c \ub9d0\ud574\uc918"),
+                ("teaching", "\ube44\uc720\ud574\uc11c \uc124\uba85\ud574\uc918"),
+                ("example", "\uc608\ub97c \ub4e4\uc5b4 \uc124\uba85\ud574\uc918"),
+                ("professional", "\uc804\ubb38\uc801\uc73c\ub85c \uc124\uba85\ud574\uc918"),
+                ("simple_terms", "\uc804\ubb38\uc6a9\uc5b4 \ube7c\uc918"),
+                ("longer", "\uc870\uae08 \ub354 \uc790\uc138\ud788"),
+            )
+            responses: dict[str, str] = {}
+            for label, text in messages:
+                response = brain.respond(LLMConversationRequest(chat, "cli", "cli", text, _utc_now(), f"{run_id}:message:{label}"))
+                responses[label] = response.text
+            second_chat = brain.respond(LLMConversationRequest(f"{run_id}:chat-b", "cli", "cli", "\uc9e7\uac8c \ub9d0\ud574\uc918", _utc_now(), f"{run_id}:message:isolated"))
+            if not responses["decision"].startswith("\ud604\uc7ac \uacb0\uacfc\ub9cc\uc73c\ub85c\ub294 \ub9e4\uc218\ub97c \ucd94\ucc9c\ud558\uae30 \uc5b4\ub835\uc2b5\ub2c8\ub2e4."):
+                raise ConfigurationError("natural conversation did not answer the investment question directly")
+            if "[\uacb0\ub860]" in responses["decision"] or "[\ud575\uc2ec \uadfc\uac70]" in responses["decision"]:
+                raise ConfigurationError("conversational style exposed report headings")
+            if len([line for line in responses["one_line"].splitlines() if line.strip()]) > 1:
+                raise ConfigurationError("one-line presentation was not concise")
+            if "\uc2dc\ud5d8 \ubb38\uc81c" not in responses["teaching"]:
+                raise ConfigurationError("teaching renderer did not include the grounded analogy")
+            if "1,000,000\uc6d0" not in responses["example"] or "44,000\uc6d0" not in responses["example"]:
+                raise ConfigurationError("numeric example did not use authoritative initial capital and MDD")
+            if not all(token in responses["professional"] for token in ("MDD", "Sharpe", "Profit Factor", "Exposure", "trade_count")):
+                raise ConfigurationError("professional explanation did not include expected technical metrics")
+            if "quality_status=" in "\n".join(responses.values()) or "fixture_backed" in "\n".join(responses.values()) or "strategy_fingerprint" in "\n".join(responses.values()):
+                raise ConfigurationError("natural presentation leaked internal metadata")
+            if "\ub9e4\uc218\ud558\uc138\uc694" in "\n".join(responses.values()) or "\ud655\uc2e4\ud788 \uc88b\uc2b5\ub2c8\ub2e4" in "\n".join(responses.values()):
+                raise ConfigurationError("natural presentation made an unsupported recommendation")
+            if len(store.tool_audit.list(tool_name="krx_real_research")) != 1:
+                raise ConfigurationError("presentation follow-ups should not rerun research")
+            if "\uc9c1\uc804\uc5d0 \uc124\uba85\ud560 \ubd84\uc11d \uacb0\uacfc\uac00 \uc5c6\uc2b5\ub2c8\ub2e4" not in second_chat.text:
+                raise ConfigurationError("chat isolation failed for presentation-only follow-up")
+            print(
+                "gaon-natural-conversation-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "style=pass length=pass teaching=pass example=pass preference=pass safety=pass"
+            )
+        finally:
+            store.close()
+
+
     elif args.command == "agent-status":
         config = load_runtime_config(os.environ)
         store = RuntimeStateStore(args.db)
@@ -3582,6 +3643,7 @@ def _conversation_context_release_payload(symbol: str, *, fixture_backed: bool, 
         },
         "quality": {"status": "pass", "findings": []},
         "strategy": {"fingerprint": f"strategy:{symbol}:conversation-context"},
+        "assumptions": {"initial_capital": {"value": 1000000.0, "provenance": "release-check"}},
         "backtest": {
             "result_id": f"backtest:{symbol}:conversation-context",
             "metrics": {
