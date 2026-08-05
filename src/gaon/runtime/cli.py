@@ -221,6 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_telegram_followup_release = sub.add_parser("gaon-telegram-followup-release-check")
     gaon_telegram_followup_release.add_argument("--db", default=":memory:")
     gaon_telegram_followup_release.add_argument("--run-id", default=None)
+    gaon_result_presentation_release = sub.add_parser("gaon-result-presentation-release-check")
+    gaon_result_presentation_release.add_argument("--db", default=":memory:")
+    gaon_result_presentation_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -961,8 +964,8 @@ def _run(args: argparse.Namespace) -> int:
             if single_audits != 1 or after_explain_audits != 1 or compare_audits != 3 or final_audits != 3:
                 raise ConfigurationError("follow-up context release check triggered unexpected research tool calls")
             combined_followups = "\n".join((explain.text, simple.text, detail.text, missing.text, after_greeting.text))
-            required_terms = ("직전", "삼성전자", "SK하이닉스", "quality_status=pass", "직전에 설명할 분석 결과가 없습니다")
-            forbidden_terms = ("champion", "v5", "fixture:sprint152", "fixture:krx-market-data", "2026-07-01", "validation_id", "fixture_backed", "<output>", "<response>")
+            required_terms = ("직전", "삼성전자", "SK하이닉스", "데이터 무결성 검토 통과", "직전에 설명할 분석 결과가 없습니다")
+            forbidden_terms = ("champion", "v5", "fixture:sprint152", "fixture:krx-market-data", "2026-07-01", "validation_id", "fixture_backed", "quality_status=", "source=", "strategy_fingerprint", "<output>", "<response>")
             if not all(term in combined_followups for term in required_terms):
                 raise ConfigurationError("conversation context release check missed required grounded follow-up terms")
             if any(term in combined_followups for term in forbidden_terms):
@@ -1021,6 +1024,68 @@ def _run(args: argparse.Namespace) -> int:
                 "gaon-telegram-followup-release-check: PASS "
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "context=persistent typo=pass followups=pass audit_count=2"
+            )
+        finally:
+            store.close()
+    elif args.command == "gaon-result-presentation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.conversational_mvp import render_follow_up, render_single_symbol_summary, render_symbol_comparison_detail
+            from gaon.runtime.conversational_mvp import ConversationalMVPContext, ConversationalMVPIntent
+
+            run_id = args.run_id or f"gaon-result-presentation-release-check:{uuid4().hex}"
+            payload = _result_presentation_release_payload("005930", trade_count=3, expectancy=297134.3)
+            zero_payload = _result_presentation_release_payload("000660", trade_count=0, expectancy=None)
+            detail = render_single_symbol_summary(payload, user_text="삼성전자 자세히 보여줘", detail_level="detail")
+            comparison = render_symbol_comparison_detail((payload, zero_payload))
+            context = ConversationalMVPContext(
+                last_intent="compare_symbols",
+                last_symbols=("005930", "000660"),
+                last_result_kind="symbol_comparison",
+                last_research_result_ids=("backtest:005930", "backtest:000660"),
+                last_rendered_result=comparison,
+                last_payloads=(payload, zero_payload),
+                last_structured_results=(payload, zero_payload),
+                last_summary=comparison,
+                last_detail_payload={},
+                last_source="real:yahoo-chart",
+                last_fixture_backed=False,
+                last_quality_status="pass",
+                detail_level="detail",
+                created_at=_utc_now(),
+                updated_at=_utc_now(),
+            )
+            followup = render_follow_up(context, ConversationalMVPIntent.SHOW_DETAILS)
+            combined = "\n".join((detail, comparison, followup))
+            forbidden = (
+                "29713430.00%",
+                "strategy_fingerprint",
+                "quality_status=",
+                "source=",
+                "fixture_backed",
+                "run_id",
+                "validation_id",
+                "주의: 주의:",
+                "<output>",
+                "<response>",
+            )
+            required = (
+                "297,134.30",
+                "초기 자본 대비 29.71%",
+                "계산 불가",
+                "데이터 무결성 검토 통과",
+                "Yahoo Chart 공개 데이터",
+            )
+            if any(token in combined for token in forbidden):
+                raise ConfigurationError("result presentation release check leaked raw metadata or invalid units")
+            if not all(token in combined for token in required):
+                raise ConfigurationError("result presentation release check missed required Korean metric labels")
+            if "MDD: 0.00%" in comparison and "거래 없음" not in comparison:
+                raise ConfigurationError("zero-trade MDD was presented as risk-free")
+            print(
+                "gaon-result-presentation-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "units=pass expectancy=currency fingerprint=hidden warnings=deduped"
             )
         finally:
             store.close()
@@ -3457,6 +3522,48 @@ def _conversation_context_release_payload(symbol: str, *, fixture_backed: bool, 
                 "sharpe": 0.42,
                 "expectancy": expectancy,
                 "exposure": exposure,
+            },
+        },
+        "automatic_order": False,
+        "automatic_champion_promotion": False,
+    }
+
+
+def _result_presentation_release_payload(symbol: str, *, trade_count: int, expectancy: float | None) -> dict[str, object]:
+    total_return = 0.047 if trade_count else 0.0
+    mdd = 0.052 if trade_count else 0.0
+    return {
+        "schema_version": 33,
+        "dataset": {
+            "symbols": [{"symbol": symbol, "name": symbol}],
+            "metadata": {
+                "source": "real:yahoo-chart",
+                "market": "KOSPI",
+                "timeframe": "daily",
+                "start_date": "2021-07-25",
+                "end_date": "2026-07-24",
+                "fixture_backed": False,
+            },
+        },
+        "quality": {"status": "pass", "findings": []},
+        "strategy": {"fingerprint": f"strategy:{symbol}:internal"},
+        "assumptions": {"initial_capital": {"value": 1000000.0, "provenance": "default"}},
+        "backtest": {
+            "result_id": f"backtest:{symbol}:presentation",
+            "metrics": {
+                "total_return": total_return,
+                "cagr": 0.031 if trade_count else None,
+                "mdd": mdd,
+                "sharpe": 0.74 if trade_count else None,
+                "win_rate": 0.666667 if trade_count else None,
+                "profit_factor": 1.42 if trade_count else None,
+                "trade_count": trade_count,
+                "average_trade": expectancy,
+                "average_win": 350000.0 if trade_count else None,
+                "average_loss": -48000.0 if trade_count else None,
+                "expectancy": expectancy,
+                "exposure": 0.18 if trade_count else 0.0,
+                "ending_equity": 1047000.0 if trade_count else 1000000.0,
             },
         },
         "automatic_order": False,

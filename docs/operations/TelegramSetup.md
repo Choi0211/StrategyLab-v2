@@ -82,6 +82,17 @@ response must not claim a stable winner when one symbol has only one trade and
 the other has zero trades, and it must not fall back to Champion, V5, market
 condition speculation, or fixture context.
 
+Hotfix 152.3 result presentation release check:
+
+```bash
+python -m gaon.runtime.cli gaon-result-presentation-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This check verifies that Telegram-facing research responses preserve metric
+units, render expectancy as a capital-denominated amount, hide internal
+fingerprints and raw provenance keys, use Korean data-quality/source labels, and
+deduplicate warning prefixes.
+
 ## Windows PowerShell Example
 
 ```powershell

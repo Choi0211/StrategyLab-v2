@@ -53,7 +53,7 @@ class ConversationalMVPTests(unittest.TestCase):
 
         self.assertIn("영하님", text)
         self.assertIn("삼성전자", text)
-        self.assertIn("주의: 거래 표본이 1건뿐이므로", text)
+        self.assertIn("거래 표본이 1건뿐이므로", text)
         self.assertIn("손실 거래 없음으로 해석 제한", text)
         for forbidden in ("validation_id", "fixture_backed", "None", " inf", "<output>", "유니"):
             self.assertNotIn(forbidden, text)
@@ -82,13 +82,43 @@ class ConversationalMVPTests(unittest.TestCase):
 
         text = render_follow_up(context, ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT)
 
-        self.assertIn("real:yahoo-chart", text)
-        self.assertIn("quality_status=pass", text)
+        self.assertIn("Yahoo Chart 공개 데이터", text)
+        self.assertIn("데이터 무결성 검토 통과", text)
         self.assertIn("전략 성과가 검증됐다는 뜻은 아닙니다", text)
         self.assertNotIn("fixture 데이터 기반", text)
 
     def test_missing_context_response_is_deterministic(self) -> None:
         self.assertEqual(render_missing_context(), "직전에 설명할 분석 결과가 없습니다. 먼저 종목 분석이나 비교를 요청해 주세요.")
+
+    def test_detail_renderer_preserves_currency_expectancy_units(self) -> None:
+        payload = _payload("005930", trade_count=3, profit_factor=1.42)
+        payload["dataset"]["metadata"]["source"] = "real:yahoo-chart"
+        payload["dataset"]["metadata"]["fixture_backed"] = False
+        payload["assumptions"] = {"initial_capital": {"value": 1000000.0, "provenance": "default"}}
+        payload["backtest"]["metrics"]["expectancy"] = 297134.3
+        payload["backtest"]["metrics"]["average_trade"] = 297134.3
+        payload["backtest"]["metrics"]["ending_equity"] = 1047000.0
+
+        text = render_single_symbol_summary(payload, user_text="삼성전자 자세히 보여줘", detail_level="detail")
+
+        self.assertIn("297,134.30", text)
+        self.assertIn("29.71%", text)
+        self.assertNotIn("29713430.00%", text)
+        self.assertNotIn("strategy_fingerprint", text)
+        self.assertNotIn("quality_status=", text)
+        self.assertNotIn("source=", text)
+
+    def test_detail_renderer_handles_none_and_zero_trade_without_false_safety(self) -> None:
+        payload = _payload("000660", trade_count=0, profit_factor=None)
+        payload["backtest"]["metrics"]["expectancy"] = None
+        payload["backtest"]["metrics"]["mdd"] = 0.0
+
+        text = render_single_symbol_summary(payload, user_text="SK하이닉스 자세히 보여줘", detail_level="detail")
+
+        self.assertIn("계산 불가", text)
+        self.assertIn("거래가 없어", text)
+        self.assertNotIn("위험 없음", text)
+        self.assertNotIn("주의: 주의:", text)
 
 
 def _payload(symbol: str, *, trade_count: int = 3, profit_factor=1.2) -> dict[str, object]:

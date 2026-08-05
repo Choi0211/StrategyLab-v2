@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 152.3 - Result Units and Presentation Integrity
+
+- Added metric-semantics-aware conversational formatting so `expectancy`, average trade, average win/loss, ending equity, and initial capital are treated as capital-denominated amounts instead of percentages.
+- Hid internal research identifiers and raw provenance keys such as strategy fingerprints, validation IDs, `quality_status=...`, and `source=...` from default user-facing Telegram responses.
+- Replaced raw data-quality/source strings with Korean labels and deduplicated repeated warning prefixes.
+- Added `gaon-result-presentation-release-check` plus unit and Telegram integration coverage for currency expectancy, zero-trade unavailable metrics, hidden fingerprints, and provenance-label rendering.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 152.2 - Telegram Follow-up Persistence and Typo Tolerance
 
 - Persisted Sprint 152 conversational MVP research context in existing versioned conversation session metadata so Telegram follow-ups survive runtime/Brain recreation across polling ticks.

@@ -490,7 +490,7 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertIn("총 수익률", final)
             self.assertIn("MDD", final)
             self.assertIn("거래 수: 1회", final)
-            self.assertIn("주의: 거래 표본이 1건뿐이므로", final)
+            self.assertIn("거래 표본이 1건뿐이므로", final)
             for forbidden in ("validation_id", "fixture_backed", "None", " inf", "<output>", "RealBacktestResult"):
                 self.assertNotIn(forbidden, final)
             self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
@@ -546,10 +546,12 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
             final = client.sent[1][1]
             self.assertIn("직전 삼성전자(005930) 분석 판단 근거", final)
-            self.assertIn("real:yahoo-chart", final)
-            self.assertIn("quality_status=pass", final)
+            self.assertIn("Yahoo Chart 공개 데이터", final)
+            self.assertIn("데이터 무결성 검토 통과", final)
             self.assertIn("전략 성과가 검증됐다는 뜻은 아닙니다", final)
             self.assertNotIn("fixture", final)
+            self.assertNotIn("quality_status=", final)
+            self.assertNotIn("source=", final)
             self.assertNotIn("champion", final.casefold())
             self.assertNotIn("v5", final.casefold())
         finally:
@@ -636,6 +638,9 @@ class TelegramConversationAgentTests(unittest.TestCase):
 
     def test_hotfix1521_context_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversation-context-release-check", "--db", ":memory:"]), 0)
+
+    def test_hotfix1523_result_presentation_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-result-presentation-release-check", "--db", ":memory:"]), 0)
 
     def test_sprint152_partial_compare_failure_is_fail_closed(self) -> None:
         store = RuntimeStateStore(":memory:")

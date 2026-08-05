@@ -76,6 +76,11 @@ SIMPLIFY_TOKENS = ("쉽게", "쉽개", "간단히", "간단하게", "요약", "�
 EXPLAIN_TOKENS = ("왜", "이유", "판단", "판간", "근거", "그렇게", "그절", "그런", "explain")
 STATUS_TOKENS = ("상태", "status", "정상", "하고 있어")
 
+RATIO_METRICS = frozenset({"total_return", "cagr", "mdd", "win_rate", "exposure"})
+CURRENCY_METRICS = frozenset({"average_trade", "average_win", "average_loss", "expectancy", "ending_equity", "initial_capital"})
+COUNT_METRICS = frozenset({"trade_count", "longest_losing_streak"})
+DIMENSIONLESS_METRICS = frozenset({"sharpe", "profit_factor", "payoff_ratio"})
+
 _EXPLAIN_ALIASES = (
     "왜 그렇게 판단했어",
     "왜 그렇게 판단한 거야",
@@ -192,7 +197,7 @@ def render_single_symbol_summary(payload: dict[str, object], *, user_text: str, 
     strategy = _dict(payload.get("strategy"))
     warnings = _reliability_warnings(payload)
     lines = [
-        f"영하님, {name}({symbol}) 실제 연구 결과입니다.",
+        f"영하님, {name}({symbol}) 실제 시장 데이터를 사용한 백테스트 결과입니다.",
         "",
         "[분석 대상과 데이터 기간]",
         f"- 종목: {name}({symbol})",
@@ -215,8 +220,8 @@ def render_single_symbol_summary(payload: dict[str, object], *, user_text: str, 
             f"- 승률: {_format_percent(metrics.get('win_rate'))}",
             "",
             "[데이터 신뢰도]",
-            f"- quality_status={quality.get('status', 'unknown')}",
-            f"- source={metadata.get('source', 'unknown')}",
+            f"- {_quality_label(quality.get('status'))}",
+            f"- {_source_label(metadata)}",
             "",
             "[주요 위험]",
             *[f"- {item}" for item in _risk_lines(payload)],
@@ -253,7 +258,7 @@ def render_symbol_comparison(payloads: tuple[dict[str, object], ...], *, user_te
         lines.append(
             f"- {name}({symbol}): 총 수익률 {_format_percent(metrics.get('total_return'))}, "
             f"MDD {_format_percent(metrics.get('mdd'))}, 거래 수 {_format_int(metrics.get('trade_count'))}회, "
-            f"confidence={confidence}, quality_status={quality.get('status', 'unknown')}"
+            f"{_confidence_label(confidence)}, {_quality_label(quality.get('status'))}"
         )
     lines.extend(["", "[판단]", _comparison_conclusion(rows), "", "[주의]"])
     lines.extend(f"- {warning}" for _, _, _, _, warnings in rows for warning in warnings)
@@ -292,7 +297,7 @@ def render_single_symbol_explanation(payload: dict[str, object], context: Conver
     lines = [
         f"영하님, 직전 {name}({symbol}) 분석 판단 근거는 저장된 구조화 결과입니다.",
         f"- 데이터: {_source_label(metadata)}",
-        f"- 데이터 품질: quality_status={quality.get('status', 'unknown')}입니다. 이것은 데이터 검사를 통과했다는 뜻이지, 전략 성과가 검증됐다는 뜻은 아닙니다.",
+        f"- 데이터 품질: {_quality_label(quality.get('status'))}. 이것은 데이터 검사를 통과했다는 뜻이지, 전략 성과가 검증됐다는 뜻은 아닙니다.",
         f"- 거래 수: {_format_int(metrics.get('trade_count'))}회",
         f"- 총 수익률: {_format_percent(metrics.get('total_return'))}",
         f"- MDD: {_format_percent(metrics.get('mdd'))}",
@@ -325,7 +330,7 @@ def render_single_symbol_simple(payload: dict[str, object]) -> str:
     lines = [
         f"영하님, 쉽게 말하면 직전 {name}({symbol}) 결과는 이렇게 보면 됩니다.",
         f"- 실제로 확인된 거래는 {trade_count}회입니다.",
-        f"- 데이터 품질은 quality_status={quality.get('status', 'unknown')}입니다.",
+        f"- 데이터 품질은 {_quality_label(quality.get('status'))}입니다.",
     ]
     if trade_count == 0:
         lines.append("- 거래가 없어 전략 성과를 직접 평가할 수 없습니다.")
@@ -349,7 +354,7 @@ def render_symbol_comparison_simple(payloads: tuple[dict[str, object], ...]) -> 
             metric_text = "거래 0회, 성과 평가 불가"
         else:
             metric_text = f"거래 {trade_count}회, 관측된 총 수익률 {_format_percent(metrics.get('total_return'))}"
-        lines.append(f"- {name}({symbol}): {metric_text}, quality_status={quality.get('status', 'unknown')}")
+        lines.append(f"- {name}({symbol}): {metric_text}, {_quality_label(quality.get('status'))}")
     lines.append("- 표본이 부족하므로 어느 종목이 더 좋다고 확정하지 않습니다.")
     return _sanitize_final("\n".join(lines))
 
@@ -368,7 +373,7 @@ def render_symbol_comparison_detail(payloads: tuple[dict[str, object], ...]) -> 
                 f"[{name}({symbol})]",
                 f"- 기간: {metadata.get('start_date', 'unknown')} ~ {metadata.get('end_date', 'unknown')}",
                 f"- 데이터: {_source_label(metadata)}",
-                f"- quality_status={quality.get('status', 'unknown')}",
+                f"- {_quality_label(quality.get('status'))}",
                 f"- 총 수익률: {_format_percent(metrics.get('total_return'))}",
                 f"- MDD: {_format_percent(metrics.get('mdd'))}",
                 f"- 거래 수: {_format_int(metrics.get('trade_count'))}회",
@@ -393,7 +398,7 @@ def _comparison_explanation_lines(payload: dict[str, object]) -> list[str]:
     lines = [
         f"[{name}({symbol})]",
         f"- 데이터: {_source_label(metadata)}",
-        f"- quality_status={quality.get('status', 'unknown')}: 데이터 품질 상태이며 전략 유효성 판정이 아닙니다.",
+        f"- {_quality_label(quality.get('status'))}: 데이터 품질 상태이며 전략 유효성 판정이 아닙니다.",
         f"- 거래 수: {trade_count}회",
     ]
     if trade_count == 0:
@@ -472,8 +477,31 @@ def _source_label(metadata: dict[str, object]) -> str:
     fixture = metadata.get("fixture_backed")
     source = metadata.get("source", "unknown")
     if fixture is True:
-        return f"{source} (fixture, 실제 데이터 아님)"
-    return str(source)
+        return "데이터 출처: 테스트용 fixture"
+    if str(source) == "real:yahoo-chart":
+        return "데이터 출처: Yahoo Chart 공개 데이터"
+    return "데이터 출처: 확인된 연구 데이터"
+
+
+def _quality_label(status: object) -> str:
+    value = str(status or "unknown")
+    if value == "pass":
+        return "데이터 무결성 검토 통과"
+    if value in {"pass_with_warnings", "warning"}:
+        return "데이터 무결성 검토 경고 있음"
+    if value == "fail":
+        return "데이터 무결성 검토 실패"
+    return "데이터 무결성 상태 확인 필요"
+
+
+def _confidence_label(confidence: str) -> str:
+    if confidence == "낮음":
+        return "성과 신뢰도: 낮음"
+    if confidence == "보통":
+        return "성과 신뢰도: 보통"
+    if confidence == "높음":
+        return "성과 신뢰도: 높음"
+    return "성과 신뢰도: 판단 보류"
 
 
 def _one_line_conclusion(metrics: dict[str, object]) -> str:
@@ -513,7 +541,30 @@ def _reliability_warnings(payload: dict[str, object]) -> list[str]:
         warnings.append("fixture 데이터 기반 결과이므로 실제 시장 결과처럼 해석하지 않습니다.")
     if quality.get("status") not in {"pass", None}:
         warnings.append(f"데이터 품질 상태가 {quality.get('status')}입니다. 경고 내용을 함께 확인해야 합니다.")
-    return warnings
+    return _dedupe_warnings(warnings)
+
+
+def _dedupe_warnings(warnings: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for warning in warnings:
+        normalized = _normalize_warning(warning)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return result
+
+
+def _normalize_warning(warning: str) -> str:
+    value = warning.strip()
+    changed = True
+    while changed:
+        changed = False
+        for prefix in ("주의:", "경고:", "위험:"):
+            if value.startswith(prefix):
+                value = value[len(prefix):].strip()
+                changed = True
+    return value
 
 
 def _risk_lines(payload: dict[str, object]) -> list[str]:
@@ -524,12 +575,18 @@ def _risk_lines(payload: dict[str, object]) -> list[str]:
 
 
 def _detail_lines(payload: dict[str, object], strategy: dict[str, object], metrics: dict[str, object]) -> list[str]:
+    assumptions = _dict(payload.get("assumptions"))
+    initial_capital = _provenanced_numeric(assumptions.get("initial_capital"))
     return [
-        f"- strategy_fingerprint={strategy.get('fingerprint', 'unknown')}",
-        f"- CAGR={_format_percent(metrics.get('cagr'))}",
-        f"- Sharpe={_format_number(metrics.get('sharpe'))}",
-        f"- Expectancy={_format_percent(metrics.get('expectancy'))}",
-        f"- Exposure={_format_percent(metrics.get('exposure'))}",
+        f"- CAGR: {_format_metric('cagr', metrics.get('cagr'))}",
+        f"- Sharpe: {_format_metric('sharpe', metrics.get('sharpe'))}",
+        f"- 승률: {_format_metric('win_rate', metrics.get('win_rate'))}",
+        f"- 평균 거래 손익: {_format_metric('average_trade', metrics.get('average_trade'))}",
+        f"- 평균 이익 거래: {_format_metric('average_win', metrics.get('average_win'))}",
+        f"- 평균 손실 거래: {_format_metric('average_loss', metrics.get('average_loss'))}",
+        f"- 평균 거래 기대손익: {_format_expectancy(metrics.get('expectancy'), initial_capital)}",
+        f"- 노출 비율: {_format_metric('exposure', metrics.get('exposure'))}",
+        f"- 최종 자산: {_format_metric('ending_equity', metrics.get('ending_equity'))}",
     ]
 
 
@@ -542,11 +599,53 @@ def _comparison_conclusion(rows: list[tuple[str, str, dict[str, object], dict[st
     return f"구조화된 지표만 보면 {ranked[0][1]}({ranked[0][0]})가 상대적으로 앞서지만 주문이나 승격 판단은 아닙니다."
 
 
+def _format_metric(metric: str, value: object) -> str:
+    if metric in RATIO_METRICS:
+        return _format_percent(value)
+    if metric in CURRENCY_METRICS:
+        return _format_currency(value)
+    if metric in COUNT_METRICS:
+        return _format_count(value)
+    if metric in DIMENSIONLESS_METRICS:
+        if metric == "profit_factor":
+            return _format_profit_factor(value, 1)
+        return _format_dimensionless(value)
+    return _format_optional_float(value)
+
+
 def _format_percent(value: object) -> str:
     numeric = _as_float(value)
     if numeric is None:
         return "계산 불가"
     return f"{numeric:.2%}"
+
+
+def _format_currency(value: object) -> str:
+    numeric = _as_float(value)
+    if numeric is None:
+        return "계산 불가"
+    return f"{numeric:,.2f}"
+
+
+def _format_count(value: object) -> str:
+    numeric = _as_float(value)
+    if numeric is None:
+        return "계산 불가"
+    return f"{int(numeric)}"
+
+
+def _format_optional_float(value: object) -> str:
+    numeric = _as_float(value)
+    if numeric is None:
+        return "계산 불가"
+    return f"{numeric:.4f}"
+
+
+def _format_dimensionless(value: object) -> str:
+    numeric = _as_float(value)
+    if numeric is None:
+        return "계산 불가"
+    return f"{numeric:.4f}"
 
 
 def _format_int(value: object) -> str:
@@ -569,6 +668,22 @@ def _format_profit_factor(value: object, trade_count: object) -> str:
     if numeric is None:
         return "계산 불가"
     return f"{numeric:.2f}"
+
+
+def _format_expectancy(value: object, initial_capital: float | None) -> str:
+    numeric = _as_float(value)
+    if numeric is None:
+        return "계산 불가"
+    text = _format_currency(numeric)
+    if initial_capital and initial_capital > 0:
+        text = f"{text} (초기 자본 대비 {numeric / initial_capital:.2%})"
+    return text
+
+
+def _provenanced_numeric(value: object) -> float | None:
+    if isinstance(value, dict):
+        return _as_float(value.get("value"))
+    return _as_float(value)
 
 
 def _as_float(value: object) -> float | None:
@@ -595,7 +710,7 @@ def _is_inf(value: object) -> bool:
 
 
 def _sanitize_final(text: str) -> str:
-    forbidden = ("validation_id", "provenance", "fixture_backed", "None", " inf", "RealBacktestResult", "CandidateComparison")
+    forbidden = ("validation_id", "strategy_fingerprint", "run_id", "provenance", "fixture_backed", "schema_version", "None", " inf", "RealBacktestResult", "CandidateComparison")
     sanitized = text.replace("<output>", "").replace("</output>", "").replace("<response>", "").replace("</response>", "")
     for token in forbidden:
         sanitized = sanitized.replace(token, "")

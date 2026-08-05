@@ -3,6 +3,29 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 152.3 Result Units and Presentation Integrity
+
+Hotfix 152.3 makes conversational research reports preserve metric units.
+`expectancy` is now rendered as a capital-denominated amount, with any
+capital-relative percentage clearly derived from `initial_capital`. It is no
+longer formatted as a raw percentage.
+
+Default Telegram-facing output also hides internal strategy fingerprints,
+validation IDs, run IDs, and raw provenance keys. Data quality and source
+metadata are rendered with Korean labels such as `데이터 무결성 검토 통과` and
+`데이터 출처: Yahoo Chart 공개 데이터`. Repeated warning prefixes are
+deduplicated.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-result-presentation-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged: no live
+trading, no broker/KIS order, no automatic Champion promotion, no approval
+bypass, and no strategy config mutation.
+
 ## Hotfix 152.2 Telegram Follow-up Persistence and Typo Tolerance
 
 Hotfix 152.2 makes Telegram follow-up context durable across polling ticks.
