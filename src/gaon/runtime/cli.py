@@ -243,6 +243,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_telegram_autonomous_release = sub.add_parser("gaon-telegram-autonomous-research-release-check")
     gaon_telegram_autonomous_release.add_argument("--db", default=":memory:")
     gaon_telegram_autonomous_release.add_argument("--run-id", default=None)
+    gaon_autonomous_context_release = sub.add_parser("gaon-autonomous-conversation-context-release-check")
+    gaon_autonomous_context_release.add_argument("--db", default=":memory:")
+    gaon_autonomous_context_release.add_argument("--run-id", default=None)
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1471,6 +1474,69 @@ def _run(args: argparse.Namespace) -> int:
                 "intent_routing=pass context_resolution=pass adaptive_validation=pass planner=pass "
                 "critic=pass candidate_retest=pass learning_memory=pass continuation=pass "
                 "chat_isolation=pass grounded=true safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-autonomous-conversation-context-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"gaon-autonomous-conversation-context-release-check:{uuid4().hex}"
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100", "101"),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            client = _ReleaseCheckTelegramClient()
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(config, store._connection, tool_executor=_telegram_autonomous_research_release_tool_executor(store)),
+                allowed_chat_ids=("100", "101"),
+            )
+            steps = (
+                ("analysis", "삼성전자 분석해줘", "100"),
+                ("validate", "삼성전자 전략을 더 검증해봐", "100"),
+                ("critique", "이 전략의 문제점을 찾아서 더 연구해줘", "100"),
+                ("continue", "계속 연구해줘", "100"),
+                ("learning", "지금까지 연구하면서 무엇을 배웠어?", "100"),
+                ("simple", "쉽게 설명해줘", "100"),
+                ("isolated", "쉽게 설명해줘", "101"),
+            )
+            for label, text, chat_id in steps:
+                update = parse_update_result(_telegram_update_with_text(run_id, label, text, chat_id=chat_id), received_at=_utc_now())
+                result = process_update(update, runtime, client)
+                if result.status != "sent":
+                    raise ConfigurationError(f"autonomous conversation context release check failed at {label}: {result.status}")
+            krx_count = len(store.tool_audit.list(tool_name="krx_real_research"))
+            autonomous_count = len(store.tool_audit.list(tool_name="autonomous_research_cycle"))
+            if krx_count != 1 or autonomous_count != 3:
+                raise ConfigurationError("autonomous presentation follow-up reran or skipped research tools unexpectedly")
+            simple = client.sent[-2][1]
+            isolated = client.sent[-1][1]
+            if "백테스트 성과표가 아니라" not in simple or "저장된 기록: 1건" not in simple:
+                raise ConfigurationError("learning-memory presentation did not preserve semantic context")
+            forbidden = ("unknown ~ unknown", "trade_count=0", "총수익률 계산 불가", "기간 unknown", "<output>", "<response>", "매수하세요")
+            if any(token in simple for token in forbidden):
+                raise ConfigurationError("learning-memory presentation fell back to fabricated backtest defaults")
+            if "직전에 설명할 분석 결과가 없습니다" not in isolated:
+                raise ConfigurationError("autonomous conversation context leaked across Telegram chats")
+            messages = store.conversations.list_messages("telegram:100")
+            assistant_routes = tuple(message.route for message in messages if message.role == "assistant")
+            if "conversation_autonomous_presentation_simplify_previous_result" not in assistant_routes:
+                raise ConfigurationError("autonomous presentation follow-up did not use the autonomous presentation route")
+            session = store.conversations.get_session("telegram:100")
+            context = session.metadata.get("conversation_mvp", {}).get("last_research_context", {})
+            if context.get("last_result_kind") != "autonomous_learning_memory_summary":
+                raise ConfigurationError("learning-memory summary context type was not persisted")
+            print(
+                "gaon-autonomous-conversation-context-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "learning_context=preserved autonomous_context=preserved presentation_no_rerun=true "
+                "chat_isolation=pass fabricated_defaults=blocked safety=pass"
             )
         finally:
             store.close()

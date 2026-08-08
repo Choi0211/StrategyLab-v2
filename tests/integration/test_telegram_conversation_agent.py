@@ -1029,6 +1029,112 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_hotfix1631_telegram_autonomous_research_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-telegram-autonomous-research-release-check", "--db", ":memory:"]), 0)
 
+    def test_hotfix1632_learning_summary_presentation_preserves_learning_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for index, text in enumerate(("삼성전자 분석해줘", "삼성전자 전략을 더 검증해봐", "지금까지 연구하면서 무엇을 배웠어?", "쉽게 설명해줘"), 1):
+                process_update(parse_update_result(_update(720 + index, 720 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 1)
+            final = client.sent[-1][1]
+            self.assertIn("백테스트 성과표가 아니라", final)
+            self.assertIn("저장된 기록: 1건", final)
+            self.assertNotIn("unknown", final.casefold())
+            self.assertNotIn("trade_count=0", final)
+            self.assertNotIn("총수익률 계산 불가", final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertIn("conversation_autonomous_presentation_simplify_previous_result", tuple(message.route for message in assistant))
+        finally:
+            store.close()
+
+    def test_hotfix1632_autonomous_continuation_presentation_preserves_cycle_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for index, text in enumerate(("삼성전자 분석해줘", "삼성전자 전략을 더 검증해봐", "계속 연구해줘", "쉽게 설명해줘"), 1):
+                process_update(parse_update_result(_update(730 + index, 730 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 2)
+            final = client.sent[-1][1]
+            self.assertIn("자율 연구 진행 상태", final)
+            self.assertIn("개선 후보: 1건", final)
+            self.assertNotIn("unknown", final.casefold())
+            self.assertNotIn("trade_count=0", final)
+            session = store.conversations.get_session("telegram:100")
+            self.assertEqual(session.metadata["conversation_mvp"]["last_research_context"]["last_result_kind"], "autonomous_continuation")
+        finally:
+            store.close()
+
+    def test_hotfix1632_standard_research_presentation_still_works(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for index, text in enumerate(("삼성전자 분석해줘", "전문적으로 설명해줘", "쉽게 설명해줘"), 1):
+                process_update(parse_update_result(_update(740 + index, 740 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            final = client.sent[-1][1]
+            self.assertIn("삼성전자", final)
+            self.assertNotIn("Learning Memory", final)
+            self.assertNotIn("백테스트 성과표가 아니라", final)
+        finally:
+            store.close()
+
+    def test_hotfix1632_comparison_rerun_presentation_keeps_comparison_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for index, text in enumerate(("삼성전자와 SK하이닉스 비교해줘", "3년으로 다시 비교해줘", "쉽게 설명해줘"), 1):
+                process_update(parse_update_result(_update(750 + index, 750 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="multi_symbol_research")), 1)
+            final = client.sent[-1][1]
+            self.assertIn("삼성전자", final)
+            self.assertIn("SK하이닉스", final)
+            self.assertNotIn("Learning Memory", final)
+            self.assertNotIn("unknown(unknown)", final)
+        finally:
+            store.close()
+
+    def test_hotfix1632_presentation_context_is_chat_isolated(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100", "101"),
+            )
+            for index, text in enumerate(("삼성전자 분석해줘", "삼성전자 전략을 더 검증해봐", "지금까지 연구하면서 무엇을 배웠어?"), 1):
+                process_update(parse_update_result(_update(760 + index, 760 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(770, 770, "쉽게 설명해줘", chat_id=101), received_at="2026-07-30T00:00:01Z"), runtime, client)
+
+            self.assertIn("직전에 설명할 분석 결과가 없습니다", client.sent[-1][1])
+            self.assertNotIn("저장된 기록: 1건", client.sent[-1][1])
+        finally:
+            store.close()
+
+    def test_hotfix1632_autonomous_context_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-autonomous-conversation-context-release-check", "--db", ":memory:"]), 0)
+
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
 

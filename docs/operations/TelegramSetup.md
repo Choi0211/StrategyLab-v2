@@ -198,6 +198,26 @@ to the read-only autonomous research cycle. Presentation-only follow-ups must no
 rerun research, and another Telegram chat must not read the prior chat's
 autonomous context.
 
+Hotfix 163.2 autonomous conversation context integrity release check:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-conversation-context-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This verifies the production acceptance sequence:
+
+- `삼성전자 분석해줘`
+- `삼성전자 전략을 더 검증해봐`
+- `이 전략의 문제점을 찾아서 더 연구해줘`
+- `계속 연구해줘`
+- `지금까지 연구하면서 무엇을 배웠어?`
+- `쉽게 설명해줘`
+
+The final presentation-only response must preserve the Learning Memory semantic
+context. It must not fall back to a normal BacktestResult renderer, must not show
+unknown periods or fabricated zero-trade metrics, and must not rerun research or
+autonomous tools.
+
 ## Windows PowerShell Example
 
 ```powershell
