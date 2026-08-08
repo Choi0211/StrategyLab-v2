@@ -230,6 +230,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_natural_release = sub.add_parser("gaon-natural-conversation-release-check")
     gaon_natural_release.add_argument("--db", default=":memory:")
     gaon_natural_release.add_argument("--run-id", default=None)
+    gaon_presentation_integrity_release = sub.add_parser("gaon-presentation-integrity-release-check")
+    gaon_presentation_integrity_release.add_argument("--db", default=":memory:")
+    gaon_presentation_integrity_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1217,6 +1220,63 @@ def _run(args: argparse.Namespace) -> int:
                 "gaon-natural-conversation-release-check: PASS "
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "style=pass length=pass teaching=pass example=pass preference=pass safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-presentation-integrity-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+            brain = LLMConversationBrain(
+                config,
+                store.conversations,
+                tool_executor=_telegram_followup_release_tool_executor(store),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            run_id = args.run_id or f"gaon-presentation-integrity-release-check:{uuid4().hex}"
+            chat = f"{run_id}:chat-a"
+            messages = (
+                ("analysis", "\uc0bc\uc131\uc804\uc790 \ubd84\uc11d\ud574\uc918"),
+                ("decision", "\uc9c0\uae08 \uc0ac\ub3c4 \ub3fc?"),
+                ("one_line", "\ud55c \uc904\ub85c \ub9d0\ud574\uc918"),
+                ("analogy", "\ube44\uc720\ud574\uc11c \uc124\uba85\ud574\uc918"),
+                ("example", "\uc608\ub97c \ub4e4\uc5b4 \uc124\uba85\ud574\uc918"),
+                ("professional", "\uc804\ubb38\uc801\uc73c\ub85c \uc124\uba85\ud574\uc918"),
+                ("plain", "\uc804\ubb38\uc6a9\uc5b4 \ube7c\uc918"),
+                ("short", "\uc870\uae08 \ub354 \uc9e7\uac8c"),
+                ("detail", "\uc790\uc138\ud788 \ubcf4\uc5ec\uc918"),
+            )
+            responses: dict[str, str] = {}
+            for label, text in messages:
+                response = brain.respond(LLMConversationRequest(chat, "cli", "cli", text, _utc_now(), f"{run_id}:message:{label}"))
+                responses[label] = response.text
+            combined = "\n".join(responses.values())
+            short = responses["short"]
+            detail = responses["detail"]
+            if len(store.tool_audit.list(tool_name="krx_real_research")) != 1:
+                raise ConfigurationError("presentation integrity check reran the research tool")
+            if "[\uacb0\ub860]" in short or "[\ud575\uc2ec \uadfc\uac70]" in short:
+                raise ConfigurationError("short presentation combined multiple renderer sections")
+            if "Yahoo Chart \uacf5\uac1c \ub370\uc774\ud130" not in short or "Yahoo Chart \uacf5\uac1c \ub370\uc774\ud130" not in detail:
+                raise ConfigurationError("presentation integrity check lost authoritative source metadata")
+            if "\uba85\uc2dc\ub418\uc9c0" in combined or "\uc54c \uc218 \uc5c6\uc74c" in combined:
+                raise ConfigurationError("presentation integrity check produced unsupported missing-source wording")
+            if "44,000\uc6d0" not in responses["example"] or "\uc124\uba85\uc6a9 \uc608\uc2dc" not in responses["example"]:
+                raise ConfigurationError("presentation integrity check did not preserve grounded MDD example wording")
+            if not all(token in detail for token in ("\ucd1d \uc218\uc775\ub960", "MDD", "Profit Factor")):
+                raise ConfigurationError("detail presentation did not restore structured metrics after short preference")
+            if len([line for line in detail.splitlines() if line.strip()]) <= len([line for line in short.splitlines() if line.strip()]):
+                raise ConfigurationError("detail presentation was blocked by previous short preference")
+            forbidden = ("quality_status=", "fixture_backed", "strategy_fingerprint", "\ub9e4\uc218\ud558\uc138\uc694", "<output>", "<response>")
+            if any(token in combined for token in forbidden):
+                raise ConfigurationError("presentation integrity check leaked metadata or unsafe wording")
+            print(
+                "gaon-presentation-integrity-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "source=preserved renderer=single preference=explicit grounded=true safety=pass"
             )
         finally:
             store.close()

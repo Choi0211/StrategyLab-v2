@@ -3,6 +3,27 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 154.1 Presentation State and Grounding Integrity
+
+Hotfix 154.1 strengthens Sprint 154's presentation state handling. Explicit
+current requests such as `조금 더 짧게`, `자세히 보여줘`, `전문용어 빼줘`,
+and `표로 보여줘` now override stale previous style/length preference while
+reusing the same authoritative structured research context.
+
+Short and plain-language renderers preserve known source metadata such as
+`Yahoo Chart 공개 데이터`; they must not degrade a known source into
+unknown-source wording. Detailed follow-ups re-render from structured evidence
+instead of summarizing the previous response string. MDD examples now state that
+the capital calculation is illustrative.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-presentation-integrity-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
 ## Sprint 154 Natural Conversation & Teaching Engine
 
 Sprint 154 adds a deterministic presentation layer on top of Sprint 153

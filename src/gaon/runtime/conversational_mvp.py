@@ -59,11 +59,18 @@ class ResponseLength(str, Enum):
     LONG = "long"
 
 
+class PresentationFormat(str, Enum):
+    PROSE = "prose"
+    BULLETS = "bullets"
+    TABLE = "table"
+
+
 @dataclass(frozen=True)
 class PresentationPreference:
     style: ConversationStyle = ConversationStyle.CONVERSATIONAL
     depth: ExplanationDepth = ExplanationDepth.STANDARD
     length: ResponseLength = ResponseLength.MEDIUM
+    format: PresentationFormat = PresentationFormat.PROSE
     analogy_preference: bool = False
 
     def to_json(self) -> dict[str, object]:
@@ -71,6 +78,7 @@ class PresentationPreference:
             "style": self.style.value,
             "depth": self.depth.value,
             "length": self.length.value,
+            "format": self.format.value,
             "analogy_preference": self.analogy_preference,
         }
 
@@ -81,6 +89,7 @@ class PresentationPreference:
                 style=ConversationStyle(str(payload.get("style", ConversationStyle.CONVERSATIONAL.value))),
                 depth=ExplanationDepth(str(payload.get("depth", ExplanationDepth.STANDARD.value))),
                 length=ResponseLength(str(payload.get("length", ResponseLength.MEDIUM.value))),
+                format=PresentationFormat(str(payload.get("format", PresentationFormat.PROSE.value))),
                 analogy_preference=bool(payload.get("analogy_preference", False)),
             )
         except ValueError:
@@ -112,6 +121,7 @@ class ConversationPresentationResult:
     style: ConversationStyle
     depth: ExplanationDepth
     length: ResponseLength
+    format: PresentationFormat
     direct_answer: str
     explanation: str
     analogy: Analogy | None
@@ -492,11 +502,11 @@ def render_follow_up(context: ConversationalMVPContext, intent: ConversationalMV
         if payloads:
             pref = presentation_preference_for_text(user_text, preference)
             if intent is ConversationalMVPIntent.PROFESSIONAL_EXPLANATION:
-                pref = PresentationPreference(ConversationStyle.PROFESSIONAL, ExplanationDepth.PROFESSIONAL, pref.length, pref.analogy_preference)
+                pref = PresentationPreference(style=ConversationStyle.PROFESSIONAL, depth=ExplanationDepth.PROFESSIONAL, length=pref.length, format=pref.format, analogy_preference=pref.analogy_preference)
             elif intent is ConversationalMVPIntent.SHOW_DETAILS and pref.style is ConversationStyle.CONVERSATIONAL:
-                pref = PresentationPreference(ConversationStyle.REPORT, ExplanationDepth.DETAILED, ResponseLength.LONG, pref.analogy_preference)
+                pref = PresentationPreference(style=ConversationStyle.REPORT, depth=ExplanationDepth.DETAILED, length=ResponseLength.LONG, format=PresentationFormat.BULLETS, analogy_preference=pref.analogy_preference)
             elif intent is ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT and pref.style is ConversationStyle.CONVERSATIONAL:
-                pref = PresentationPreference(ConversationStyle.EXPLANATORY, ExplanationDepth.SIMPLE, ResponseLength.SHORT, pref.analogy_preference)
+                pref = PresentationPreference(style=ConversationStyle.EXPLANATORY, depth=ExplanationDepth.SIMPLE, length=ResponseLength.SHORT, format=PresentationFormat.PROSE, analogy_preference=pref.analogy_preference)
             return render_presentation_from_payloads(payloads, intent=intent, user_text=user_text, preference=pref)
         return _sanitize_final(context.last_summary or context.last_rendered_result)
     if intent in {ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, ConversationalMVPIntent.RERUN_REQUEST}:
@@ -663,12 +673,25 @@ def presentation_preference_for_text(text: str, existing: PresentationPreference
         depth = ExplanationDepth.PROFESSIONAL
     elif any(token in normalized for token in ("\uc790\uc138\ud788", "\uc0c1\uc138\ud788", "\ubcf4\uace0\uc11c")):
         depth = ExplanationDepth.DETAILED
+    format = base.format
+    if "\ud45c\ub85c" in normalized:
+        format = PresentationFormat.TABLE
+        style = ConversationStyle.REPORT
+        depth = ExplanationDepth.DETAILED
+        length = ResponseLength.LONG
+    elif any(token in normalized for token in ("\uc790\uc138\ud788", "\uc790\uc138\ud558\uac8c", "\uc0c1\uc138\ud788", "\uc0c1\uc138\ud558\uac8c", "\uc790\uc138\ud55c \uacb0\uacfc", "\uc6d0\ubcf8", "\uc804\uccb4 \uacb0\uacfc")):
+        format = PresentationFormat.BULLETS
+        style = ConversationStyle.REPORT
+        depth = ExplanationDepth.DETAILED
+        length = ResponseLength.LONG
+    elif any(token in normalized for token in ("\uc9e7\uac8c", "\uac04\ub2e8\ud788", "\uac04\ub2e8\ud558\uac8c", "\ud55c \uc904", "1\uc904")):
+        format = PresentationFormat.PROSE
     if style is not original_style and not explicit_length:
         if style is ConversationStyle.REPORT:
             length = ResponseLength.LONG
         elif style in {ConversationStyle.TEACHING, ConversationStyle.PROFESSIONAL, ConversationStyle.EXPLANATORY, ConversationStyle.CONVERSATIONAL}:
             length = ResponseLength.MEDIUM
-    return PresentationPreference(style=style, depth=depth, length=length, analogy_preference=analogy)
+    return PresentationPreference(style=style, depth=depth, length=length, format=format, analogy_preference=analogy)
 
 
 def render_presentation_from_payloads(payloads: tuple[dict[str, object], ...], *, intent: ConversationalMVPIntent, user_text: str, preference: PresentationPreference | None = None) -> str:
@@ -693,6 +716,7 @@ def build_presentation_result(request: ConversationPresentationRequest, payloads
         style=pref.style,
         depth=pref.depth,
         length=pref.length,
+        format=pref.format,
         direct_answer=direct,
         explanation=explanation,
         analogy=analogy,
@@ -705,10 +729,14 @@ def build_presentation_result(request: ConversationPresentationRequest, payloads
 
 
 def render_presentation_result(result: ConversationPresentationResult, payloads: tuple[dict[str, object], ...]) -> str:
-    if result.style is ConversationStyle.REPORT:
+    if result.format is PresentationFormat.TABLE:
         if len(payloads) > 1:
             return _sanitize_final(_comparison_markdown_table(payloads, result))
-        return _sanitize_final(render_reasoning_result(_presentation_reasoning_proxy(result)))
+        return _sanitize_final(_single_markdown_table(payloads[0], result))
+    if result.style is ConversationStyle.REPORT:
+        if len(payloads) > 1:
+            return _sanitize_final(render_symbol_comparison_detail(payloads))
+        return _sanitize_final(render_single_symbol_summary(payloads[0], user_text="\uc790\uc138\ud788 \ubcf4\uc5ec\uc918"))
     if result.length is ResponseLength.ONE_LINE or result.style is ConversationStyle.CONCISE:
         sentences = [result.direct_answer, result.explanation]
         return _sanitize_final(" ".join(_dedupe_sentences(sentences)[:2]))
@@ -777,9 +805,11 @@ def _presentation_subject_context(payloads: tuple[dict[str, object], ...]) -> st
     if not payloads:
         return ""
     labels = tuple(f"{SYMBOL_NAMES.get(_symbol_from_payload(payload), _symbol_from_payload(payload))}({_symbol_from_payload(payload)})" for payload in payloads)
+    metadata = _dict(_dict(payloads[0].get("dataset")).get("metadata"))
+    source = _source_label(metadata)
     if len(labels) == 1:
-        return f"\uc9c1\uc804 {labels[0]} \ubd84\uc11d \uae30\uc900\uc73c\ub85c, "
-    return f"\uc9c1\uc804 \ube44\uad50 \ub300\uc0c1\uc740 {', '.join(labels)}\uc785\ub2c8\ub2e4. "
+        return f"\uc9c1\uc804 {labels[0]} \ubd84\uc11d \uae30\uc900\uc774\uba70 {source}\uc785\ub2c8\ub2e4. "
+    return f"\uc9c1\uc804 \ube44\uad50 \ub300\uc0c1\uc740 {', '.join(labels)}\uc774\uace0 {source}\uc785\ub2c8\ub2e4. "
 
 
 def _presentation_analogy(reasoning: ConversationReasoningResult, preference: PresentationPreference) -> Analogy | None:
@@ -812,7 +842,7 @@ def _presentation_example(payloads: tuple[dict[str, object], ...], preference: P
     return ExampleCalculation(
         "mdd_example",
         "drawdown_amount = initial_capital * mdd; remaining_equity = initial_capital * (1 - mdd)",
-        f"\uc608\ub97c \ub4e4\uc5b4 \ucd08\uae30 \uc790\ubcf8\uc774 {initial_capital:,.0f}\uc6d0\uc774\uace0 MDD\uac00 {mdd:.2%}\ub77c\uba74, \ubc31\ud14c\uc2a4\ud2b8 \uc911 \ud55c\ub54c \uc57d {drawdown_amount:,.0f}\uc6d0\uae4c\uc9c0 \ub0b4\ub824\uac00 {remaining_equity:,.0f}\uc6d0 \uc218\uc900\uc744 \ubcfc \uc218 \uc788\uc5c8\ub2e4\ub294 \ub73b\uc785\ub2c8\ub2e4.",
+        f"\uc608\ub97c \ub4e4\uc5b4 MDD {mdd:.2%}\ub97c \ucd08\uae30 \uc790\ubcf8 {initial_capital:,.0f}\uc6d0\uc5d0 \ub2e8\uc21c \uc801\uc6a9\ud558\uba74 \uace0\uc810 \ub300\ube44 \uc57d {drawdown_amount:,.0f}\uc6d0\uc758 \ub099\ud3ed, \uc57d {remaining_equity:,.0f}\uc6d0 \uc218\uc900\uc744 \uc608\uc2dc\ub85c \uc0dd\uac01\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4. \uc774\uac83\uc740 MDD\ub97c \ucd08\uae30 \uc790\ubcf8\uc5d0 \ub300\uc785\ud55c \uc124\uba85\uc6a9 \uc608\uc2dc\uc774\uba70, \uc2e4\uc81c \uc190\uc2e4\uc774 \ubc18\ub4dc\uc2dc \ucd08\uae30 \uc790\ubcf8\uc5d0\uc11c \uc9c1\uc811 \ubc1c\uc0dd\ud588\ub2e4\ub294 \ub73b\uc740 \uc544\ub2d9\ub2c8\ub2e4.",
     )
 
 
@@ -844,6 +874,29 @@ def _comparison_markdown_table(payloads: tuple[dict[str, object], ...], result: 
         confidence = "\ub0ae\uc74c" if trade_count < 5 else "\ubcf4\ud1b5" if trade_count < 20 else "\ub192\uc74c"
         interpretable = "\uc81c\ud55c\uc801" if trade_count < 5 else "\uac00\ub2a5"
         lines.append(f"| {SYMBOL_NAMES.get(symbol, symbol)}({symbol}) | {_format_percent(metrics.get('total_return'))} | {_format_percent(metrics.get('mdd'))} | {trade_count}\ud68c | {confidence} | {interpretable} |")
+    if result.warnings:
+        lines.extend(["", "\uc8fc\uc758: " + result.warnings[0]])
+    return "\n".join(lines)
+
+
+def _single_markdown_table(payload: dict[str, object], result: ConversationPresentationResult) -> str:
+    symbol = _symbol_from_payload(payload)
+    metrics = _dict(_dict(payload.get("backtest")).get("metrics"))
+    quality = _dict(payload.get("quality"))
+    metadata = _dict(_dict(payload.get("dataset")).get("metadata"))
+    lines = [
+        result.direct_answer,
+        "",
+        "| \ud56d\ubaa9 | \uac12 |",
+        "|---|---:|",
+        f"| \uc885\ubaa9 | {SYMBOL_NAMES.get(symbol, symbol)}({symbol}) |",
+        f"| \ub370\uc774\ud130 \ucd9c\ucc98 | {_source_label(metadata)} |",
+        f"| \ub370\uc774\ud130 \ud488\uc9c8 | {_quality_label(quality.get('status'))} |",
+        f"| \ucd1d\uc218\uc775\ub960 | {_format_percent(metrics.get('total_return'))} |",
+        f"| MDD | {_format_percent(metrics.get('mdd'))} |",
+        f"| \uac70\ub798 \uc218 | {_format_int(metrics.get('trade_count'))}\ud68c |",
+        f"| Profit Factor | {_format_profit_factor(metrics.get('profit_factor'), metrics.get('trade_count'))} |",
+    ]
     if result.warnings:
         lines.extend(["", "\uc8fc\uc758: " + result.warnings[0]])
     return "\n".join(lines)

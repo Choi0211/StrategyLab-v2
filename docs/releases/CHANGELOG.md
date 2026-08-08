@@ -1,5 +1,15 @@
 # Changelog
 
+## Hotfix 154.1 - Presentation State and Grounding Integrity
+
+- Added `PresentationFormat` to make prose, bulleted detail, and table presentation intent explicit.
+- Strengthened preference precedence so the current user message overrides stale short/plain/professional state.
+- Preserved authoritative source metadata in short/plain presentation renderers.
+- Made detailed follow-ups re-render from structured context even after prior one-line or short follow-ups.
+- Clarified MDD examples as illustrative applications of MDD to initial capital, not realized cash-loss claims.
+- Added `gaon-presentation-integrity-release-check` plus unit and Telegram integration coverage for source preservation, single-renderer behavior, detail-after-short behavior, and no research rerun.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Sprint 154 - Natural Conversation & Teaching Engine
 
 - Added deterministic natural presentation on top of Sprint 153 evidence-bound reasoning.

@@ -1161,6 +1161,7 @@ def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
         or request.session_id.startswith("gaon-conversation-context-release-check:")
         or request.session_id.startswith("gaon-conversational-reasoning-release-check:")
         or request.session_id.startswith("gaon-natural-conversation-release-check:")
+        or request.session_id.startswith("gaon-presentation-integrity-release-check:")
     )
 
 
@@ -1226,6 +1227,8 @@ def _is_natural_presentation_request(text: str) -> bool:
         "\uc804\ubb38\uc6a9\uc5b4 \ube7c",
         "\uc26c\uc6b4 \ud45c\ud604",
         "\ud45c\ub85c",
+        "\uc870\uae08 \ub354 \uc9e7\uac8c",
+        "\uc790\uc138\ud788 \ubcf4\uc5ec\uc918",
     )
     normalized = text.casefold()
     return any(token.casefold() in normalized for token in tokens)
