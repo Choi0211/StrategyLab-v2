@@ -3,6 +3,21 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 159 Research Critic / Improvement / Retest
+
+Sprint 159 adds a deterministic critic loop. Gaon can now report evidence
+weaknesses, propose bounded improvements, record candidate retest outcomes,
+and retain rejected evidence for later review.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-research-critic-release-check --db :memory:
+```
+
+The loop remains advisory. It does not place orders, promote Champions,
+approve changes, or mutate strategy configuration.
+
 ## Sprint 158 Strategy Candidate Generation
 
 Sprint 158 adds deterministic candidate generation. Candidates carry parent

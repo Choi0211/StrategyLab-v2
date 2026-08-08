@@ -57,6 +57,7 @@ Included foundations:
 - Sprint 156 Adaptive Research Validation with evidence adequacy assessment, validation need planning, fail-closed data-quality handling, and `gaon-adaptive-validation-release-check`
 - Sprint 157 Autonomous Research Planner with bounded deterministic research goals, steps, budgets, dependencies, stop conditions, and `gaon-autonomous-research-planner-release-check`
 - Sprint 158 Strategy Candidate Generation with evidence-backed PROPOSED candidates, changed-rule rationale, downside/rollback metadata, and `gaon-strategy-candidate-generation-release-check`
+- Sprint 159 Research Critic / Improvement / Retest with structured critic findings, evidence-backed improvement proposals, candidate retest records, retained rejected evidence, and `gaon-research-critic-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

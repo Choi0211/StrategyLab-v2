@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 159 - Research Critic / Improvement / Retest
+
+- Added structured critic findings for sample-size, drawdown, and data-quality issues.
+- Added improvement proposals and candidate retest records that preserve supporting evidence.
+- Retained rejected candidates in critic/retest reports instead of discarding negative evidence.
+- Added `gaon-research-critic-release-check` plus unit and integration coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Sprint 158 - Strategy Candidate Generation
 
 - Added evidence-backed strategy candidate contracts with parent strategy, hypothesis, changed rules, rationale, expected effect, downside, and rollback metadata.

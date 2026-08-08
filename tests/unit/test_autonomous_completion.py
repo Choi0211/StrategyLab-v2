@@ -5,7 +5,9 @@ from gaon.research.autonomous_completion import (
     AdequacyStatus,
     AutonomousResearchGoal,
     AutonomousResearchPlanner,
+    CriticImprovementRetestLoop,
     ResearchBudget,
+    ResearchCriticEngine,
     ResearchStopCondition,
     ResearchStepKind,
     StrategyCandidateGenerator,
@@ -14,6 +16,7 @@ from gaon.research.autonomous_completion import (
     ValidationStopReason,
     gaon_adaptive_validation_release_check,
     gaon_autonomous_research_planner_release_check,
+    gaon_research_critic_release_check,
     gaon_strategy_candidate_generation_release_check,
 )
 
@@ -124,6 +127,47 @@ class StrategyCandidateGenerationTests(unittest.TestCase):
 
     def test_candidate_release_check_passes(self) -> None:
         result = gaon_strategy_candidate_generation_release_check()
+
+        self.assertEqual(result["safety"], "pass")
+
+
+class ResearchCriticRetestTests(unittest.TestCase):
+    def test_critic_flags_sample_size_and_drawdown(self) -> None:
+        assessment = AdaptiveResearchValidator().assess(
+            {
+                "metrics": {"trade_count": 1, "wins": 1, "losses": 0, "mdd": 0.3},
+                "observation_days": 100,
+                "market_regime_count": 1,
+                "quality": {"status": "pass"},
+                "evidence_refs": ("backtest:critic",),
+            }
+        )
+
+        findings = ResearchCriticEngine().critique(assessment)
+
+        self.assertIn("sample_size", {finding.category for finding in findings})
+        self.assertIn("drawdown", {finding.category for finding in findings})
+
+    def test_critic_loop_preserves_retests_and_no_mutation(self) -> None:
+        assessment = AdaptiveResearchValidator().assess(
+            {
+                "metrics": {"trade_count": 1, "wins": 1, "losses": 0, "mdd": 0.25},
+                "observation_days": 100,
+                "market_regime_count": 1,
+                "quality": {"status": "pass"},
+                "evidence_refs": ("backtest:critic",),
+            }
+        )
+        goal = AutonomousResearchGoal("goal:critic", "critic loop", ("005930",), assessment.evidence_refs)
+        plan = AutonomousResearchPlanner().plan(goal, assessment)
+        report = CriticImprovementRetestLoop().run("strategy:parent", assessment, plan)
+
+        self.assertTrue(report.proposals)
+        self.assertTrue(report.retests)
+        self.assertFalse(report.to_json()["automatic_config_apply"])
+
+    def test_research_critic_release_check_passes(self) -> None:
+        result = gaon_research_critic_release_check()
 
         self.assertEqual(result["safety"], "pass")
 

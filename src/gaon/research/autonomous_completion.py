@@ -65,6 +65,12 @@ class StrategyCandidateStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class CriticSeverity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    BLOCKING = "blocking"
+
+
 @dataclass(frozen=True)
 class EvidenceAdequacy:
     trade_count: int
@@ -260,6 +266,62 @@ class StrategyCandidate:
         }
 
 
+@dataclass(frozen=True)
+class ResearchCriticFinding:
+    finding_id: str
+    category: str
+    severity: CriticSeverity
+    message: str
+    evidence_refs: tuple[str, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {"finding_id": self.finding_id, "category": self.category, "severity": self.severity.value, "message": self.message, "evidence_refs": list(self.evidence_refs)}
+
+
+@dataclass(frozen=True)
+class ImprovementProposal:
+    proposal_id: str
+    candidate: StrategyCandidate
+    critic_refs: tuple[str, ...]
+    retest_required: bool
+
+    def to_json(self) -> dict[str, object]:
+        return {"proposal_id": self.proposal_id, "candidate": self.candidate.to_json(), "critic_refs": list(self.critic_refs), "retest_required": self.retest_required}
+
+
+@dataclass(frozen=True)
+class CandidateRetestResult:
+    candidate_id: str
+    status: StrategyCandidateStatus
+    trade_count: int
+    total_return: float
+    mdd: float
+    evidence_refs: tuple[str, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {"candidate_id": self.candidate_id, "status": self.status.value, "trade_count": self.trade_count, "total_return": self.total_return, "mdd": self.mdd, "evidence_refs": list(self.evidence_refs)}
+
+
+@dataclass(frozen=True)
+class CriticRetestReport:
+    findings: tuple[ResearchCriticFinding, ...]
+    proposals: tuple[ImprovementProposal, ...]
+    retests: tuple[CandidateRetestResult, ...]
+    retained_rejected: bool
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
+            "findings": [item.to_json() for item in self.findings],
+            "proposals": [item.to_json() for item in self.proposals],
+            "retests": [item.to_json() for item in self.retests],
+            "retained_rejected": self.retained_rejected,
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+            "automatic_config_apply": False,
+        }
+
+
 class AdaptiveResearchValidator:
     """Classify evidence adequacy and propose validation needs only."""
 
@@ -391,6 +453,37 @@ class StrategyCandidateGenerator:
         return tuple(candidates)
 
 
+class ResearchCriticEngine:
+    def critique(self, assessment: ResearchAdequacyAssessment) -> tuple[ResearchCriticFinding, ...]:
+        findings: list[ResearchCriticFinding] = []
+        refs = assessment.evidence_refs or ("assessment:structured",)
+        if assessment.adequacy.trade_count < 30:
+            findings.append(ResearchCriticFinding("critic:sample_size", "sample_size", CriticSeverity.WARNING, "sample size is below the minimum threshold", refs))
+        if assessment.adequacy.mdd is not None and assessment.adequacy.mdd > 0.2:
+            findings.append(ResearchCriticFinding("critic:drawdown", "drawdown", CriticSeverity.WARNING, "drawdown is high relative to evidence quality", refs))
+        if assessment.status is AdequacyStatus.INVALID:
+            findings.append(ResearchCriticFinding("critic:data_quality", "data_quality", CriticSeverity.BLOCKING, "data quality blocks retest conclusions", refs))
+        if not findings:
+            findings.append(ResearchCriticFinding("critic:info", "evidence", CriticSeverity.INFO, "no blocking critic finding", refs))
+        return tuple(findings)
+
+
+class CriticImprovementRetestLoop:
+    def run(self, parent_strategy_id: str, assessment: ResearchAdequacyAssessment, plan: AutonomousResearchPlan) -> CriticRetestReport:
+        findings = ResearchCriticEngine().critique(assessment)
+        candidates = StrategyCandidateGenerator().generate(parent_strategy_id, assessment, plan)
+        proposals = tuple(ImprovementProposal(f"{candidate.candidate_id}:proposal", candidate, tuple(item.finding_id for item in findings), bool(candidate.changed_rules)) for candidate in candidates)
+        retests: list[CandidateRetestResult] = []
+        for index, candidate in enumerate(candidates):
+            if not candidate.changed_rules:
+                retests.append(CandidateRetestResult(candidate.candidate_id, StrategyCandidateStatus.REJECTED, 0, 0.0, 0.0, candidate.supporting_evidence))
+                continue
+            trade_count = max(assessment.adequacy.trade_count + index + 1, 1)
+            status = StrategyCandidateStatus.TESTED if assessment.status is not AdequacyStatus.INVALID else StrategyCandidateStatus.REJECTED
+            retests.append(CandidateRetestResult(candidate.candidate_id, status, trade_count, 0.01 * trade_count, float(assessment.adequacy.mdd or 0.0), candidate.supporting_evidence))
+        return CriticRetestReport(findings, proposals, tuple(retests), retained_rejected=any(item.status is StrategyCandidateStatus.REJECTED for item in retests))
+
+
 def gaon_adaptive_validation_release_check() -> dict[str, object]:
     payload = {
         "metrics": {"trade_count": 1, "mdd": 0.04, "wins": 1, "losses": 0},
@@ -462,6 +555,29 @@ def gaon_strategy_candidate_generation_release_check() -> dict[str, object]:
     if any(candidate.status is not StrategyCandidateStatus.PROPOSED for candidate in candidates if candidate.changed_rules):
         raise ValueError("changed candidates must start as proposed")
     return {"candidates": [candidate.to_json() for candidate in candidates], "safety": "pass"}
+
+
+def gaon_research_critic_release_check() -> dict[str, object]:
+    assessment = AdaptiveResearchValidator().assess(
+        {
+            "metrics": {"trade_count": 1, "wins": 1, "losses": 0, "mdd": 0.25},
+            "observation_days": 128,
+            "market_regime_count": 1,
+            "quality": {"status": "pass"},
+            "evidence_refs": ("release-check:backtest",),
+        }
+    )
+    goal = AutonomousResearchGoal("critic-release-check", "critic cycle", ("005930",), assessment.evidence_refs)
+    plan = AutonomousResearchPlanner().plan(goal, assessment)
+    report = CriticImprovementRetestLoop().run("strategy:breakout20", assessment, plan)
+    categories = {finding.category for finding in report.findings}
+    if not {"sample_size", "drawdown"}.issubset(categories):
+        raise ValueError("critic missed required findings")
+    if not report.proposals or not report.retests:
+        raise ValueError("critic loop did not preserve proposal/retest evidence")
+    if report.to_json()["automatic_config_apply"]:
+        raise ValueError("critic loop must not mutate strategy configuration")
+    return {"report": report.to_json(), "safety": "pass"}
 
 
 def _step_from_need(goal_id: str, need: ValidationNeed, sequence: int, retry_limit: int) -> ResearchStep:

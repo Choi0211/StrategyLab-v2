@@ -2,6 +2,14 @@
 
 Status: Passed
 
+## Sprint 159 Research Critic / Improvement / Retest
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 12 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-research-critic-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+
 ## Sprint 158 Strategy Candidate Generation
 
 - Targeted local verification:
