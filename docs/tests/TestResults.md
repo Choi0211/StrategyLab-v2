@@ -2,6 +2,80 @@
 
 Status: Passed
 
+## Sprint 163 Autonomous Research Completion
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 23 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 8 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-research-complete-release-check --db :memory:`: PASS, schema v36
+- Full local verification:
+  - `python -m pytest tests/unit -q`: NOT RUN, bundled Python does not include pytest
+  - `python -m pytest tests/integration -q`: NOT RUN, bundled Python does not include pytest
+  - `python -m unittest discover -s tests/unit -q`: PASS, 607 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 160 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS
+
+## Sprint 162 Operational Autonomous Research
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 22 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 7 tests
+  - `python -m gaon.runtime.cli gaon-operational-autonomous-research-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+
+## Sprint 161 Autonomous Research Cycle
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 18 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 6 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-research-cycle-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+
+## Sprint 160 Autonomous Learning Memory Integration
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 15 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-memory-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+
+## Sprint 159 Research Critic / Improvement / Retest
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 12 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-research-critic-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+
+## Sprint 158 Strategy Candidate Generation
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 9 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 3 tests
+  - `python -m gaon.runtime.cli gaon-strategy-candidate-generation-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+- Note: `python -m pytest ...` was not executed in this local desktop runtime because pytest is not installed in the bundled Python environment; equivalent `unittest` commands are used for local verification.
+
+## Sprint 157 Autonomous Research Planner
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 7 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 2 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-research-planner-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+- Note: `python -m pytest ...` was not executed in this local desktop runtime because pytest is not installed in the bundled Python environment; equivalent `unittest` commands are used for local verification.
+
+## Sprint 156 Adaptive Research Validation
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 4 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-adaptive-validation-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+- Note: `python -m pytest ...` was not executed in this local desktop runtime because pytest is not installed in the bundled Python environment; equivalent `unittest` commands are used for local verification.
+
 ## Hotfix 155.1 Conversational Re-execution Integrity
 
 - Targeted local verification:

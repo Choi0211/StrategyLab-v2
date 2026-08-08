@@ -3,6 +3,135 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 163 Autonomous Research Completion
+
+Sprint 163 adds the completion release check for Sprints 156 through 162. It
+aggregates adaptive validation, planning, candidate generation, critic/retest,
+Learning Memory integration, bounded cycle execution, and operational runtime
+routing into one deterministic local verification path.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-complete-release-check --db :memory:
+```
+
+Successful completion reports `AUTONOMOUS RESEARCH COMPLETE`. This status does
+not enable live trading, automatic Champion promotion, strategy mutation, or
+approval bypass.
+
+## Sprint 162 Operational Autonomous Research
+
+Sprint 162 adds a production-shaped deterministic runtime wrapper for
+autonomous research requests. It enforces execute/dry-run safety gates, skips
+duplicate request IDs, and renders Korean reports from structured evidence.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-operational-autonomous-research-release-check --db :memory:
+```
+
+The operational wrapper does not call an LLM provider, invent metrics, mutate
+Telegram configuration, apply strategy configuration, or place orders.
+
+## Sprint 161 Autonomous Research Cycle
+
+Sprint 161 composes adaptive validation, planning, critic/retest, and Learning
+Memory integration into a bounded autonomous research cycle. The cycle reports
+terminal states such as insufficient evidence, data failure, budget exhausted,
+and user approval required.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-cycle-release-check --db :memory:
+```
+
+Invalid data quality fails closed. Sufficient evidence still requires user
+approval before any strategy configuration change.
+
+## Sprint 160 Autonomous Learning Memory Integration
+
+Sprint 160 stores autonomous research outcomes as unvalidated, evidence-backed
+Learning Memory records. Stored records include confidence, revalidation
+metadata, and append-only audit events.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-learning-memory-release-check --db :memory:
+```
+
+Duplicate records are reported without automatic merge. The integration does
+not validate knowledge, apply policy, approve changes, or mutate strategy
+configuration.
+
+## Sprint 159 Research Critic / Improvement / Retest
+
+Sprint 159 adds a deterministic critic loop. Gaon can now report evidence
+weaknesses, propose bounded improvements, record candidate retest outcomes,
+and retain rejected evidence for later review.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-research-critic-release-check --db :memory:
+```
+
+The loop remains advisory. It does not place orders, promote Champions,
+approve changes, or mutate strategy configuration.
+
+## Sprint 158 Strategy Candidate Generation
+
+Sprint 158 adds deterministic candidate generation. Candidates carry parent
+strategy, hypothesis, changed rules, rationale, supporting evidence, expected
+effect, possible downside, and rollback metadata. Generated candidates are
+proposals only; production strategy mutation remains disabled.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-strategy-candidate-generation-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
+## Sprint 157 Autonomous Research Planner
+
+Sprint 157 converts evidence gaps into deterministic autonomous research plans.
+Plans contain bounded steps, priorities, dependencies, retry/runtime budgets,
+and explicit stop conditions. Invalid data quality becomes a terminal data
+failure rather than an execution plan.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-planner-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
+## Sprint 156 Adaptive Research Validation
+
+Sprint 156 adds a deterministic adequacy layer for autonomous research. Gaon
+now distinguishes sufficient, insufficient, degraded, and invalid evidence
+using structured inputs such as trade count, observation period, regime
+coverage, win/loss sample, data quality, and symbol coverage.
+
+When evidence is insufficient, the output is a bounded validation plan. It may
+recommend period expansion, other-regime testing, multi-symbol validation,
+parameter robustness checks, or out-of-sample validation. It does not authorize
+strategy changes, Champion promotion, knowledge validation, or orders.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-adaptive-validation-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
 ## Hotfix 155.1 Conversational Re-execution Integrity
 
 Hotfix 155.1 fixes production follow-up reruns after multi-symbol comparison

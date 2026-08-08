@@ -1,5 +1,67 @@
 # Changelog
 
+## Sprint 163 - Autonomous Research Completion
+
+- Added an end-to-end completion release check aggregating Sprints 156 through 162.
+- Added `AUTONOMOUS RESEARCH COMPLETE` status for deterministic local verification.
+- Added `gaon-autonomous-research-complete-release-check` plus unit and integration coverage.
+- Preserved schema v36, no provider-based reasoning, no automatic approval, no strategy configuration mutation, no Champion promotion, and no trading.
+
+## Sprint 162 - Operational Autonomous Research
+
+- Added an execute-gated deterministic operational wrapper for autonomous research requests.
+- Added duplicate request protection and dry-run safety blocking before research execution.
+- Added Korean structured operational reporting without LLM provider calls or fabricated metrics.
+- Added `gaon-operational-autonomous-research-release-check` plus unit and integration coverage.
+- Preserved schema v36, no Telegram configuration mutation, no strategy configuration mutation, no Champion promotion, and no trading.
+
+## Sprint 161 - Autonomous Research Cycle
+
+- Added bounded autonomous research cycle orchestration across validation, planning, critic/retest, and Learning Memory integration.
+- Added explicit cycle terminal states for completed, insufficient evidence, data failure, budget exhausted, safety stop, and user approval required.
+- Added fail-closed handling for invalid evidence quality.
+- Added `gaon-autonomous-research-cycle-release-check` plus unit and integration coverage.
+- Preserved schema v36, no automatic approval, no strategy configuration mutation, no Champion promotion, and no trading.
+
+## Sprint 160 - Autonomous Learning Memory Integration
+
+- Added unvalidated evidence-backed Learning Memory integration for autonomous research outcomes.
+- Added append-only audit event creation for stored autonomous research memory records.
+- Added duplicate reporting without automatic merge or overwrite.
+- Added `gaon-autonomous-learning-memory-release-check` plus unit and integration coverage.
+- Preserved schema v36, no knowledge validation, no policy application, no trading, no Champion promotion, and no strategy configuration mutation.
+
+## Sprint 159 - Research Critic / Improvement / Retest
+
+- Added structured critic findings for sample-size, drawdown, and data-quality issues.
+- Added improvement proposals and candidate retest records that preserve supporting evidence.
+- Retained rejected candidates in critic/retest reports instead of discarding negative evidence.
+- Added `gaon-research-critic-release-check` plus unit and integration coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
+## Sprint 158 - Strategy Candidate Generation
+
+- Added evidence-backed strategy candidate contracts with parent strategy, hypothesis, changed rules, rationale, expected effect, downside, and rollback metadata.
+- Added deterministic candidate generation from validation plans while keeping candidates in `PROPOSED` state.
+- Added `gaon-strategy-candidate-generation-release-check` plus unit and integration coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no production strategy mutation.
+
+## Sprint 157 - Autonomous Research Planner
+
+- Added deterministic autonomous research planning contracts for goals, plans, steps, priorities, budgets, dependencies, and stop conditions.
+- Converted Sprint 156 validation needs into bounded ordered research steps with retry/runtime limits.
+- Added terminal data-failure planning when evidence quality is invalid.
+- Added `gaon-autonomous-research-planner-release-check` plus unit and integration coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
+## Sprint 156 - Adaptive Research Validation
+
+- Added evidence adequacy contracts and deterministic adaptive validation for trade count, observation period, regime coverage, win/loss sample, data quality, and symbol coverage.
+- Added validation needs for period expansion, other-regime testing, multi-symbol validation, parameter robustness, and out-of-sample testing.
+- Added fail-closed `INVALID` handling for blocking data quality without authorizing strategy mutation.
+- Added `gaon-adaptive-validation-release-check` plus unit and integration coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 155.1 - Conversational Re-execution Integrity
 
 - Fixed conversational multi-symbol reruns to normalize the production `multi_symbol_research` `evidence` schema instead of relying only on the legacy `symbols` summary shape.

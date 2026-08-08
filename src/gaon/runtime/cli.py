@@ -130,6 +130,7 @@ from gaon.research.operations import (
     operation_report_markdown,
 )
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
+from gaon.research.autonomous_completion import gaon_adaptive_validation_release_check, gaon_autonomous_learning_memory_release_check, gaon_autonomous_research_complete_release_check, gaon_autonomous_research_cycle_release_check, gaon_autonomous_research_planner_release_check, gaon_operational_autonomous_research_release_check, gaon_research_critic_release_check, gaon_strategy_candidate_generation_release_check
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
@@ -239,6 +240,22 @@ def main(argv: list[str] | None = None) -> int:
     gaon_reexecution_integrity_release = sub.add_parser("gaon-conversational-reexecution-integrity-release-check")
     gaon_reexecution_integrity_release.add_argument("--db", default=":memory:")
     gaon_reexecution_integrity_release.add_argument("--run-id", default=None)
+    adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
+    adaptive_validation_release.add_argument("--db", default=":memory:")
+    autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
+    autonomous_planner_release.add_argument("--db", default=":memory:")
+    candidate_generation_release = sub.add_parser("gaon-strategy-candidate-generation-release-check")
+    candidate_generation_release.add_argument("--db", default=":memory:")
+    research_critic_release = sub.add_parser("gaon-research-critic-release-check")
+    research_critic_release.add_argument("--db", default=":memory:")
+    learning_memory_release = sub.add_parser("gaon-autonomous-learning-memory-release-check")
+    learning_memory_release.add_argument("--db", default=":memory:")
+    autonomous_cycle_release = sub.add_parser("gaon-autonomous-research-cycle-release-check")
+    autonomous_cycle_release.add_argument("--db", default=":memory:")
+    operational_autonomous_release = sub.add_parser("gaon-operational-autonomous-research-release-check")
+    operational_autonomous_release.add_argument("--db", default=":memory:")
+    autonomous_complete_release = sub.add_parser("gaon-autonomous-research-complete-release-check")
+    autonomous_complete_release.add_argument("--db", default=":memory:")
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1389,6 +1406,118 @@ def _run(args: argparse.Namespace) -> int:
                 "period_parsing=pass multi_symbol_context=pass multi_symbol_rendering=pass "
                 "typo_normalization=pass warning_summary=pass warning_detail=pass unknown_guard=pass "
                 "grounded=true safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-adaptive-validation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_adaptive_validation_release_check()
+            assessment = dict(result["assessment"])
+            print(
+                "gaon-adaptive-validation-release-check: PASS "
+                f"schema_version={store.status().schema_version} "
+                f"status={assessment['status']} needs={len(assessment['plan']['needs'])} "
+                f"invalid_status={result['invalid_status']} safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-autonomous-research-planner-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_autonomous_research_planner_release_check()
+            plan = dict(result["plan"])
+            print(
+                "gaon-autonomous-research-planner-release-check: PASS "
+                f"schema_version={store.status().schema_version} steps={len(plan['steps'])} "
+                f"terminal={plan['terminal_if_unresolved']} invalid_terminal={result['invalid_terminal']} "
+                f"safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-strategy-candidate-generation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_strategy_candidate_generation_release_check()
+            print(
+                "gaon-strategy-candidate-generation-release-check: PASS "
+                f"schema_version={store.status().schema_version} candidates={len(result['candidates'])} "
+                f"safety={result['safety']} mutation_allowed=false"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-research-critic-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_research_critic_release_check()
+            report = dict(result["report"])
+            print(
+                "gaon-research-critic-release-check: PASS "
+                f"schema_version={store.status().schema_version} findings={len(report['findings'])} "
+                f"proposals={len(report['proposals'])} retests={len(report['retests'])} "
+                f"retained_rejected={str(report['retained_rejected']).lower()} safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-autonomous-learning-memory-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_autonomous_learning_memory_release_check()
+            integration = dict(result["integration"])
+            duplicate = dict(result["duplicate"])
+            print(
+                "gaon-autonomous-learning-memory-release-check: PASS "
+                f"schema_version={store.status().schema_version} stored={len(integration['stored_records'])} "
+                f"duplicates={len(duplicate['duplicate_candidates'])} audit_events={result['audit_events']} "
+                f"knowledge_validated={str(integration['knowledge_validated']).lower()} "
+                f"policy_applied={str(integration['policy_applied']).lower()} safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-autonomous-research-cycle-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_autonomous_research_cycle_release_check()
+            report = dict(result["report"])
+            print(
+                "gaon-autonomous-research-cycle-release-check: PASS "
+                f"schema_version={store.status().schema_version} terminal={report['terminal_state']} "
+                f"iterations={report['iterations']} invalid_terminal={result['invalid_terminal_state']} "
+                f"approval_required={str(report['approval_required']).lower()} safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-operational-autonomous-research-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_operational_autonomous_research_release_check()
+            response = dict(result["response"])
+            duplicate = dict(result["duplicate"])
+            dry_run = dict(result["dry_run"])
+            print(
+                "gaon-operational-autonomous-research-release-check: PASS "
+                f"schema_version={store.status().schema_version} route={response['route']} "
+                f"duplicate_route={duplicate['route']} dry_run_route={dry_run['route']} "
+                f"provider_calls={response['provider_calls']} safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-autonomous-research-complete-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_autonomous_research_complete_release_check()
+            print(
+                "gaon-autonomous-research-complete-release-check: PASS "
+                f"schema_version={store.status().schema_version} status=\"{result['status']}\" "
+                f"checks={len(result['checks'])} safety={result['safety']}"
             )
         finally:
             store.close()
