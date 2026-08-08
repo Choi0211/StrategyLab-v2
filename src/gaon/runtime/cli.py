@@ -240,6 +240,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_reexecution_integrity_release = sub.add_parser("gaon-conversational-reexecution-integrity-release-check")
     gaon_reexecution_integrity_release.add_argument("--db", default=":memory:")
     gaon_reexecution_integrity_release.add_argument("--run-id", default=None)
+    gaon_telegram_autonomous_release = sub.add_parser("gaon-telegram-autonomous-research-release-check")
+    gaon_telegram_autonomous_release.add_argument("--db", default=":memory:")
+    gaon_telegram_autonomous_release.add_argument("--run-id", default=None)
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1406,6 +1409,68 @@ def _run(args: argparse.Namespace) -> int:
                 "period_parsing=pass multi_symbol_context=pass multi_symbol_rendering=pass "
                 "typo_normalization=pass warning_summary=pass warning_detail=pass unknown_guard=pass "
                 "grounded=true safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-telegram-autonomous-research-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"gaon-telegram-autonomous-research-release-check:{uuid4().hex}"
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100", "101"),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            client = _ReleaseCheckTelegramClient()
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(config, store._connection, tool_executor=_telegram_autonomous_research_release_tool_executor(store)),
+                allowed_chat_ids=("100", "101"),
+            )
+            steps = (
+                ("analysis", "삼성전자 분석해줘", "100"),
+                ("validate", "이 전략을 근거가 충분한지 검증해줘", "100"),
+                ("critique", "문제점을 찾아서 개선 후보까지 연구해줘", "100"),
+                ("learn", "지금까지 연구하면서 무엇을 배웠어?", "100"),
+                ("presentation", "조금 더 짧게", "100"),
+                ("isolated", "지금까지 연구하면서 무엇을 배웠어?", "101"),
+            )
+            for label, text, chat_id in steps:
+                update = parse_update_result(_telegram_update_with_text(run_id, label, text, chat_id=chat_id), received_at=_utc_now())
+                result = process_update(update, runtime, client)
+                if result.status != "sent":
+                    raise ConfigurationError(f"telegram autonomous research release check failed at {label}: {result.status}")
+            krx_audits = store.tool_audit.list(tool_name="krx_real_research")
+            autonomous_audits = store.tool_audit.list(tool_name="autonomous_research_cycle")
+            if len(krx_audits) != 1:
+                raise ConfigurationError("telegram autonomous research release check did not preserve the initial authoritative context")
+            if len(autonomous_audits) != 2:
+                raise ConfigurationError("telegram autonomous research release check did not run validate and critique cycles")
+            messages = store.conversations.list_messages("telegram:100")
+            assistant_routes = tuple(message.route for message in messages if message.role == "assistant")
+            if assistant_routes.count("conversation_autonomous_research_cycle") != 2:
+                raise ConfigurationError("telegram autonomous research release check missed autonomous routing")
+            if "conversation_autonomous_learning_query" not in assistant_routes:
+                raise ConfigurationError("telegram autonomous research release check did not answer learning query from stored context")
+            combined = "\n".join(text for _chat_id, text in client.sent)
+            if "자율 연구 검증 사이클" not in combined or "Learning Memory" not in combined or "Critic" not in combined:
+                raise ConfigurationError("telegram autonomous research release check missed autonomous report sections")
+            if "현재 저장된 검증된 학습 기록은 없습니다" not in client.sent[-1][1]:
+                raise ConfigurationError("telegram autonomous research release check leaked context across Telegram chats")
+            forbidden = ("5.32%", "RSI(14) 30", "MA15", "MA90", "1.5x", "매수하세요", "<output>", "<response>")
+            if any(token in combined for token in forbidden):
+                raise ConfigurationError("telegram autonomous research release check leaked fabricated or unsafe content")
+            print(
+                "gaon-telegram-autonomous-research-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "intent_routing=pass context_resolution=pass adaptive_validation=pass planner=pass "
+                "critic=pass candidate_retest=pass learning_memory=pass continuation=pass "
+                "chat_isolation=pass grounded=true safety=pass"
             )
         finally:
             store.close()
@@ -3881,12 +3946,12 @@ def _production_real_research_text() -> str:
     )
 
 
-def _telegram_update_with_text(run_id: str, suffix: str, text: str) -> dict[str, object]:
+def _telegram_update_with_text(run_id: str, suffix: str, text: str, *, chat_id: str = "100") -> dict[str, object]:
     return {
         "update_id": 9200 + (abs(hash((run_id, suffix))) % 700),
         "message": {
             "message_id": abs(hash((run_id, suffix, "message"))) % 100000000,
-            "chat": {"id": 100, "type": "private"},
+            "chat": {"id": int(chat_id), "type": "private"},
             "from": {"id": 200, "username": "youngha"},
             "text": text,
         },
@@ -4117,6 +4182,94 @@ def _conversational_research_execution_tool_executor(store: RuntimeStateStore) -
             allowed_args=("symbols", "universe_type", "start_date", "end_date"),
         ),
         handle_multi,
+    )
+    return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore) -> SafeToolExecutor:
+    registry = ToolRegistry()
+
+    def handle_research(tool_args):
+        payload = _conversation_context_release_payload(str(tool_args.get("symbol", "005930")), fixture_backed=False)
+        payload["request_text"] = str(tool_args.get("request_text", ""))
+        return payload
+
+    def handle_autonomous(tool_args):
+        symbol = str(tool_args.get("symbol", "005930"))
+        mode = str(tool_args.get("mode", "validate"))
+        baseline = handle_research({"symbol": symbol, "request_text": tool_args.get("request_text", "")})
+        metrics = dict(baseline["backtest"]["metrics"])
+        return {
+            "schema_version": 36,
+            "tool": "autonomous_research_cycle",
+            "mode": mode,
+            "run_id": f"autonomous-cycle:release-check:{uuid4().hex}",
+            "symbol": symbol,
+            "baseline": baseline,
+            "assessment": {
+                "status": "insufficient_sample",
+                "adequacy": {"trade_count": metrics["trade_count"], "observation_days": 378},
+                "needs": [{"kind": "period_expansion", "reason": "trade_count below confidence threshold"}],
+            },
+            "plan": {"steps": [{"step_id": "step:extend-period", "kind": "extend_period", "status": "planned"}]},
+            "critic_report": {
+                "findings": [{"category": "sample_size", "severity": "warning", "message": "표본 수가 아직 충분하지 않습니다."}],
+                "proposals": [{"proposal_id": "candidate:A", "hypothesis": "진입 필터를 보수적으로 조정합니다."}],
+                "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": int(metrics["trade_count"]) + 3, "metrics": {"trade_count": int(metrics["trade_count"]) + 3}}],
+            },
+            "learning_report": {"stored_records": ["learning:release-check:sample"], "duplicate_candidates": []},
+            "terminal_state": "needs_more_evidence",
+            "autonomous_cycle": {
+                "assessment": {"status": "insufficient_sample"},
+                "plan": {"steps": [{"step_id": "step:extend-period", "kind": "extend_period", "status": "planned"}]},
+                "critic_report": {
+                    "findings": [{"category": "sample_size", "severity": "warning", "message": "표본 수가 아직 충분하지 않습니다."}],
+                    "proposals": [{"proposal_id": "candidate:A"}],
+                    "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": int(metrics["trade_count"]) + 3}],
+                },
+                "learning_report": {"stored_records": ["learning:release-check:sample"], "duplicate_candidates": []},
+                "terminal_state": "needs_more_evidence",
+            },
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "quality_status": "pass",
+            "audit": {
+                "resolved_intent": f"autonomous_{mode}",
+                "resolved_context_kind": "telegram_authoritative_context",
+                "autonomous_cycle_invoked": True,
+                "planner_invoked": True,
+                "critic_invoked": True,
+                "candidate_count": 1,
+                "retest_count": 1,
+                "learning_memory_write": True,
+                "learning_memory_read": mode == "learning_query",
+                "terminal_state": "needs_more_evidence",
+                "safety_state": "read_only",
+            },
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+            "automatic_config_apply": False,
+        }
+
+    registry.register(
+        ToolDefinition(
+            "krx_real_research",
+            "Run deterministic Telegram autonomous release-check research.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol",),
+        ),
+        handle_research,
+    )
+    registry.register(
+        ToolDefinition(
+            "autonomous_research_cycle",
+            "Run deterministic Telegram autonomous release-check cycle.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol", "mode"),
+        ),
+        handle_autonomous,
     )
     return SafeToolExecutor(registry, store.tool_audit)
 

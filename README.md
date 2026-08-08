@@ -62,6 +62,7 @@ Included foundations:
 - Sprint 161 Autonomous Research Cycle with bounded validation/planning/critic/retest/memory orchestration, terminal states, fail-closed data-quality handling, and `gaon-autonomous-research-cycle-release-check`
 - Sprint 162 Operational Autonomous Research with execute-gated deterministic runtime routing, duplicate request protection, Korean structured reports, and `gaon-operational-autonomous-research-release-check`
 - Sprint 163 Autonomous Research Completion with end-to-end Sprints 156-162 aggregation, final safety assertions, `AUTONOMOUS RESEARCH COMPLETE`, and `gaon-autonomous-research-complete-release-check`
+- Hotfix 163.1 Telegram Autonomous Research Routing with same-chat context resolution from conversational research results into the read-only autonomous validation/planner/critic/learning cycle, grounded Korean rendering, cross-chat isolation, and `gaon-telegram-autonomous-research-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

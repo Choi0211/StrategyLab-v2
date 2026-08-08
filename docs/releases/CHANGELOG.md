@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 163.1 - Telegram Autonomous Research Routing
+
+- Added `autonomous_research_cycle` as a read-only safe tool route for Telegram conversational follow-ups.
+- Routed explicit validation, critique/improvement, continuation, and learning-memory prompts from the same-chat authoritative research context into the autonomous research cycle.
+- Added deterministic Korean autonomous research rendering with baseline metrics, planner steps, critic findings, candidate retest counts, and Learning Memory status.
+- Added cross-chat isolation and presentation-only no-rerun regression coverage.
+- Added `gaon-telegram-autonomous-research-release-check`.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Sprint 163 - Autonomous Research Completion
 
 - Added an end-to-end completion release check aggregating Sprints 156 through 162.

@@ -31,6 +31,8 @@ def route_read_only_tool(text: str) -> str | None:
         return "krx_real_research"
     if _strategy_critique(normalized):
         return "strategy_critique"
+    if _autonomous_research_cycle(normalized):
+        return "autonomous_research_cycle"
     if _research_memory(normalized):
         return "research_memory_search"
     if _strategy_quality(normalized):
@@ -58,6 +60,41 @@ def _krx_real_research(value: str) -> bool:
     real_data = ("실제", "실데이터", "real", "yahoo", "krx", "삼성전자", "005930")
     research = ("백테스트", "backtest", "분석", "개선후보", "비교", "연구")
     return _contains_any(value, real_data) and _contains_any(value, research)
+
+
+def _autonomous_research_cycle(value: str) -> bool:
+    autonomous = (
+        "전략을검증",
+        "전략검증",
+        "검증해봐",
+        "검증해줘",
+        "추가검증",
+        "표본이부족",
+        "충분한표본",
+        "근거가충분",
+        "문제점을찾아",
+        "약점을분석",
+        "개선해",
+        "계속연구",
+        "다음검증",
+        "무엇을배웠",
+        "뭘배웠",
+        "autonomousvalidate",
+        "autonomouscritique",
+        "continue研究",
+        "retest",
+        "researchcycle",
+    )
+    research = ("전략", "연구", "분석", "백테스트", "삼성전자", "005930", "krx", "strategy", "research", "validate")
+    explicit = (
+        "autonomousresearchcycle",
+        "autonomouscycle",
+        "autonomousvalidate",
+        "autonomouscritique",
+        "자율연구사이클",
+        "자율검증사이클",
+    )
+    return _contains_any(value, explicit)
 
 
 def _multi_symbol_research_ascii(value: str) -> bool:

@@ -30,6 +30,7 @@ from gaon.research.real_research import (
 )
 from gaon.research.krx_real_pipeline import krx_real_research_payload
 from gaon.research.krx_universe import KRXUniverseRequest, KRXUniverseSelector
+from gaon.research.autonomous_completion import telegram_autonomous_research_payload
 from gaon.research.autonomous_retest import research_retest_history_payload, research_retest_payload, research_retest_status_payload
 from gaon.research.multi_symbol import multi_symbol_research_history_payload, multi_symbol_research_payload, multi_symbol_research_status_payload
 from gaon.research.operations import SQLiteResearchOperationRepository
@@ -274,6 +275,10 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry.register(
         ToolDefinition("research_retest", "Run the read-only autonomous KRX real-research retest pipeline with deterministic period expansion.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol",)),
         lambda args: research_retest_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930"))),
+    )
+    registry.register(
+        ToolDefinition("autonomous_research_cycle", "Run the read-only autonomous research cycle from a Telegram research context.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol", "mode")),
+        lambda args: telegram_autonomous_research_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930")), mode=str(args.get("mode", "validate"))),
     )
     registry.register(
         ToolDefinition("research_operation_status", "Read research quality, recommendation, strategy config, and rollback audit status.", ToolRiskLevel.READ_ONLY, allowed_args=("limit",)),
