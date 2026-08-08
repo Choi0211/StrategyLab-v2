@@ -130,6 +130,29 @@ again for presentation-only requests, must keep internal metadata hidden, and
 must not fabricate investment recommendations or unsupported performance
 figures.
 
+Hotfix 154.1 presentation integrity release check:
+
+```bash
+python -m gaon.runtime.cli gaon-presentation-integrity-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This check verifies the production-style sequence:
+
+- `삼성전자 분석해줘`
+- `지금 사도 돼?`
+- `한 줄로 말해줘`
+- `비유해서 설명해줘`
+- `예를 들어 설명해줘`
+- `전문적으로 설명해줘`
+- `전문용어 빼줘`
+- `조금 더 짧게`
+- `자세히 보여줘`
+
+The final answers must preserve authoritative source and quality metadata, must
+not combine multiple renderer outputs into one response, must not rerun the
+research tool for presentation-only follow-ups, and must not expose unsupported
+unknown-source wording.
+
 ## Windows PowerShell Example
 
 ```powershell

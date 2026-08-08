@@ -7,6 +7,7 @@ from gaon.runtime.conversational_mvp import (
     ConversationStyle,
     ExplanationDepth,
     PresentationPreference,
+    PresentationFormat,
     ResponseLength,
     build_reasoning_result,
     presentation_preference_for_text,
@@ -65,6 +66,24 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertEqual(presentation_preference_for_text("전문적으로 설명해줘").depth, ExplanationDepth.PROFESSIONAL)
         self.assertEqual(presentation_preference_for_text("보고서로 정리해줘").style, ConversationStyle.REPORT)
 
+    def test_hotfix1541_explicit_detail_overrides_previous_short_preference(self) -> None:
+        short = presentation_preference_for_text("한 줄로 말해줘")
+        detail = presentation_preference_for_text("자세히 보여줘", short)
+
+        self.assertEqual(detail.style, ConversationStyle.REPORT)
+        self.assertEqual(detail.depth, ExplanationDepth.DETAILED)
+        self.assertEqual(detail.length, ResponseLength.LONG)
+        self.assertEqual(detail.format, PresentationFormat.BULLETS)
+
+    def test_hotfix1541_explicit_short_preserves_grounded_source(self) -> None:
+        payload = _payload(trade_count=1, fixture_backed=False)
+        text = render_presentation_from_payloads((payload,), intent=ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, user_text="조금 더 짧게", preference=PresentationPreference(style=ConversationStyle.EXPLANATORY, depth=ExplanationDepth.SIMPLE))
+
+        self.assertNotIn("[결론]", text)
+        self.assertEqual(text.count("Yahoo Chart 공개 데이터"), 1)
+        self.assertNotIn("명시되지", text)
+        self.assertNotIn("알 수 없음", text)
+
     def test_sprint154_direct_answer_first_and_conversational_rendering(self) -> None:
         payload = _payload(trade_count=1, fixture_backed=False)
         text = render_presentation_from_payloads((payload,), intent=ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, user_text="삼성전자 지금 사도 돼?", preference=PresentationPreference())
@@ -98,6 +117,16 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertIn("1,000,000원", text)
         self.assertIn("44,000원", text)
         self.assertIn("956,000원", text)
+
+    def test_hotfix1541_numeric_example_states_mdd_is_illustrative(self) -> None:
+        payload = _payload(trade_count=3, fixture_backed=False, mdd=0.192288)
+        text = render_presentation_from_payloads((payload,), intent=ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, user_text="예를 들어 설명해줘", preference=PresentationPreference(style=ConversationStyle.TEACHING))
+
+        self.assertIn("192,288원", text)
+        self.assertIn("807,712원", text)
+        self.assertIn("단순 적용", text)
+        self.assertIn("설명용 예시", text)
+        self.assertIn("직접 발생했다는 뜻은 아닙니다", text)
 
     def test_sprint153_reasoning_intents_are_classified(self) -> None:
         self.assertEqual(classify_conversational_route("삼성전자 지금 사도 돼?").intent, ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION)
@@ -219,12 +248,12 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertIn("매수 또는 매도 추천", result.unsupported_claims_blocked)
 
 
-def _payload(symbol: str = "005930", *, trade_count: int = 3, profit_factor=1.2, fixture_backed: bool = True) -> dict[str, object]:
+def _payload(symbol: str = "005930", *, trade_count: int = 3, profit_factor=1.2, fixture_backed: bool = True, mdd: float = 0.044) -> dict[str, object]:
     return {
         "dataset": {
             "symbols": [{"symbol": symbol, "name": symbol}],
             "metadata": {
-                "source": "fixture:test",
+                "source": "fixture:test" if fixture_backed else "real:yahoo-chart",
                 "start_date": "2026-01-02",
                 "end_date": "2026-07-10",
                 "fixture_backed": fixture_backed,
@@ -237,7 +266,7 @@ def _payload(symbol: str = "005930", *, trade_count: int = 3, profit_factor=1.2,
             "result_id": f"backtest:{symbol}",
             "metrics": {
                 "total_return": 0.05,
-                "mdd": 0.044,
+                "mdd": mdd,
                 "trade_count": trade_count,
                 "profit_factor": profit_factor,
                 "win_rate": 1.0 if trade_count == 1 else 0.5,

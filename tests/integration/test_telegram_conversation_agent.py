@@ -687,6 +687,52 @@ class TelegramConversationAgentTests(unittest.TestCase):
         finally:
             store.close()
 
+    def test_hotfix1541_presentation_state_and_grounding_integrity(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        texts = (
+            "삼성전자 분석해줘",
+            "지금 사도 돼?",
+            "한 줄로 말해줘",
+            "비유해서 설명해줘",
+            "예를 들어 설명해줘",
+            "전문적으로 설명해줘",
+            "전문용어 빼줘",
+            "조금 더 짧게",
+            "자세히 보여줘",
+        )
+        try:
+            for index, text in enumerate(texts, 1):
+                runtime = TelegramRuntime(
+                    TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                    allowed_chat_ids=("100",),
+                )
+                process_update(parse_update_result(_update(560 + index, 560 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            short = client.sent[7][1]
+            detail = client.sent[8][1]
+            self.assertNotIn("[결론]", short)
+            self.assertLessEqual(short.count("Yahoo Chart 공개 데이터"), 1)
+            self.assertIn("Yahoo Chart 공개 데이터", short)
+            self.assertNotIn("명시되지", "\n".join(text for _chat_id, text in client.sent))
+            self.assertNotIn("알 수 없음", "\n".join(text for _chat_id, text in client.sent))
+            self.assertIn("총 수익률", detail)
+            self.assertIn("MDD", detail)
+            self.assertIn("Profit Factor", detail)
+            self.assertIn("Yahoo Chart 공개 데이터", detail)
+            self.assertGreater(len([line for line in detail.splitlines() if line.strip()]), len([line for line in short.splitlines() if line.strip()]))
+            for text in (sent_text for _chat_id, sent_text in client.sent[1:]):
+                self.assertNotIn("quality_status=", text)
+                self.assertNotIn("fixture_backed", text)
+                self.assertNotIn("strategy_fingerprint", text)
+                self.assertNotIn("매수하세요", text)
+        finally:
+            store.close()
+
+    def test_hotfix1541_presentation_integrity_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-presentation-integrity-release-check", "--db", ":memory:"]), 0)
+
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
 
