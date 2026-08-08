@@ -277,8 +277,14 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         lambda args: research_retest_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930"))),
     )
     registry.register(
-        ToolDefinition("autonomous_research_cycle", "Run the read-only autonomous research cycle from a Telegram research context.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol", "mode")),
-        lambda args: telegram_autonomous_research_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930")), mode=str(args.get("mode", "validate"))),
+        ToolDefinition("autonomous_research_cycle", "Run the read-only autonomous research cycle from a Telegram research context.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol", "mode", "continuation_state")),
+        lambda args: telegram_autonomous_research_payload(
+            connection,
+            str(args["request_text"]),
+            symbol=str(args.get("symbol", "005930")),
+            mode=str(args.get("mode", "validate")),
+            continuation_state=args.get("continuation_state") if isinstance(args.get("continuation_state"), dict) else None,
+        ),
     )
     registry.register(
         ToolDefinition("research_operation_status", "Read research quality, recommendation, strategy config, and rollback audit status.", ToolRiskLevel.READ_ONLY, allowed_args=("limit",)),

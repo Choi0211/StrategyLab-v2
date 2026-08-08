@@ -29,8 +29,10 @@ from gaon.research.autonomous_completion import (
     gaon_operational_autonomous_research_release_check,
     gaon_research_critic_release_check,
     gaon_strategy_candidate_generation_release_check,
+    telegram_autonomous_research_payload,
 )
 from gaon.learning.repository import InMemoryLearningRepository
+from gaon.runtime.storage import RuntimeStateStore
 
 
 class AdaptiveResearchValidationTests(unittest.TestCase):
@@ -279,6 +281,26 @@ class AutonomousResearchCycleTests(unittest.TestCase):
         result = gaon_autonomous_research_cycle_release_check()
 
         self.assertEqual(result["safety"], "pass")
+
+    def test_telegram_payload_uses_continuation_state_to_stop_duplicate_candidates(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            first = telegram_autonomous_research_payload(store._connection, "삼성전자 전략을 더 검증해봐", symbol="005930", mode="validate")
+            state = {
+                "current_cycle_id": first["run_id"],
+                "root_cycle_id": first["run_id"],
+                "continuation_count": 0,
+                "tested_candidate_keys": first["progression"]["tested_candidate_keys"],
+            }
+            second = telegram_autonomous_research_payload(store._connection, "계속 연구해줘", symbol="005930", mode="continue", continuation_state=state)
+
+            self.assertEqual(second["terminal_state"], "no_new_research_path")
+            self.assertEqual(second["critic_report"]["retests"], [])
+            self.assertEqual(second["progression"]["parent_cycle_id"], first["run_id"])
+            self.assertEqual(second["progression"]["progression_state"], "NO_NEW_RESEARCH_PATH")
+            self.assertTrue(second["progression"]["assumptions_immutable"])
+        finally:
+            store.close()
 
 
 class OperationalAutonomousResearchTests(unittest.TestCase):

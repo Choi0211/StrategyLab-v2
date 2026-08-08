@@ -2,6 +2,20 @@
 
 Status: Passed
 
+## Hotfix 163.3 Autonomous Research Progression Integrity
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion.AutonomousResearchCycleTests.test_telegram_payload_uses_continuation_state_to_stop_duplicate_candidates -q`: PASS
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1633_continuation_reuses_parent_state_and_stops_duplicates tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1633_progress_comparison_blocks_unsupported_deltas tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1633_presentation_after_progress_comparison_preserves_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1633_progression_context_is_chat_isolated tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1633_autonomous_progression_release_check_passes -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-research-progression-release-check --db :memory:`: PASS, schema v36
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 608 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 176 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - Sprint 152-163 release-check regressions: PASS in integration suite, including `gaon-conversation-release-check`, `gaon-conversational-reasoning-release-check`, `gaon-natural-conversation-release-check`, `gaon-presentation-integrity-release-check`, `gaon-conversational-research-execution-release-check`, `gaon-conversational-reexecution-integrity-release-check`, `gaon-telegram-autonomous-research-release-check`, and `gaon-autonomous-conversation-context-release-check`
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Hotfix 163.2 Autonomous Conversation Context Integrity
 
 - Targeted local verification:

@@ -775,6 +775,10 @@ class LLMConversationBrain:
             return "영하님, 직전 연구나 전략 맥락이 없습니다. 먼저 분석할 종목이나 전략을 말씀해 주세요.", "conversation_autonomous_missing_context", _dedupe((*warnings, "autonomous research requires structured context")), references, "deterministic", ()
         if context is None:
             return None
+        if mode == "compare" and context.last_result_kind in _AUTONOMOUS_CONTEXT_KINDS:
+            text = _render_autonomous_progress_comparison(context)
+            self._remember_mvp_response_context(request, ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, "conversation_autonomous_progress_comparison")
+            return text, "conversation_autonomous_progress_comparison", _dedupe((*warnings, "autonomous progression comparison grounded")), references, "deterministic", ()
         if mode == "compare" and len(route.symbols) >= 2:
             result = self._execute_mvp_multi_symbol_research(request, tuple(symbol.symbol for symbol in route.symbols), request.text, None, None)
             self._record_tool_result(request.session_id, result, request.received_at)
@@ -786,14 +790,19 @@ class LLMConversationBrain:
             return text, "conversation_autonomous_compare", _dedupe((*warnings, "autonomous compare routed to multi-symbol research")), _dedupe((*references, "tool:multi_symbol_research")), "deterministic", ("multi_symbol_research",)
         symbol = _resolve_autonomous_symbol(route, context)
         original_text = previous_request_text(context, request.text) if context is not None else request.text
-        result = self._tool_executor.execute(ToolRequest("autonomous_research_cycle", {"request_text": original_text, "symbol": symbol, "mode": mode}, request.user_ref, request.received_at))
+        tool_args: dict[str, object] = {"request_text": original_text, "symbol": symbol, "mode": mode}
+        continuation_state = _autonomous_continuation_state(context) if context is not None else {}
+        if mode == "continue" and continuation_state:
+            tool_args["continuation_state"] = continuation_state
+        result = self._tool_executor.execute(ToolRequest("autonomous_research_cycle", tool_args, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
         if result.status != "success":
             failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
             return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", ("autonomous_research_cycle",)
-        text = _format_tool_response("autonomous_research_cycle", result.output, request.text)
-        self._remember_autonomous_context(request, result.output, text, mode)
-        audit = _as_dict(result.output.get("audit"))
+        result_output = _with_autonomous_progression(result.output, context, mode)
+        text = _format_tool_response("autonomous_research_cycle", result_output, request.text)
+        self._remember_autonomous_context(request, result_output, text, mode)
+        audit = _as_dict(result_output.get("audit"))
         audit_warnings = (
             f"autonomous_intent={audit.get('resolved_intent', mode)}",
             f"autonomous_terminal={audit.get('terminal_state', 'unknown')}",
@@ -1787,6 +1796,143 @@ def _render_autonomous_learning_query(payload: dict[str, object]) -> str:
     )
 
 
+def _autonomous_continuation_state(context: ConversationalMVPContext) -> dict[str, object]:
+    payload = dict(context.last_detail_payload)
+    progression = _as_dict(payload.get("progression"))
+    critic = _as_dict(payload.get("critic_report"))
+    if not critic:
+        critic = _as_dict(_as_dict(payload.get("autonomous_cycle")).get("critic_report"))
+    retests = _as_list(critic.get("retests"))
+    tested_keys = set(str(item) for item in progression.get("tested_candidate_keys", ()) if item)
+    tested_keys.update(_candidate_dedupe_key(item) for item in retests if _as_dict(item).get("status") in {"tested", "TESTED"})
+    return {
+        "schema_version": 1,
+        "root_cycle_id": progression.get("root_cycle_id") or payload.get("run_id"),
+        "current_cycle_id": payload.get("run_id"),
+        "terminal_state": payload.get("terminal_state"),
+        "continuation_count": int(progression.get("continuation_count", 0) or 0),
+        "tested_candidate_keys": sorted(tested_keys),
+        "completed_steps": tuple(str(item) for item in progression.get("completed_steps", ()) if item),
+        "assumptions_fingerprint": _autonomous_assumptions_fingerprint(payload),
+        "strategy_fingerprint": _autonomous_strategy_fingerprint(payload),
+    }
+
+
+def _with_autonomous_progression(output: dict[str, object], previous: ConversationalMVPContext | None, mode: str) -> dict[str, object]:
+    payload = dict(output)
+    prior_payload = dict(previous.last_detail_payload) if previous is not None else {}
+    prior_progression = _as_dict(prior_payload.get("progression"))
+    critic = _as_dict(payload.get("critic_report"))
+    retests = _as_list(critic.get("retests"))
+    prior_tested = {str(item) for item in prior_progression.get("tested_candidate_keys", ()) if item}
+    current_tested = {_candidate_dedupe_key(item) for item in retests if _as_dict(item).get("status") in {"tested", "TESTED"}}
+    duplicate = sorted(prior_tested.intersection(current_tested))
+    continuation_count = int(prior_progression.get("continuation_count", 0) or 0) + (1 if mode == "continue" else 0)
+    terminal = str(payload.get("terminal_state") or _as_dict(payload.get("autonomous_cycle")).get("terminal_state") or "unknown")
+    if mode == "continue" and prior_tested and current_tested and current_tested.issubset(prior_tested):
+        terminal = "no_new_research_path"
+        payload["terminal_state"] = terminal
+        critic = dict(critic)
+        critic["retests"] = []
+        critic["proposals"] = []
+        payload["critic_report"] = critic
+        cycle = dict(_as_dict(payload.get("autonomous_cycle")))
+        if cycle:
+            cycle_critic = dict(_as_dict(cycle.get("critic_report")))
+            cycle_critic["retests"] = []
+            cycle_critic["proposals"] = []
+            cycle["critic_report"] = cycle_critic
+            cycle["terminal_state"] = terminal
+            payload["autonomous_cycle"] = cycle
+    progression = {
+        "schema_version": 1,
+        "root_cycle_id": prior_progression.get("root_cycle_id") or prior_payload.get("run_id") or payload.get("run_id"),
+        "parent_cycle_id": prior_payload.get("run_id") if previous is not None and previous.last_result_kind in _AUTONOMOUS_CONTEXT_KINDS else None,
+        "current_cycle_id": payload.get("run_id"),
+        "continuation_count": continuation_count,
+        "tested_candidate_keys": sorted(prior_tested | current_tested),
+        "duplicate_candidate_keys": duplicate,
+        "terminal_state": terminal,
+        "progression_state": "NO_NEW_RESEARCH_PATH" if terminal == "no_new_research_path" else ("CONTINUED" if mode == "continue" else terminal.upper()),
+        "assumptions_immutable": _autonomous_assumptions_fingerprint(payload) == (prior_progression.get("assumptions_fingerprint") or _autonomous_assumptions_fingerprint(payload)),
+        "assumptions_fingerprint": _autonomous_assumptions_fingerprint(payload),
+        "strategy_fingerprint": _autonomous_strategy_fingerprint(payload),
+        "unsupported_claims_blocked": ["cost_assumptions", "fabricated_metric_delta", "unsupported_assumption_change"],
+    }
+    payload["progression"] = progression
+    audit = dict(_as_dict(payload.get("audit")))
+    audit["continuation_count"] = continuation_count
+    audit["duplicate_candidate_count"] = len(duplicate)
+    audit["terminal_state"] = terminal
+    payload["audit"] = audit
+    return payload
+
+
+def _render_autonomous_progress_comparison(context: ConversationalMVPContext) -> str:
+    payload = dict(context.last_detail_payload)
+    progression = _as_dict(payload.get("progression"))
+    critic = _as_dict(payload.get("critic_report"))
+    findings = _as_list(critic.get("findings"))
+    proposals = _as_list(critic.get("proposals"))
+    retests = _as_list(critic.get("retests"))
+    learning = _as_dict(payload.get("learning_report"))
+    stored = _as_list(learning.get("stored_records"))
+    terminal = progression.get("terminal_state") or payload.get("terminal_state") or "unknown"
+    return "\n".join(
+        [
+            "영하님, 처음 연구와 지금까지의 자율 연구 진행 차이를 구조화된 기록 기준으로만 비교하면 다음과 같습니다.",
+            f"- 처음에는 baseline 분석을 기준으로 표본/근거 부족 여부를 확인했습니다.",
+            f"- 이후 확인된 critic finding은 {len(findings)}건입니다.",
+            f"- 생성된 개선 후보는 {len(proposals)}건이고, TESTED 후보 기록은 {len(retests)}건입니다.",
+            f"- Learning Memory에 연결된 evidence-backed 기록은 {len(stored)}건입니다.",
+            f"- continuation_count={progression.get('continuation_count', 0)}",
+            f"- 현재 terminal_state={terminal}",
+            "- 성과 수치 변화는 양쪽 authoritative 결과에 같은 metric이 있을 때만 계산합니다. 현재는 근거 없는 성과 delta를 만들지 않겠습니다.",
+            "- 비용 가정, slippage, tax, position sizing, execution timing이 바뀌었다는 기록은 없습니다.",
+            "- 자동 주문, Champion 자동 승격, 승인 없는 config 변경은 수행하지 않았습니다.",
+        ]
+    )
+
+
+def _candidate_dedupe_key(value: object) -> str:
+    item = _as_dict(value)
+    candidate = _as_dict(item.get("candidate"))
+    changed_rules = candidate.get("changed_rules")
+    if not isinstance(changed_rules, list):
+        changed_rules = item.get("changed_rules") if isinstance(item.get("changed_rules"), list) else []
+    basis = {
+        "candidate_kind": _candidate_kind(str(item.get("candidate_id") or candidate.get("candidate_id") or item.get("proposal_id") or "")),
+        "hypothesis": str(candidate.get("hypothesis") or item.get("hypothesis") or ""),
+        "changed_rules": sorted(str(rule) for rule in changed_rules),
+        "status": str(item.get("status") or candidate.get("status") or ""),
+    }
+    return "|".join(f"{key}={basis[key]}" for key in sorted(basis))
+
+
+def _candidate_kind(candidate_id: str) -> str:
+    if "robust-breakout" in candidate_id:
+        return "robust-breakout"
+    if "regime-filter" in candidate_id:
+        return "regime-filter"
+    if "no-change" in candidate_id:
+        return "no-change"
+    if ":candidate:" in candidate_id:
+        return candidate_id.rsplit(":candidate:", 1)[-1]
+    return candidate_id
+
+
+def _autonomous_assumptions_fingerprint(payload: dict[str, object]) -> str:
+    baseline = _as_dict(payload.get("baseline"))
+    assumptions = _as_dict(baseline.get("assumptions"))
+    return hashlib.sha256(dumps_json(assumptions).encode("utf-8")).hexdigest()[:16]
+
+
+def _autonomous_strategy_fingerprint(payload: dict[str, object]) -> str:
+    baseline = _as_dict(payload.get("baseline"))
+    strategy = _as_dict(baseline.get("strategy"))
+    return str(strategy.get("fingerprint") or strategy.get("strategy_id") or "strategy:unknown")
+
+
 def _is_autonomous_presentation_intent(intent: ConversationalMVPIntent) -> bool:
     return intent in {
         ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
@@ -1812,13 +1958,15 @@ def _render_autonomous_context_followup(context: ConversationalMVPContext, inten
         findings = _as_list(critic.get("findings"))
         proposals = _as_list(critic.get("proposals"))
         stored = _as_list(learning.get("stored_records"))
-        status = str(assessment.get("status") or payload.get("terminal_state") or "검증 계속 필요")
+        progression = _as_dict(payload.get("progression"))
+        candidate_count = len(proposals) or len(_as_list(progression.get("tested_candidate_keys")))
+        status = str(progression.get("progression_state") or progression.get("terminal_state") or payload.get("terminal_state") or assessment.get("status") or "검증 계속 필요")
         return "\n".join(
             [
                 f"영하님, 쉽게 말하면 방금 결과는 일반 백테스트 요약이 아니라 자율 연구 진행 상태입니다. 현재 판단은 {status}입니다.",
                 f"- 검증/계획 단계: {len(steps)}개",
                 f"- 발견한 문제: {len(findings)}건",
-                f"- 개선 후보: {len(proposals)}건",
+                f"- 개선 후보: {candidate_count}건",
                 f"- evidence-backed 학습 기록: {len(stored)}건",
                 "- 이 답변은 저장된 자율 연구 context만 다시 설명한 것이며, 연구 도구를 다시 실행하지 않았습니다.",
                 "- 자동 주문, Champion 자동 승격, 승인 없는 config 변경은 수행하지 않았습니다.",

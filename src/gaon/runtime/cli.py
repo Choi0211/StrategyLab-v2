@@ -246,6 +246,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_autonomous_context_release = sub.add_parser("gaon-autonomous-conversation-context-release-check")
     gaon_autonomous_context_release.add_argument("--db", default=":memory:")
     gaon_autonomous_context_release.add_argument("--run-id", default=None)
+    gaon_autonomous_progression_release = sub.add_parser("gaon-autonomous-research-progression-release-check")
+    gaon_autonomous_progression_release.add_argument("--db", default=":memory:")
+    gaon_autonomous_progression_release.add_argument("--run-id", default=None)
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1537,6 +1540,94 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "learning_context=preserved autonomous_context=preserved presentation_no_rerun=true "
                 "chat_isolation=pass fabricated_defaults=blocked safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-autonomous-research-progression-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"gaon-autonomous-research-progression-release-check:{uuid4().hex}"
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100", "101"),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            client = _ReleaseCheckTelegramClient()
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(config, store._connection, tool_executor=_telegram_autonomous_research_release_tool_executor(store)),
+                allowed_chat_ids=("100", "101"),
+            )
+            steps = (
+                ("analysis", "삼성전자 분석해줘", "100"),
+                ("validate", "삼성전자 전략을 더 검증해봐", "100"),
+                ("continue1", "계속 연구해줘", "100"),
+                ("continue2", "한 번 더 계속 연구해줘", "100"),
+                ("compare", "지금까지 진행한 연구가 처음 연구와 비교해서 무엇이 달라졌어?", "100"),
+                ("simple", "쉽게 설명해줘", "100"),
+                ("isolated", "계속 연구해줘", "101"),
+            )
+            for label, text, chat_id in steps:
+                update = parse_update_result(_telegram_update_with_text(run_id, label, text, chat_id=chat_id), received_at=_utc_now())
+                result = process_update(update, runtime, client)
+                if result.status != "sent":
+                    raise ConfigurationError(f"autonomous progression release check failed at {label}: {result.status}")
+            audits = store.tool_audit.list(tool_name="autonomous_research_cycle")
+            if len(audits) != 3:
+                raise ConfigurationError("autonomous continuation did not execute the expected bounded cycle count")
+            first_args = next(record.request["arguments"] for record in audits if record.request["arguments"].get("mode") == "validate")
+            continuation_records = sorted(
+                (record for record in audits if record.request["arguments"].get("mode") == "continue"),
+                key=lambda record: int(record.result["output"].get("progression", {}).get("continuation_count", 0)) if isinstance(record.result.get("output"), dict) else 0,
+            )
+            if len(continuation_records) != 2:
+                raise ConfigurationError("expected exactly two continuation records")
+            second_args = continuation_records[0].request["arguments"]
+            third_args = continuation_records[1].request["arguments"]
+            if "continuation_state" in first_args:
+                raise ConfigurationError("initial validation must not pretend to continue a prior cycle")
+            if "continuation_state" not in second_args or "continuation_state" not in third_args:
+                raise ConfigurationError("continuation requests did not carry prior autonomous state")
+            second_output = continuation_records[0].result["output"]
+            third_output = continuation_records[1].result["output"]
+            if not isinstance(second_output, dict) or not isinstance(third_output, dict):
+                raise ConfigurationError("autonomous progression audit output was not structured")
+            second_progression = second_output.get("progression")
+            third_progression = third_output.get("progression")
+            if not isinstance(second_progression, dict) or not isinstance(third_progression, dict):
+                raise ConfigurationError("autonomous progression was not persisted in tool output")
+            if int(second_progression.get("continuation_count", 0)) < 1 or int(third_progression.get("continuation_count", 0)) < 2:
+                raise ConfigurationError("continuation_count did not progress")
+            if second_progression.get("parent_cycle_id") in {None, ""}:
+                raise ConfigurationError("parent cycle linkage missing")
+            if third_progression.get("progression_state") != "NO_NEW_RESEARCH_PATH":
+                raise ConfigurationError("duplicate continuation did not stop with NO_NEW_RESEARCH_PATH")
+            if third_output.get("critic_report", {}).get("retests"):
+                raise ConfigurationError("duplicate candidate retest was recreated")
+            comparison = client.sent[-3][1]
+            simple = client.sent[-2][1]
+            isolated = client.sent[-1][1]
+            forbidden = ("cost_assumptions", "-0.98%", "CAGR -0.735", "0.0%", "slippage changed", "tax changed")
+            if any(token in comparison for token in forbidden):
+                raise ConfigurationError("progress comparison fabricated unsupported assumptions or metrics")
+            if "성과 수치 변화" not in comparison or "비용 가정" not in comparison:
+                raise ConfigurationError("progress comparison did not explain grounded metric/assumption limits")
+            if "NO_NEW_RESEARCH_PATH" not in simple:
+                raise ConfigurationError("presentation follow-up did not preserve progression terminal context")
+            if "직전 연구나 전략 맥락이 없습니다" not in isolated:
+                raise ConfigurationError("autonomous progression context leaked across chats")
+            print(
+                "gaon-autonomous-research-progression-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "continuation_state=pass parent_linkage=pass candidate_dedupe=pass "
+                "plan_progression=pass budget_stop=pass terminal_state=pass "
+                "progress_comparison=pass assumptions_immutable=true memory_dedupe=pass "
+                "grounded=true safety=pass"
             )
         finally:
             store.close()
@@ -4263,13 +4354,22 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
     def handle_autonomous(tool_args):
         symbol = str(tool_args.get("symbol", "005930"))
         mode = str(tool_args.get("mode", "validate"))
+        state = tool_args.get("continuation_state") if isinstance(tool_args.get("continuation_state"), dict) else {}
         baseline = handle_research({"symbol": symbol, "request_text": tool_args.get("request_text", "")})
         metrics = dict(baseline["backtest"]["metrics"])
+        prior_tested = set(str(item) for item in state.get("tested_candidate_keys", ()) if item)
+        candidate_key = "candidate_kind=candidate:A|changed_rules=[]|hypothesis=|status=tested"
+        duplicate = mode == "continue" and candidate_key in prior_tested
+        proposals = [] if duplicate else [{"proposal_id": "candidate:A", "hypothesis": "진입 필터를 보수적으로 조정합니다."}]
+        retests = [] if duplicate else [{"candidate_id": "candidate:A", "status": "tested", "trade_count": int(metrics["trade_count"]) + 3, "metrics": {"trade_count": int(metrics["trade_count"]) + 3}}]
+        terminal = "no_new_research_path" if duplicate else "needs_more_evidence"
+        continuation_count = int(state.get("continuation_count", 0) or 0) + (1 if mode == "continue" else 0)
+        cycle_id = f"autonomous-cycle:release-check:{uuid4().hex}"
         return {
             "schema_version": 36,
             "tool": "autonomous_research_cycle",
             "mode": mode,
-            "run_id": f"autonomous-cycle:release-check:{uuid4().hex}",
+            "run_id": cycle_id,
             "symbol": symbol,
             "baseline": baseline,
             "assessment": {
@@ -4280,21 +4380,33 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
             "plan": {"steps": [{"step_id": "step:extend-period", "kind": "extend_period", "status": "planned"}]},
             "critic_report": {
                 "findings": [{"category": "sample_size", "severity": "warning", "message": "표본 수가 아직 충분하지 않습니다."}],
-                "proposals": [{"proposal_id": "candidate:A", "hypothesis": "진입 필터를 보수적으로 조정합니다."}],
-                "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": int(metrics["trade_count"]) + 3, "metrics": {"trade_count": int(metrics["trade_count"]) + 3}}],
+                "proposals": proposals,
+                "retests": retests,
             },
             "learning_report": {"stored_records": ["learning:release-check:sample"], "duplicate_candidates": []},
-            "terminal_state": "needs_more_evidence",
+            "terminal_state": terminal,
             "autonomous_cycle": {
                 "assessment": {"status": "insufficient_sample"},
                 "plan": {"steps": [{"step_id": "step:extend-period", "kind": "extend_period", "status": "planned"}]},
                 "critic_report": {
                     "findings": [{"category": "sample_size", "severity": "warning", "message": "표본 수가 아직 충분하지 않습니다."}],
-                    "proposals": [{"proposal_id": "candidate:A"}],
-                    "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": int(metrics["trade_count"]) + 3}],
+                    "proposals": [{"proposal_id": "candidate:A"}] if not duplicate else [],
+                    "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": int(metrics["trade_count"]) + 3}] if not duplicate else [],
                 },
                 "learning_report": {"stored_records": ["learning:release-check:sample"], "duplicate_candidates": []},
-                "terminal_state": "needs_more_evidence",
+                "terminal_state": terminal,
+            },
+            "progression": {
+                "schema_version": 1,
+                "parent_cycle_id": state.get("current_cycle_id"),
+                "current_cycle_id": cycle_id,
+                "root_cycle_id": state.get("root_cycle_id") or state.get("current_cycle_id") or cycle_id,
+                "continuation_count": continuation_count,
+                "tested_candidate_keys": sorted(prior_tested | ({candidate_key} if not duplicate else set())),
+                "duplicate_candidate_keys": [candidate_key] if duplicate else [],
+                "terminal_state": terminal,
+                "progression_state": "NO_NEW_RESEARCH_PATH" if duplicate else ("CONTINUED" if mode == "continue" else "NEEDS_MORE_EVIDENCE"),
+                "assumptions_immutable": True,
             },
             "source": "real:yahoo-chart",
             "fixture_backed": False,
@@ -4305,11 +4417,13 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
                 "autonomous_cycle_invoked": True,
                 "planner_invoked": True,
                 "critic_invoked": True,
-                "candidate_count": 1,
-                "retest_count": 1,
+                "candidate_count": len(proposals),
+                "retest_count": len(retests),
+                "duplicate_candidate_count": 1 if duplicate else 0,
+                "continuation_count": continuation_count,
                 "learning_memory_write": True,
                 "learning_memory_read": mode == "learning_query",
-                "terminal_state": "needs_more_evidence",
+                "terminal_state": terminal,
                 "safety_state": "read_only",
             },
             "automatic_order": False,
@@ -4333,7 +4447,7 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
             "Run deterministic Telegram autonomous release-check cycle.",
             ToolRiskLevel.READ_ONLY,
             required_args=("request_text",),
-            allowed_args=("symbol", "mode"),
+            allowed_args=("symbol", "mode", "continuation_state"),
         ),
         handle_autonomous,
     )

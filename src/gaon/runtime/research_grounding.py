@@ -287,6 +287,7 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
     source = output.get("source", "unknown")
     quality_status = output.get("quality_status", "unknown")
     terminal = output.get("terminal_state", cycle.get("terminal_state", "unknown"))
+    progression = _as_dict(output.get("progression"))
     lines = [
         "영하님, 기존 분석 결과를 근거로 자율 연구 검증 사이클을 실행했습니다.",
         "",
@@ -303,6 +304,7 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
         f"- terminal_state={terminal}",
         f"- validation_needs={len(_as_list(_as_dict(assessment.get('plan')).get('needs')))}",
         f"- planner_steps={len(_as_list(plan.get('steps')))}",
+        f"- continuation_count={progression.get('continuation_count', 0)}",
         "",
         "[Critic 결과]",
     ]
@@ -320,9 +322,19 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
     if retests:
         for item in retests[:5]:
             retest = _as_dict(item)
-            lines.append(f"- {retest.get('candidate_id', 'candidate')}: status={retest.get('status', 'unknown')} trade_count={retest.get('trade_count', 'unknown')}")
+            lines.append(f"- {_candidate_display_label(retest)}: status={retest.get('status', 'unknown')} trade_count={retest.get('trade_count', 'unknown')}")
     else:
-        lines.append("- 아직 TESTED 후보 결과는 없습니다.")
+        if terminal == "no_new_research_path":
+            lines.append("- 이미 검증한 후보를 같은 조건으로 반복하지 않았습니다.")
+            lines.append("- 새 근거가 없어 이번 continuation은 NO_NEW_RESEARCH_PATH로 멈췄습니다.")
+        else:
+            lines.append("- 아직 TESTED 후보 결과는 없습니다.")
+    if progression:
+        duplicate_count = len(_as_list(progression.get("duplicate_candidate_keys")))
+        if duplicate_count:
+            lines.append(f"- duplicate_candidates_blocked={duplicate_count}")
+        if progression.get("assumptions_immutable") is True:
+            lines.append("- assumptions_immutable=true")
     lines.extend(
         [
             "",
@@ -339,6 +351,19 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
     if baseline:
         lines.append(f"- baseline_report={baseline.get('report_id') or baseline.get('research_report_id') or 'available'}")
     return "\n".join(lines)
+
+
+def _candidate_display_label(retest: dict[str, object]) -> str:
+    raw = str(retest.get("candidate_id") or "candidate")
+    if "robust-breakout" in raw:
+        return "robust-breakout"
+    if "regime-filter" in raw:
+        return "regime-filter"
+    if "no-change" in raw:
+        return "no-change"
+    if ":candidate:" in raw:
+        return raw.rsplit(":candidate:", 1)[-1]
+    return raw[:40]
 
 
 def _format_research_retest(output: dict[str, object]) -> str:

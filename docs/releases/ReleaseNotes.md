@@ -3,6 +3,26 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 163.3 Autonomous Research Progression Integrity
+
+Hotfix 163.3 fixes repeated autonomous continuation prompts. `계속 연구해줘`
+now carries the previous autonomous research state into the read-only safe tool
+instead of restarting from a fresh baseline. The continuation state tracks
+parent/root cycle IDs, continuation count, tested candidate keys, and immutable
+strategy/assumption fingerprints.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-progression-release-check --db :memory:
+```
+
+The hotfix also adds grounded progress comparison rendering for prompts like
+`처음 연구와 비교해서 무엇이 달라졌어?`. Gaon reports only structured
+progression facts and blocks unsupported cost-assumption or performance metric
+deltas. It does not enable trading, Champion promotion, approval bypass, or
+strategy mutation.
+
 ## Hotfix 163.2 Autonomous Conversation Context Integrity
 
 Hotfix 163.2 fixes presentation-only follow-ups after autonomous research and

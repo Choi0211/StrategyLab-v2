@@ -64,6 +64,7 @@ Included foundations:
 - Sprint 163 Autonomous Research Completion with end-to-end Sprints 156-162 aggregation, final safety assertions, `AUTONOMOUS RESEARCH COMPLETE`, and `gaon-autonomous-research-complete-release-check`
 - Hotfix 163.1 Telegram Autonomous Research Routing with same-chat context resolution from conversational research results into the read-only autonomous validation/planner/critic/learning cycle, grounded Korean rendering, cross-chat isolation, and `gaon-telegram-autonomous-research-release-check`
 - Hotfix 163.2 autonomous conversation context integrity with distinct autonomous/learning-memory presentation context, no backtest renderer fallback for learning summaries, presentation-only no-rerun guarantees, and `gaon-autonomous-conversation-context-release-check`
+- Hotfix 163.3 autonomous research progression integrity with continuation state handoff, parent/root cycle linkage, deterministic candidate dedupe, grounded progress comparison, no unsupported assumption deltas, and `gaon-autonomous-research-progression-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
