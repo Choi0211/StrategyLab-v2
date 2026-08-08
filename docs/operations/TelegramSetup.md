@@ -153,6 +153,27 @@ not combine multiple renderer outputs into one response, must not rerun the
 research tool for presentation-only follow-ups, and must not expose unsupported
 unknown-source wording.
 
+Sprint 155 conversational research execution release check:
+
+```bash
+python -m gaon.runtime.cli gaon-conversational-research-execution-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This verifies that period-change follow-ups are separated from presentation
+follow-ups. Examples:
+
+- `삼성전자 분석해줘`
+- `더 긴 기간으로 다시 분석해봐` asks for an explicit period.
+- `5년으로 다시 해봐` reuses the Samsung context and reruns the existing
+  `krx_real_research` safe tool.
+- `삼성전자와 SK하이닉스 비교해줘`
+- `3년으로 다시 비교해줘` reuses both symbols and executes
+  `multi_symbol_research`.
+
+The response must use structured authoritative metrics only and must not expose
+run IDs, strategy fingerprints, validation IDs, automatic orders, or Champion
+promotion.
+
 ## Windows PowerShell Example
 
 ```powershell

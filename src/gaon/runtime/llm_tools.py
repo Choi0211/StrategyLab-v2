@@ -262,8 +262,14 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         lambda _args: compare_backtests_payload(),
     )
     registry.register(
-        ToolDefinition("krx_real_research", "Run the read-only KRX real-research pipeline with explicit source provenance.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol",)),
-        lambda args: krx_real_research_payload(connection, str(args["request_text"]), symbol=str(args.get("symbol", "005930"))),
+        ToolDefinition("krx_real_research", "Run the read-only KRX real-research pipeline with explicit source provenance.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol", "start_date", "end_date")),
+        lambda args: krx_real_research_payload(
+            connection,
+            str(args["request_text"]),
+            symbol=str(args.get("symbol", "005930")),
+            start_date=str(args["start_date"]) if "start_date" in args else None,
+            end_date=str(args["end_date"]) if "end_date" in args else None,
+        ),
     )
     registry.register(
         ToolDefinition("research_retest", "Run the read-only autonomous KRX real-research retest pipeline with deterministic period expansion.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol",)),

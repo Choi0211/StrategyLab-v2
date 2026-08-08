@@ -1,5 +1,16 @@
 # Changelog
 
+## Sprint 155 - Conversational Research Execution
+
+- Added immutable `ConversationalResearchExecutionRequest` and `ConversationalResearchExecutionResult` contracts for chat-scoped research reruns.
+- Added deterministic period resolution for explicit `3년`, `5년`, recent-year, and year-start requests while keeping ambiguous period changes fail-closed.
+- Wired `krx_real_research` safe tool arguments for `start_date` and `end_date`.
+- Added Telegram conversation routing that reuses previous structured strategy context and assumptions for single-symbol reruns.
+- Added multi-symbol period reruns through `multi_symbol_research` when the previous context was a comparison.
+- Kept presentation-only follow-ups isolated so requests like `조금 더 짧게` do not rerun research.
+- Added `gaon-conversational-research-execution-release-check` plus unit and Telegram integration coverage for context resolution, period resolution, multi-symbol execution, missing-context handling, and metadata hiding.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 154.1 - Presentation State and Grounding Integrity
 
 - Added `PresentationFormat` to make prose, bulleted detail, and table presentation intent explicit.

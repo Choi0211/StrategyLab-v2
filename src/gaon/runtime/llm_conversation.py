@@ -34,6 +34,13 @@ from gaon.runtime.conversational_mvp import (
     render_symbol_comparison,
     render_unknown,
 )
+from gaon.runtime.conversational_research_execution import (
+    ConversationalResearchExecutionResult,
+    build_conversational_research_execution_request,
+    previous_request_text,
+    render_conversational_research_execution_result,
+    render_research_execution_clarification,
+)
 from gaon.runtime.errors import ConfigurationError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.intents import Intent, parse_intent
@@ -641,7 +648,11 @@ class LLMConversationBrain:
             return None
         existing_tool = route_read_only_tool(request.text)
         if existing_tool in {"research_retest", "multi_symbol_research", "multi_symbol_research_status", "multi_symbol_research_history", "champion_status", "runtime_status", "v5_pipeline_history"}:
-            return None
+            if not (
+                route.intent in {ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, ConversationalMVPIntent.RERUN_REQUEST}
+                and self._mvp_context_for(request.session_id) is not None
+            ):
+                return None
         if route.intent in {ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS, ConversationalMVPIntent.COMPARE_SYMBOLS} and not _is_simple_conversational_research_request(request.text):
             return None
         if route.intent is ConversationalMVPIntent.GREETING:
@@ -674,6 +685,9 @@ class LLMConversationBrain:
             self._store_presentation_preference(request.session_id, preference, request)
             self._remember_mvp_response_context(request, route.intent, f"conversation_mvp_{route.intent.value}")
             if route.intent in {ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, ConversationalMVPIntent.RERUN_REQUEST}:
+                execution = self._try_conversational_research_execution(request, context, warnings, references)
+                if execution is not None:
+                    return execution
                 return render_rerun_boundary(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe((*warnings, "rerun request requires explicit authoritative rerun")), references, "deterministic", ()
             if route.intent in {
                 ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION,
@@ -724,10 +738,127 @@ class LLMConversationBrain:
             return render_unknown(route.symbols), "conversation_mvp_unknown", _dedupe(warnings), references, "deterministic", ()
         return None
 
-    def _execute_mvp_real_research(self, request: LLMConversationRequest, symbol: str):
-        result = self._tool_executor.execute(ToolRequest("krx_real_research", {"request_text": request.text, "symbol": symbol}, request.user_ref, request.received_at))
+    def _try_conversational_research_execution(self, request: LLMConversationRequest, context: ConversationalMVPContext, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        if self._tool_executor is None:
+            return None
+        execution_request = build_conversational_research_execution_request(request.text, context, received_at=request.received_at)
+        if execution_request.requires_confirmation:
+            return (
+                render_research_execution_clarification(context, request.text),
+                "conversation_research_execution_clarification",
+                _dedupe((*warnings, "research execution requires explicit period")),
+                references,
+                "deterministic",
+                (),
+            )
+        original_text = previous_request_text(context, request.text)
+        if execution_request.comparison_requested or len(execution_request.symbols) > 1:
+            result = self._execute_mvp_multi_symbol_research(request, tuple(execution_request.symbols), original_text, execution_request.start_date, execution_request.end_date)
+            tool_calls = ("multi_symbol_research",)
+            outputs = self._payloads_from_multi_symbol_result(result.output) if result.status == "success" else ()
+        else:
+            result = self._execute_mvp_real_research(request, execution_request.symbols[0], request_text=original_text, start_date=execution_request.start_date, end_date=execution_request.end_date)
+            tool_calls = ("krx_real_research",)
+            outputs = (result.output,) if result.status == "success" else ()
+        if result.status != "success":
+            failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+            return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", tool_calls
+        execution_result = ConversationalResearchExecutionResult(
+            execution_status="success",
+            symbols=execution_request.symbols,
+            resolved_start_date=execution_request.start_date,
+            resolved_end_date=execution_request.end_date,
+            research_results=outputs,
+            previous_results=context.last_structured_results or context.last_payloads,
+            comparison=self._comparison_from_execution_output(result.output),
+            data_quality=tuple(dict(output.get("quality")) for output in outputs if isinstance(output.get("quality"), dict)),
+            limitations=self._limitations_from_execution_outputs(outputs),
+            execution_evidence=("safe_tool_execution", "structured_authoritative_result", "previous_strategy_reused"),
+        )
+        text = render_conversational_research_execution_result(execution_result)
+        self._remember_mvp_context(
+            request,
+            ConversationalMVPIntent.COMPARE_SYMBOLS if len(outputs) > 1 else ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS,
+            outputs,
+            text,
+        )
+        return (
+            text,
+            "conversation_research_execution",
+            _dedupe((*warnings, "authoritative conversational research re-execution")),
+            _dedupe((*references, *[f"tool:{tool}" for tool in tool_calls])),
+            "deterministic",
+            tool_calls,
+        )
+
+    def _execute_mvp_real_research(self, request: LLMConversationRequest, symbol: str, *, request_text: str | None = None, start_date: str | None = None, end_date: str | None = None):
+        arguments = {"request_text": request_text or request.text, "symbol": symbol}
+        if start_date is not None:
+            arguments["start_date"] = start_date
+        if end_date is not None:
+            arguments["end_date"] = end_date
+        result = self._tool_executor.execute(ToolRequest("krx_real_research", arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
         return result
+
+    def _execute_mvp_multi_symbol_research(self, request: LLMConversationRequest, symbols: tuple[str, ...], request_text: str, start_date: str | None, end_date: str | None):
+        arguments: dict[str, object] = {"request_text": request_text, "symbols": symbols, "universe_type": "explicit"}
+        if start_date is not None:
+            arguments["start_date"] = start_date
+        if end_date is not None:
+            arguments["end_date"] = end_date
+        result = self._tool_executor.execute(ToolRequest("multi_symbol_research", arguments, request.user_ref, request.received_at))
+        self._record_tool_result(request.session_id, result, request.received_at)
+        return result
+
+    def _payloads_from_multi_symbol_result(self, output: dict[str, object]) -> tuple[dict[str, object], ...]:
+        symbols = output.get("symbols")
+        if isinstance(symbols, list):
+            payloads: list[dict[str, object]] = []
+            for item in symbols:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol", "unknown"))
+                metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+                payloads.append(
+                    {
+                        "dataset": {
+                            "symbols": [{"symbol": symbol, "name": symbol}],
+                            "metadata": {
+                                "source": output.get("source", "unknown"),
+                                "start_date": output.get("start_date"),
+                                "end_date": output.get("end_date"),
+                                "fixture_backed": output.get("fixture_backed"),
+                            },
+                        },
+                        "quality": {"status": item.get("quality_status", output.get("quality_status", "unknown"))},
+                        "backtest": {"metrics": metrics},
+                        "request_text": output.get("request_text"),
+                    }
+                )
+            return tuple(payloads)
+        return (output,)
+
+    def _comparison_from_execution_output(self, output: dict[str, object]) -> dict[str, object]:
+        if isinstance(output.get("aggregate"), dict):
+            return dict(output["aggregate"])
+        comparison: dict[str, object] = {}
+        for key in ("aggregate_trade_count", "sample_confidence", "recommendation"):
+            if key in output:
+                comparison[key] = output[key]
+        return comparison
+
+    def _limitations_from_execution_outputs(self, outputs: tuple[dict[str, object], ...]) -> tuple[str, ...]:
+        limitations: list[str] = []
+        for output in outputs:
+            quality = output.get("quality")
+            if isinstance(quality, dict):
+                findings = quality.get("findings")
+                if isinstance(findings, list):
+                    for finding in findings:
+                        if isinstance(finding, dict) and finding.get("message") is not None:
+                            limitations.append(str(finding["message"]))
+        return tuple(dict.fromkeys(limitations))
 
     def _presentation_preference_for(self, session_id: str) -> PresentationPreference:
         try:
@@ -1162,6 +1293,7 @@ def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
         or request.session_id.startswith("gaon-conversational-reasoning-release-check:")
         or request.session_id.startswith("gaon-natural-conversation-release-check:")
         or request.session_id.startswith("gaon-presentation-integrity-release-check:")
+        or request.session_id.startswith("gaon-conversational-research-execution-release-check:")
     )
 
 
@@ -1200,6 +1332,15 @@ def _contains_supported_conversational_mvp_token(text: str) -> bool:
         "\uc804\ubb38\uc801\uc73c\ub85c",
         "\ub2e4\uc2dc \ubd84\uc11d",
         "\ub2e4\uc2dc \uac80\uc99d",
+        "\ub2e4\uc2dc \ud574\ubd10",
+        "\ub354 \uae34 \uae30\uac04",
+        "\ub354 \uae38\uac8c",
+        "\uae30\uac04 \ub298\ub824",
+        "\uae30\uac04\ub9cc \ubc14\uafd4",
+        "\uac19\uc740 \uc870\uac74",
+        "\ucd5c\uadfc 5\ub144",
+        "3\ub144",
+        "5\ub144",
         "\uae30\uac04",
         "\ud55c \uc904",
         "\uc9e7\uac8c",
