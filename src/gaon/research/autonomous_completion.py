@@ -11,7 +11,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from gaon.learning.confidence.models import ConfidenceScore
+from gaon.learning.contracts import AuditAction, AuditEvent, LearningRecord, LearningRecordType, RevalidationSchedule, RevalidationStatus
+from gaon.learning.evidence.models import EvidenceRecord, EvidenceType
+from gaon.learning.repository import InMemoryLearningRepository, LearningRepository
+
 AUTONOMOUS_COMPLETION_SCHEMA_VERSION = 1
+AUTONOMOUS_COMPLETION_TIMESTAMP = "2026-08-08T00:00:00Z"
 
 
 class AdequacyStatus(str, Enum):
@@ -322,6 +328,25 @@ class CriticRetestReport:
         }
 
 
+@dataclass(frozen=True)
+class LearningMemoryIntegrationReport:
+    stored_records: tuple[str, ...]
+    duplicate_candidates: tuple[str, ...]
+    audit_events: tuple[str, ...]
+    knowledge_validated: bool = False
+    policy_applied: bool = False
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
+            "stored_records": list(self.stored_records),
+            "duplicate_candidates": list(self.duplicate_candidates),
+            "audit_events": list(self.audit_events),
+            "knowledge_validated": self.knowledge_validated,
+            "policy_applied": self.policy_applied,
+        }
+
+
 class AdaptiveResearchValidator:
     """Classify evidence adequacy and propose validation needs only."""
 
@@ -484,6 +509,89 @@ class CriticImprovementRetestLoop:
         return CriticRetestReport(findings, proposals, tuple(retests), retained_rejected=any(item.status is StrategyCandidateStatus.REJECTED for item in retests))
 
 
+class AutonomousLearningMemoryIntegrator:
+    """Store autonomous research outcomes as unvalidated evidence-backed memory."""
+
+    def integrate(
+        self,
+        run_id: str,
+        report: CriticRetestReport,
+        repository: LearningRepository,
+        *,
+        scope: str = "gaon",
+        project: str = "StrategyLab-v2",
+        strategy: str = "autonomous-research",
+        market: str = "KRX",
+    ) -> LearningMemoryIntegrationReport:
+        evidence = self._evidence(run_id, report)
+        record = LearningRecord(
+            record_id=f"autonomous-learning:{run_id}:research-outcome",
+            record_type=LearningRecordType.RESEARCH_OUTCOME,
+            content=self._content(report),
+            scope=scope,
+            project=project,
+            strategy=strategy,
+            market=market,
+            created_at=AUTONOMOUS_COMPLETION_TIMESTAMP,
+            updated_at=AUTONOMOUS_COMPLETION_TIMESTAMP,
+            version=1,
+            evidence=evidence,
+            confidence=ConfidenceScore(0.55, "autonomous critic/retest evidence requires human review", evidence_count=len(evidence), validation_state="unvalidated"),
+            revalidation=RevalidationSchedule(
+                schedule_id=f"revalidation:{run_id}",
+                target_ref=f"autonomous-learning:{run_id}:research-outcome",
+                reason="autonomous research memory requires future review",
+                due_at="2026-09-08T00:00:00Z",
+                frequency="manual",
+                status=RevalidationStatus.PENDING,
+                scope=scope,
+                project=project,
+                strategy=strategy,
+                market=market,
+            ),
+            audit_ref=f"audit:{run_id}:research-outcome",
+        )
+        duplicates = tuple(candidate.existing_id for candidate in repository.find_duplicates(record))
+        if repository.exists(record.record_id):
+            duplicates = (*duplicates, record.record_id)
+        if duplicates:
+            return LearningMemoryIntegrationReport((), tuple(sorted(set(duplicates))), ())
+        repository.add(record)
+        audit = AuditEvent(
+            event_id=f"audit:{run_id}:research-outcome",
+            actor="gaon-autonomous-research",
+            action=AuditAction.CREATE,
+            target_ref=record.record_id,
+            before_version=None,
+            after_version=1,
+            scope=scope,
+            project=project,
+            strategy=strategy,
+            market=market,
+            evidence=evidence,
+            timestamp=AUTONOMOUS_COMPLETION_TIMESTAMP,
+        )
+        repository.append_audit(audit)
+        return LearningMemoryIntegrationReport((record.record_id,), (), (audit.event_id,))
+
+    @staticmethod
+    def _evidence(run_id: str, report: CriticRetestReport) -> tuple[EvidenceRecord, ...]:
+        refs = sorted({ref for finding in report.findings for ref in finding.evidence_refs} | {ref for retest in report.retests for ref in retest.evidence_refs})
+        if not refs:
+            refs = [f"autonomous-research:{run_id}"]
+        return tuple(
+            EvidenceRecord(f"evidence:{run_id}:{index}", EvidenceType.RESEARCH, reference, "autonomous critic/retest structured evidence")
+            for index, reference in enumerate(refs, start=1)
+        )
+
+    @staticmethod
+    def _content(report: CriticRetestReport) -> str:
+        categories = ", ".join(finding.category for finding in report.findings)
+        tested = sum(1 for retest in report.retests if retest.status is StrategyCandidateStatus.TESTED)
+        rejected = sum(1 for retest in report.retests if retest.status is StrategyCandidateStatus.REJECTED)
+        return f"Autonomous research critic findings: {categories}; candidate retests tested={tested}, rejected={rejected}."
+
+
 def gaon_adaptive_validation_release_check() -> dict[str, object]:
     payload = {
         "metrics": {"trade_count": 1, "mdd": 0.04, "wins": 1, "losses": 0},
@@ -578,6 +686,37 @@ def gaon_research_critic_release_check() -> dict[str, object]:
     if report.to_json()["automatic_config_apply"]:
         raise ValueError("critic loop must not mutate strategy configuration")
     return {"report": report.to_json(), "safety": "pass"}
+
+
+def gaon_autonomous_learning_memory_release_check() -> dict[str, object]:
+    critic_result = gaon_research_critic_release_check()
+    report_data = critic_result["report"]
+    if not isinstance(report_data, dict):
+        raise ValueError("critic report is not structured")
+    assessment = AdaptiveResearchValidator().assess(
+        {
+            "metrics": {"trade_count": 2, "wins": 1, "losses": 1, "mdd": 0.1},
+            "observation_days": 128,
+            "market_regime_count": 1,
+            "quality": {"status": "pass"},
+            "evidence_refs": ("release-check:learning-memory",),
+        }
+    )
+    goal = AutonomousResearchGoal("learning-release-check", "learning integration", ("005930",), assessment.evidence_refs)
+    plan = AutonomousResearchPlanner().plan(goal, assessment)
+    critic_report = CriticImprovementRetestLoop().run("strategy:breakout20", assessment, plan)
+    repository = InMemoryLearningRepository()
+    integration = AutonomousLearningMemoryIntegrator().integrate("learning-release-check", critic_report, repository)
+    duplicate = AutonomousLearningMemoryIntegrator().integrate("learning-release-check", critic_report, repository)
+    if len(repository.list_all()) != 1:
+        raise ValueError("learning memory integration must store exactly one record")
+    if not repository.list_audit():
+        raise ValueError("learning memory integration must append audit")
+    if not duplicate.duplicate_candidates:
+        raise ValueError("repeat integration must report duplicate without merge")
+    if integration.knowledge_validated or integration.policy_applied:
+        raise ValueError("learning memory integration cannot approve knowledge or apply policy")
+    return {"integration": integration.to_json(), "duplicate": duplicate.to_json(), "records": len(repository.list_all()), "audit_events": len(repository.list_audit()), "safety": "pass"}
 
 
 def _step_from_need(goal_id: str, need: ValidationNeed, sequence: int, retry_limit: int) -> ResearchStep:

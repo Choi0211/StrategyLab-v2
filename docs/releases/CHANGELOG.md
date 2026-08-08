@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 160 - Autonomous Learning Memory Integration
+
+- Added unvalidated evidence-backed Learning Memory integration for autonomous research outcomes.
+- Added append-only audit event creation for stored autonomous research memory records.
+- Added duplicate reporting without automatic merge or overwrite.
+- Added `gaon-autonomous-learning-memory-release-check` plus unit and integration coverage.
+- Preserved schema v36, no knowledge validation, no policy application, no trading, no Champion promotion, and no strategy configuration mutation.
+
 ## Sprint 159 - Research Critic / Improvement / Retest
 
 - Added structured critic findings for sample-size, drawdown, and data-quality issues.

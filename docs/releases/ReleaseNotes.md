@@ -3,6 +3,22 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 160 Autonomous Learning Memory Integration
+
+Sprint 160 stores autonomous research outcomes as unvalidated, evidence-backed
+Learning Memory records. Stored records include confidence, revalidation
+metadata, and append-only audit events.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-learning-memory-release-check --db :memory:
+```
+
+Duplicate records are reported without automatic merge. The integration does
+not validate knowledge, apply policy, approve changes, or mutate strategy
+configuration.
+
 ## Sprint 159 Research Critic / Improvement / Retest
 
 Sprint 159 adds a deterministic critic loop. Gaon can now report evidence

@@ -58,6 +58,7 @@ Included foundations:
 - Sprint 157 Autonomous Research Planner with bounded deterministic research goals, steps, budgets, dependencies, stop conditions, and `gaon-autonomous-research-planner-release-check`
 - Sprint 158 Strategy Candidate Generation with evidence-backed PROPOSED candidates, changed-rule rationale, downside/rollback metadata, and `gaon-strategy-candidate-generation-release-check`
 - Sprint 159 Research Critic / Improvement / Retest with structured critic findings, evidence-backed improvement proposals, candidate retest records, retained rejected evidence, and `gaon-research-critic-release-check`
+- Sprint 160 Autonomous Learning Memory Integration with unvalidated evidence-backed research outcome records, append-only audit, duplicate reporting without merge, and `gaon-autonomous-learning-memory-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

@@ -5,6 +5,7 @@ from gaon.research.autonomous_completion import (
     AdequacyStatus,
     AutonomousResearchGoal,
     AutonomousResearchPlanner,
+    AutonomousLearningMemoryIntegrator,
     CriticImprovementRetestLoop,
     ResearchBudget,
     ResearchCriticEngine,
@@ -15,10 +16,12 @@ from gaon.research.autonomous_completion import (
     ValidationNeedKind,
     ValidationStopReason,
     gaon_adaptive_validation_release_check,
+    gaon_autonomous_learning_memory_release_check,
     gaon_autonomous_research_planner_release_check,
     gaon_research_critic_release_check,
     gaon_strategy_candidate_generation_release_check,
 )
+from gaon.learning.repository import InMemoryLearningRepository
 
 
 class AdaptiveResearchValidationTests(unittest.TestCase):
@@ -168,6 +171,56 @@ class ResearchCriticRetestTests(unittest.TestCase):
 
     def test_research_critic_release_check_passes(self) -> None:
         result = gaon_research_critic_release_check()
+
+        self.assertEqual(result["safety"], "pass")
+
+
+class AutonomousLearningMemoryIntegrationTests(unittest.TestCase):
+    def test_integrator_stores_evidence_backed_unvalidated_record(self) -> None:
+        assessment = AdaptiveResearchValidator().assess(
+            {
+                "metrics": {"trade_count": 2, "wins": 1, "losses": 1, "mdd": 0.1},
+                "observation_days": 128,
+                "market_regime_count": 1,
+                "quality": {"status": "pass"},
+                "evidence_refs": ("backtest:learning",),
+            }
+        )
+        plan = AutonomousResearchPlanner().plan(AutonomousResearchGoal("goal:learning", "learn", ("005930",), assessment.evidence_refs), assessment)
+        critic_report = CriticImprovementRetestLoop().run("strategy:parent", assessment, plan)
+        repository = InMemoryLearningRepository()
+
+        report = AutonomousLearningMemoryIntegrator().integrate("run:learning", critic_report, repository)
+
+        self.assertEqual(len(report.stored_records), 1)
+        self.assertEqual(len(repository.list_all()), 1)
+        self.assertEqual(len(repository.list_audit()), 1)
+        self.assertFalse(report.knowledge_validated)
+        self.assertFalse(report.policy_applied)
+
+    def test_integrator_reports_duplicate_without_merge(self) -> None:
+        assessment = AdaptiveResearchValidator().assess(
+            {
+                "metrics": {"trade_count": 2, "wins": 1, "losses": 1, "mdd": 0.1},
+                "observation_days": 128,
+                "market_regime_count": 1,
+                "quality": {"status": "pass"},
+                "evidence_refs": ("backtest:learning",),
+            }
+        )
+        plan = AutonomousResearchPlanner().plan(AutonomousResearchGoal("goal:learning", "learn", ("005930",), assessment.evidence_refs), assessment)
+        critic_report = CriticImprovementRetestLoop().run("strategy:parent", assessment, plan)
+        repository = InMemoryLearningRepository()
+        integrator = AutonomousLearningMemoryIntegrator()
+
+        integrator.integrate("run:learning", critic_report, repository)
+        duplicate = integrator.integrate("run:learning", critic_report, repository)
+
+        self.assertEqual(len(repository.list_all()), 1)
+        self.assertEqual(duplicate.duplicate_candidates, ("autonomous-learning:run:learning:research-outcome",))
+
+    def test_autonomous_learning_memory_release_check_passes(self) -> None:
+        result = gaon_autonomous_learning_memory_release_check()
 
         self.assertEqual(result["safety"], "pass")
 
