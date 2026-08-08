@@ -130,7 +130,7 @@ from gaon.research.operations import (
     operation_report_markdown,
 )
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
-from gaon.research.autonomous_completion import gaon_adaptive_validation_release_check
+from gaon.research.autonomous_completion import gaon_adaptive_validation_release_check, gaon_autonomous_research_planner_release_check
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
@@ -242,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
     gaon_reexecution_integrity_release.add_argument("--run-id", default=None)
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
+    autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
+    autonomous_planner_release.add_argument("--db", default=":memory:")
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1406,6 +1408,20 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} "
                 f"status={assessment['status']} needs={len(assessment['plan']['needs'])} "
                 f"invalid_status={result['invalid_status']} safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-autonomous-research-planner-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_autonomous_research_planner_release_check()
+            plan = dict(result["plan"])
+            print(
+                "gaon-autonomous-research-planner-release-check: PASS "
+                f"schema_version={store.status().schema_version} steps={len(plan['steps'])} "
+                f"terminal={plan['terminal_if_unresolved']} invalid_terminal={result['invalid_terminal']} "
+                f"safety={result['safety']}"
             )
         finally:
             store.close()

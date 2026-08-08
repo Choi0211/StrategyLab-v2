@@ -3,6 +3,21 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 157 Autonomous Research Planner
+
+Sprint 157 converts evidence gaps into deterministic autonomous research plans.
+Plans contain bounded steps, priorities, dependencies, retry/runtime budgets,
+and explicit stop conditions. Invalid data quality becomes a terminal data
+failure rather than an execution plan.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-planner-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
 ## Sprint 156 Adaptive Research Validation
 
 Sprint 156 adds a deterministic adequacy layer for autonomous research. Gaon

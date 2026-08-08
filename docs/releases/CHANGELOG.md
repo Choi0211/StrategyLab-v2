@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 157 - Autonomous Research Planner
+
+- Added deterministic autonomous research planning contracts for goals, plans, steps, priorities, budgets, dependencies, and stop conditions.
+- Converted Sprint 156 validation needs into bounded ordered research steps with retry/runtime limits.
+- Added terminal data-failure planning when evidence quality is invalid.
+- Added `gaon-autonomous-research-planner-release-check` plus unit and integration coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Sprint 156 - Adaptive Research Validation
 
 - Added evidence adequacy contracts and deterministic adaptive validation for trade count, observation period, regime coverage, win/loss sample, data quality, and symbol coverage.

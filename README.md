@@ -55,6 +55,7 @@ Included foundations:
 - Sprint 155 Conversational Research Execution with chat-scoped period reruns, same-strategy/assumption reuse from structured context, single-symbol and multi-symbol safe tool execution, clarification for ambiguous periods, and `gaon-conversational-research-execution-release-check`
 - Hotfix 155.1 conversational re-execution integrity with production `multi_symbol_research` evidence-schema normalization, typo-tolerant comparison reruns, concise quality-warning summaries, explicit stored quality detail follow-ups, and `gaon-conversational-reexecution-integrity-release-check`
 - Sprint 156 Adaptive Research Validation with evidence adequacy assessment, validation need planning, fail-closed data-quality handling, and `gaon-adaptive-validation-release-check`
+- Sprint 157 Autonomous Research Planner with bounded deterministic research goals, steps, budgets, dependencies, stop conditions, and `gaon-autonomous-research-planner-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

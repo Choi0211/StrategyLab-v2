@@ -3,9 +3,15 @@ import unittest
 from gaon.research.autonomous_completion import (
     AdaptiveResearchValidator,
     AdequacyStatus,
+    AutonomousResearchGoal,
+    AutonomousResearchPlanner,
+    ResearchBudget,
+    ResearchStopCondition,
+    ResearchStepKind,
     ValidationNeedKind,
     ValidationStopReason,
     gaon_adaptive_validation_release_check,
+    gaon_autonomous_research_planner_release_check,
 )
 
 
@@ -57,6 +63,38 @@ class AdaptiveResearchValidationTests(unittest.TestCase):
 
     def test_release_check_passes(self) -> None:
         result = gaon_adaptive_validation_release_check()
+
+        self.assertEqual(result["safety"], "pass")
+
+
+class AutonomousResearchPlannerTests(unittest.TestCase):
+    def test_planner_builds_bounded_steps_from_validation_needs(self) -> None:
+        assessment = AdaptiveResearchValidator().assess(
+            {
+                "metrics": {"trade_count": 1, "wins": 1, "losses": 0},
+                "observation_days": 100,
+                "market_regime_count": 1,
+                "quality": {"status": "pass"},
+                "evidence_refs": ("assessment:1",),
+            }
+        )
+        goal = AutonomousResearchGoal("goal:1", "validate strategy", ("005930",), assessment.evidence_refs)
+        plan = AutonomousResearchPlanner(ResearchBudget(3, 1, 60)).plan(goal, assessment)
+
+        self.assertLessEqual(len(plan.steps), 3)
+        self.assertIn(ResearchStopCondition.MAX_STEPS_REACHED, plan.stop_conditions)
+        self.assertEqual(plan.steps[0].kind, ResearchStepKind.EXTEND_PERIOD)
+        self.assertFalse(plan.to_json()["automatic_config_apply"])
+
+    def test_planner_stops_on_invalid_data(self) -> None:
+        assessment = AdaptiveResearchValidator().assess({"metrics": {"trade_count": 50}, "quality": {"status": "fail", "missing_bar_count": 1}})
+        plan = AutonomousResearchPlanner().plan(AutonomousResearchGoal("goal:bad", "bad data", ("005930",), ()), assessment)
+
+        self.assertEqual(plan.stop_conditions, (ResearchStopCondition.DATA_FAILURE,))
+        self.assertEqual(plan.terminal_if_unresolved, "data_failure")
+
+    def test_planner_release_check_passes(self) -> None:
+        result = gaon_autonomous_research_planner_release_check()
 
         self.assertEqual(result["safety"], "pass")
 

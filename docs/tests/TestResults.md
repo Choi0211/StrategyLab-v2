@@ -2,6 +2,15 @@
 
 Status: Passed
 
+## Sprint 157 Autonomous Research Planner
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 7 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 2 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-research-planner-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+- Note: `python -m pytest ...` was not executed in this local desktop runtime because pytest is not installed in the bundled Python environment; equivalent `unittest` commands are used for local verification.
+
 ## Sprint 156 Adaptive Research Validation
 
 - Targeted local verification:
