@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 163.3 - Autonomous Research Progression Integrity
+
+- Added `continuation_state` handoff for Telegram autonomous research continuation requests.
+- Normalized candidate dedupe keys so run-specific cycle IDs do not cause duplicate retests.
+- Added grounded autonomous progress comparison rendering that blocks unsupported cost-assumption and metric deltas.
+- Added `gaon-autonomous-research-progression-release-check`.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 163.2 - Autonomous Conversation Context Integrity
 
 - Added distinct autonomous conversation context kinds for autonomous cycles, continuation, critique, and Learning Memory summaries.

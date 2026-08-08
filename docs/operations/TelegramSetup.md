@@ -218,6 +218,19 @@ context. It must not fall back to a normal BacktestResult renderer, must not sho
 unknown periods or fabricated zero-trade metrics, and must not rerun research or
 autonomous tools.
 
+Hotfix 163.3 autonomous research progression integrity release check:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-progression-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This verifies that repeated `계속 연구해줘` requests pass the prior autonomous
+research state into the read-only safe tool instead of restarting from the
+baseline. The check confirms parent/root cycle linkage, candidate dedupe,
+deterministic `NO_NEW_RESEARCH_PATH` stopping when no new evidence path remains,
+grounded progress comparison, immutable assumptions, Learning Memory dedupe, and
+Telegram chat isolation.
+
 ## Windows PowerShell Example
 
 ```powershell

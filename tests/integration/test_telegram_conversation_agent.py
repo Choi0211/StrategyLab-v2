@@ -1135,6 +1135,98 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_hotfix1632_autonomous_context_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-autonomous-conversation-context-release-check", "--db", ":memory:"]), 0)
 
+    def test_hotfix1633_continuation_reuses_parent_state_and_stops_duplicates(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for index, text in enumerate(("삼성전자 분석해줘", "삼성전자 전략을 더 검증해봐", "계속 연구해줘", "한 번 더 계속 연구해줘"), 1):
+                process_update(parse_update_result(_update(780 + index, 780 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            audits = store.tool_audit.list(tool_name="autonomous_research_cycle")
+            self.assertEqual(len(audits), 3)
+            validation = next(record for record in audits if record.request["arguments"].get("mode") == "validate")
+            continuations = sorted(
+                (record for record in audits if record.request["arguments"].get("mode") == "continue"),
+                key=lambda record: int(record.result["output"]["progression"]["continuation_count"]),
+            )
+            self.assertNotIn("continuation_state", validation.request["arguments"])
+            self.assertEqual(len(continuations), 2)
+            self.assertIn("continuation_state", continuations[0].request["arguments"])
+            self.assertIn("continuation_state", continuations[1].request["arguments"])
+            second = continuations[0].result["output"]["progression"]
+            third = continuations[1].result["output"]["progression"]
+            self.assertTrue(second["parent_cycle_id"])
+            self.assertGreaterEqual(int(second["continuation_count"]), 1)
+            self.assertEqual(third["progression_state"], "NO_NEW_RESEARCH_PATH")
+            self.assertEqual(continuations[1].result["output"]["critic_report"]["retests"], [])
+            self.assertIn("NO_NEW_RESEARCH_PATH", client.sent[-1][1])
+        finally:
+            store.close()
+
+    def test_hotfix1633_progress_comparison_blocks_unsupported_deltas(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for index, text in enumerate(("삼성전자 분석해줘", "삼성전자 전략을 더 검증해봐", "계속 연구해줘", "지금까지 진행한 연구가 처음 연구와 비교해서 무엇이 달라졌어?"), 1):
+                process_update(parse_update_result(_update(790 + index, 790 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            final = client.sent[-1][1]
+            self.assertIn("구조화된 기록 기준", final)
+            self.assertIn("성과 수치 변화", final)
+            self.assertIn("비용 가정", final)
+            for forbidden in ("cost_assumptions", "-0.98%", "CAGR -0.735", "slippage changed", "tax changed"):
+                self.assertNotIn(forbidden, final)
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 2)
+        finally:
+            store.close()
+
+    def test_hotfix1633_presentation_after_progress_comparison_preserves_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            for index, text in enumerate(("삼성전자 분석해줘", "삼성전자 전략을 더 검증해봐", "계속 연구해줘", "지금까지 진행한 연구가 처음 연구와 비교해서 무엇이 달라졌어?", "쉽게 설명해줘"), 1):
+                process_update(parse_update_result(_update(800 + index, 800 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 2)
+            final = client.sent[-1][1]
+            self.assertIn("자율 연구 진행 상태", final)
+            self.assertNotIn("unknown ~ unknown", final)
+            self.assertNotIn("trade_count=0", final)
+        finally:
+            store.close()
+
+    def test_hotfix1633_progression_context_is_chat_isolated(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100", "101"),
+            )
+            for index, text in enumerate(("삼성전자 분석해줘", "삼성전자 전략을 더 검증해봐"), 1):
+                process_update(parse_update_result(_update(810 + index, 810 + index, text), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(813, 813, "계속 연구해줘", chat_id=101), received_at="2026-07-30T00:00:01Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 1)
+            self.assertIn("직전 연구나 전략 맥락이 없습니다", client.sent[-1][1])
+        finally:
+            store.close()
+
+    def test_hotfix1633_autonomous_progression_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-autonomous-research-progression-release-check", "--db", ":memory:"]), 0)
+
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
 
@@ -1395,7 +1487,8 @@ def _sprint152_tool_executor(
 
     def handle_autonomous(args):
         symbol = str(args.get("symbol", "005930"))
-        return _sprint163_autonomous_payload(symbol, mode=str(args.get("mode", "validate")))
+        state = args.get("continuation_state") if isinstance(args.get("continuation_state"), dict) else None
+        return _sprint163_autonomous_payload(symbol, mode=str(args.get("mode", "validate")), continuation_state=state)
 
     registry.register(
         ToolDefinition(
@@ -1423,15 +1516,21 @@ def _sprint152_tool_executor(
             "Run deterministic autonomous research cycle for conversation tests.",
             ToolRiskLevel.READ_ONLY,
             required_args=("request_text",),
-            allowed_args=("symbol", "mode"),
+            allowed_args=("symbol", "mode", "continuation_state"),
         ),
         handle_autonomous,
     )
     return SafeToolExecutor(registry, store.tool_audit)
 
 
-def _sprint163_autonomous_payload(symbol: str = "005930", *, mode: str = "validate") -> dict[str, object]:
+def _sprint163_autonomous_payload(symbol: str = "005930", *, mode: str = "validate", continuation_state: dict[str, object] | None = None) -> dict[str, object]:
     baseline = _sprint152_payload(symbol, fixture_backed=False, request_text="telegram autonomous research")
+    prior_tested = set(str(item) for item in (continuation_state or {}).get("tested_candidate_keys", ()) if item)
+    candidate_key = "candidate_kind=candidate:A|changed_rules=[]|hypothesis=|status=tested"
+    duplicate = mode == "continue" and candidate_key in prior_tested
+    retests = [] if duplicate else [{"candidate_id": "candidate:A", "status": "tested", "trade_count": 4, "metrics": {"trade_count": 4}}]
+    proposals = [] if duplicate else [{"proposal_id": "candidate:A", "hypothesis": "진입 필터를 보수적으로 조정합니다."}]
+    terminal = "no_new_research_path" if duplicate else "needs_more_evidence"
     return {
         "schema_version": 36,
         "tool": "autonomous_research_cycle",
@@ -1447,21 +1546,32 @@ def _sprint163_autonomous_payload(symbol: str = "005930", *, mode: str = "valida
         "plan": {"steps": [{"step_id": "step:1", "kind": "extend_period", "status": "planned"}]},
         "critic_report": {
             "findings": [{"category": "sample_size", "severity": "warning", "message": "표본 수가 아직 충분하지 않습니다."}],
-            "proposals": [{"proposal_id": "candidate:A", "hypothesis": "진입 필터를 보수적으로 조정합니다."}],
-            "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": 4, "metrics": {"trade_count": 4}}],
+            "proposals": proposals,
+            "retests": retests,
         },
         "learning_report": {"stored_records": ["learning:test:sample"], "duplicate_candidates": []},
-        "terminal_state": "needs_more_evidence",
+        "terminal_state": terminal,
         "autonomous_cycle": {
             "assessment": {"status": "insufficient_sample"},
             "plan": {"steps": [{"step_id": "step:1", "kind": "extend_period", "status": "planned"}]},
             "critic_report": {
                 "findings": [{"category": "sample_size", "severity": "warning", "message": "표본 수가 아직 충분하지 않습니다."}],
-                "proposals": [{"proposal_id": "candidate:A"}],
-                "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": 4}],
+                "proposals": [{"proposal_id": "candidate:A"}] if not duplicate else [],
+                "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": 4}] if not duplicate else [],
             },
             "learning_report": {"stored_records": ["learning:test:sample"], "duplicate_candidates": []},
-            "terminal_state": "needs_more_evidence",
+            "terminal_state": terminal,
+        },
+        "progression": {
+            "parent_cycle_id": (continuation_state or {}).get("current_cycle_id"),
+            "current_cycle_id": f"autonomous-cycle:test:{mode}:{symbol}",
+            "root_cycle_id": (continuation_state or {}).get("root_cycle_id") or (continuation_state or {}).get("current_cycle_id") or f"autonomous-cycle:test:{mode}:{symbol}",
+            "continuation_count": int((continuation_state or {}).get("continuation_count", 0) or 0) + (1 if mode == "continue" else 0),
+            "tested_candidate_keys": sorted(prior_tested | ({candidate_key} if not duplicate else set())),
+            "duplicate_candidate_keys": [candidate_key] if duplicate else [],
+            "terminal_state": terminal,
+            "progression_state": "NO_NEW_RESEARCH_PATH" if duplicate else ("CONTINUED" if mode == "continue" else "NEEDS_MORE_EVIDENCE"),
+            "assumptions_immutable": True,
         },
         "source": "real:yahoo-chart",
         "fixture_backed": False,
@@ -1472,11 +1582,12 @@ def _sprint163_autonomous_payload(symbol: str = "005930", *, mode: str = "valida
             "autonomous_cycle_invoked": True,
             "planner_invoked": True,
             "critic_invoked": True,
-            "candidate_count": 1,
-            "retest_count": 1,
+            "candidate_count": len(proposals),
+            "retest_count": len(retests),
+            "duplicate_candidate_count": 1 if duplicate else 0,
             "learning_memory_write": True,
             "learning_memory_read": mode == "learning_query",
-            "terminal_state": "needs_more_evidence",
+            "terminal_state": terminal,
             "safety_state": "read_only",
         },
         "automatic_order": False,

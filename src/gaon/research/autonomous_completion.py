@@ -81,11 +81,14 @@ class CriticSeverity(str, Enum):
 
 class CycleTerminalState(str, Enum):
     COMPLETED = "completed"
+    CONTINUED = "continued"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    NO_NEW_RESEARCH_PATH = "no_new_research_path"
     DATA_FAILURE = "data_failure"
     BUDGET_EXHAUSTED = "budget_exhausted"
     SAFETY_STOP = "safety_stop"
     USER_APPROVAL_REQUIRED = "user_approval_required"
+    USER_INPUT_REQUIRED = "user_input_required"
 
 
 class OperationalResearchRoute(str, Enum):
@@ -1021,7 +1024,7 @@ def gaon_autonomous_research_complete_release_check() -> dict[str, object]:
     }
 
 
-def telegram_autonomous_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930", mode: str = "validate") -> dict[str, object]:
+def telegram_autonomous_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930", mode: str = "validate", continuation_state: dict[str, object] | None = None) -> dict[str, object]:
     """Run a production-shaped autonomous research cycle from Telegram text."""
 
     from gaon.research.krx_real_pipeline import krx_real_research_payload
@@ -1051,6 +1054,39 @@ def telegram_autonomous_research_payload(connection: sqlite3.Connection, request
     )
     cycle = AutonomousResearchCycleRunner().run(cycle_request)
     cycle_json = cycle.to_json()
+    prior_state = dict(continuation_state or {})
+    prior_tested = {str(item) for item in prior_state.get("tested_candidate_keys", ()) if item}
+    current_retests = _list(_dict(cycle_json["critic_report"]).get("retests"))
+    current_proposals = _list(_dict(cycle_json["critic_report"]).get("proposals"))
+    current_keys = {_candidate_dedupe_key(item) for item in current_retests}
+    duplicate_keys = sorted(key for key in current_keys if key in prior_tested)
+    if mode == "continue" and prior_tested and current_keys and current_keys.issubset(prior_tested):
+        filtered_retests: list[object] = []
+        filtered_proposals: list[object] = []
+        terminal_state = CycleTerminalState.NO_NEW_RESEARCH_PATH.value
+    else:
+        filtered_retests = current_retests
+        filtered_proposals = current_proposals
+        terminal_state = str(cycle_json["terminal_state"])
+    critic_report = dict(cycle_json["critic_report"])
+    critic_report["proposals"] = filtered_proposals
+    critic_report["retests"] = filtered_retests
+    cycle_json["critic_report"] = critic_report
+    cycle_json["terminal_state"] = terminal_state
+    continuation_count = _int(prior_state.get("continuation_count")) + (1 if mode == "continue" else 0)
+    progression = {
+        "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
+        "parent_cycle_id": str(prior_state.get("current_cycle_id") or prior_state.get("cycle_id") or "") or None,
+        "current_cycle_id": run_id,
+        "root_cycle_id": str(prior_state.get("root_cycle_id") or prior_state.get("current_cycle_id") or run_id),
+        "continuation_count": continuation_count,
+        "tested_candidate_keys": sorted(set(prior_tested) | {_candidate_dedupe_key(item) for item in filtered_retests}),
+        "duplicate_candidate_keys": duplicate_keys,
+        "terminal_state": terminal_state,
+        "progression_state": "NO_NEW_RESEARCH_PATH" if terminal_state == CycleTerminalState.NO_NEW_RESEARCH_PATH.value else ("CONTINUED" if mode == "continue" else terminal_state.upper()),
+        "assumptions_immutable": True,
+        "unsupported_claims_blocked": ["cost_assumptions", "fabricated_metric_delta", "unsupported_assumption_change"],
+    }
     return {
         "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
         "tool": "autonomous_research_cycle",
@@ -1059,6 +1095,7 @@ def telegram_autonomous_research_payload(connection: sqlite3.Connection, request
         "symbol": symbol,
         "baseline": baseline,
         "autonomous_cycle": cycle_json,
+        "progression": progression,
         "assessment": cycle_json["assessment"],
         "plan": cycle_json["plan"],
         "critic_report": cycle_json["critic_report"],
@@ -1075,6 +1112,8 @@ def telegram_autonomous_research_payload(connection: sqlite3.Connection, request
             "critic_invoked": True,
             "candidate_count": len(_list(_dict(cycle_json["critic_report"]).get("proposals"))),
             "retest_count": len(_list(_dict(cycle_json["critic_report"]).get("retests"))),
+            "duplicate_candidate_count": len(duplicate_keys),
+            "continuation_count": continuation_count,
             "learning_memory_write": bool(cycle_json.get("learning_report")),
             "learning_memory_read": mode == "learning_query",
             "terminal_state": cycle_json["terminal_state"],
@@ -1092,6 +1131,33 @@ def _dict(value: object) -> dict[str, object]:
 
 def _list(value: object) -> list[object]:
     return list(value) if isinstance(value, list) else []
+
+
+def _candidate_dedupe_key(value: object) -> str:
+    item = _dict(value)
+    candidate = _dict(item.get("candidate"))
+    changed_rules = candidate.get("changed_rules")
+    if not isinstance(changed_rules, list):
+        changed_rules = item.get("changed_rules") if isinstance(item.get("changed_rules"), list) else []
+    basis = {
+        "candidate_kind": _candidate_kind(str(item.get("candidate_id") or candidate.get("candidate_id") or item.get("proposal_id") or "")),
+        "hypothesis": str(candidate.get("hypothesis") or item.get("hypothesis") or ""),
+        "changed_rules": sorted(str(rule) for rule in changed_rules),
+        "status": str(item.get("status") or candidate.get("status") or ""),
+    }
+    return "|".join(f"{key}={basis[key]}" for key in sorted(basis))
+
+
+def _candidate_kind(candidate_id: str) -> str:
+    if "robust-breakout" in candidate_id:
+        return "robust-breakout"
+    if "regime-filter" in candidate_id:
+        return "regime-filter"
+    if "no-change" in candidate_id:
+        return "no-change"
+    if ":candidate:" in candidate_id:
+        return candidate_id.rsplit(":candidate:", 1)[-1]
+    return candidate_id
 
 
 def _step_from_need(goal_id: str, need: ValidationNeed, sequence: int, retry_limit: int) -> ResearchStep:
