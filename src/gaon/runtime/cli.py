@@ -130,7 +130,7 @@ from gaon.research.operations import (
     operation_report_markdown,
 )
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
-from gaon.research.autonomous_completion import gaon_adaptive_validation_release_check, gaon_autonomous_research_planner_release_check
+from gaon.research.autonomous_completion import gaon_adaptive_validation_release_check, gaon_autonomous_research_planner_release_check, gaon_strategy_candidate_generation_release_check
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
@@ -244,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
     autonomous_planner_release.add_argument("--db", default=":memory:")
+    candidate_generation_release = sub.add_parser("gaon-strategy-candidate-generation-release-check")
+    candidate_generation_release.add_argument("--db", default=":memory:")
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1422,6 +1424,18 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} steps={len(plan['steps'])} "
                 f"terminal={plan['terminal_if_unresolved']} invalid_terminal={result['invalid_terminal']} "
                 f"safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-strategy-candidate-generation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_strategy_candidate_generation_release_check()
+            print(
+                "gaon-strategy-candidate-generation-release-check: PASS "
+                f"schema_version={store.status().schema_version} candidates={len(result['candidates'])} "
+                f"safety={result['safety']} mutation_allowed=false"
             )
         finally:
             store.close()

@@ -1,5 +1,12 @@
 # Changelog
 
+## Sprint 158 - Strategy Candidate Generation
+
+- Added evidence-backed strategy candidate contracts with parent strategy, hypothesis, changed rules, rationale, expected effect, downside, and rollback metadata.
+- Added deterministic candidate generation from validation plans while keeping candidates in `PROPOSED` state.
+- Added `gaon-strategy-candidate-generation-release-check` plus unit and integration coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no production strategy mutation.
+
 ## Sprint 157 - Autonomous Research Planner
 
 - Added deterministic autonomous research planning contracts for goals, plans, steps, priorities, budgets, dependencies, and stop conditions.

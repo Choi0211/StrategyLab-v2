@@ -58,6 +58,13 @@ class ResearchStopCondition(str, Enum):
     DATA_FAILURE = "data_failure"
 
 
+class StrategyCandidateStatus(str, Enum):
+    PROPOSED = "proposed"
+    TESTING = "testing"
+    TESTED = "tested"
+    REJECTED = "rejected"
+
+
 @dataclass(frozen=True)
 class EvidenceAdequacy:
     trade_count: int
@@ -219,6 +226,40 @@ class AutonomousResearchPlan:
         }
 
 
+@dataclass(frozen=True)
+class StrategyCandidate:
+    candidate_id: str
+    parent_strategy_id: str
+    status: StrategyCandidateStatus
+    hypothesis: str
+    changed_rules: tuple[str, ...]
+    rationale: str
+    supporting_evidence: tuple[str, ...]
+    expected_effect: str
+    possible_downside: str
+    rollback_ref: str
+    production_mutation_allowed: bool = False
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
+            "candidate_id": self.candidate_id,
+            "parent_strategy_id": self.parent_strategy_id,
+            "status": self.status.value,
+            "hypothesis": self.hypothesis,
+            "changed_rules": list(self.changed_rules),
+            "rationale": self.rationale,
+            "supporting_evidence": list(self.supporting_evidence),
+            "expected_effect": self.expected_effect,
+            "possible_downside": self.possible_downside,
+            "rollback_ref": self.rollback_ref,
+            "production_mutation_allowed": self.production_mutation_allowed,
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+            "automatic_config_apply": False,
+        }
+
+
 class AdaptiveResearchValidator:
     """Classify evidence adequacy and propose validation needs only."""
 
@@ -296,6 +337,60 @@ class AutonomousResearchPlanner:
         )
 
 
+class StrategyCandidateGenerator:
+    """Generate justified candidate proposals without production mutation."""
+
+    def generate(self, parent_strategy_id: str, assessment: ResearchAdequacyAssessment, plan: AutonomousResearchPlan) -> tuple[StrategyCandidate, ...]:
+        evidence = tuple(dict.fromkeys((*assessment.evidence_refs, *plan.audit_refs)))
+        candidates: list[StrategyCandidate] = []
+        if any(step.kind is ResearchStepKind.PARAMETER_ROBUSTNESS for step in plan.steps):
+            candidates.append(
+                StrategyCandidate(
+                    f"{plan.plan_id}:candidate:robust-breakout",
+                    parent_strategy_id,
+                    StrategyCandidateStatus.PROPOSED,
+                    "Longer breakout confirmation may reduce false positives.",
+                    ("entry.breakout_lookback",),
+                    "Parameter robustness was requested by the adequacy assessment.",
+                    evidence,
+                    "Potentially fewer false breakouts.",
+                    "May reduce trade frequency and miss early moves.",
+                    f"{parent_strategy_id}:rollback",
+                )
+            )
+        if any(step.kind is ResearchStepKind.TEST_REGIME for step in plan.steps):
+            candidates.append(
+                StrategyCandidate(
+                    f"{plan.plan_id}:candidate:regime-filter",
+                    parent_strategy_id,
+                    StrategyCandidateStatus.PROPOSED,
+                    "A regime filter may reduce trades in weak market regimes.",
+                    ("filters.regime_guard",),
+                    "Market-regime coverage was incomplete.",
+                    evidence,
+                    "Potentially lower drawdown in non-trending regimes.",
+                    "May over-filter and lower opportunity count.",
+                    f"{parent_strategy_id}:rollback",
+                )
+            )
+        if not candidates:
+            candidates.append(
+                StrategyCandidate(
+                    f"{plan.plan_id}:candidate:no-change",
+                    parent_strategy_id,
+                    StrategyCandidateStatus.REJECTED,
+                    "No candidate should be generated without a validation need.",
+                    (),
+                    "Evidence is sufficient or invalid; random search is disabled.",
+                    evidence,
+                    "No expected production effect.",
+                    "No strategy change is proposed.",
+                    f"{parent_strategy_id}:rollback",
+                )
+            )
+        return tuple(candidates)
+
+
 def gaon_adaptive_validation_release_check() -> dict[str, object]:
     payload = {
         "metrics": {"trade_count": 1, "mdd": 0.04, "wins": 1, "losses": 0},
@@ -343,6 +438,30 @@ def gaon_autonomous_research_planner_release_check() -> dict[str, object]:
     if invalid_plan.terminal_if_unresolved != "data_failure":
         raise ValueError("planner did not stop on data failure")
     return {"plan": plan.to_json(), "invalid_terminal": invalid_plan.terminal_if_unresolved, "safety": "pass"}
+
+
+def gaon_strategy_candidate_generation_release_check() -> dict[str, object]:
+    assessment = AdaptiveResearchValidator().assess(
+        {
+            "metrics": {"trade_count": 1, "wins": 1, "losses": 0, "mdd": 0.05},
+            "observation_days": 128,
+            "market_regime_count": 1,
+            "quality": {"status": "pass"},
+            "evidence_refs": ("release-check:assessment",),
+        }
+    )
+    goal = AutonomousResearchGoal("candidate-release-check", "improve only if evidence justifies it", ("005930",), assessment.evidence_refs)
+    plan = AutonomousResearchPlanner().plan(goal, assessment)
+    candidates = StrategyCandidateGenerator().generate("strategy:breakout20", assessment, plan)
+    if not candidates:
+        raise ValueError("candidate generation produced no proposals")
+    if any(candidate.production_mutation_allowed for candidate in candidates):
+        raise ValueError("candidate generation must not allow production mutation")
+    if not all(candidate.supporting_evidence for candidate in candidates):
+        raise ValueError("candidate generation requires supporting evidence")
+    if any(candidate.status is not StrategyCandidateStatus.PROPOSED for candidate in candidates if candidate.changed_rules):
+        raise ValueError("changed candidates must start as proposed")
+    return {"candidates": [candidate.to_json() for candidate in candidates], "safety": "pass"}
 
 
 def _step_from_need(goal_id: str, need: ValidationNeed, sequence: int, retry_limit: int) -> ResearchStep:

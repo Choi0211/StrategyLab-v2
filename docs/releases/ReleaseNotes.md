@@ -3,6 +3,21 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 158 Strategy Candidate Generation
+
+Sprint 158 adds deterministic candidate generation. Candidates carry parent
+strategy, hypothesis, changed rules, rationale, supporting evidence, expected
+effect, possible downside, and rollback metadata. Generated candidates are
+proposals only; production strategy mutation remains disabled.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-strategy-candidate-generation-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
 ## Sprint 157 Autonomous Research Planner
 
 Sprint 157 converts evidence gaps into deterministic autonomous research plans.

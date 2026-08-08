@@ -8,10 +8,13 @@ from gaon.research.autonomous_completion import (
     ResearchBudget,
     ResearchStopCondition,
     ResearchStepKind,
+    StrategyCandidateGenerator,
+    StrategyCandidateStatus,
     ValidationNeedKind,
     ValidationStopReason,
     gaon_adaptive_validation_release_check,
     gaon_autonomous_research_planner_release_check,
+    gaon_strategy_candidate_generation_release_check,
 )
 
 
@@ -95,6 +98,32 @@ class AutonomousResearchPlannerTests(unittest.TestCase):
 
     def test_planner_release_check_passes(self) -> None:
         result = gaon_autonomous_research_planner_release_check()
+
+        self.assertEqual(result["safety"], "pass")
+
+
+class StrategyCandidateGenerationTests(unittest.TestCase):
+    def test_candidates_are_proposed_and_do_not_mutate_production(self) -> None:
+        assessment = AdaptiveResearchValidator().assess(
+            {
+                "metrics": {"trade_count": 1, "wins": 1, "losses": 0},
+                "observation_days": 100,
+                "market_regime_count": 1,
+                "quality": {"status": "pass"},
+                "evidence_refs": ("assessment:1",),
+            }
+        )
+        goal = AutonomousResearchGoal("goal:candidate", "candidate generation", ("005930",), assessment.evidence_refs)
+        plan = AutonomousResearchPlanner().plan(goal, assessment)
+        candidates = StrategyCandidateGenerator().generate("strategy:parent", assessment, plan)
+
+        self.assertTrue(candidates)
+        self.assertTrue(all(candidate.status is StrategyCandidateStatus.PROPOSED for candidate in candidates if candidate.changed_rules))
+        self.assertFalse(any(candidate.production_mutation_allowed for candidate in candidates))
+        self.assertTrue(all(candidate.supporting_evidence for candidate in candidates))
+
+    def test_candidate_release_check_passes(self) -> None:
+        result = gaon_strategy_candidate_generation_release_check()
 
         self.assertEqual(result["safety"], "pass")
 
