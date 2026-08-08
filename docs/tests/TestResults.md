@@ -2,6 +2,21 @@
 
 Status: Passed
 
+## Hotfix 155.1 Conversational Re-execution Integrity
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_conversational_research_execution tests.unit.test_conversational_mvp -q`: PASS, 36 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests -q`: PASS, 50 tests
+  - `python -m gaon.runtime.cli gaon-conversational-reexecution-integrity-release-check --db :memory:`: PASS, schema v36
+- Full verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 584 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 152 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - Existing Sprint 152~155 release checks: PASS
+  - `git diff --check`: PASS
+- Note: `python -m pytest ...` was not executed in this local desktop runtime because pytest is not installed in the bundled Python environment; equivalent `unittest` commands are used for local verification.
+
 ## Sprint 155 Conversational Research Execution
 
 - Targeted local verification:

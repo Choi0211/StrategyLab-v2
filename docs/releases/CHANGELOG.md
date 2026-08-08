@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 155.1 - Conversational Re-execution Integrity
+
+- Fixed conversational multi-symbol reruns to normalize the production `multi_symbol_research` `evidence` schema instead of relying only on the legacy `symbols` summary shape.
+- Added fail-closed validation for successful research tool results that lack authoritative symbol identity or structured metrics, preventing `unknown(unknown)` presentation.
+- Added narrow typo tolerance for `비겨` comparison follow-ups and `sk하이닏스` symbol mentions.
+- Changed default re-execution reports to summarize data-quality warnings while keeping detailed stored evidence available through explicit quality-detail follow-ups.
+- Added `gaon-conversational-reexecution-integrity-release-check` plus unit and Telegram integration coverage for period parsing, typo normalization, production-equivalent multi-symbol schema handling, quality-detail follow-ups, and invalid-result blocking.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Sprint 155 - Conversational Research Execution
 
 - Added immutable `ConversationalResearchExecutionRequest` and `ConversationalResearchExecutionResult` contracts for chat-scoped research reruns.

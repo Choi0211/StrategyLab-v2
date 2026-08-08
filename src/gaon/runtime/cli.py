@@ -236,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_research_execution_release = sub.add_parser("gaon-conversational-research-execution-release-check")
     gaon_research_execution_release.add_argument("--db", default=":memory:")
     gaon_research_execution_release.add_argument("--run-id", default=None)
+    gaon_reexecution_integrity_release = sub.add_parser("gaon-conversational-reexecution-integrity-release-check")
+    gaon_reexecution_integrity_release.add_argument("--db", default=":memory:")
+    gaon_reexecution_integrity_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1341,6 +1344,51 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "context_resolution=pass period_resolution=pass real_execution=pass multi_symbol=pass "
                 "assumptions_preserved=true presentation_isolated=true grounded=true safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-conversational-reexecution-integrity-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+            brain = LLMConversationBrain(
+                config,
+                store.conversations,
+                tool_executor=_conversational_research_execution_tool_executor(store),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            run_id = args.run_id or f"gaon-conversational-reexecution-integrity-release-check:{uuid4().hex}"
+            chat = f"{run_id}:chat"
+            brain.respond(LLMConversationRequest(chat, "cli", "cli", "\uc0bc\uc131\uc804\uc790\uc640 SK\ud558\uc774\ub2c9\uc2a4 \ube44\uad50\ud574\uc918", _utc_now(), f"{run_id}:message:compare"))
+            rerun = brain.respond(LLMConversationRequest(chat, "cli", "cli", "\ucd5c\uadfc 3\ub144\uc73c\ub85c \ub2e4\uc2dc \ube44\uaca8\ud574\uc918", _utc_now(), f"{run_id}:message:rerun"))
+            detail = brain.respond(LLMConversationRequest(chat, "cli", "cli", "\ub370\uc774\ud130 \ubb38\uc81c \uc790\uc138\ud788 \ubcf4\uc5ec\uc918", _utc_now(), f"{run_id}:message:quality-detail"))
+
+            multi_audits = store.tool_audit.list(tool_name="multi_symbol_research")
+            if rerun.tool_calls != ("multi_symbol_research",):
+                raise ConfigurationError("reexecution integrity check did not route typo follow-up to multi-symbol safe tool")
+            args_payload = dict(multi_audits[-1].request.get("arguments", {}))
+            if tuple(args_payload.get("symbols", ())) != ("005930", "000660"):
+                raise ConfigurationError("reexecution integrity check did not preserve comparison symbols")
+            if args_payload.get("start_date") != "2023-07-25" or args_payload.get("end_date") != "2026-07-24":
+                raise ConfigurationError("reexecution integrity check did not resolve exact three-year period")
+            combined = "\n".join((rerun.text, detail.text))
+            if "unknown(unknown)" in combined or "run_id" in combined or "strategy_fingerprint" in combined:
+                raise ConfigurationError("reexecution integrity check leaked invalid identity or internal metadata")
+            if "\ub370\uc774\ud130 \ud488\uc9c8" not in rerun.text or "raw evidence" in rerun.text.casefold():
+                raise ConfigurationError("reexecution integrity check did not summarize quality warnings")
+            if "2025-09-19" not in detail.text or "\ub2e4\uc2dc \uc2e4\ud589\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4" not in detail.text:
+                raise ConfigurationError("reexecution integrity check did not render stored quality details")
+            if detail.tool_calls:
+                raise ConfigurationError("quality detail follow-up reran research")
+            print(
+                "gaon-conversational-reexecution-integrity-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "period_parsing=pass multi_symbol_context=pass multi_symbol_rendering=pass "
+                "typo_normalization=pass warning_summary=pass warning_detail=pass unknown_guard=pass "
+                "grounded=true safety=pass"
             )
         finally:
             store.close()
@@ -3887,20 +3935,34 @@ def _conversational_research_execution_tool_executor(store: RuntimeStateStore) -
         aggregate_trade_count = sum(int(output["backtest"]["metrics"]["trade_count"]) for output in outputs)
         return {
             "schema_version": 36,
+            "run_id": f"release-check:multi:{uuid4().hex}",
             "request_text": str(tool_args.get("request_text", "")),
-            "source": "real:yahoo-chart",
-            "fixture_backed": False,
-            "start_date": start_date,
-            "end_date": end_date,
-            "quality_status": "pass",
-            "symbols": [
+            "request": {
+                "request_text": str(tool_args.get("request_text", "")),
+                "start_date": start_date,
+                "end_date": end_date,
+                "source": "real:yahoo-chart",
+                "fixture_backed": False,
+            },
+            "evidence": [
                 {
+                    "evidence_id": f"release-check:evidence:{output['dataset']['symbols'][0]['symbol']}",
                     "symbol": str(output["dataset"]["symbols"][0]["symbol"]),
+                    "eligible": True,
+                    "source": "real:yahoo-chart",
+                    "fixture_backed": False,
+                    "provider": "real:yahoo-chart",
                     "metrics": dict(output["backtest"]["metrics"]),
                     "quality_status": str(output["quality"]["status"]),
+                    "provider_gap_dates": ["2025-09-19"] if str(output["dataset"]["symbols"][0]["symbol"]) == "005930" else [],
+                    "provider_ohlc_anomaly_dates": [],
+                    "provider_zero_volume_anomaly_dates": [],
+                    "blocking_findings": [],
+                    "warnings": [],
                 }
                 for output in outputs
             ],
+            "summary": {"aggregate_trade_count": aggregate_trade_count, "sample_confidence": "medium"},
             "aggregate": {"aggregate_trade_count": aggregate_trade_count, "sample_confidence": "medium"},
             "automatic_order": False,
             "automatic_champion_promotion": False,

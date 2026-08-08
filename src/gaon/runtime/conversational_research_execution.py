@@ -53,7 +53,7 @@ def build_conversational_research_execution_request(text: str, context: Any, *, 
     context_symbols = tuple(str(item) for item in getattr(context, "last_symbols", ()) if item)
     symbols = explicit_symbols or context_symbols
     period = _resolve_period(text, context, received_at=received_at)
-    comparison_requested = len(symbols) > 1 or "비교" in normalized or "compare" in normalized or getattr(context, "last_result_kind", "") == "symbol_comparison"
+    comparison_requested = len(symbols) > 1 or any(token in normalized for token in ("\ube44\uad50", "\ube44\uaca8", "compare")) or getattr(context, "last_result_kind", "") == "symbol_comparison"
     inferred: dict[str, object] = {}
     provided: dict[str, object] = {}
     if explicit_symbols:
@@ -146,6 +146,21 @@ def _render_single_symbol_result(result: ConversationalResearchExecutionResult) 
 
 
 def _render_multi_symbol_result(result: ConversationalResearchExecutionResult) -> str:
+    if any(_symbol_from_payload(payload) == "unknown" or not _metrics(payload) for payload in result.research_results):
+        return render_conversational_research_execution_result(
+            ConversationalResearchExecutionResult(
+                execution_status="invalid_result",
+                symbols=result.symbols,
+                resolved_start_date=result.resolved_start_date,
+                resolved_end_date=result.resolved_end_date,
+                research_results=(),
+                previous_results=result.previous_results,
+                comparison={},
+                data_quality=(),
+                limitations=(),
+                execution_evidence=("invalid_multi_symbol_result",),
+            )
+        )
     lines = [
         "영하님, 직전 비교 대상 종목들을 같은 전략 조건과 기존 가정으로 다시 비교했습니다.",
         "",
@@ -183,6 +198,16 @@ class _ResolvedPeriod:
 def _resolve_period(text: str, context: Any, *, received_at: str) -> _ResolvedPeriod:
     normalized = text.casefold()
     end_date = _context_end_date(context) or _date_from_received_at(received_at)
+    if re.search(r"20\d{2}-\d{2}-\d{2}\s*[~\-]\s*20\d{2}-\d{2}-\d{2}", normalized):
+        dates = re.findall(r"20\d{2}-\d{2}-\d{2}", normalized)
+        return _ResolvedPeriod("explicit_range", dates[0], dates[1])
+    start_year = re.search(r"(20\d{2})\s*(?:\ub144)?\s*(?:\ubd80\ud130|from)", normalized)
+    if start_year is not None:
+        return _ResolvedPeriod(f"{start_year.group(1)}-present", f"{start_year.group(1)}-01-01", end_date)
+    year_match = re.search(r"(?:\ucd5c\uadfc\s*)?([1-9])\s*(?:\ub144|y|years?)", normalized)
+    if year_match:
+        years = int(year_match.group(1))
+        return _ResolvedPeriod(f"{years}y", _years_before(end_date, years), end_date)
     year_match = re.search(r"(?<!\d)([1-9])\s*년", normalized)
     if year_match:
         years = int(year_match.group(1))
@@ -201,7 +226,7 @@ def _extract_symbols(text: str) -> tuple[str, ...]:
     normalized = text.casefold()
     mapping = (
         ("005930", ("005930", "삼성전자")),
-        ("000660", ("000660", "sk하이닉스", "sk 하이닉스")),
+        ("000660", ("000660", "sk하이닉스", "sk 하이닉스", "sk하이닏스")),
         ("005380", ("005380", "현대차")),
         ("035420", ("035420", "naver", "네이버")),
         ("051910", ("051910", "lg화학", "lg 화학")),
@@ -274,8 +299,46 @@ def _quality_lines(result: ConversationalResearchExecutionResult) -> list[str]:
     lines: list[str] = []
     warnings = tuple(item for item in result.limitations if item)
     if warnings:
-        lines.extend(["", "[남은 한계]", *[f"- {item}" for item in warnings]])
+        return [
+            "",
+            "[데이터 품질]",
+            f"- 검증 경고 {len(warnings)}건이 있습니다. 요약 응답에서는 원시 증거를 전부 나열하지 않습니다.",
+            "- 세부 날짜와 근거가 필요하면 '데이터 문제 자세히 보여줘'라고 말씀해 주세요.",
+        ]
     return lines
+
+
+def render_data_quality_details_from_payloads(payloads: tuple[dict[str, object], ...]) -> str:
+    if not payloads:
+        return "현재 저장된 연구 결과가 없어 데이터 품질 세부 내역을 보여드릴 수 없습니다."
+    lines = ["데이터 품질 세부 내역입니다.", ""]
+    for payload in payloads:
+        symbol = _symbol_from_payload(payload)
+        quality = _quality(payload)
+        lines.append(f"[{_symbol_label(symbol)}]")
+        lines.append(f"- 품질 상태: {quality.get('status', 'unknown')}")
+        for key, label in (
+            ("provider_gap_dates", "데이터 공급자 누락"),
+            ("provider_ohlc_anomaly_dates", "데이터 공급자 OHLC 이상"),
+            ("provider_zero_volume_anomaly_dates", "데이터 공급자 거래량 0 이상"),
+            ("unknown_missing_trading_dates", "확인되지 않은 거래일 누락"),
+            ("zero_volume_dates", "확인되지 않은 거래량 0"),
+        ):
+            values = quality.get(key)
+            if isinstance(values, list) and values:
+                lines.append(f"- {label}: {', '.join(str(item) for item in values[:20])}")
+        findings = quality.get("findings")
+        if isinstance(findings, list) and findings:
+            lines.append("- 품질 finding:")
+            for finding in findings[:10]:
+                if isinstance(finding, dict):
+                    code = finding.get("code", "unknown")
+                    date = finding.get("date") or finding.get("trading_date") or finding.get("context", "")
+                    message = finding.get("message", "")
+                    lines.append(f"  - {code}: {date} {message}".rstrip())
+        lines.append("")
+    lines.append("위 내역은 저장된 구조화 결과에서만 읽었고, 연구 tool을 다시 실행하지 않았습니다.")
+    return "\n".join(lines)
 
 
 def _source_label(metadata: dict[str, object]) -> str:

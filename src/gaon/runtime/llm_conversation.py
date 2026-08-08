@@ -38,6 +38,7 @@ from gaon.runtime.conversational_research_execution import (
     ConversationalResearchExecutionResult,
     build_conversational_research_execution_request,
     previous_request_text,
+    render_data_quality_details_from_payloads,
     render_conversational_research_execution_result,
     render_research_execution_clarification,
 )
@@ -689,6 +690,9 @@ class LLMConversationBrain:
                 if execution is not None:
                     return execution
                 return render_rerun_boundary(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe((*warnings, "rerun request requires explicit authoritative rerun")), references, "deterministic", ()
+            if _is_data_quality_detail_request(request.text):
+                payloads = context.last_structured_results or context.last_payloads
+                return render_data_quality_details_from_payloads(payloads), "conversation_research_quality_detail", _dedupe((*warnings, "stored research quality detail")), references, "deterministic", ()
             if route.intent in {
                 ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION,
                 ConversationalMVPIntent.RISK_QUESTION,
@@ -763,6 +767,27 @@ class LLMConversationBrain:
         if result.status != "success":
             failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
             return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", tool_calls
+        if not outputs or any(not self._is_valid_research_payload(output) for output in outputs):
+            invalid_result = ConversationalResearchExecutionResult(
+                execution_status="invalid_result",
+                symbols=execution_request.symbols,
+                resolved_start_date=execution_request.start_date,
+                resolved_end_date=execution_request.end_date,
+                research_results=(),
+                previous_results=context.last_structured_results or context.last_payloads,
+                comparison={},
+                data_quality=(),
+                limitations=(),
+                execution_evidence=("invalid_structured_tool_result",),
+            )
+            return (
+                render_conversational_research_execution_result(invalid_result),
+                "conversation_research_execution_invalid_result",
+                _dedupe((*warnings, "invalid structured research result blocked")),
+                references,
+                "deterministic",
+                tool_calls,
+            )
         execution_result = ConversationalResearchExecutionResult(
             execution_status="success",
             symbols=execution_request.symbols,
@@ -812,6 +837,38 @@ class LLMConversationBrain:
         return result
 
     def _payloads_from_multi_symbol_result(self, output: dict[str, object]) -> tuple[dict[str, object], ...]:
+        evidence = output.get("evidence")
+        if isinstance(evidence, list):
+            request_payload = output.get("request") if isinstance(output.get("request"), dict) else {}
+            payloads: list[dict[str, object]] = []
+            for item in evidence:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("symbol") or "").strip()
+                metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+                quality = item.get("quality") if isinstance(item.get("quality"), dict) else {
+                    "status": item.get("quality_status", "unknown"),
+                    "provider_gap_dates": list(item.get("provider_gap_dates", ())) if isinstance(item.get("provider_gap_dates", ()), list) else [],
+                    "provider_ohlc_anomaly_dates": list(item.get("provider_ohlc_anomaly_dates", ())) if isinstance(item.get("provider_ohlc_anomaly_dates", ()), list) else [],
+                    "provider_zero_volume_anomaly_dates": list(item.get("provider_zero_volume_anomaly_dates", ())) if isinstance(item.get("provider_zero_volume_anomaly_dates", ()), list) else [],
+                    "blocking_findings": list(item.get("blocking_findings", ())) if isinstance(item.get("blocking_findings", ()), list) else [],
+                    "findings": list(item.get("blocking_findings", ())) if isinstance(item.get("blocking_findings", ()), list) else [],
+                }
+                metadata = {
+                    "source": item.get("source", request_payload.get("source", output.get("source", "unknown"))),
+                    "start_date": item.get("start_date", request_payload.get("start_date", output.get("start_date"))),
+                    "end_date": item.get("end_date", request_payload.get("end_date", output.get("end_date"))),
+                    "fixture_backed": item.get("fixture_backed", request_payload.get("fixture_backed", output.get("fixture_backed"))),
+                }
+                payloads.append(
+                    {
+                        "dataset": {"symbols": [{"symbol": symbol, "name": symbol}], "metadata": metadata},
+                        "quality": quality,
+                        "backtest": {"metrics": metrics},
+                        "request_text": output.get("request_text") or request_payload.get("request_text"),
+                    }
+                )
+            return tuple(payloads)
         symbols = output.get("symbols")
         if isinstance(symbols, list):
             payloads: list[dict[str, object]] = []
@@ -839,6 +896,22 @@ class LLMConversationBrain:
             return tuple(payloads)
         return (output,)
 
+    def _is_valid_research_payload(self, output: dict[str, object]) -> bool:
+        dataset = output.get("dataset")
+        if not isinstance(dataset, dict):
+            return False
+        symbols = dataset.get("symbols")
+        if not isinstance(symbols, list) or not symbols or not isinstance(symbols[0], dict):
+            return False
+        symbol = str(symbols[0].get("symbol", "")).strip()
+        if not symbol or symbol == "unknown":
+            return False
+        backtest = output.get("backtest")
+        if not isinstance(backtest, dict) or not isinstance(backtest.get("metrics"), dict):
+            return False
+        metrics = backtest["metrics"]
+        return any(key in metrics for key in ("trade_count", "total_return", "mdd", "win_rate", "profit_factor"))
+
     def _comparison_from_execution_output(self, output: dict[str, object]) -> dict[str, object]:
         if isinstance(output.get("aggregate"), dict):
             return dict(output["aggregate"])
@@ -853,6 +926,10 @@ class LLMConversationBrain:
         for output in outputs:
             quality = output.get("quality")
             if isinstance(quality, dict):
+                for key in ("provider_gap_dates", "provider_ohlc_anomaly_dates", "provider_zero_volume_anomaly_dates", "unknown_missing_trading_dates", "zero_volume_dates"):
+                    values = quality.get(key)
+                    if isinstance(values, list) and values:
+                        limitations.append(f"{key}: {', '.join(str(item) for item in values[:10])}")
                 findings = quality.get("findings")
                 if isinstance(findings, list):
                     for finding in findings:
@@ -1294,6 +1371,7 @@ def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
         or request.session_id.startswith("gaon-natural-conversation-release-check:")
         or request.session_id.startswith("gaon-presentation-integrity-release-check:")
         or request.session_id.startswith("gaon-conversational-research-execution-release-check:")
+        or request.session_id.startswith("gaon-conversational-reexecution-integrity-release-check:")
     )
 
 
@@ -1311,6 +1389,11 @@ def _contains_supported_conversational_mvp_token(text: str) -> bool:
         "LG\ud654\ud559",
         "\ubd84\uc11d\ud574\uc918",
         "\ube44\uad50\ud574\uc918",
+        "\ube44\uaca8",
+        "sk\ud558\uc774\ub2cf\uc2a4",
+        "\ub370\uc774\ud130 \ubb38\uc81c",
+        "\ub204\ub77d \ub0a0\uc9dc",
+        "\ud488\uc9c8 \ubb38\uc81c",
         "\uc65c \uadf8\ub807\uac8c",
         "\uc65c \uadf8\uc808",
         "\ud310\uac04",
@@ -1353,6 +1436,23 @@ def _contains_supported_conversational_mvp_token(text: str) -> bool:
     )
     normalized = text.casefold()
     return any(token.casefold() in normalized for token in tokens)
+
+
+def _is_data_quality_detail_request(text: str) -> bool:
+    normalized = text.casefold()
+    return any(
+        token in normalized
+        for token in (
+            "\ub370\uc774\ud130 \ubb38\uc81c",
+            "\ub370\uc774\ud130 \ud488\uc9c8",
+            "\ud488\uc9c8 \ubb38\uc81c",
+            "\ub204\ub77d \ub0a0\uc9dc",
+            "\ub204\ub77d\ub41c \ub0a0\uc9dc",
+            "quality detail",
+            "data quality",
+            "missing date",
+        )
+    )
 
 
 def _is_natural_presentation_request(text: str) -> bool:

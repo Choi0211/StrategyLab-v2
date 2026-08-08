@@ -34,6 +34,17 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertEqual(route.intent, ConversationalMVPIntent.COMPARE_SYMBOLS)
         self.assertEqual(tuple(item.symbol for item in route.symbols), ("005930", "000660"))
 
+    def test_comparison_typo_and_symbol_typo_are_tolerated(self) -> None:
+        route = classify_conversational_route("삼성전자와 sk하이닏스 비겨해줘")
+
+        self.assertEqual(route.intent, ConversationalMVPIntent.COMPARE_SYMBOLS)
+        self.assertEqual(tuple(item.symbol for item in route.symbols), ("005930", "000660"))
+
+    def test_period_rerun_comparison_typo_is_timeframe_change(self) -> None:
+        route = classify_conversational_route("3년으로 다시 비겨해줘")
+
+        self.assertEqual(route.intent, ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST)
+
     def test_single_symbol_analysis_intent(self) -> None:
         route = classify_conversational_route("삼성전자 분석해줘")
 
