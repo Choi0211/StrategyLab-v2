@@ -1,5 +1,12 @@
 # Changelog
 
+## Sprint 163 - Autonomous Research Completion
+
+- Added an end-to-end completion release check aggregating Sprints 156 through 162.
+- Added `AUTONOMOUS RESEARCH COMPLETE` status for deterministic local verification.
+- Added `gaon-autonomous-research-complete-release-check` plus unit and integration coverage.
+- Preserved schema v36, no provider-based reasoning, no automatic approval, no strategy configuration mutation, no Champion promotion, and no trading.
+
 ## Sprint 162 - Operational Autonomous Research
 
 - Added an execute-gated deterministic operational wrapper for autonomous research requests.

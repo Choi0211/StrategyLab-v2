@@ -25,6 +25,9 @@ class AutonomousCompletionFlowTests(unittest.TestCase):
     def test_sprint162_operational_autonomous_research_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-operational-autonomous-research-release-check", "--db", ":memory:"]), 0)
 
+    def test_sprint163_autonomous_research_complete_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-autonomous-research-complete-release-check", "--db", ":memory:"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

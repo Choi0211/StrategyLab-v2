@@ -995,6 +995,30 @@ def gaon_operational_autonomous_research_release_check() -> dict[str, object]:
     return {"response": response.to_json(), "duplicate": duplicate.to_json(), "dry_run": dry_run.to_json(), "safety": "pass"}
 
 
+def gaon_autonomous_research_complete_release_check() -> dict[str, object]:
+    checks = {
+        "adaptive_validation": gaon_adaptive_validation_release_check(),
+        "autonomous_planner": gaon_autonomous_research_planner_release_check(),
+        "candidate_generation": gaon_strategy_candidate_generation_release_check(),
+        "research_critic": gaon_research_critic_release_check(),
+        "learning_memory": gaon_autonomous_learning_memory_release_check(),
+        "research_cycle": gaon_autonomous_research_cycle_release_check(),
+        "operational_runtime": gaon_operational_autonomous_research_release_check(),
+    }
+    failed = [name for name, result in checks.items() if result.get("safety") != "pass"]
+    if failed:
+        raise ValueError(f"autonomous research completion checks failed: {', '.join(failed)}")
+    return {
+        "status": "AUTONOMOUS RESEARCH COMPLETE",
+        "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
+        "checks": tuple(checks.keys()),
+        "safety": "pass",
+        "automatic_order": False,
+        "automatic_champion_promotion": False,
+        "automatic_config_apply": False,
+    }
+
+
 def _step_from_need(goal_id: str, need: ValidationNeed, sequence: int, retry_limit: int) -> ResearchStep:
     kind_map = {
         ValidationNeedKind.EXTEND_PERIOD: ResearchStepKind.EXTEND_PERIOD,

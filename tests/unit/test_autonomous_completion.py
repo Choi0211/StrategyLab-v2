@@ -23,6 +23,7 @@ from gaon.research.autonomous_completion import (
     ValidationStopReason,
     gaon_adaptive_validation_release_check,
     gaon_autonomous_learning_memory_release_check,
+    gaon_autonomous_research_complete_release_check,
     gaon_autonomous_research_cycle_release_check,
     gaon_autonomous_research_planner_release_check,
     gaon_operational_autonomous_research_release_check,
@@ -325,6 +326,18 @@ class OperationalAutonomousResearchTests(unittest.TestCase):
         result = gaon_operational_autonomous_research_release_check()
 
         self.assertEqual(result["safety"], "pass")
+
+
+class AutonomousResearchCompletionTests(unittest.TestCase):
+    def test_complete_release_check_passes_all_component_checks(self) -> None:
+        result = gaon_autonomous_research_complete_release_check()
+
+        self.assertEqual(result["status"], "AUTONOMOUS RESEARCH COMPLETE")
+        self.assertEqual(result["safety"], "pass")
+        self.assertEqual(len(result["checks"]), 7)
+        self.assertFalse(result["automatic_order"])
+        self.assertFalse(result["automatic_champion_promotion"])
+        self.assertFalse(result["automatic_config_apply"])
 
 
 if __name__ == "__main__":

@@ -3,6 +3,23 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 163 Autonomous Research Completion
+
+Sprint 163 adds the completion release check for Sprints 156 through 162. It
+aggregates adaptive validation, planning, candidate generation, critic/retest,
+Learning Memory integration, bounded cycle execution, and operational runtime
+routing into one deterministic local verification path.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-complete-release-check --db :memory:
+```
+
+Successful completion reports `AUTONOMOUS RESEARCH COMPLETE`. This status does
+not enable live trading, automatic Champion promotion, strategy mutation, or
+approval bypass.
+
 ## Sprint 162 Operational Autonomous Research
 
 Sprint 162 adds a production-shaped deterministic runtime wrapper for
