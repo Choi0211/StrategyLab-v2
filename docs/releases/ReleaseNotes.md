@@ -3,6 +3,28 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 154 Natural Conversation & Teaching Engine
+
+Sprint 154 adds a deterministic presentation layer on top of Sprint 153
+reasoning. Gaon now separates what the evidence says from how the answer is
+presented, with typed style, explanation-depth, and response-length contracts.
+
+Telegram follow-ups such as `한 줄로 말해줘`, `비유해서 설명해줘`,
+`예를 들어 설명해줘`, `전문적으로 설명해줘`, and `전문용어 빼줘` reuse the
+existing same-chat research context instead of running research again. Teaching
+responses use grounded analogies and exact numeric examples only when the
+structured evidence contains the required inputs.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-natural-conversation-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged: no live
+trading, no broker/KIS order, no automatic Champion promotion, no approval
+bypass, no unsupported recommendation, and no strategy config mutation.
+
 ## Sprint 153 Conversational Reasoning & Explanation Engine
 
 Sprint 153 adds a deterministic evidence-bound reasoning layer for Telegram

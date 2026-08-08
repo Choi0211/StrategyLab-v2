@@ -18,8 +18,11 @@ from gaon.runtime.conversational_mvp import (
     ConversationalMVPContext,
     ConversationalMVPIntent,
     ExplanationLevel,
+    PresentationPreference,
     classify_conversational_route,
     explanation_level_for_text,
+    presentation_preference_for_text,
+    render_presentation_from_payloads,
     render_reasoning_from_payloads,
     render_rerun_boundary,
     render_follow_up,
@@ -658,14 +661,17 @@ class LLMConversationBrain:
                     if result.status != "success":
                         failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
                         return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", ("krx_real_research",)
-                    level = explanation_level_for_text(request.text, route.intent)
-                    text = render_reasoning_from_payloads((result.output,), intent=route.intent, level=level, user_text=request.text)
+                    preference = presentation_preference_for_text(request.text, self._presentation_preference_for(request.session_id))
+                    text = render_presentation_from_payloads((result.output,), intent=route.intent, user_text=request.text, preference=preference)
                     self._remember_mvp_context(request, route.intent, (result.output,), text)
-                    return text, f"conversation_reasoning_{route.intent.value}", _dedupe((*warnings, "evidence-bound reasoning response")), _dedupe((*references, "tool:krx_real_research")), "deterministic", ("krx_real_research",)
+                    self._store_presentation_preference(request.session_id, preference, request)
+                    return text, f"conversation_presentation_{route.intent.value}", _dedupe((*warnings, "evidence-bound natural presentation")), _dedupe((*references, "tool:krx_real_research")), "deterministic", ("krx_real_research",)
                 if self._tool_result_repository is not None and self._tool_result_repository.latest(request.session_id) is not None and _is_explicit_tool_result_synthesis_request(request.text):
                     return None
                 self._remember_mvp_response_context(request, route.intent, "conversation_mvp_missing_context")
                 return render_missing_context(), "conversation_mvp_missing_context", _dedupe(warnings), references, "deterministic", ()
+            preference = presentation_preference_for_text(request.text, self._presentation_preference_for(request.session_id))
+            self._store_presentation_preference(request.session_id, preference, request)
             self._remember_mvp_response_context(request, route.intent, f"conversation_mvp_{route.intent.value}")
             if route.intent in {ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, ConversationalMVPIntent.RERUN_REQUEST}:
                 return render_rerun_boundary(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe((*warnings, "rerun request requires explicit authoritative rerun")), references, "deterministic", ()
@@ -677,9 +683,11 @@ class LLMConversationBrain:
                 ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
                 ConversationalMVPIntent.PROFESSIONAL_EXPLANATION,
             }:
-                level = explanation_level_for_text(request.text, route.intent)
-                return render_reasoning_from_payloads(context.last_structured_results or context.last_payloads, intent=route.intent, level=level, user_text=request.text), f"conversation_reasoning_{route.intent.value}", _dedupe((*warnings, "evidence-bound reasoning response")), references, "deterministic", ()
-            return render_follow_up(context, route.intent), f"conversation_mvp_{route.intent.value}", _dedupe(warnings), references, "deterministic", ()
+                if route.intent not in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST} and not _is_natural_presentation_request(request.text):
+                    level = explanation_level_for_text(request.text, route.intent)
+                    return render_reasoning_from_payloads(context.last_structured_results or context.last_payloads, intent=route.intent, level=level, user_text=request.text), f"conversation_mvp_{route.intent.value}", _dedupe(warnings), references, "deterministic", ()
+                return render_presentation_from_payloads(context.last_structured_results or context.last_payloads, intent=route.intent, user_text=request.text, preference=preference), f"conversation_presentation_{route.intent.value}", _dedupe((*warnings, "evidence-bound natural presentation")), references, "deterministic", ()
+            return render_follow_up(context, route.intent, user_text=request.text, preference=preference), f"conversation_mvp_{route.intent.value}", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS:
             if self._tool_executor is None:
                 return None
@@ -720,6 +728,33 @@ class LLMConversationBrain:
         result = self._tool_executor.execute(ToolRequest("krx_real_research", {"request_text": request.text, "symbol": symbol}, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
         return result
+
+    def _presentation_preference_for(self, session_id: str) -> PresentationPreference:
+        try:
+            session = self._repository.get_session(session_id)
+        except KeyError:
+            return PresentationPreference()
+        root = session.metadata.get("conversation_mvp")
+        if not isinstance(root, dict):
+            return PresentationPreference()
+        raw = root.get("presentation_preference")
+        if not isinstance(raw, dict):
+            return PresentationPreference()
+        return PresentationPreference.from_json(raw)
+
+    def _store_presentation_preference(self, session_id: str, preference: PresentationPreference, request: LLMConversationRequest) -> None:
+        try:
+            session = self._repository.get_session(session_id)
+        except KeyError:
+            return
+        metadata = dict(session.metadata)
+        payload = _mvp_metadata_root(metadata)
+        payload["presentation_preference"] = {
+            **preference.to_json(),
+            "updated_at": request.received_at,
+        }
+        metadata["conversation_mvp"] = payload
+        self._repository.upsert_session(LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, request.received_at, metadata))
 
     def _remember_mvp_context(self, request: LLMConversationRequest, intent: ConversationalMVPIntent, payloads: tuple[dict[str, object], ...], text: str) -> None:
         result_ids: list[str] = []
@@ -1125,45 +1160,72 @@ def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
         or request.session_id.startswith("gaon-conversation-release-check:")
         or request.session_id.startswith("gaon-conversation-context-release-check:")
         or request.session_id.startswith("gaon-conversational-reasoning-release-check:")
+        or request.session_id.startswith("gaon-natural-conversation-release-check:")
     )
 
 
 def _contains_supported_conversational_mvp_token(text: str) -> bool:
     tokens = (
-        "안녕",
-        "안녕하세요",
-        "가온아",
-        "도움말",
-        "삼성전자",
-        "SK하이닉스",
-        "SK 하이닉스",
-        "현대차",
-        "네이버",
-        "LG화학",
-        "분석해줘",
-        "비교해줘",
-        "왜 그렇게",
-        "왜 그절",
-        "판간",
-        "이유가 뭐야",
-        "쉽게",
-        "쉽개",
-        "간단하게",
-        "자세히",
-        "자세하게",
-        "상세히",
-        "원본",
-        "전체 결과",
-        "지금 사도",
-        "매수해도",
-        "추천",
-        "위험",
-        "리스크",
-        "전략",
-        "전문적으로",
-        "다시 분석",
-        "다시 검증",
-        "기간",
+        "\uc548\ub155",
+        "\uc548\ub155\ud558\uc138\uc694",
+        "\uac00\uc628\uc544",
+        "\ub3c4\uc6c0\ub9d0",
+        "\uc0bc\uc131\uc804\uc790",
+        "SK\ud558\uc774\ub2c9\uc2a4",
+        "SK \ud558\uc774\ub2c9\uc2a4",
+        "\ud604\ub300\ucc28",
+        "\ub124\uc774\ubc84",
+        "LG\ud654\ud559",
+        "\ubd84\uc11d\ud574\uc918",
+        "\ube44\uad50\ud574\uc918",
+        "\uc65c \uadf8\ub807\uac8c",
+        "\uc65c \uadf8\uc808",
+        "\ud310\uac04",
+        "\uc774\uc720\uac00 \ubb50\uc57c",
+        "\uc27d\uac8c",
+        "\uc27d\uac1c",
+        "\uac04\ub2e8\ud558\uac8c",
+        "\uc790\uc138\ud788",
+        "\uc790\uc138\ud558\uac8c",
+        "\uc0c1\uc138\ud788",
+        "\uc6d0\ubcf8",
+        "\uc804\uccb4 \uacb0\uacfc",
+        "\uc9c0\uae08 \uc0ac\ub3c4",
+        "\ub9e4\uc218\ud574\ub3c4",
+        "\ucd94\ucc9c",
+        "\uc704\ud5d8",
+        "\ub9ac\uc2a4\ud06c",
+        "\uc804\ub7b5",
+        "\uc804\ubb38\uc801\uc73c\ub85c",
+        "\ub2e4\uc2dc \ubd84\uc11d",
+        "\ub2e4\uc2dc \uac80\uc99d",
+        "\uae30\uac04",
+        "\ud55c \uc904",
+        "\uc9e7\uac8c",
+        "\ube44\uc720",
+        "\uc608\ub97c \ub4e4\uc5b4",
+        "\uc804\ubb38\uc6a9\uc5b4 \ube7c",
+        "\ubcf4\uace0\uc11c",
+        "\ud45c\ub85c",
+        "\uc870\uae08 \ub354 \uc790\uc138",
+    )
+    normalized = text.casefold()
+    return any(token.casefold() in normalized for token in tokens)
+
+
+def _is_natural_presentation_request(text: str) -> bool:
+    tokens = (
+        "\ud55c \uc904",
+        "1\uc904",
+        "\uc9e7\uac8c",
+        "\uac04\ub2e8\ud788",
+        "\ub300\ud654\ucc98\ub7fc",
+        "\uc790\uc5f0\uc2a4\ub7fd\uac8c",
+        "\ube44\uc720",
+        "\uc608\ub97c \ub4e4\uc5b4",
+        "\uc804\ubb38\uc6a9\uc5b4 \ube7c",
+        "\uc26c\uc6b4 \ud45c\ud604",
+        "\ud45c\ub85c",
     )
     normalized = text.casefold()
     return any(token.casefold() in normalized for token in tokens)

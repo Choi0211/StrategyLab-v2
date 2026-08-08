@@ -111,6 +111,25 @@ Gaon must not expose hidden chain-of-thought, must not recommend buying or
 selling from insufficient evidence, and must not rerun or mutate strategy
 parameters without an explicit authoritative request.
 
+Sprint 154 natural conversation release check:
+
+```bash
+python -m gaon.runtime.cli gaon-natural-conversation-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This check verifies presentation-only follow-ups such as:
+
+- `한 줄로 말해줘`
+- `비유해서 설명해줘`
+- `예를 들어 설명해줘`
+- `전문적으로 설명해줘`
+- `전문용어 빼줘`
+
+Gaon must reuse the same-chat research evidence, must not run the research tool
+again for presentation-only requests, must keep internal metadata hidden, and
+must not fabricate investment recommendations or unsupported performance
+figures.
+
 ## Windows PowerShell Example
 
 ```powershell

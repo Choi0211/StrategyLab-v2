@@ -4,7 +4,13 @@ from gaon.runtime.conversational_mvp import (
     ConversationalMVPContext,
     ConversationalMVPIntent,
     ExplanationLevel,
+    ConversationStyle,
+    ExplanationDepth,
+    PresentationPreference,
+    ResponseLength,
     build_reasoning_result,
+    presentation_preference_for_text,
+    render_presentation_from_payloads,
     classify_conversational_route,
     explanation_level_for_text,
     extract_symbol_entities,
@@ -51,6 +57,47 @@ class ConversationalMVPTests(unittest.TestCase):
 
         self.assertEqual(simple.intent, ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT)
         self.assertEqual(detail.intent, ConversationalMVPIntent.SHOW_DETAILS)
+
+
+    def test_sprint154_presentation_style_length_and_depth_model(self) -> None:
+        self.assertEqual(presentation_preference_for_text("한 줄로 말해줘").length, ResponseLength.ONE_LINE)
+        self.assertEqual(presentation_preference_for_text("가르쳐주듯 설명해줘").style, ConversationStyle.TEACHING)
+        self.assertEqual(presentation_preference_for_text("전문적으로 설명해줘").depth, ExplanationDepth.PROFESSIONAL)
+        self.assertEqual(presentation_preference_for_text("보고서로 정리해줘").style, ConversationStyle.REPORT)
+
+    def test_sprint154_direct_answer_first_and_conversational_rendering(self) -> None:
+        payload = _payload(trade_count=1, fixture_backed=False)
+        text = render_presentation_from_payloads((payload,), intent=ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, user_text="삼성전자 지금 사도 돼?", preference=PresentationPreference())
+
+        self.assertTrue(text.startswith("현재 결과만으로는 매수를 추천하기 어렵습니다."))
+        self.assertIn("거래 표본", text)
+        self.assertNotIn("[결론]", text)
+        self.assertNotIn("strategy_fingerprint", text)
+        self.assertNotIn("fixture_backed", text)
+
+    def test_sprint154_one_line_keeps_context_but_shortens(self) -> None:
+        payload = _payload(trade_count=1, fixture_backed=False)
+        text = render_presentation_from_payloads((payload,), intent=ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, user_text="한 줄로 말해줘", preference=PresentationPreference())
+
+        self.assertLessEqual(len([line for line in text.splitlines() if line.strip()]), 1)
+        self.assertIn("거래", text)
+
+    def test_sprint154_teaching_analogy_does_not_create_new_metrics(self) -> None:
+        payload = _payload(trade_count=1, fixture_backed=False)
+        text = render_presentation_from_payloads((payload,), intent=ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, user_text="비유해서 설명해줘", preference=PresentationPreference())
+
+        self.assertIn("시험 문제", text)
+        self.assertNotIn("RSI", text)
+        self.assertNotIn("MA90", text)
+        self.assertNotIn("매수하세요", text)
+
+    def test_sprint154_numeric_example_uses_initial_capital_and_mdd(self) -> None:
+        payload = _payload(trade_count=3, fixture_backed=False)
+        text = render_presentation_from_payloads((payload,), intent=ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, user_text="예를 들어 설명해줘", preference=PresentationPreference(style=ConversationStyle.TEACHING))
+
+        self.assertIn("1,000,000원", text)
+        self.assertIn("44,000원", text)
+        self.assertIn("956,000원", text)
 
     def test_sprint153_reasoning_intents_are_classified(self) -> None:
         self.assertEqual(classify_conversational_route("삼성전자 지금 사도 돼?").intent, ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION)
@@ -172,7 +219,7 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertIn("매수 또는 매도 추천", result.unsupported_claims_blocked)
 
 
-def _payload(symbol: str, *, trade_count: int = 3, profit_factor=1.2) -> dict[str, object]:
+def _payload(symbol: str = "005930", *, trade_count: int = 3, profit_factor=1.2, fixture_backed: bool = True) -> dict[str, object]:
     return {
         "dataset": {
             "symbols": [{"symbol": symbol, "name": symbol}],
@@ -180,16 +227,17 @@ def _payload(symbol: str, *, trade_count: int = 3, profit_factor=1.2) -> dict[st
                 "source": "fixture:test",
                 "start_date": "2026-01-02",
                 "end_date": "2026-07-10",
-                "fixture_backed": True,
+                "fixture_backed": fixture_backed,
             },
         },
         "quality": {"status": "pass"},
         "strategy": {"fingerprint": "strategy:test"},
+        "assumptions": {"initial_capital": {"value": 1000000.0, "provenance": "test"}},
         "backtest": {
             "result_id": f"backtest:{symbol}",
             "metrics": {
                 "total_return": 0.05,
-                "mdd": 0.08,
+                "mdd": 0.044,
                 "trade_count": trade_count,
                 "profit_factor": profit_factor,
                 "win_rate": 1.0 if trade_count == 1 else 0.5,
