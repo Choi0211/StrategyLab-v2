@@ -1805,12 +1805,24 @@ def _autonomous_continuation_state(context: ConversationalMVPContext) -> dict[st
     retests = _as_list(critic.get("retests"))
     tested_keys = set(str(item) for item in progression.get("tested_candidate_keys", ()) if item)
     tested_keys.update(_candidate_dedupe_key(item) for item in retests if _as_dict(item).get("status") in {"tested", "TESTED"})
+    historical_candidates = set(str(item) for item in progression.get("historical_candidates", ()) if item)
+    historical_tested = set(str(item) for item in progression.get("historical_tested_candidates", ()) if item)
+    historical_candidates.update(_identity_from_dedupe_key(item) for item in tested_keys)
+    historical_tested.update(_identity_from_dedupe_key(item) for item in tested_keys)
+    proposals = _as_list(critic.get("proposals"))
+    historical_candidates.update(_candidate_identity_key(item) for item in (proposals or retests))
+    historical_tested.update(_candidate_identity_key(item) for item in retests if _as_dict(item).get("status") in {"tested", "TESTED"})
     return {
         "schema_version": 1,
         "root_cycle_id": progression.get("root_cycle_id") or payload.get("run_id"),
         "current_cycle_id": payload.get("run_id"),
         "terminal_state": payload.get("terminal_state"),
         "continuation_count": int(progression.get("continuation_count", 0) or 0),
+        "historical_candidates": sorted(historical_candidates),
+        "historical_tested_candidates": sorted(historical_tested),
+        "current_cycle_candidates": tuple(str(item) for item in progression.get("current_cycle_candidates", ()) if item),
+        "current_cycle_tested_candidates": tuple(str(item) for item in progression.get("current_cycle_tested_candidates", ()) if item),
+        "duplicate_candidates": tuple(str(item) for item in progression.get("duplicate_candidates", ()) if item),
         "tested_candidate_keys": sorted(tested_keys),
         "completed_steps": tuple(str(item) for item in progression.get("completed_steps", ()) if item),
         "assumptions_fingerprint": _autonomous_assumptions_fingerprint(payload),
@@ -1824,7 +1836,12 @@ def _with_autonomous_progression(output: dict[str, object], previous: Conversati
     prior_progression = _as_dict(prior_payload.get("progression"))
     critic = _as_dict(payload.get("critic_report"))
     retests = _as_list(critic.get("retests"))
+    proposals = _as_list(critic.get("proposals"))
     prior_tested = {str(item) for item in prior_progression.get("tested_candidate_keys", ()) if item}
+    prior_historical_candidates = {str(item) for item in prior_progression.get("historical_candidates", ()) if item}
+    prior_historical_tested = {str(item) for item in prior_progression.get("historical_tested_candidates", ()) if item}
+    prior_historical_candidates.update(_identity_from_dedupe_key(item) for item in prior_tested)
+    prior_historical_tested.update(_identity_from_dedupe_key(item) for item in prior_tested)
     current_tested = {_candidate_dedupe_key(item) for item in retests if _as_dict(item).get("status") in {"tested", "TESTED"}}
     duplicate = sorted(prior_tested.intersection(current_tested))
     continuation_count = int(prior_progression.get("continuation_count", 0) or 0) + (1 if mode == "continue" else 0)
@@ -1844,12 +1861,23 @@ def _with_autonomous_progression(output: dict[str, object], previous: Conversati
             cycle["critic_report"] = cycle_critic
             cycle["terminal_state"] = terminal
             payload["autonomous_cycle"] = cycle
+        proposals = []
+        retests = []
+    current_candidates = {_candidate_identity_key(item) for item in proposals} if proposals else {_candidate_identity_key(item) for item in retests}
+    current_tested_candidates = {_candidate_identity_key(item) for item in retests if _as_dict(item).get("status") in {"tested", "TESTED"}}
+    original_retests = _as_list(_as_dict(output.get("critic_report")).get("retests"))
+    duplicate_candidates = sorted(_candidate_identity_key(item) for item in original_retests if _candidate_dedupe_key(item) in duplicate)
     progression = {
         "schema_version": 1,
         "root_cycle_id": prior_progression.get("root_cycle_id") or prior_payload.get("run_id") or payload.get("run_id"),
         "parent_cycle_id": prior_payload.get("run_id") if previous is not None and previous.last_result_kind in _AUTONOMOUS_CONTEXT_KINDS else None,
         "current_cycle_id": payload.get("run_id"),
         "continuation_count": continuation_count,
+        "historical_candidates": sorted(prior_historical_candidates | current_candidates),
+        "historical_tested_candidates": sorted(prior_historical_tested | current_tested_candidates),
+        "current_cycle_candidates": sorted(current_candidates),
+        "current_cycle_tested_candidates": sorted(current_tested_candidates),
+        "duplicate_candidates": duplicate_candidates,
         "tested_candidate_keys": sorted(prior_tested | current_tested),
         "duplicate_candidate_keys": duplicate,
         "terminal_state": terminal,
@@ -1878,12 +1906,20 @@ def _render_autonomous_progress_comparison(context: ConversationalMVPContext) ->
     learning = _as_dict(payload.get("learning_report"))
     stored = _as_list(learning.get("stored_records"))
     terminal = progression.get("terminal_state") or payload.get("terminal_state") or "unknown"
+    historical_candidates = _as_list(progression.get("historical_candidates"))
+    historical_tested = _as_list(progression.get("historical_tested_candidates"))
+    current_candidates = _as_list(progression.get("current_cycle_candidates"))
+    duplicate_candidates = _as_list(progression.get("duplicate_candidates"))
+    candidate_history_label = ", ".join(_candidate_history_label(item) for item in historical_candidates) or "없음"
     return "\n".join(
         [
             "영하님, 처음 연구와 지금까지의 자율 연구 진행 차이를 구조화된 기록 기준으로만 비교하면 다음과 같습니다.",
             f"- 처음에는 baseline 분석을 기준으로 표본/근거 부족 여부를 확인했습니다.",
             f"- 이후 확인된 critic finding은 {len(findings)}건입니다.",
-            f"- 생성된 개선 후보는 {len(proposals)}건이고, TESTED 후보 기록은 {len(retests)}건입니다.",
+            f"- 전체 history 기준 생성된 개선 후보는 {len(historical_candidates)}건이고, TESTED 후보 기록은 {len(historical_tested)}건입니다.",
+            f"- 이번 continuation에서 새로 생성된 후보는 {len(current_candidates)}건입니다.",
+            f"- 중복으로 차단한 후보는 {len(duplicate_candidates)}건입니다.",
+            f"- 후보 history: {candidate_history_label}",
             f"- Learning Memory에 연결된 evidence-backed 기록은 {len(stored)}건입니다.",
             f"- continuation_count={progression.get('continuation_count', 0)}",
             f"- 현재 terminal_state={terminal}",
@@ -1907,6 +1943,33 @@ def _candidate_dedupe_key(value: object) -> str:
         "status": str(item.get("status") or candidate.get("status") or ""),
     }
     return "|".join(f"{key}={basis[key]}" for key in sorted(basis))
+
+
+def _candidate_identity_key(value: object) -> str:
+    item = _as_dict(value)
+    candidate = _as_dict(item.get("candidate"))
+    changed_rules = candidate.get("changed_rules")
+    if not isinstance(changed_rules, list):
+        changed_rules = item.get("changed_rules") if isinstance(item.get("changed_rules"), list) else []
+    basis = {
+        "candidate_kind": _candidate_kind(str(item.get("candidate_id") or candidate.get("candidate_id") or item.get("proposal_id") or "")),
+        "changed_rules": sorted(str(rule) for rule in changed_rules),
+    }
+    return "|".join(f"{key}={basis[key]}" for key in sorted(basis))
+
+
+def _identity_from_dedupe_key(value: object) -> str:
+    text = str(value)
+    parts = [part for part in text.split("|") if not part.startswith(("status=", "hypothesis="))]
+    return "|".join(parts)
+
+
+def _candidate_history_label(value: object) -> str:
+    text = str(value)
+    for part in text.split("|"):
+        if part.startswith("candidate_kind="):
+            return part.split("=", 1)[1] or "unknown"
+    return text or "unknown"
 
 
 def _candidate_kind(candidate_id: str) -> str:
@@ -1959,7 +2022,7 @@ def _render_autonomous_context_followup(context: ConversationalMVPContext, inten
         proposals = _as_list(critic.get("proposals"))
         stored = _as_list(learning.get("stored_records"))
         progression = _as_dict(payload.get("progression"))
-        candidate_count = len(proposals) or len(_as_list(progression.get("tested_candidate_keys")))
+        candidate_count = len(proposals) or len(_as_list(progression.get("historical_candidates"))) or len(_as_list(progression.get("tested_candidate_keys")))
         status = str(progression.get("progression_state") or progression.get("terminal_state") or payload.get("terminal_state") or assessment.get("status") or "검증 계속 필요")
         return "\n".join(
             [

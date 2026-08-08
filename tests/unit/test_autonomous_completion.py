@@ -299,6 +299,12 @@ class AutonomousResearchCycleTests(unittest.TestCase):
             self.assertEqual(second["progression"]["parent_cycle_id"], first["run_id"])
             self.assertEqual(second["progression"]["progression_state"], "NO_NEW_RESEARCH_PATH")
             self.assertTrue(second["progression"]["assumptions_immutable"])
+            self.assertEqual(len(second["progression"]["historical_candidates"]), 2)
+            self.assertEqual(len(second["progression"]["historical_tested_candidates"]), 2)
+            self.assertEqual(second["progression"]["current_cycle_candidates"], [])
+            self.assertEqual(len(second["progression"]["duplicate_candidates"]), 2)
+            self.assertTrue(any("robust-breakout" in item for item in second["progression"]["historical_candidates"]))
+            self.assertTrue(any("regime-filter" in item for item in second["progression"]["historical_candidates"]))
         finally:
             store.close()
 

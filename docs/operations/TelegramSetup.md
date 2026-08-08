@@ -231,6 +231,17 @@ deterministic `NO_NEW_RESEARCH_PATH` stopping when no new evidence path remains,
 grounded progress comparison, immutable assumptions, Learning Memory dedupe, and
 Telegram chat isolation.
 
+Hotfix 163.4 autonomous research history integrity release check:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-history-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This verifies that `NO_NEW_RESEARCH_PATH` means no new current-cycle candidate,
+not erased history. Root robust-breakout/regime-filter candidate and TESTED
+history remains visible in later comparison follow-ups, while the comparison
+question does not rerun autonomous tools or fabricate metric/assumption deltas.
+
 ## Windows PowerShell Example
 
 ```powershell
