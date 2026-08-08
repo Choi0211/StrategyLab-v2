@@ -3,6 +3,27 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 155.1 Conversational Re-execution Integrity
+
+Hotfix 155.1 fixes production follow-up reruns after multi-symbol comparison
+research. The conversation layer now reads the real `multi_symbol_research`
+`evidence` payload shape, validates symbol identity and structured metrics, and
+fails closed instead of rendering `unknown(unknown)` if a safe-tool result is
+malformed.
+
+The hotfix also adds narrow typo tolerance for comparison follow-ups such as
+`비겨해줘` and symbol typo `sk하이닏스`. Default rerun responses summarize
+data-quality warnings; explicit follow-ups such as `데이터 문제 자세히 보여줘`
+show stored quality evidence without rerunning research.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-conversational-reexecution-integrity-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
 ## Sprint 155 Conversational Research Execution
 
 Sprint 155 connects explicit Telegram period-change follow-ups to authoritative

@@ -174,6 +174,17 @@ The response must use structured authoritative metrics only and must not expose
 run IDs, strategy fingerprints, validation IDs, automatic orders, or Champion
 promotion.
 
+Hotfix 155.1 conversational re-execution integrity release check:
+
+```bash
+python -m gaon.runtime.cli gaon-conversational-reexecution-integrity-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This verifies production-equivalent multi-symbol `evidence` payload handling,
+typo-tolerant comparison reruns such as `비겨해줘`, concise data-quality warning
+summaries, explicit stored quality-detail follow-ups, and fail-closed handling
+for malformed structured research results.
+
 ## Windows PowerShell Example
 
 ```powershell

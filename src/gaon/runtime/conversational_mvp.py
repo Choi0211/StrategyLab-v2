@@ -219,7 +219,7 @@ class ConversationalMVPContext:
 
 SYMBOL_ALIASES: dict[str, tuple[str, ...]] = {
     "005930": ("005930", "삼성전자", "삼성 전자", "samsung electronics", "samsung"),
-    "000660": ("000660", "SK하이닉스", "SK 하이닉스", "sk하이닉스", "에스케이하이닉스", "하이닉스", "sk hynix", "hynix"),
+    "000660": ("000660", "SK하이닉스", "SK 하이닉스", "sk하이닉스", "sk하이닏스", "에스케이하이닉스", "하이닉스", "sk hynix", "hynix"),
     "005380": ("005380", "현대차", "현대자동차", "hyundai motor", "hyundai"),
     "035420": ("035420", "NAVER", "네이버", "naver"),
     "051910": ("051910", "LG화학", "LG 화학", "lg chem"),
@@ -233,7 +233,7 @@ SYMBOL_NAMES = {
     "051910": "LG화학",
 }
 
-COMPARISON_TOKENS = ("비교", "차이", "어느 쪽", "뭐가 더", "대", "와", "과", " vs ", "versus", "compare")
+COMPARISON_TOKENS = ("비교", "비겨", "차이", "어느 쪽", "뭐가 더", "대", "와", "과", " vs ", "versus", "compare")
 ANALYSIS_TOKENS = ("분석", "백테스트", "검증", "연구", "어때", "봐줘", "알려줘", "analysis", "backtest")
 MULTI_SYMBOL_TOKENS = ("여러 종목", "다종목", "전체 종목", "유니버스", "상위", "universe", "multi-symbol", "multisymbol")
 DETAIL_TOKENS = ("자세히", "자세하게", "상세히", "상세하게", "원본", "전체 결과", "상세", "detail", "raw")
