@@ -252,6 +252,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_autonomous_history_release = sub.add_parser("gaon-autonomous-research-history-release-check")
     gaon_autonomous_history_release.add_argument("--db", default=":memory:")
     gaon_autonomous_history_release.add_argument("--run-id", default=None)
+    gaon_autonomous_candidate_identity_release = sub.add_parser("gaon-autonomous-candidate-identity-release-check")
+    gaon_autonomous_candidate_identity_release.add_argument("--db", default=":memory:")
+    gaon_autonomous_candidate_identity_release.add_argument("--run-id", default=None)
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1635,10 +1638,16 @@ def _run(args: argparse.Namespace) -> int:
         finally:
             store.close()
 
+    elif args.command == "gaon-autonomous-candidate-identity-release-check":
+        setattr(args, "_release_check_name", "gaon-autonomous-candidate-identity-release-check")
+        args.command = "gaon-autonomous-research-history-release-check"
+        return _run(args)
+
     elif args.command == "gaon-autonomous-research-history-release-check":
         store = RuntimeStateStore(args.db)
         try:
-            run_id = args.run_id or f"gaon-autonomous-research-history-release-check:{uuid4().hex}"
+            release_name = getattr(args, "_release_check_name", "gaon-autonomous-research-history-release-check")
+            run_id = args.run_id or f"{release_name}:{uuid4().hex}"
             config = GaonRuntimeConfig(
                 mode="execute",
                 dry_run=False,
@@ -1702,7 +1711,7 @@ def _run(args: argparse.Namespace) -> int:
             if "robust-breakout" not in comparison or "regime-filter" not in comparison:
                 raise ConfigurationError("history comparison did not render preserved candidate identities")
             print(
-                "gaon-autonomous-research-history-release-check: PASS "
+                f"{getattr(args, '_release_check_name', 'gaon-autonomous-research-history-release-check')}: PASS "
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "historical_candidates=2 historical_TESTED_candidates=2 "
                 "current_cycle_candidates=0 continuation_count=2 "
@@ -4443,8 +4452,8 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
             "candidate_kind=regime-filter|changed_rules=[]|hypothesis=|status=tested",
         }
         candidate_identities = {
-            "candidate_kind=robust-breakout|changed_rules=[]",
-            "candidate_kind=regime-filter|changed_rules=[]",
+            "candidate_kind=robust-breakout",
+            "candidate_kind=regime-filter",
         }
         duplicate = mode == "continue" and candidate_keys.issubset(prior_tested)
         proposals = [] if duplicate else [

@@ -1805,8 +1805,8 @@ def _autonomous_continuation_state(context: ConversationalMVPContext) -> dict[st
     retests = _as_list(critic.get("retests"))
     tested_keys = set(str(item) for item in progression.get("tested_candidate_keys", ()) if item)
     tested_keys.update(_candidate_dedupe_key(item) for item in retests if _as_dict(item).get("status") in {"tested", "TESTED"})
-    historical_candidates = set(str(item) for item in progression.get("historical_candidates", ()) if item)
-    historical_tested = set(str(item) for item in progression.get("historical_tested_candidates", ()) if item)
+    historical_candidates = {_identity_from_dedupe_key(item) for item in progression.get("historical_candidates", ()) if item}
+    historical_tested = {_identity_from_dedupe_key(item) for item in progression.get("historical_tested_candidates", ()) if item}
     historical_candidates.update(_identity_from_dedupe_key(item) for item in tested_keys)
     historical_tested.update(_identity_from_dedupe_key(item) for item in tested_keys)
     proposals = _as_list(critic.get("proposals"))
@@ -1838,8 +1838,8 @@ def _with_autonomous_progression(output: dict[str, object], previous: Conversati
     retests = _as_list(critic.get("retests"))
     proposals = _as_list(critic.get("proposals"))
     prior_tested = {str(item) for item in prior_progression.get("tested_candidate_keys", ()) if item}
-    prior_historical_candidates = {str(item) for item in prior_progression.get("historical_candidates", ()) if item}
-    prior_historical_tested = {str(item) for item in prior_progression.get("historical_tested_candidates", ()) if item}
+    prior_historical_candidates = {_identity_from_dedupe_key(item) for item in prior_progression.get("historical_candidates", ()) if item}
+    prior_historical_tested = {_identity_from_dedupe_key(item) for item in prior_progression.get("historical_tested_candidates", ()) if item}
     prior_historical_candidates.update(_identity_from_dedupe_key(item) for item in prior_tested)
     prior_historical_tested.update(_identity_from_dedupe_key(item) for item in prior_tested)
     current_tested = {_candidate_dedupe_key(item) for item in retests if _as_dict(item).get("status") in {"tested", "TESTED"}}
@@ -1948,20 +1948,17 @@ def _candidate_dedupe_key(value: object) -> str:
 def _candidate_identity_key(value: object) -> str:
     item = _as_dict(value)
     candidate = _as_dict(item.get("candidate"))
-    changed_rules = candidate.get("changed_rules")
-    if not isinstance(changed_rules, list):
-        changed_rules = item.get("changed_rules") if isinstance(item.get("changed_rules"), list) else []
-    basis = {
-        "candidate_kind": _candidate_kind(str(item.get("candidate_id") or candidate.get("candidate_id") or item.get("proposal_id") or "")),
-        "changed_rules": sorted(str(rule) for rule in changed_rules),
-    }
-    return "|".join(f"{key}={basis[key]}" for key in sorted(basis))
+    kind = _candidate_kind(str(item.get("candidate_id") or candidate.get("candidate_id") or item.get("proposal_id") or ""))
+    return f"candidate_kind={kind or 'unknown'}"
 
 
 def _identity_from_dedupe_key(value: object) -> str:
     text = str(value)
-    parts = [part for part in text.split("|") if not part.startswith(("status=", "hypothesis="))]
-    return "|".join(parts)
+    for part in text.split("|"):
+        if part.startswith("candidate_kind="):
+            kind = part.split("=", 1)[1] or "unknown"
+            return f"candidate_kind={kind}"
+    return text or "candidate_kind=unknown"
 
 
 def _candidate_history_label(value: object) -> str:
