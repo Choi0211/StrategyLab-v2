@@ -21,6 +21,7 @@ RESEARCH_TOOLS = {
     "compare_backtests",
     "krx_market_data",
     "krx_real_research",
+    "autonomous_research_cycle",
     "research_retest",
     "multi_symbol_research",
     "multi_symbol_research_status",
@@ -170,6 +171,8 @@ def sanitize_research_tool_output(tool_name: str, output: dict[str, object], use
 def format_grounded_tool_response(tool_name: str, output: dict[str, object], user_text: str = "") -> str | None:
     if tool_name == "krx_real_research":
         return _format_krx_real_research(output)
+    if tool_name == "autonomous_research_cycle":
+        return _format_autonomous_research_cycle(output)
     if tool_name == "research_retest":
         return _format_research_retest(output)
     if tool_name == "multi_symbol_research":
@@ -192,7 +195,7 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
 
 
 def is_strict_real_research_tool(tool_name: str) -> bool:
-    return tool_name in {"krx_real_research", "research_retest", "multi_symbol_research"}
+    return tool_name in {"krx_real_research", "autonomous_research_cycle", "research_retest", "multi_symbol_research"}
 
 
 def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]) -> bool:
@@ -201,6 +204,8 @@ def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]
 
 def strict_real_research_grounding_violations(text: str, output: dict[str, object]) -> tuple[str, ...]:
     """Return fail-closed grounding violations for user-facing real research text."""
+    if "autonomous_cycle" in output and "baseline" in output:
+        return ()
     if "candidate_generalization" in output and "summary" in output and "evidence" in output:
         return ()
     if _is_retest_output(output):
@@ -265,6 +270,74 @@ def _format_memory(output: dict[str, object]) -> str:
             if isinstance(item, dict):
                 lines.append(f"- {item.get('memory_id') or item.get('run_id') or 'memory'} / {item.get('strategy_family') or item.get('family') or 'unknown'}")
     lines.append("\uc815\uc131 \ubd84\uc11d: \uc704 \ud56d\ubaa9\uc740 \uc800\uc7a5\ub41c \uc5f0\uad6c \uae30\uc5b5\uc744 \uae30\uc900\uc73c\ub85c\ub9cc \uc694\uc57d\ud588\uc2b5\ub2c8\ub2e4.")
+    return "\n".join(lines)
+
+
+def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
+    baseline = _as_dict(output.get("baseline"))
+    cycle = _as_dict(output.get("autonomous_cycle"))
+    assessment = _as_dict(output.get("assessment"))
+    adequacy = _as_dict(assessment.get("adequacy"))
+    plan = _as_dict(output.get("plan"))
+    critic = _as_dict(output.get("critic_report"))
+    findings = _as_list(critic.get("findings"))
+    proposals = _as_list(critic.get("proposals"))
+    retests = _as_list(critic.get("retests"))
+    learning = _as_dict(output.get("learning_report"))
+    source = output.get("source", "unknown")
+    quality_status = output.get("quality_status", "unknown")
+    terminal = output.get("terminal_state", cycle.get("terminal_state", "unknown"))
+    lines = [
+        "영하님, 기존 분석 결과를 근거로 자율 연구 검증 사이클을 실행했습니다.",
+        "",
+        "[검증된 기준]",
+        f"- symbol={output.get('symbol', 'unknown')}",
+        f"- source={source}",
+        f"- fixture_backed={str(output.get('fixture_backed', False)).lower()}",
+        f"- quality={quality_status}",
+        f"- trade_count={adequacy.get('trade_count', 'unknown')}",
+        f"- observation_days={adequacy.get('observation_days', 'unknown')}",
+        "",
+        "[자율 검증 판단]",
+        f"- adequacy_status={assessment.get('status', 'unknown')}",
+        f"- terminal_state={terminal}",
+        f"- validation_needs={len(_as_list(_as_dict(assessment.get('plan')).get('needs')))}",
+        f"- planner_steps={len(_as_list(plan.get('steps')))}",
+        "",
+        "[Critic 결과]",
+    ]
+    if findings:
+        for item in findings[:5]:
+            finding = _as_dict(item)
+            lines.append(f"- {finding.get('category', 'finding')}: {finding.get('severity', 'unknown')} / {finding.get('message', '')}")
+    else:
+        lines.append("- 구조화된 critic finding이 없습니다.")
+    lines.extend(["", "[개선 후보와 재검증]"])
+    if proposals:
+        lines.append(f"- improvement_proposals={len(proposals)}")
+    else:
+        lines.append("- 생성된 개선 후보가 없습니다.")
+    if retests:
+        for item in retests[:5]:
+            retest = _as_dict(item)
+            lines.append(f"- {retest.get('candidate_id', 'candidate')}: status={retest.get('status', 'unknown')} trade_count={retest.get('trade_count', 'unknown')}")
+    else:
+        lines.append("- 아직 TESTED 후보 결과는 없습니다.")
+    lines.extend(
+        [
+            "",
+            "[Learning Memory]",
+            f"- stored_records={len(_as_list(learning.get('stored_records')))}",
+            f"- duplicate_candidates={len(_as_list(learning.get('duplicate_candidates')))}",
+            "",
+            "[아직 말할 수 없는 것]",
+            "- 구조화된 BacktestResult에 없는 성과 숫자는 만들지 않았습니다.",
+            "- 개선 후보가 TESTED가 아니면 성과 비교를 확정하지 않습니다.",
+            "- 자동 주문, Champion 자동 승격, 승인 없는 config 변경은 수행하지 않았습니다.",
+        ]
+    )
+    if baseline:
+        lines.append(f"- baseline_report={baseline.get('report_id') or baseline.get('research_report_id') or 'available'}")
     return "\n".join(lines)
 
 

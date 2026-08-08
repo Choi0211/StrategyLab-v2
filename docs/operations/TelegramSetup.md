@@ -185,6 +185,19 @@ typo-tolerant comparison reruns such as `비겨해줘`, concise data-quality war
 summaries, explicit stored quality-detail follow-ups, and fail-closed handling
 for malformed structured research results.
 
+Hotfix 163.1 Telegram autonomous research release check:
+
+```bash
+python -m gaon.runtime.cli gaon-telegram-autonomous-research-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This verifies that Telegram follow-ups such as `이 전략을 검증해줘`,
+`문제점을 찾아서 개선 후보까지 연구해줘`, and `지금까지 연구하면서 무엇을
+배웠어?` resolve against the same-chat authoritative research context and route
+to the read-only autonomous research cycle. Presentation-only follow-ups must not
+rerun research, and another Telegram chat must not read the prior chat's
+autonomous context.
+
 ## Windows PowerShell Example
 
 ```powershell

@@ -3,6 +3,23 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 163.1 Telegram Autonomous Research Routing
+
+Hotfix 163.1 connects Telegram natural-language follow-ups to the completed
+autonomous research cycle. After a grounded research answer, Gaon can now route
+same-chat requests for validation, critique/improvement, continuation, and
+learning summaries into the deterministic read-only autonomous research path.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-telegram-autonomous-research-release-check --db :memory:
+```
+
+The response remains grounded in structured tool output. The hotfix does not
+enable live trading, automatic Champion promotion, approval bypass, or strategy
+configuration mutation.
+
 ## Sprint 163 Autonomous Research Completion
 
 Sprint 163 adds the completion release check for Sprints 156 through 162. It

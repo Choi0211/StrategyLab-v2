@@ -2,6 +2,20 @@
 
 Status: Passed
 
+## Hotfix 163.1 Telegram Autonomous Research Routing
+
+- Targeted local verification:
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1631_autonomous_validate_routes_from_telegram_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1631_autonomous_critique_uses_prior_context_without_ids tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1631_autonomous_learning_query_reads_same_chat_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1631_autonomous_context_is_chat_isolated tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1631_telegram_autonomous_research_release_check_passes -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-telegram-autonomous-research-release-check --db :memory:`: PASS, schema v36
+  - Existing Sprint 152, 153, 154, and 155 conversation release-check smoke tests: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 607 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 165 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - Sprint 152 through 163 release-check commands: PASS
+  - `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only
+
 ## Sprint 163 Autonomous Research Completion
 
 - Targeted local verification:

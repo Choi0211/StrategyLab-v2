@@ -70,6 +70,7 @@ TOOL_RESULT_TTL_SECONDS = {
     "backtest_result": 300,
     "compare_backtests": 300,
     "krx_real_research": 300,
+    "autonomous_research_cycle": 300,
     "multi_symbol_research": 300,
     "multi_symbol_research_status": 300,
     "multi_symbol_research_history": 300,
@@ -620,6 +621,9 @@ class LLMConversationBrain:
         if not _is_conversational_mvp_source(request):
             return None
         route = classify_conversational_route(request.text)
+        autonomous = self._try_autonomous_research_conversation(request, route, warnings, references)
+        if autonomous is not None:
+            return autonomous
         reasoning_followup_intents = {
             ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
             ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT,
@@ -741,6 +745,51 @@ class LLMConversationBrain:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_unknown")
             return render_unknown(route.symbols), "conversation_mvp_unknown", _dedupe(warnings), references, "deterministic", ()
         return None
+
+    def _try_autonomous_research_conversation(self, request: LLMConversationRequest, route, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        if self._tool_executor is None:
+            return None
+        context = self._mvp_context_for(request.session_id)
+        mode = _autonomous_request_mode(request.text)
+        if mode is None:
+            return None
+        if mode == "learning_query":
+            if context is None or context.last_result_kind != "autonomous_research_cycle":
+                return "영하님, 현재 저장된 검증된 학습 기록은 없습니다. 먼저 종목이나 전략을 분석한 뒤 자율 연구를 실행해 주세요.", "conversation_autonomous_learning_empty", _dedupe(warnings), references, "deterministic", ()
+            text = _render_autonomous_learning_query(context.last_detail_payload)
+            self._remember_mvp_response_context(request, ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, "conversation_autonomous_learning_query")
+            return text, "conversation_autonomous_learning_query", _dedupe((*warnings, "learning memory context read")), references, "deterministic", ()
+        if context is None and not route.symbols:
+            return "영하님, 직전 연구나 전략 맥락이 없습니다. 먼저 분석할 종목이나 전략을 말씀해 주세요.", "conversation_autonomous_missing_context", _dedupe((*warnings, "autonomous research requires structured context")), references, "deterministic", ()
+        if context is None:
+            return None
+        if mode == "compare" and len(route.symbols) >= 2:
+            result = self._execute_mvp_multi_symbol_research(request, tuple(symbol.symbol for symbol in route.symbols), request.text, None, None)
+            self._record_tool_result(request.session_id, result, request.received_at)
+            if result.status != "success":
+                failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+                return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", ("multi_symbol_research",)
+            text = _format_tool_response("multi_symbol_research", result.output, request.text)
+            self._remember_mvp_context(request, ConversationalMVPIntent.COMPARE_SYMBOLS, self._payloads_from_multi_symbol_result(result.output), text)
+            return text, "conversation_autonomous_compare", _dedupe((*warnings, "autonomous compare routed to multi-symbol research")), _dedupe((*references, "tool:multi_symbol_research")), "deterministic", ("multi_symbol_research",)
+        symbol = _resolve_autonomous_symbol(route, context)
+        original_text = previous_request_text(context, request.text) if context is not None else request.text
+        result = self._tool_executor.execute(ToolRequest("autonomous_research_cycle", {"request_text": original_text, "symbol": symbol, "mode": mode}, request.user_ref, request.received_at))
+        self._record_tool_result(request.session_id, result, request.received_at)
+        if result.status != "success":
+            failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+            return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", ("autonomous_research_cycle",)
+        text = _format_tool_response("autonomous_research_cycle", result.output, request.text)
+        self._remember_autonomous_context(request, result.output, text, mode)
+        audit = _as_dict(result.output.get("audit"))
+        audit_warnings = (
+            f"autonomous_intent={audit.get('resolved_intent', mode)}",
+            f"autonomous_terminal={audit.get('terminal_state', 'unknown')}",
+            f"candidate_count={audit.get('candidate_count', 0)}",
+            f"retest_count={audit.get('retest_count', 0)}",
+            "autonomous research cycle invoked",
+        )
+        return text, "conversation_autonomous_research_cycle", _dedupe((*warnings, *result.warnings, *audit_warnings)), _dedupe((*references, "tool:autonomous_research_cycle")), "deterministic", ("autonomous_research_cycle",)
 
     def _try_conversational_research_execution(self, request: LLMConversationRequest, context: ConversationalMVPContext, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
@@ -1015,6 +1064,32 @@ class LLMConversationBrain:
             updated_at=request.received_at,
         )
         self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route=f"conversation_mvp_{intent.value}")
+
+    def _remember_autonomous_context(self, request: LLMConversationRequest, payload: dict[str, object], text: str, mode: str) -> None:
+        baseline = _as_dict(payload.get("baseline"))
+        dataset = _as_dict(baseline.get("dataset"))
+        metadata = _as_dict(dataset.get("metadata"))
+        quality = _as_dict(baseline.get("quality"))
+        symbol = str(payload.get("symbol") or _symbol_from_autonomous_payload(payload))
+        source = str(payload.get("source") or metadata.get("source") or "unknown")
+        self._mvp_contexts[request.session_id] = ConversationalMVPContext(
+            last_intent=f"autonomous_{mode}",
+            last_symbols=(symbol,),
+            last_result_kind="autonomous_research_cycle",
+            last_research_result_ids=(str(payload.get("run_id", "autonomous-cycle")),),
+            last_rendered_result=text,
+            last_payloads=(payload,),
+            last_structured_results=(payload,),
+            last_summary=text,
+            last_detail_payload=dict(payload),
+            last_source=source,
+            last_fixture_backed=bool(payload.get("fixture_backed", metadata.get("fixture_backed", False))),
+            last_quality_status=str(payload.get("quality_status") or quality.get("status") or "unknown"),
+            detail_level="summary",
+            created_at=request.received_at,
+            updated_at=request.received_at,
+        )
+        self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route="conversation_autonomous_research_cycle")
 
     def _mvp_context_for(self, session_id: str) -> ConversationalMVPContext | None:
         context = self._mvp_contexts.get(session_id)
@@ -1594,6 +1669,8 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
         return {"request_text": text, "symbol": "005930"}
     if tool_name == "research_retest":
         return {"request_text": text, "symbol": "005930"}
+    if tool_name == "autonomous_research_cycle":
+        return {"request_text": text, "symbol": "005930", "mode": _autonomous_request_mode(text) or "validate"}
     if tool_name == "multi_symbol_research":
         start_date, end_date = _extract_date_range(text)
         return {
@@ -1624,6 +1701,68 @@ def _extract_date_range(text: str) -> tuple[str, str]:
     if len(dates) >= 2:
         return dates[0], dates[1]
     return "2021-07-25", "2026-07-24"
+
+
+def _autonomous_request_mode(text: str) -> str | None:
+    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
+    if not normalized:
+        return None
+    learning = ("지금까지무엇을배웠", "지금까지뭘배웠", "무엇을배웠", "뭘배웠", "학습기록", "learningmemory", "whatlearned")
+    critique = ("문제점을찾아", "문제점을찾아줘", "약점을분석", "약점", "취약", "개선해", "보완", "critic", "critique")
+    compare = ("어느종목", "어떤종목", "더잘맞", "비교", "compare", "whichsymbol")
+    continue_terms = ("계속연구", "더연구", "다음검증", "계속검증", "continue")
+    validate = ("전략을검증", "전략검증", "검증해봐", "검증해줘", "추가검증", "표본이부족", "충분한표본", "근거가충분", "validate", "researchcycle")
+    if any(token in normalized for token in learning):
+        return "learning_query"
+    if any(token in normalized for token in critique):
+        return "critique"
+    if any(token in normalized for token in compare) and any(token in normalized for token in ("전략", "연구", "검증", "strategy", "research")):
+        return "compare"
+    if any(token in normalized for token in continue_terms):
+        return "continue"
+    if any(token in normalized for token in validate) and any(token in normalized for token in ("전략", "연구", "분석", "백테스트", "삼성전자", "005930", "strategy", "research")):
+        return "validate"
+    return None
+
+
+def _resolve_autonomous_symbol(route, context: ConversationalMVPContext | None) -> str:
+    if route.symbols:
+        return route.symbols[0].symbol
+    if context is not None and context.last_symbols:
+        return context.last_symbols[0]
+    return "005930"
+
+
+def _render_autonomous_learning_query(payload: dict[str, object]) -> str:
+    learning = _as_dict(_as_dict(payload.get("autonomous_cycle")).get("learning_report") or payload.get("learning_report"))
+    stored = _as_list(learning.get("stored_records"))
+    duplicates = _as_list(learning.get("duplicate_candidates"))
+    if not stored and not duplicates:
+        return "영하님, 현재 저장된 검증된 학습 기록은 없습니다. 임의의 학습 내용을 만들지 않겠습니다."
+    return "\n".join(
+        [
+            "영하님, 지금까지의 자율 연구에서 확인한 학습 내용입니다.",
+            f"- 저장된 evidence-backed 기록: {len(stored)}건",
+            f"- 중복으로 병합하지 않은 후보: {len(duplicates)}건",
+            "- 이 기록은 검증 근거가 붙은 연구 메모리이며, Knowledge Validated나 정책 적용 상태가 아닙니다.",
+            "- 자동 주문, Champion 자동 승격, 승인 없는 config 변경은 수행하지 않았습니다.",
+        ]
+    )
+
+
+def _symbol_from_autonomous_payload(payload: dict[str, object]) -> str:
+    baseline = _as_dict(payload.get("baseline"))
+    dataset = _as_dict(baseline.get("dataset"))
+    metadata = _as_dict(dataset.get("metadata"))
+    return str(payload.get("symbol") or metadata.get("symbol") or "005930")
+
+
+def _as_dict(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
 
 
 def _format_tool_response(tool_name: str, output: dict[str, object], user_text: str = "") -> str:

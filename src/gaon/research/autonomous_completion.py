@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import sqlite3
 from typing import Any
+from uuid import uuid4
 
 from gaon.learning.confidence.models import ConfidenceScore
 from gaon.learning.contracts import AuditAction, AuditEvent, LearningRecord, LearningRecordType, RevalidationSchedule, RevalidationStatus
@@ -1017,6 +1019,79 @@ def gaon_autonomous_research_complete_release_check() -> dict[str, object]:
         "automatic_champion_promotion": False,
         "automatic_config_apply": False,
     }
+
+
+def telegram_autonomous_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930", mode: str = "validate") -> dict[str, object]:
+    """Run a production-shaped autonomous research cycle from Telegram text."""
+
+    from gaon.research.krx_real_pipeline import krx_real_research_payload
+
+    baseline = krx_real_research_payload(connection, request_text, symbol=symbol)
+    dataset = _dict(baseline.get("dataset"))
+    metadata = _dict(dataset.get("metadata"))
+    quality = _dict(baseline.get("quality"))
+    backtest = _dict(baseline.get("backtest"))
+    metrics = _dict(backtest.get("metrics"))
+    report_id = str(baseline.get("report_id") or baseline.get("research_report_id") or f"baseline:{symbol}")
+    run_id = f"autonomous-cycle:{uuid4().hex}"
+    evidence_payload = {
+        "metrics": metrics,
+        "observation_days": int(metadata.get("rows") or dataset.get("rows") or 0),
+        "market_regime_count": 1,
+        "quality": quality,
+        "evidence_refs": (report_id, str(backtest.get("result_id") or f"backtest:{symbol}")),
+    }
+    cycle_request = AutonomousResearchCycleRequest(
+        run_id=run_id,
+        symbol=symbol,
+        strategy_id=str(_dict(baseline.get("strategy")).get("strategy_id") or "strategy:telegram-context"),
+        evidence_payload=evidence_payload,
+        max_steps=5,
+        persist_learning=True,
+    )
+    cycle = AutonomousResearchCycleRunner().run(cycle_request)
+    cycle_json = cycle.to_json()
+    return {
+        "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
+        "tool": "autonomous_research_cycle",
+        "mode": mode,
+        "run_id": run_id,
+        "symbol": symbol,
+        "baseline": baseline,
+        "autonomous_cycle": cycle_json,
+        "assessment": cycle_json["assessment"],
+        "plan": cycle_json["plan"],
+        "critic_report": cycle_json["critic_report"],
+        "learning_report": cycle_json["learning_report"],
+        "terminal_state": cycle_json["terminal_state"],
+        "source": metadata.get("source") or baseline.get("source") or "unknown",
+        "fixture_backed": bool(metadata.get("fixture_backed", baseline.get("fixture_backed", False))),
+        "quality_status": quality.get("status", "unknown"),
+        "audit": {
+            "resolved_intent": f"autonomous_{mode}",
+            "resolved_context_kind": "telegram_authoritative_context",
+            "autonomous_cycle_invoked": True,
+            "planner_invoked": True,
+            "critic_invoked": True,
+            "candidate_count": len(_list(_dict(cycle_json["critic_report"]).get("proposals"))),
+            "retest_count": len(_list(_dict(cycle_json["critic_report"]).get("retests"))),
+            "learning_memory_write": bool(cycle_json.get("learning_report")),
+            "learning_memory_read": mode == "learning_query",
+            "terminal_state": cycle_json["terminal_state"],
+            "safety_state": "read_only",
+        },
+        "automatic_order": False,
+        "automatic_champion_promotion": False,
+        "automatic_config_apply": False,
+    }
+
+
+def _dict(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
 
 
 def _step_from_need(goal_id: str, need: ValidationNeed, sequence: int, retry_limit: int) -> ResearchStep:

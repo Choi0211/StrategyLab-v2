@@ -928,8 +928,106 @@ class TelegramConversationAgentTests(unittest.TestCase):
         finally:
             store.close()
 
+    def test_hotfix1631_autonomous_validate_routes_from_telegram_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        provider = _HallucinatingRealResearchProvider()
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(
+                    _config(assistant_enabled=True, assistant_provider="openai-compatible"),
+                    store._connection,
+                    assistant_provider=provider,
+                    tool_executor=_sprint152_tool_executor(store, fixture_backed=False),
+                ),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(700, 700, "삼성전자 분석해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(701, 701, "이 전략을 근거가 충분한지 검증해줘"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+
+            self.assertEqual(provider.calls, 0)
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 1)
+            final = client.sent[-1][1]
+            self.assertIn("자율 연구 검증 사이클", final)
+            self.assertIn("trade_count=1", final)
+            self.assertIn("source=real:yahoo-chart", final)
+            self.assertIn("planner_steps=1", final)
+            self.assertIn("Learning Memory", final)
+            self.assertNotIn("5.32%", final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "conversation_autonomous_research_cycle")
+            self.assertEqual(assistant[-1].tool_calls, ("autonomous_research_cycle",))
+        finally:
+            store.close()
+
+    def test_hotfix1631_autonomous_critique_uses_prior_context_without_ids(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(702, 702, "삼성전자 분석해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(703, 703, "이 전략의 문제점을 찾아서 개선 후보까지 연구해줘"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 1)
+            final = client.sent[-1][1]
+            self.assertIn("Critic", final)
+            self.assertIn("개선 후보", final)
+            self.assertNotIn("전략 ID", final)
+            self.assertNotIn("백테스트 결과 ID", final)
+            self.assertNotIn("임의", final)
+        finally:
+            store.close()
+
+    def test_hotfix1631_autonomous_learning_query_reads_same_chat_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(704, 704, "삼성전자 분석해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(705, 705, "이 전략을 검증해줘"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+            before = len(store.tool_audit.list(tool_name="autonomous_research_cycle"))
+            process_update(parse_update_result(_update(706, 706, "지금까지 연구하면서 무엇을 배웠어?"), received_at="2026-07-30T00:00:02Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), before)
+            final = client.sent[-1][1]
+            self.assertIn("자율 연구에서 확인한 학습 내용", final)
+            self.assertIn("evidence-backed 기록", final)
+            self.assertIn("1건", final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "conversation_autonomous_learning_query")
+        finally:
+            store.close()
+
+    def test_hotfix1631_autonomous_context_is_chat_isolated(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100", "101"),
+            )
+            process_update(parse_update_result(_update(707, 707, "삼성전자 분석해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(708, 708, "이 전략을 검증해줘"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+            process_update(parse_update_result(_update(709, 709, "지금까지 연구하면서 무엇을 배웠어?", chat_id=101), received_at="2026-07-30T00:00:02Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 1)
+            self.assertIn("현재 저장된 검증된 학습 기록은 없습니다", client.sent[-1][1])
+            self.assertNotIn("learning:test:sample", client.sent[-1][1])
+        finally:
+            store.close()
+
     def test_sprint155_conversational_research_execution_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-research-execution-release-check", "--db", ":memory:"]), 0)
+
+    def test_hotfix1631_telegram_autonomous_research_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-telegram-autonomous-research-release-check", "--db", ":memory:"]), 0)
 
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
@@ -1189,6 +1287,10 @@ def _sprint152_tool_executor(
             "automatic_config_apply": False,
         }
 
+    def handle_autonomous(args):
+        symbol = str(args.get("symbol", "005930"))
+        return _sprint163_autonomous_payload(symbol, mode=str(args.get("mode", "validate")))
+
     registry.register(
         ToolDefinition(
             "krx_real_research",
@@ -1209,7 +1311,72 @@ def _sprint152_tool_executor(
         ),
         handle_multi,
     )
+    registry.register(
+        ToolDefinition(
+            "autonomous_research_cycle",
+            "Run deterministic autonomous research cycle for conversation tests.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol", "mode"),
+        ),
+        handle_autonomous,
+    )
     return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _sprint163_autonomous_payload(symbol: str = "005930", *, mode: str = "validate") -> dict[str, object]:
+    baseline = _sprint152_payload(symbol, fixture_backed=False, request_text="telegram autonomous research")
+    return {
+        "schema_version": 36,
+        "tool": "autonomous_research_cycle",
+        "mode": mode,
+        "run_id": f"autonomous-cycle:test:{mode}:{symbol}",
+        "symbol": symbol,
+        "baseline": baseline,
+        "assessment": {
+            "status": "insufficient_sample",
+            "adequacy": {"trade_count": baseline["backtest"]["metrics"]["trade_count"], "observation_days": 378},
+            "needs": [{"kind": "period_expansion", "reason": "trade_count below confidence threshold"}],
+        },
+        "plan": {"steps": [{"step_id": "step:1", "kind": "extend_period", "status": "planned"}]},
+        "critic_report": {
+            "findings": [{"category": "sample_size", "severity": "warning", "message": "표본 수가 아직 충분하지 않습니다."}],
+            "proposals": [{"proposal_id": "candidate:A", "hypothesis": "진입 필터를 보수적으로 조정합니다."}],
+            "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": 4, "metrics": {"trade_count": 4}}],
+        },
+        "learning_report": {"stored_records": ["learning:test:sample"], "duplicate_candidates": []},
+        "terminal_state": "needs_more_evidence",
+        "autonomous_cycle": {
+            "assessment": {"status": "insufficient_sample"},
+            "plan": {"steps": [{"step_id": "step:1", "kind": "extend_period", "status": "planned"}]},
+            "critic_report": {
+                "findings": [{"category": "sample_size", "severity": "warning", "message": "표본 수가 아직 충분하지 않습니다."}],
+                "proposals": [{"proposal_id": "candidate:A"}],
+                "retests": [{"candidate_id": "candidate:A", "status": "tested", "trade_count": 4}],
+            },
+            "learning_report": {"stored_records": ["learning:test:sample"], "duplicate_candidates": []},
+            "terminal_state": "needs_more_evidence",
+        },
+        "source": "real:yahoo-chart",
+        "fixture_backed": False,
+        "quality_status": "pass_with_warnings",
+        "audit": {
+            "resolved_intent": f"autonomous_{mode}",
+            "resolved_context_kind": "telegram_authoritative_context",
+            "autonomous_cycle_invoked": True,
+            "planner_invoked": True,
+            "critic_invoked": True,
+            "candidate_count": 1,
+            "retest_count": 1,
+            "learning_memory_write": True,
+            "learning_memory_read": mode == "learning_query",
+            "terminal_state": "needs_more_evidence",
+            "safety_state": "read_only",
+        },
+        "automatic_order": False,
+        "automatic_champion_promotion": False,
+        "automatic_config_apply": False,
+    }
 
 
 def _sprint152_payload(symbol: str, *, fixture_backed: bool = True, zero_trade_symbols: tuple[str, ...] = (), start_date: str = "2026-01-02", end_date: str = "2026-07-10", request_text: str = "") -> dict[str, object]:
