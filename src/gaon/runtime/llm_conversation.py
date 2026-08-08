@@ -75,6 +75,14 @@ TOOL_RESULT_TTL_SECONDS = {
     "multi_symbol_research_status": 300,
     "multi_symbol_research_history": 300,
 }
+_AUTONOMOUS_CONTEXT_KINDS = frozenset(
+    {
+        "autonomous_research_cycle",
+        "autonomous_continuation",
+        "autonomous_learning_memory_summary",
+        "autonomous_critique",
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -697,6 +705,10 @@ class LLMConversationBrain:
             if _is_data_quality_detail_request(request.text):
                 payloads = context.last_structured_results or context.last_payloads
                 return render_data_quality_details_from_payloads(payloads), "conversation_research_quality_detail", _dedupe((*warnings, "stored research quality detail")), references, "deterministic", ()
+            if context.last_result_kind in _AUTONOMOUS_CONTEXT_KINDS and _is_autonomous_presentation_intent(route.intent):
+                response_route = f"conversation_autonomous_presentation_{route.intent.value}"
+                self._remember_mvp_response_context(request, route.intent, response_route)
+                return _render_autonomous_context_followup(context, route.intent, request.text), response_route, _dedupe((*warnings, "autonomous semantic context preserved")), references, "deterministic", ()
             if route.intent in {
                 ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION,
                 ConversationalMVPIntent.RISK_QUESTION,
@@ -754,10 +766,10 @@ class LLMConversationBrain:
         if mode is None:
             return None
         if mode == "learning_query":
-            if context is None or context.last_result_kind != "autonomous_research_cycle":
+            if context is None or context.last_result_kind not in _AUTONOMOUS_CONTEXT_KINDS:
                 return "영하님, 현재 저장된 검증된 학습 기록은 없습니다. 먼저 종목이나 전략을 분석한 뒤 자율 연구를 실행해 주세요.", "conversation_autonomous_learning_empty", _dedupe(warnings), references, "deterministic", ()
             text = _render_autonomous_learning_query(context.last_detail_payload)
-            self._remember_mvp_response_context(request, ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, "conversation_autonomous_learning_query")
+            self._remember_autonomous_learning_context(request, context, text)
             return text, "conversation_autonomous_learning_query", _dedupe((*warnings, "learning memory context read")), references, "deterministic", ()
         if context is None and not route.symbols:
             return "영하님, 직전 연구나 전략 맥락이 없습니다. 먼저 분석할 종목이나 전략을 말씀해 주세요.", "conversation_autonomous_missing_context", _dedupe((*warnings, "autonomous research requires structured context")), references, "deterministic", ()
@@ -1072,10 +1084,15 @@ class LLMConversationBrain:
         quality = _as_dict(baseline.get("quality"))
         symbol = str(payload.get("symbol") or _symbol_from_autonomous_payload(payload))
         source = str(payload.get("source") or metadata.get("source") or "unknown")
+        result_kind = "autonomous_research_cycle"
+        if mode == "continue":
+            result_kind = "autonomous_continuation"
+        elif mode == "critique":
+            result_kind = "autonomous_critique"
         self._mvp_contexts[request.session_id] = ConversationalMVPContext(
             last_intent=f"autonomous_{mode}",
             last_symbols=(symbol,),
-            last_result_kind="autonomous_research_cycle",
+            last_result_kind=result_kind,
             last_research_result_ids=(str(payload.get("run_id", "autonomous-cycle")),),
             last_rendered_result=text,
             last_payloads=(payload,),
@@ -1090,6 +1107,26 @@ class LLMConversationBrain:
             updated_at=request.received_at,
         )
         self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route="conversation_autonomous_research_cycle")
+
+    def _remember_autonomous_learning_context(self, request: LLMConversationRequest, context: ConversationalMVPContext, text: str) -> None:
+        self._mvp_contexts[request.session_id] = ConversationalMVPContext(
+            last_intent="autonomous_learning_query",
+            last_symbols=context.last_symbols,
+            last_result_kind="autonomous_learning_memory_summary",
+            last_research_result_ids=context.last_research_result_ids,
+            last_rendered_result=text,
+            last_payloads=context.last_payloads,
+            last_structured_results=context.last_structured_results,
+            last_summary=text,
+            last_detail_payload=dict(context.last_detail_payload),
+            last_source=context.last_source,
+            last_fixture_backed=context.last_fixture_backed,
+            last_quality_status=context.last_quality_status,
+            detail_level=context.detail_level,
+            created_at=context.created_at,
+            updated_at=request.received_at,
+        )
+        self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route="conversation_autonomous_learning_query")
 
     def _mvp_context_for(self, session_id: str) -> ConversationalMVPContext | None:
         context = self._mvp_contexts.get(session_id)
@@ -1746,6 +1783,88 @@ def _render_autonomous_learning_query(payload: dict[str, object]) -> str:
             f"- 중복으로 병합하지 않은 후보: {len(duplicates)}건",
             "- 이 기록은 검증 근거가 붙은 연구 메모리이며, Knowledge Validated나 정책 적용 상태가 아닙니다.",
             "- 자동 주문, Champion 자동 승격, 승인 없는 config 변경은 수행하지 않았습니다.",
+        ]
+    )
+
+
+def _is_autonomous_presentation_intent(intent: ConversationalMVPIntent) -> bool:
+    return intent in {
+        ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
+        ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT,
+        ConversationalMVPIntent.PROFESSIONAL_EXPLANATION,
+        ConversationalMVPIntent.SHOW_DETAILS,
+        ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
+    }
+
+
+def _render_autonomous_context_followup(context: ConversationalMVPContext, intent: ConversationalMVPIntent, user_text: str) -> str:
+    payload = dict(context.last_detail_payload)
+    if not payload and context.last_structured_results:
+        payload = _as_dict(context.last_structured_results[0])
+    if context.last_result_kind == "autonomous_learning_memory_summary":
+        return _render_autonomous_learning_presentation(payload, intent, user_text)
+    if intent is ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT:
+        assessment = _as_dict(payload.get("assessment"))
+        plan = _as_dict(payload.get("plan"))
+        critic = _as_dict(payload.get("critic_report"))
+        learning = _as_dict(payload.get("learning_report"))
+        steps = _as_list(plan.get("steps"))
+        findings = _as_list(critic.get("findings"))
+        proposals = _as_list(critic.get("proposals"))
+        stored = _as_list(learning.get("stored_records"))
+        status = str(assessment.get("status") or payload.get("terminal_state") or "검증 계속 필요")
+        return "\n".join(
+            [
+                f"영하님, 쉽게 말하면 방금 결과는 일반 백테스트 요약이 아니라 자율 연구 진행 상태입니다. 현재 판단은 {status}입니다.",
+                f"- 검증/계획 단계: {len(steps)}개",
+                f"- 발견한 문제: {len(findings)}건",
+                f"- 개선 후보: {len(proposals)}건",
+                f"- evidence-backed 학습 기록: {len(stored)}건",
+                "- 이 답변은 저장된 자율 연구 context만 다시 설명한 것이며, 연구 도구를 다시 실행하지 않았습니다.",
+                "- 자동 주문, Champion 자동 승격, 승인 없는 config 변경은 수행하지 않았습니다.",
+            ]
+        )
+    grounded = format_grounded_tool_response("autonomous_research_cycle", payload, user_text)
+    if grounded is not None:
+        return grounded
+    return context.last_summary or context.last_rendered_result
+
+
+def _render_autonomous_learning_presentation(payload: dict[str, object], intent: ConversationalMVPIntent, user_text: str) -> str:
+    learning = _as_dict(_as_dict(payload.get("autonomous_cycle")).get("learning_report") or payload.get("learning_report"))
+    stored = _as_list(learning.get("stored_records"))
+    duplicates = _as_list(learning.get("duplicate_candidates"))
+    if intent is ConversationalMVPIntent.SHOW_DETAILS or "표" in user_text:
+        return "\n".join(
+            [
+                "영하님, 직전 learning-memory 요약을 같은 의미로 자세히 풀어드리겠습니다.",
+                "",
+                "| 항목 | 값 |",
+                "| --- | --- |",
+                f"| evidence-backed 기록 | {len(stored)}건 |",
+                f"| 자동 병합하지 않은 중복 후보 | {len(duplicates)}건 |",
+                "| Knowledge Validated | 아님 |",
+                "| 정책 적용 | 아님 |",
+                "| 자동 주문/승격/config 변경 | 수행하지 않음 |",
+            ]
+        )
+    if intent is ConversationalMVPIntent.PROFESSIONAL_EXPLANATION:
+        return "\n".join(
+            [
+                "영하님, 직전 답변은 Learning Memory 조회 결과입니다.",
+                f"- 저장된 evidence-backed 연구 기록은 {len(stored)}건입니다.",
+                f"- 중복 후보는 {len(duplicates)}건이며 자동 병합하지 않았습니다.",
+                "- 이 기록은 검증 근거가 붙은 연구 메모리이지만, Knowledge Validated 또는 정책 적용 상태는 아닙니다.",
+                "- 따라서 성과 수치, 기간, 거래 수를 새로 계산하거나 일반 BacktestResult로 해석하지 않습니다.",
+            ]
+        )
+    return "\n".join(
+        [
+            "영하님, 쉽게 말하면 방금 답변은 백테스트 성과표가 아니라 가온이 연구 과정에서 남긴 검증 근거 있는 메모리 요약입니다.",
+            f"- 저장된 기록: {len(stored)}건",
+            f"- 자동으로 합치지 않은 중복 후보: {len(duplicates)}건",
+            "- 아직 확정 지식이나 실제 전략 변경은 아닙니다.",
+            "- 그래서 기간, 거래 수, 수익률을 새로 만들어 설명하지 않겠습니다.",
         ]
     )
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 163.2 - Autonomous Conversation Context Integrity
+
+- Added distinct autonomous conversation context kinds for autonomous cycles, continuation, critique, and Learning Memory summaries.
+- Added autonomous presentation renderers so `쉽게 설명해줘` and related presentation-only follow-ups preserve the prior autonomous or Learning Memory semantic context.
+- Blocked fallback from Learning Memory summaries into the normal BacktestResult renderer, preventing fabricated unknown periods, zero trades, or unavailable metrics.
+- Added `gaon-autonomous-conversation-context-release-check`.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 163.1 - Telegram Autonomous Research Routing
 
 - Added `autonomous_research_cycle` as a read-only safe tool route for Telegram conversational follow-ups.

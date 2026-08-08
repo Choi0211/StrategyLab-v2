@@ -3,6 +3,24 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 163.2 Autonomous Conversation Context Integrity
+
+Hotfix 163.2 fixes presentation-only follow-ups after autonomous research and
+Learning Memory summaries. A prompt such as `쉽게 설명해줘` now preserves the
+semantic type of the previous answer instead of reinterpreting it as a normal
+BacktestResult.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-conversation-context-release-check --db :memory:
+```
+
+The hotfix prevents fabricated fallback fields such as unknown periods,
+zero-trade metrics, or unavailable total-return calculations. It does not rerun
+research tools for presentation-only follow-ups and does not enable trading,
+Champion promotion, approval bypass, or strategy mutation.
+
 ## Hotfix 163.1 Telegram Autonomous Research Routing
 
 Hotfix 163.1 connects Telegram natural-language follow-ups to the completed

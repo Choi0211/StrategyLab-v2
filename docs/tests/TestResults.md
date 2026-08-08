@@ -2,6 +2,19 @@
 
 Status: Passed
 
+## Hotfix 163.2 Autonomous Conversation Context Integrity
+
+- Targeted local verification:
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1632_learning_summary_presentation_preserves_learning_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1632_autonomous_continuation_presentation_preserves_cycle_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1632_standard_research_presentation_still_works tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1632_comparison_rerun_presentation_keeps_comparison_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1632_presentation_context_is_chat_isolated tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1632_autonomous_context_release_check_passes -q`: PASS, 6 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-conversation-context-release-check --db :memory:`: PASS, schema v36
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 607 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 171 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - Sprint 152 through 163 release-check commands, including `gaon-autonomous-conversation-context-release-check`: PASS
+  - `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only
+
 ## Hotfix 163.1 Telegram Autonomous Research Routing
 
 - Targeted local verification:
