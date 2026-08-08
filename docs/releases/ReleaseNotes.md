@@ -3,6 +3,26 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 156 Adaptive Research Validation
+
+Sprint 156 adds a deterministic adequacy layer for autonomous research. Gaon
+now distinguishes sufficient, insufficient, degraded, and invalid evidence
+using structured inputs such as trade count, observation period, regime
+coverage, win/loss sample, data quality, and symbol coverage.
+
+When evidence is insufficient, the output is a bounded validation plan. It may
+recommend period expansion, other-regime testing, multi-symbol validation,
+parameter robustness checks, or out-of-sample validation. It does not authorize
+strategy changes, Champion promotion, knowledge validation, or orders.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-adaptive-validation-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
 ## Hotfix 155.1 Conversational Re-execution Integrity
 
 Hotfix 155.1 fixes production follow-up reruns after multi-symbol comparison

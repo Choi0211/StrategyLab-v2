@@ -130,6 +130,7 @@ from gaon.research.operations import (
     operation_report_markdown,
 )
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
+from gaon.research.autonomous_completion import gaon_adaptive_validation_release_check
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
@@ -239,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
     gaon_reexecution_integrity_release = sub.add_parser("gaon-conversational-reexecution-integrity-release-check")
     gaon_reexecution_integrity_release.add_argument("--db", default=":memory:")
     gaon_reexecution_integrity_release.add_argument("--run-id", default=None)
+    adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
+    adaptive_validation_release.add_argument("--db", default=":memory:")
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1389,6 +1392,20 @@ def _run(args: argparse.Namespace) -> int:
                 "period_parsing=pass multi_symbol_context=pass multi_symbol_rendering=pass "
                 "typo_normalization=pass warning_summary=pass warning_detail=pass unknown_guard=pass "
                 "grounded=true safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-adaptive-validation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_adaptive_validation_release_check()
+            assessment = dict(result["assessment"])
+            print(
+                "gaon-adaptive-validation-release-check: PASS "
+                f"schema_version={store.status().schema_version} "
+                f"status={assessment['status']} needs={len(assessment['plan']['needs'])} "
+                f"invalid_status={result['invalid_status']} safety={result['safety']}"
             )
         finally:
             store.close()

@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 156 - Adaptive Research Validation
+
+- Added evidence adequacy contracts and deterministic adaptive validation for trade count, observation period, regime coverage, win/loss sample, data quality, and symbol coverage.
+- Added validation needs for period expansion, other-regime testing, multi-symbol validation, parameter robustness, and out-of-sample testing.
+- Added fail-closed `INVALID` handling for blocking data quality without authorizing strategy mutation.
+- Added `gaon-adaptive-validation-release-check` plus unit and integration coverage.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 155.1 - Conversational Re-execution Integrity
 
 - Fixed conversational multi-symbol reruns to normalize the production `multi_symbol_research` `evidence` schema instead of relying only on the legacy `symbols` summary shape.

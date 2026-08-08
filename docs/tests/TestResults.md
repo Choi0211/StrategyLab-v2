@@ -2,6 +2,15 @@
 
 Status: Passed
 
+## Sprint 156 Adaptive Research Validation
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion -q`: PASS, 4 tests
+  - `python -m unittest tests.integration.test_autonomous_completion_flow -q`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-adaptive-validation-release-check --db :memory:`: PASS, schema v36
+- Full verification: PENDING until Sprint 163 completion.
+- Note: `python -m pytest ...` was not executed in this local desktop runtime because pytest is not installed in the bundled Python environment; equivalent `unittest` commands are used for local verification.
+
 ## Hotfix 155.1 Conversational Re-execution Integrity
 
 - Targeted local verification:
