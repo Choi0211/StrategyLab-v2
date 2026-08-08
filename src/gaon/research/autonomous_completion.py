@@ -86,6 +86,12 @@ class CycleTerminalState(str, Enum):
     USER_APPROVAL_REQUIRED = "user_approval_required"
 
 
+class OperationalResearchRoute(str, Enum):
+    AUTONOMOUS_RESEARCH_CYCLE = "autonomous_research_cycle"
+    DUPLICATE_SKIPPED = "duplicate_skipped"
+    SAFETY_BLOCKED = "safety_blocked"
+
+
 @dataclass(frozen=True)
 class EvidenceAdequacy:
     trade_count: int
@@ -404,6 +410,44 @@ class AutonomousResearchCycleReport:
         }
 
 
+@dataclass(frozen=True)
+class OperationalAutonomousResearchRequest:
+    request_id: str
+    user_message: str
+    cycle_request: AutonomousResearchCycleRequest
+    execute: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.request_id:
+            raise ValueError("request_id is required")
+        if not self.user_message:
+            raise ValueError("user_message is required")
+
+
+@dataclass(frozen=True)
+class OperationalAutonomousResearchResponse:
+    request_id: str
+    route: OperationalResearchRoute
+    cycle_report: AutonomousResearchCycleReport | None
+    final_message: str
+    provider_calls: int
+    duplicate_guard_key: str
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
+            "request_id": self.request_id,
+            "route": self.route.value,
+            "cycle_report": self.cycle_report.to_json() if self.cycle_report else None,
+            "final_message": self.final_message,
+            "provider_calls": self.provider_calls,
+            "duplicate_guard_key": self.duplicate_guard_key,
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+            "automatic_config_apply": False,
+        }
+
+
 class AdaptiveResearchValidator:
     """Classify evidence adequacy and propose validation needs only."""
 
@@ -689,6 +733,61 @@ class AutonomousResearchCycleRunner:
         return CycleTerminalState.INSUFFICIENT_EVIDENCE
 
 
+class OperationalAutonomousResearchRuntime:
+    """Production-shaped deterministic runtime for autonomous research requests."""
+
+    def __init__(self, runner: AutonomousResearchCycleRunner | None = None) -> None:
+        self._runner = runner or AutonomousResearchCycleRunner()
+        self._processed_requests: set[str] = set()
+
+    def handle(self, request: OperationalAutonomousResearchRequest) -> OperationalAutonomousResearchResponse:
+        guard_key = f"operational-autonomous-research:{request.request_id}"
+        if guard_key in self._processed_requests:
+            return OperationalAutonomousResearchResponse(
+                request.request_id,
+                OperationalResearchRoute.DUPLICATE_SKIPPED,
+                None,
+                "영하님, 이 자율 연구 요청은 이미 처리되어 중복 실행하지 않았습니다.",
+                provider_calls=0,
+                duplicate_guard_key=guard_key,
+            )
+        if not request.execute:
+            return OperationalAutonomousResearchResponse(
+                request.request_id,
+                OperationalResearchRoute.SAFETY_BLOCKED,
+                None,
+                "영하님, 실행 모드가 아니므로 자율 연구를 수행하지 않았습니다.",
+                provider_calls=0,
+                duplicate_guard_key=guard_key,
+            )
+        report = self._runner.run(request.cycle_request)
+        self._processed_requests.add(guard_key)
+        return OperationalAutonomousResearchResponse(
+            request.request_id,
+            OperationalResearchRoute.AUTONOMOUS_RESEARCH_CYCLE,
+            report,
+            self._render_korean(report),
+            provider_calls=0,
+            duplicate_guard_key=guard_key,
+        )
+
+    @staticmethod
+    def _render_korean(report: AutonomousResearchCycleReport) -> str:
+        assessment = report.assessment.adequacy
+        lines = [
+            f"영하님, 자율 연구 사이클을 완료했습니다. 상태는 {report.terminal_state.value}입니다.",
+            f"거래 수는 {assessment.trade_count}회, 관측 일수는 {assessment.observation_days}일입니다.",
+            f"실행 단계 수는 {report.iterations}개이며, 모든 수치는 구조화된 evidence에서만 가져왔습니다.",
+        ]
+        if report.terminal_state is CycleTerminalState.DATA_FAILURE:
+            lines.append("데이터 품질 문제가 있어 연구 결론을 확정하지 않았습니다.")
+        elif report.terminal_state is CycleTerminalState.USER_APPROVAL_REQUIRED:
+            lines.append("충분한 근거가 있어도 전략 변경은 사용자 승인 전에는 적용하지 않습니다.")
+        else:
+            lines.append("추가 검증이 필요한 항목은 계획과 critic 결과에 남겼습니다.")
+        return "\n".join(lines)
+
+
 def gaon_adaptive_validation_release_check() -> dict[str, object]:
     payload = {
         "metrics": {"trade_count": 1, "mdd": 0.04, "wins": 1, "losses": 0},
@@ -854,6 +953,46 @@ def gaon_autonomous_research_cycle_release_check() -> dict[str, object]:
     if invalid.terminal_state is not CycleTerminalState.DATA_FAILURE:
         raise ValueError("invalid evidence must fail closed")
     return {"report": report.to_json(), "invalid_terminal_state": invalid.terminal_state.value, "safety": "pass"}
+
+
+def gaon_operational_autonomous_research_release_check() -> dict[str, object]:
+    runtime = OperationalAutonomousResearchRuntime()
+    request = OperationalAutonomousResearchRequest(
+        request_id="operational-release-check",
+        user_message="삼성전자 자율 연구를 실행해줘",
+        execute=True,
+        cycle_request=AutonomousResearchCycleRequest(
+            run_id="operational-release-check",
+            symbol="005930",
+            strategy_id="strategy:breakout20",
+            evidence_payload={
+                "metrics": {"trade_count": 3, "wins": 2, "losses": 1, "mdd": 0.12},
+                "observation_days": 128,
+                "market_regime_count": 1,
+                "quality": {"status": "pass"},
+                "evidence_refs": ("release-check:operational",),
+            },
+        ),
+    )
+    response = runtime.handle(request)
+    duplicate = runtime.handle(request)
+    dry_run = runtime.handle(
+        OperationalAutonomousResearchRequest(
+            request_id="operational-release-check-dry-run",
+            user_message="삼성전자 자율 연구를 실행해줘",
+            execute=False,
+            cycle_request=request.cycle_request,
+        )
+    )
+    if response.route is not OperationalResearchRoute.AUTONOMOUS_RESEARCH_CYCLE:
+        raise ValueError("operational runtime did not route to autonomous cycle")
+    if duplicate.route is not OperationalResearchRoute.DUPLICATE_SKIPPED:
+        raise ValueError("operational runtime did not skip duplicate")
+    if dry_run.route is not OperationalResearchRoute.SAFETY_BLOCKED:
+        raise ValueError("dry-run request must be safety blocked")
+    if response.provider_calls != 0:
+        raise ValueError("operational release check must be deterministic")
+    return {"response": response.to_json(), "duplicate": duplicate.to_json(), "dry_run": dry_run.to_json(), "safety": "pass"}
 
 
 def _step_from_need(goal_id: str, need: ValidationNeed, sequence: int, retry_limit: int) -> ResearchStep:

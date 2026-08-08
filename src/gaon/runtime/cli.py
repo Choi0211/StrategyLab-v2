@@ -130,7 +130,7 @@ from gaon.research.operations import (
     operation_report_markdown,
 )
 from gaon.research.strategy_research import StrategyResearchOrchestrator, SQLiteStrategyResearchRepository
-from gaon.research.autonomous_completion import gaon_adaptive_validation_release_check, gaon_autonomous_learning_memory_release_check, gaon_autonomous_research_cycle_release_check, gaon_autonomous_research_planner_release_check, gaon_research_critic_release_check, gaon_strategy_candidate_generation_release_check
+from gaon.research.autonomous_completion import gaon_adaptive_validation_release_check, gaon_autonomous_learning_memory_release_check, gaon_autonomous_research_cycle_release_check, gaon_autonomous_research_planner_release_check, gaon_operational_autonomous_research_release_check, gaon_research_critic_release_check, gaon_strategy_candidate_generation_release_check
 
 TELEGRAM_SMOKE_TEXT = "Gaon Telegram 연결 테스트가 성공했습니다."
 TELEGRAM_POLL_OFFSET_KEY = "__telegram_poll__"
@@ -252,6 +252,8 @@ def main(argv: list[str] | None = None) -> int:
     learning_memory_release.add_argument("--db", default=":memory:")
     autonomous_cycle_release = sub.add_parser("gaon-autonomous-research-cycle-release-check")
     autonomous_cycle_release.add_argument("--db", default=":memory:")
+    operational_autonomous_release = sub.add_parser("gaon-operational-autonomous-research-release-check")
+    operational_autonomous_release.add_argument("--db", default=":memory:")
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1486,6 +1488,22 @@ def _run(args: argparse.Namespace) -> int:
                 f"schema_version={store.status().schema_version} terminal={report['terminal_state']} "
                 f"iterations={report['iterations']} invalid_terminal={result['invalid_terminal_state']} "
                 f"approval_required={str(report['approval_required']).lower()} safety={result['safety']}"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-operational-autonomous-research-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            result = gaon_operational_autonomous_research_release_check()
+            response = dict(result["response"])
+            duplicate = dict(result["duplicate"])
+            dry_run = dict(result["dry_run"])
+            print(
+                "gaon-operational-autonomous-research-release-check: PASS "
+                f"schema_version={store.status().schema_version} route={response['route']} "
+                f"duplicate_route={duplicate['route']} dry_run_route={dry_run['route']} "
+                f"provider_calls={response['provider_calls']} safety={result['safety']}"
             )
         finally:
             store.close()

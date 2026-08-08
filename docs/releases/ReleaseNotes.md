@@ -3,6 +3,21 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 162 Operational Autonomous Research
+
+Sprint 162 adds a production-shaped deterministic runtime wrapper for
+autonomous research requests. It enforces execute/dry-run safety gates, skips
+duplicate request IDs, and renders Korean reports from structured evidence.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-operational-autonomous-research-release-check --db :memory:
+```
+
+The operational wrapper does not call an LLM provider, invent metrics, mutate
+Telegram configuration, apply strategy configuration, or place orders.
+
 ## Sprint 161 Autonomous Research Cycle
 
 Sprint 161 composes adaptive validation, planning, critic/retest, and Learning

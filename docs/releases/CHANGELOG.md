@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 162 - Operational Autonomous Research
+
+- Added an execute-gated deterministic operational wrapper for autonomous research requests.
+- Added duplicate request protection and dry-run safety blocking before research execution.
+- Added Korean structured operational reporting without LLM provider calls or fabricated metrics.
+- Added `gaon-operational-autonomous-research-release-check` plus unit and integration coverage.
+- Preserved schema v36, no Telegram configuration mutation, no strategy configuration mutation, no Champion promotion, and no trading.
+
 ## Sprint 161 - Autonomous Research Cycle
 
 - Added bounded autonomous research cycle orchestration across validation, planning, critic/retest, and Learning Memory integration.

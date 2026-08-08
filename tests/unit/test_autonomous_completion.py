@@ -9,6 +9,9 @@ from gaon.research.autonomous_completion import (
     AutonomousResearchPlanner,
     AutonomousLearningMemoryIntegrator,
     CycleTerminalState,
+    OperationalAutonomousResearchRequest,
+    OperationalAutonomousResearchRuntime,
+    OperationalResearchRoute,
     CriticImprovementRetestLoop,
     ResearchBudget,
     ResearchCriticEngine,
@@ -22,6 +25,7 @@ from gaon.research.autonomous_completion import (
     gaon_autonomous_learning_memory_release_check,
     gaon_autonomous_research_cycle_release_check,
     gaon_autonomous_research_planner_release_check,
+    gaon_operational_autonomous_research_release_check,
     gaon_research_critic_release_check,
     gaon_strategy_candidate_generation_release_check,
 )
@@ -272,6 +276,53 @@ class AutonomousResearchCycleTests(unittest.TestCase):
 
     def test_autonomous_research_cycle_release_check_passes(self) -> None:
         result = gaon_autonomous_research_cycle_release_check()
+
+        self.assertEqual(result["safety"], "pass")
+
+
+class OperationalAutonomousResearchTests(unittest.TestCase):
+    def _request(self, request_id: str = "operational:test", execute: bool = True) -> OperationalAutonomousResearchRequest:
+        return OperationalAutonomousResearchRequest(
+            request_id=request_id,
+            user_message="삼성전자 자율 연구를 실행해줘",
+            execute=execute,
+            cycle_request=AutonomousResearchCycleRequest(
+                run_id=request_id,
+                symbol="005930",
+                strategy_id="strategy:parent",
+                evidence_payload={
+                    "metrics": {"trade_count": 3, "wins": 2, "losses": 1, "mdd": 0.12},
+                    "observation_days": 128,
+                    "market_regime_count": 1,
+                    "quality": {"status": "pass"},
+                    "evidence_refs": ("backtest:operational",),
+                },
+            ),
+        )
+
+    def test_operational_runtime_routes_and_renders_korean_without_provider(self) -> None:
+        response = OperationalAutonomousResearchRuntime().handle(self._request())
+
+        self.assertEqual(response.route, OperationalResearchRoute.AUTONOMOUS_RESEARCH_CYCLE)
+        self.assertIn("영하님", response.final_message)
+        self.assertEqual(response.provider_calls, 0)
+
+    def test_operational_runtime_skips_duplicate_request(self) -> None:
+        runtime = OperationalAutonomousResearchRuntime()
+        request = self._request()
+
+        runtime.handle(request)
+        duplicate = runtime.handle(request)
+
+        self.assertEqual(duplicate.route, OperationalResearchRoute.DUPLICATE_SKIPPED)
+
+    def test_operational_runtime_blocks_dry_run(self) -> None:
+        response = OperationalAutonomousResearchRuntime().handle(self._request("operational:dry", execute=False))
+
+        self.assertEqual(response.route, OperationalResearchRoute.SAFETY_BLOCKED)
+
+    def test_operational_autonomous_research_release_check_passes(self) -> None:
+        result = gaon_operational_autonomous_research_release_check()
 
         self.assertEqual(result["safety"], "pass")
 
