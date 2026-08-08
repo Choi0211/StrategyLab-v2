@@ -77,6 +77,15 @@ class CriticSeverity(str, Enum):
     BLOCKING = "blocking"
 
 
+class CycleTerminalState(str, Enum):
+    COMPLETED = "completed"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    DATA_FAILURE = "data_failure"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    SAFETY_STOP = "safety_stop"
+    USER_APPROVAL_REQUIRED = "user_approval_required"
+
+
 @dataclass(frozen=True)
 class EvidenceAdequacy:
     trade_count: int
@@ -347,6 +356,54 @@ class LearningMemoryIntegrationReport:
         }
 
 
+@dataclass(frozen=True)
+class AutonomousResearchCycleRequest:
+    run_id: str
+    symbol: str
+    strategy_id: str
+    evidence_payload: dict[str, Any]
+    max_steps: int = 5
+    persist_learning: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.run_id:
+            raise ValueError("run_id is required")
+        if not self.symbol:
+            raise ValueError("symbol is required")
+        if not self.strategy_id:
+            raise ValueError("strategy_id is required")
+        if self.max_steps < 1:
+            raise ValueError("max_steps must be positive")
+
+
+@dataclass(frozen=True)
+class AutonomousResearchCycleReport:
+    run_id: str
+    terminal_state: CycleTerminalState
+    assessment: ResearchAdequacyAssessment
+    plan: AutonomousResearchPlan
+    critic_report: CriticRetestReport
+    learning_report: LearningMemoryIntegrationReport | None
+    iterations: int
+    approval_required: bool
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": AUTONOMOUS_COMPLETION_SCHEMA_VERSION,
+            "run_id": self.run_id,
+            "terminal_state": self.terminal_state.value,
+            "assessment": self.assessment.to_json(),
+            "plan": self.plan.to_json(),
+            "critic_report": self.critic_report.to_json(),
+            "learning_report": self.learning_report.to_json() if self.learning_report else None,
+            "iterations": self.iterations,
+            "approval_required": self.approval_required,
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+            "automatic_config_apply": False,
+        }
+
+
 class AdaptiveResearchValidator:
     """Classify evidence adequacy and propose validation needs only."""
 
@@ -592,6 +649,46 @@ class AutonomousLearningMemoryIntegrator:
         return f"Autonomous research critic findings: {categories}; candidate retests tested={tested}, rejected={rejected}."
 
 
+class AutonomousResearchCycleRunner:
+    def __init__(self, repository: LearningRepository | None = None) -> None:
+        self._repository = repository or InMemoryLearningRepository()
+        self._validator = AdaptiveResearchValidator()
+        self._planner = AutonomousResearchPlanner()
+        self._critic_loop = CriticImprovementRetestLoop()
+        self._memory = AutonomousLearningMemoryIntegrator()
+
+    def run(self, request: AutonomousResearchCycleRequest) -> AutonomousResearchCycleReport:
+        assessment = self._validator.assess(request.evidence_payload)
+        goal = AutonomousResearchGoal(request.run_id, f"autonomous research for {request.symbol}", (request.symbol,), assessment.evidence_refs)
+        plan = self._planner.plan(goal, assessment)
+        iterations = min(len(plan.steps), request.max_steps)
+        critic_report = self._critic_loop.run(request.strategy_id, assessment, plan)
+        learning_report = self._memory.integrate(request.run_id, critic_report, self._repository) if request.persist_learning else None
+        terminal = self._terminal_state(assessment, plan, request.max_steps)
+        return AutonomousResearchCycleReport(
+            run_id=request.run_id,
+            terminal_state=terminal,
+            assessment=assessment,
+            plan=plan,
+            critic_report=critic_report,
+            learning_report=learning_report,
+            iterations=iterations,
+            approval_required=terminal is CycleTerminalState.USER_APPROVAL_REQUIRED,
+        )
+
+    @staticmethod
+    def _terminal_state(assessment: ResearchAdequacyAssessment, plan: AutonomousResearchPlan, max_steps: int) -> CycleTerminalState:
+        if assessment.status is AdequacyStatus.INVALID or ResearchStopCondition.DATA_FAILURE in plan.stop_conditions:
+            return CycleTerminalState.DATA_FAILURE
+        if len(plan.steps) > max_steps:
+            return CycleTerminalState.BUDGET_EXHAUSTED
+        if assessment.status is AdequacyStatus.SUFFICIENT:
+            return CycleTerminalState.USER_APPROVAL_REQUIRED
+        if assessment.status is AdequacyStatus.DEGRADED:
+            return CycleTerminalState.COMPLETED
+        return CycleTerminalState.INSUFFICIENT_EVIDENCE
+
+
 def gaon_adaptive_validation_release_check() -> dict[str, object]:
     payload = {
         "metrics": {"trade_count": 1, "mdd": 0.04, "wins": 1, "losses": 0},
@@ -717,6 +814,46 @@ def gaon_autonomous_learning_memory_release_check() -> dict[str, object]:
     if integration.knowledge_validated or integration.policy_applied:
         raise ValueError("learning memory integration cannot approve knowledge or apply policy")
     return {"integration": integration.to_json(), "duplicate": duplicate.to_json(), "records": len(repository.list_all()), "audit_events": len(repository.list_audit()), "safety": "pass"}
+
+
+def gaon_autonomous_research_cycle_release_check() -> dict[str, object]:
+    request = AutonomousResearchCycleRequest(
+        run_id="cycle-release-check",
+        symbol="005930",
+        strategy_id="strategy:breakout20",
+        evidence_payload={
+            "metrics": {"trade_count": 3, "wins": 2, "losses": 1, "mdd": 0.12},
+            "observation_days": 128,
+            "market_regime_count": 1,
+            "quality": {"status": "pass"},
+            "evidence_refs": ("release-check:cycle",),
+        },
+        max_steps=5,
+    )
+    report = AutonomousResearchCycleRunner().run(request)
+    if report.terminal_state is CycleTerminalState.DATA_FAILURE:
+        raise ValueError("cycle release check should not hit data failure")
+    if report.learning_report is None or not report.learning_report.stored_records:
+        raise ValueError("cycle must persist learning evidence")
+    if report.to_json()["automatic_champion_promotion"] or report.to_json()["automatic_config_apply"]:
+        raise ValueError("cycle must remain advisory")
+    invalid = AutonomousResearchCycleRunner().run(
+        AutonomousResearchCycleRequest(
+            run_id="cycle-release-check-invalid",
+            symbol="005930",
+            strategy_id="strategy:breakout20",
+            evidence_payload={
+                "metrics": {"trade_count": 3},
+                "observation_days": 128,
+                "market_regime_count": 1,
+                "quality": {"status": "fail", "blocking_findings": 1},
+                "evidence_refs": ("release-check:cycle-invalid",),
+            },
+        )
+    )
+    if invalid.terminal_state is not CycleTerminalState.DATA_FAILURE:
+        raise ValueError("invalid evidence must fail closed")
+    return {"report": report.to_json(), "invalid_terminal_state": invalid.terminal_state.value, "safety": "pass"}
 
 
 def _step_from_need(goal_id: str, need: ValidationNeed, sequence: int, retry_limit: int) -> ResearchStep:

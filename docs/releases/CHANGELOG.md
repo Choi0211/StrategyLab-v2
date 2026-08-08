@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 161 - Autonomous Research Cycle
+
+- Added bounded autonomous research cycle orchestration across validation, planning, critic/retest, and Learning Memory integration.
+- Added explicit cycle terminal states for completed, insufficient evidence, data failure, budget exhausted, safety stop, and user approval required.
+- Added fail-closed handling for invalid evidence quality.
+- Added `gaon-autonomous-research-cycle-release-check` plus unit and integration coverage.
+- Preserved schema v36, no automatic approval, no strategy configuration mutation, no Champion promotion, and no trading.
+
 ## Sprint 160 - Autonomous Learning Memory Integration
 
 - Added unvalidated evidence-backed Learning Memory integration for autonomous research outcomes.

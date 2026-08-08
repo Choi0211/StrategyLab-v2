@@ -3,6 +3,22 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 161 Autonomous Research Cycle
+
+Sprint 161 composes adaptive validation, planning, critic/retest, and Learning
+Memory integration into a bounded autonomous research cycle. The cycle reports
+terminal states such as insufficient evidence, data failure, budget exhausted,
+and user approval required.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-cycle-release-check --db :memory:
+```
+
+Invalid data quality fails closed. Sufficient evidence still requires user
+approval before any strategy configuration change.
+
 ## Sprint 160 Autonomous Learning Memory Integration
 
 Sprint 160 stores autonomous research outcomes as unvalidated, evidence-backed

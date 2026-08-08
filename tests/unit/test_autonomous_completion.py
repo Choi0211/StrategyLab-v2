@@ -4,8 +4,11 @@ from gaon.research.autonomous_completion import (
     AdaptiveResearchValidator,
     AdequacyStatus,
     AutonomousResearchGoal,
+    AutonomousResearchCycleRequest,
+    AutonomousResearchCycleRunner,
     AutonomousResearchPlanner,
     AutonomousLearningMemoryIntegrator,
+    CycleTerminalState,
     CriticImprovementRetestLoop,
     ResearchBudget,
     ResearchCriticEngine,
@@ -17,6 +20,7 @@ from gaon.research.autonomous_completion import (
     ValidationStopReason,
     gaon_adaptive_validation_release_check,
     gaon_autonomous_learning_memory_release_check,
+    gaon_autonomous_research_cycle_release_check,
     gaon_autonomous_research_planner_release_check,
     gaon_research_critic_release_check,
     gaon_strategy_candidate_generation_release_check,
@@ -221,6 +225,53 @@ class AutonomousLearningMemoryIntegrationTests(unittest.TestCase):
 
     def test_autonomous_learning_memory_release_check_passes(self) -> None:
         result = gaon_autonomous_learning_memory_release_check()
+
+        self.assertEqual(result["safety"], "pass")
+
+
+class AutonomousResearchCycleTests(unittest.TestCase):
+    def test_cycle_persists_learning_and_stays_bounded(self) -> None:
+        request = AutonomousResearchCycleRequest(
+            run_id="cycle:test",
+            symbol="005930",
+            strategy_id="strategy:parent",
+            evidence_payload={
+                "metrics": {"trade_count": 3, "wins": 2, "losses": 1, "mdd": 0.12},
+                "observation_days": 128,
+                "market_regime_count": 1,
+                "quality": {"status": "pass"},
+                "evidence_refs": ("backtest:cycle",),
+            },
+            max_steps=5,
+        )
+
+        report = AutonomousResearchCycleRunner().run(request)
+
+        self.assertEqual(report.terminal_state, CycleTerminalState.INSUFFICIENT_EVIDENCE)
+        self.assertLessEqual(report.iterations, request.max_steps)
+        self.assertIsNotNone(report.learning_report)
+        self.assertFalse(report.to_json()["automatic_champion_promotion"])
+
+    def test_cycle_fail_closed_on_invalid_quality(self) -> None:
+        request = AutonomousResearchCycleRequest(
+            run_id="cycle:invalid",
+            symbol="005930",
+            strategy_id="strategy:parent",
+            evidence_payload={
+                "metrics": {"trade_count": 3},
+                "observation_days": 128,
+                "market_regime_count": 1,
+                "quality": {"status": "fail", "blocking_findings": 1},
+                "evidence_refs": ("backtest:invalid",),
+            },
+        )
+
+        report = AutonomousResearchCycleRunner().run(request)
+
+        self.assertEqual(report.terminal_state, CycleTerminalState.DATA_FAILURE)
+
+    def test_autonomous_research_cycle_release_check_passes(self) -> None:
+        result = gaon_autonomous_research_cycle_release_check()
 
         self.assertEqual(result["safety"], "pass")
 
