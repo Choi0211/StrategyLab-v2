@@ -2,6 +2,20 @@
 
 Status: Passed
 
+## Hotfix 163.4 Autonomous Research History Integrity
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion.AutonomousResearchCycleTests.test_telegram_payload_uses_continuation_state_to_stop_duplicate_candidates -q`: PASS
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1634_progress_comparison_preserves_root_candidate_history -q`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-research-history-release-check --db :memory:`: PASS, schema v36
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 608 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 178 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - Sprint 152-163 release-check regressions: PASS in integration suite, including `gaon-autonomous-research-progression-release-check` and `gaon-autonomous-research-history-release-check`
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Hotfix 163.3 Autonomous Research Progression Integrity
 
 - Targeted local verification:

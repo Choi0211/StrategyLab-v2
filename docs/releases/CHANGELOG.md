@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 163.4 - Autonomous Research History Integrity
+
+- Split autonomous progression state into historical candidates, historical TESTED candidates, current-cycle candidates, duplicate candidates, continuation count, and terminal state.
+- Preserved robust-breakout and regime-filter root candidate history after `NO_NEW_RESEARCH_PATH` continuations.
+- Updated autonomous progress comparison rendering to use root/history structured context instead of the empty current cycle.
+- Added `gaon-autonomous-research-history-release-check`.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 163.3 - Autonomous Research Progression Integrity
 
 - Added `continuation_state` handoff for Telegram autonomous research continuation requests.

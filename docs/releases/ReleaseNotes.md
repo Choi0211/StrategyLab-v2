@@ -3,6 +3,25 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 163.4 Autonomous Research History Integrity
+
+Hotfix 163.4 fixes autonomous progress comparison after a
+`NO_NEW_RESEARCH_PATH` continuation. Gaon now keeps root autonomous research
+history separate from the empty current continuation cycle, so previously
+generated and TESTED candidates remain visible in follow-up explanations.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-research-history-release-check --db :memory:
+```
+
+The release check verifies that robust-breakout and regime-filter candidate
+history remains available, the current cycle correctly reports zero new
+candidates, continuation count reaches 2, and the comparison question does not
+rerun tools or fabricate metric/assumption deltas. It does not enable trading,
+Champion promotion, approval bypass, or strategy mutation.
+
 ## Hotfix 163.3 Autonomous Research Progression Integrity
 
 Hotfix 163.3 fixes repeated autonomous continuation prompts. `계속 연구해줘`

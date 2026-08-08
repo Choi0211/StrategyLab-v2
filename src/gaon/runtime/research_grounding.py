@@ -288,6 +288,9 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
     quality_status = output.get("quality_status", "unknown")
     terminal = output.get("terminal_state", cycle.get("terminal_state", "unknown"))
     progression = _as_dict(output.get("progression"))
+    historical_candidates = _as_list(progression.get("historical_candidates"))
+    historical_tested = _as_list(progression.get("historical_tested_candidates"))
+    current_candidates = _as_list(progression.get("current_cycle_candidates"))
     lines = [
         "영하님, 기존 분석 결과를 근거로 자율 연구 검증 사이클을 실행했습니다.",
         "",
@@ -305,6 +308,9 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
         f"- validation_needs={len(_as_list(_as_dict(assessment.get('plan')).get('needs')))}",
         f"- planner_steps={len(_as_list(plan.get('steps')))}",
         f"- continuation_count={progression.get('continuation_count', 0)}",
+        f"- historical_candidates={len(historical_candidates)}",
+        f"- historical_TESTED_candidates={len(historical_tested)}",
+        f"- current_cycle_candidates={len(current_candidates)}",
         "",
         "[Critic 결과]",
     ]
@@ -333,6 +339,9 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
         duplicate_count = len(_as_list(progression.get("duplicate_candidate_keys")))
         if duplicate_count:
             lines.append(f"- duplicate_candidates_blocked={duplicate_count}")
+        duplicate_history_count = len(_as_list(progression.get("duplicate_candidates")))
+        if duplicate_history_count:
+            lines.append(f"- duplicate_candidate_history_blocked={duplicate_history_count}")
         if progression.get("assumptions_immutable") is True:
             lines.append("- assumptions_immutable=true")
     lines.extend(
