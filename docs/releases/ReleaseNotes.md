@@ -3,6 +3,26 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 155 Conversational Research Execution
+
+Sprint 155 connects explicit Telegram period-change follow-ups to authoritative
+research execution. After a structured research answer, requests such as
+`5년으로 다시 해봐`, `3년으로 다시 비교해줘`, or `2021년부터 지금까지 분석해줘`
+reuse the same chat-scoped research context and execute existing safe tools
+instead of summarizing the previous answer string.
+
+Ambiguous requests such as `더 긴 기간으로 다시 분석해봐` ask for a concrete
+period before running. Presentation-only requests such as `조금 더 짧게` still
+reuse the stored structured result without rerunning research.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-conversational-research-execution-release-check --db :memory:
+```
+
+No schema migration is included. Safety boundaries remain unchanged.
+
 ## Hotfix 154.1 Presentation State and Grounding Integrity
 
 Hotfix 154.1 strengthens Sprint 154's presentation state handling. Explicit

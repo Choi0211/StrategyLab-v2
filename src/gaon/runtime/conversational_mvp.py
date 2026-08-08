@@ -340,7 +340,10 @@ def classify_conversational_route(text: str) -> ConversationalRoute:
         return ConversationalRoute(ConversationalMVPIntent.PROFESSIONAL_EXPLANATION, symbols)
     if any(token in normalized for token in INVESTMENT_DECISION_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, symbols)
-    if any(token in normalized for token in TIMEFRAME_TOKENS) and any(token in normalized for token in ("다시", "해줘", "검증", "분석", "돌려", "rerun", "retest")):
+    if any(token in normalized for token in TIMEFRAME_TOKENS) and (
+        any(token in normalized for token in ("다시", "해줘", "검증", "분석", "돌려", "rerun", "retest"))
+        or re.fullmatch(r"\s*(\d+\s*년|18\s*개월|6\s*개월|최근\s*\d+\s*년)\s*", normalized) is not None
+    ):
         return ConversationalRoute(ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, symbols)
     if any(token in normalized for token in RERUN_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.RERUN_REQUEST, symbols)

@@ -233,6 +233,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_presentation_integrity_release = sub.add_parser("gaon-presentation-integrity-release-check")
     gaon_presentation_integrity_release.add_argument("--db", default=":memory:")
     gaon_presentation_integrity_release.add_argument("--run-id", default=None)
+    gaon_research_execution_release = sub.add_parser("gaon-conversational-research-execution-release-check")
+    gaon_research_execution_release.add_argument("--db", default=":memory:")
+    gaon_research_execution_release.add_argument("--run-id", default=None)
     agent_status = sub.add_parser("agent-status")
     agent_status.add_argument("--db", default=":memory:")
     agent_plan_history = sub.add_parser("agent-plan-history")
@@ -1117,7 +1120,7 @@ def _run(args: argparse.Namespace) -> int:
                 ("risk", "위험은 어느 정도야?"),
                 ("simple", "쉽게 설명해줘"),
                 ("professional", "전문적으로 설명해줘"),
-                ("rerun", "3년 기간으로 다시 해줘"),
+                ("rerun", "더 긴 기간으로 다시 분석해봐"),
                 ("missing", "위험은 어느 정도야?"),
             )
             responses: dict[str, str] = {}
@@ -1156,7 +1159,7 @@ def _run(args: argparse.Namespace) -> int:
                 raise ConfigurationError("conversational reasoning release check missed required explanation structure")
             if any(token in combined for token in forbidden):
                 raise ConfigurationError("conversational reasoning release check leaked metadata or unsafe wording")
-            if "재검증 요청으로 이해했습니다" not in responses["rerun"] or "기간을 명확히 지정" not in responses["rerun"]:
+            if "기간을 지정" not in responses["rerun"] or "임의로 다시 계산" not in responses["rerun"]:
                 raise ConfigurationError("rerun boundary did not request explicit authoritative parameters")
             if len(store.tool_audit.list(tool_name="krx_real_research")) != 1:
                 raise ConfigurationError("reasoning follow-ups should reuse context without repeated research tool calls")
@@ -1277,6 +1280,67 @@ def _run(args: argparse.Namespace) -> int:
                 "gaon-presentation-integrity-release-check: PASS "
                 f"schema_version={store.status().schema_version} run_id={run_id} "
                 "source=preserved renderer=single preference=explicit grounded=true safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-conversational-research-execution-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
+
+            config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+            brain = LLMConversationBrain(
+                config,
+                store.conversations,
+                tool_executor=_conversational_research_execution_tool_executor(store),
+                tool_result_repository=store.conversation_tool_results,
+            )
+            run_id = args.run_id or f"gaon-conversational-research-execution-release-check:{uuid4().hex}"
+            chat = f"{run_id}:chat-a"
+            initial = brain.respond(LLMConversationRequest(chat, "cli", "cli", "\uc0bc\uc131\uc804\uc790 \ubd84\uc11d\ud574\uc918", _utc_now(), f"{run_id}:message:initial"))
+            ambiguous = brain.respond(LLMConversationRequest(chat, "cli", "cli", "\ub354 \uae34 \uae30\uac04\uc73c\ub85c \ub2e4\uc2dc \ubd84\uc11d\ud574\ubd10", _utc_now(), f"{run_id}:message:ambiguous"))
+            five_year = brain.respond(LLMConversationRequest(chat, "cli", "cli", "5\ub144\uc73c\ub85c \ub2e4\uc2dc \ud574\ubd10", _utc_now(), f"{run_id}:message:five-year"))
+            short = brain.respond(LLMConversationRequest(chat, "cli", "cli", "\uc870\uae08 \ub354 \uc9e7\uac8c", _utc_now(), f"{run_id}:message:short"))
+            missing = brain.respond(LLMConversationRequest(f"{run_id}:chat-b", "cli", "cli", "5\ub144\uc73c\ub85c \ub2e4\uc2dc \ud574\ubd10", _utc_now(), f"{run_id}:message:missing"))
+            compare_chat = f"{run_id}:chat-c"
+            compare = brain.respond(LLMConversationRequest(compare_chat, "cli", "cli", "\uc0bc\uc131\uc804\uc790\uc640 SK\ud558\uc774\ub2c9\uc2a4 \ube44\uad50\ud574\uc918", _utc_now(), f"{run_id}:message:compare"))
+            compare_rerun = brain.respond(LLMConversationRequest(compare_chat, "cli", "cli", "3\ub144\uc73c\ub85c \ub2e4\uc2dc \ube44\uad50\ud574\uc918", _utc_now(), f"{run_id}:message:compare-rerun"))
+
+            krx_audits = store.tool_audit.list(tool_name="krx_real_research")
+            multi_audits = store.tool_audit.list(tool_name="multi_symbol_research")
+            if initial.tool_calls != ("krx_real_research",) or five_year.tool_calls != ("krx_real_research",):
+                raise ConfigurationError("conversational research execution release check did not execute single-symbol research")
+            if ambiguous.tool_calls or missing.tool_calls:
+                raise ConfigurationError("conversational research execution release check executed ambiguous or context-free rerun")
+            if short.tool_calls:
+                raise ConfigurationError("presentation-only follow-up reran research")
+            if compare_rerun.tool_calls != ("multi_symbol_research",):
+                raise ConfigurationError("multi-symbol conversational rerun did not use the multi-symbol safe tool")
+            single_rerun_args = dict(krx_audits[1].request.get("arguments", {}))
+            if single_rerun_args.get("symbol") != "005930" or single_rerun_args.get("start_date") != "2021-07-25" or single_rerun_args.get("end_date") != "2026-07-24":
+                raise ConfigurationError("single-symbol conversational rerun did not preserve context or resolve five-year period")
+            multi_args = dict(multi_audits[-1].request.get("arguments", {}))
+            if tuple(multi_args.get("symbols", ())) != ("005930", "000660"):
+                raise ConfigurationError("multi-symbol conversational rerun did not preserve symbols")
+            if multi_args.get("start_date") != "2023-07-25" or multi_args.get("end_date") != "2026-07-24":
+                raise ConfigurationError("multi-symbol conversational rerun did not resolve three-year period")
+            combined = "\n".join((five_year.text, compare_rerun.text))
+            required = ("\uae30\uac04:", "\uac70\ub798 \uc218", "\ucd1d\uc218\uc775\ub960", "MDD", "Yahoo Chart \uacf5\uac1c \ub370\uc774\ud130")
+            forbidden = ("run_id", "strategy_fingerprint", "validation_id", "fixture_backed", "<output>", "<response>", "\ub9e4\uc218\ud558\uc138\uc694")
+            if not all(token in combined for token in required):
+                raise ConfigurationError("conversational research execution response missed required grounded result terms")
+            if any(token in combined for token in forbidden):
+                raise ConfigurationError("conversational research execution response leaked internal metadata or unsafe wording")
+            if "\uae30\uac04\uc744 \uc9c0\uc815" not in ambiguous.text:
+                raise ConfigurationError("ambiguous period rerun did not ask for clarification")
+            if "\uc9c1\uc804" not in five_year.text or "\u2192" not in five_year.text:
+                raise ConfigurationError("period rerun did not compare against previous structured result")
+            print(
+                "gaon-conversational-research-execution-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "context_resolution=pass period_resolution=pass real_execution=pass multi_symbol=pass "
+                "assumptions_preserved=true presentation_isolated=true grounded=true safety=pass"
             )
         finally:
             store.close()
@@ -3769,7 +3833,14 @@ def _telegram_followup_release_tool_executor(store: RuntimeStateStore) -> SafeTo
     registry = ToolRegistry()
 
     def handle_research(tool_args):
-        return _conversation_context_release_payload(str(tool_args.get("symbol", "005930")), fixture_backed=False, zero_trade_symbols=("000660",))
+        payload = _conversation_context_release_payload(str(tool_args.get("symbol", "005930")), fixture_backed=False, zero_trade_symbols=("000660",))
+        metadata = payload["dataset"]["metadata"]
+        if "start_date" in tool_args:
+            metadata["start_date"] = str(tool_args["start_date"])
+        if "end_date" in tool_args:
+            metadata["end_date"] = str(tool_args["end_date"])
+        payload["request_text"] = str(tool_args.get("request_text", ""))
+        return payload
 
     registry.register(
         ToolDefinition(
@@ -3777,9 +3848,84 @@ def _telegram_followup_release_tool_executor(store: RuntimeStateStore) -> SafeTo
             "Run deterministic Telegram follow-up release-check research.",
             ToolRiskLevel.READ_ONLY,
             required_args=("request_text",),
-            allowed_args=("symbol",),
+            allowed_args=("symbol", "start_date", "end_date"),
         ),
         handle_research,
+    )
+    return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _conversational_research_execution_tool_executor(store: RuntimeStateStore) -> SafeToolExecutor:
+    registry = ToolRegistry()
+
+    def handle_research(tool_args):
+        payload = _conversation_context_release_payload(str(tool_args.get("symbol", "005930")), fixture_backed=False)
+        metadata = payload["dataset"]["metadata"]
+        if "start_date" in tool_args:
+            metadata["start_date"] = str(tool_args["start_date"])
+        if "end_date" in tool_args:
+            metadata["end_date"] = str(tool_args["end_date"])
+        payload["request_text"] = str(tool_args.get("request_text", ""))
+        metrics = payload["backtest"]["metrics"]
+        if metadata["start_date"] == "2021-07-25":
+            metrics["trade_count"] = int(metrics["trade_count"]) + 12
+            metrics["total_return"] = float(metrics["total_return"]) + 0.083
+            metrics["mdd"] = max(float(metrics["mdd"]), 0.118)
+            metrics["profit_factor"] = 1.31
+        elif metadata["start_date"] == "2023-07-25":
+            metrics["trade_count"] = int(metrics["trade_count"]) + 6
+            metrics["total_return"] = float(metrics["total_return"]) + 0.041
+            metrics["mdd"] = max(float(metrics["mdd"]), 0.087)
+            metrics["profit_factor"] = 1.24
+        return payload
+
+    def handle_multi(tool_args):
+        symbols = tuple(str(item) for item in tool_args.get("symbols", ("005930", "000660")))
+        start_date = str(tool_args.get("start_date", "2021-07-25"))
+        end_date = str(tool_args.get("end_date", "2026-07-24"))
+        outputs = [handle_research({"symbol": symbol, "request_text": tool_args.get("request_text", ""), "start_date": start_date, "end_date": end_date}) for symbol in symbols]
+        aggregate_trade_count = sum(int(output["backtest"]["metrics"]["trade_count"]) for output in outputs)
+        return {
+            "schema_version": 36,
+            "request_text": str(tool_args.get("request_text", "")),
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "start_date": start_date,
+            "end_date": end_date,
+            "quality_status": "pass",
+            "symbols": [
+                {
+                    "symbol": str(output["dataset"]["symbols"][0]["symbol"]),
+                    "metrics": dict(output["backtest"]["metrics"]),
+                    "quality_status": str(output["quality"]["status"]),
+                }
+                for output in outputs
+            ],
+            "aggregate": {"aggregate_trade_count": aggregate_trade_count, "sample_confidence": "medium"},
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+            "automatic_config_apply": False,
+        }
+
+    registry.register(
+        ToolDefinition(
+            "krx_real_research",
+            "Run deterministic conversational research execution release-check research.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol", "start_date", "end_date"),
+        ),
+        handle_research,
+    )
+    registry.register(
+        ToolDefinition(
+            "multi_symbol_research",
+            "Run deterministic conversational multi-symbol research execution release-check research.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbols", "universe_type", "start_date", "end_date"),
+        ),
+        handle_multi,
     )
     return SafeToolExecutor(registry, store.tool_audit)
 

@@ -2,6 +2,21 @@
 
 Status: Passed
 
+## Sprint 155 Conversational Research Execution
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\runtime\conversational_research_execution.py src\gaon\runtime\llm_conversation.py src\gaon\runtime\conversational_mvp.py src\gaon\runtime\llm_tools.py src\gaon\research\krx_real_pipeline.py src\gaon\runtime\cli.py`: PASS
+  - `python -m gaon.runtime.cli gaon-conversational-research-execution-release-check --db :memory:`: PASS, schema v36
+  - `python -m unittest tests.integration.test_telegram_conversation_agent -v`: PASS, 46 tests
+- Full verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 578 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 148 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - Existing Sprint 152~154 release checks: PASS through integration discover and targeted CLI output
+  - `git diff --check`: PASS, with Windows LF-to-CRLF working-copy warnings only
+- Note: `python -m pytest ...` was not executed in this local desktop runtime because pytest is not installed in the bundled Python environment; equivalent `unittest` commands are used for local verification.
+
 ## Hotfix 154.1 Presentation State and Grounding Integrity
 
 - Targeted local verification:

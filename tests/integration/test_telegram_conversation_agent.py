@@ -733,6 +733,129 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_hotfix1541_presentation_integrity_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-presentation-integrity-release-check", "--db", ":memory:"]), 0)
 
+    def test_sprint155_ambiguous_period_rerun_requests_clarification(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(600, 600, "삼성전자 분석해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(601, 601, "더 긴 기간으로 다시 분석해봐"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertIn("기간을 지정", client.sent[-1][1])
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "conversation_research_execution_clarification")
+        finally:
+            store.close()
+
+    def test_sprint155_period_rerun_preserves_symbol_and_executes_research(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(602, 602, "삼성전자 분석해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(603, 603, "5년으로 다시 해봐"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+
+            audits = store.tool_audit.list(tool_name="krx_real_research")
+            self.assertEqual(len(audits), 2)
+            args = audits[-1].request["arguments"]
+            self.assertEqual(args["symbol"], "005930")
+            self.assertEqual(args["start_date"], "2021-07-11")
+            self.assertEqual(args["end_date"], "2026-07-10")
+            final = client.sent[-1][1]
+            self.assertIn("삼성전자(005930)", final)
+            self.assertIn("기간: 2021-07-11 ~ 2026-07-10", final)
+            self.assertIn("Yahoo Chart 공개 데이터", final)
+            self.assertIn("직전 결과와 비교", final)
+            self.assertNotIn("run_id", final)
+            self.assertNotIn("strategy_fingerprint", final)
+        finally:
+            store.close()
+
+    def test_sprint155_period_confirmation_keeps_context_after_clarification(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(604, 604, "삼성전자 분석해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(605, 605, "더 길게 다시 해봐"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+            process_update(parse_update_result(_update(606, 606, "3년"), received_at="2026-07-30T00:00:02Z"), runtime, client)
+
+            audits = store.tool_audit.list(tool_name="krx_real_research")
+            self.assertEqual(len(audits), 2)
+            self.assertEqual(audits[-1].request["arguments"]["symbol"], "005930")
+            self.assertEqual(audits[-1].request["arguments"]["start_date"], "2023-07-11")
+            self.assertIn("기간: 2023-07-11 ~ 2026-07-10", client.sent[-1][1])
+        finally:
+            store.close()
+
+    def test_sprint155_multi_symbol_period_rerun_uses_multi_symbol_safe_tool(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(607, 607, "삼성전자와 SK하이닉스 비교해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(608, 608, "3년으로 다시 비교해줘"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+
+            multi_audits = store.tool_audit.list(tool_name="multi_symbol_research")
+            self.assertEqual(len(multi_audits), 1)
+            args = multi_audits[0].request["arguments"]
+            self.assertEqual(tuple(args["symbols"]), ("005930", "000660"))
+            self.assertEqual(args["start_date"], "2023-07-11")
+            self.assertEqual(args["end_date"], "2026-07-10")
+            final = client.sent[-1][1]
+            self.assertIn("삼성전자(005930)", final)
+            self.assertIn("SK하이닉스(000660)", final)
+            self.assertIn("주문이나 자동 승격은 수행하지 않았습니다", final)
+        finally:
+            store.close()
+
+    def test_sprint155_missing_context_rerun_is_fail_closed(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(609, 609, "5년으로 다시 해봐"),))
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(client.updates[0], received_at="2026-07-30T00:00:00Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 0)
+            self.assertEqual(len(store.tool_audit.list(tool_name="multi_symbol_research")), 0)
+        finally:
+            store.close()
+
+    def test_sprint155_presentation_followup_does_not_rerun_research(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(610, 610, "삼성전자 분석해줘"), received_at="2026-07-30T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(611, 611, "조금 더 짧게"), received_at="2026-07-30T00:00:01Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="multi_symbol_research")), 0)
+        finally:
+            store.close()
+
+    def test_sprint155_conversational_research_execution_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-conversational-research-execution-release-check", "--db", ":memory:"]), 0)
+
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
 
@@ -934,7 +1057,41 @@ def _sprint152_tool_executor(
         symbol = str(args.get("symbol", "005930"))
         if fail_symbol == symbol:
             raise RealMarketDataUnavailable(f"real_data_unavailable: synthetic failure for {symbol}")
-        return _sprint152_payload(symbol, fixture_backed=fixture_backed, zero_trade_symbols=zero_trade_symbols)
+        return _sprint152_payload(
+            symbol,
+            fixture_backed=fixture_backed,
+            zero_trade_symbols=zero_trade_symbols,
+            start_date=str(args.get("start_date", "2026-01-02")),
+            end_date=str(args.get("end_date", "2026-07-10")),
+            request_text=str(args.get("request_text", "")),
+        )
+
+    def handle_multi(args):
+        symbols = tuple(str(item) for item in args.get("symbols", ("005930", "000660")))
+        start_date = str(args.get("start_date", "2021-07-25"))
+        end_date = str(args.get("end_date", "2026-07-24"))
+        outputs = [
+            _sprint152_payload(symbol, fixture_backed=fixture_backed, zero_trade_symbols=zero_trade_symbols, start_date=start_date, end_date=end_date, request_text=str(args.get("request_text", "")))
+            for symbol in symbols
+        ]
+        aggregate_trade_count = sum(int(output["backtest"]["metrics"]["trade_count"]) for output in outputs)
+        return {
+            "schema_version": 36,
+            "request_text": str(args.get("request_text", "")),
+            "source": "real:yahoo-chart" if not fixture_backed else "fixture:sprint152",
+            "fixture_backed": fixture_backed,
+            "start_date": start_date,
+            "end_date": end_date,
+            "quality_status": "pass",
+            "symbols": [
+                {"symbol": output["dataset"]["symbols"][0]["symbol"], "metrics": dict(output["backtest"]["metrics"]), "quality_status": output["quality"]["status"]}
+                for output in outputs
+            ],
+            "aggregate": {"aggregate_trade_count": aggregate_trade_count, "sample_confidence": "medium"},
+            "automatic_order": False,
+            "automatic_champion_promotion": False,
+            "automatic_config_apply": False,
+        }
 
     registry.register(
         ToolDefinition(
@@ -942,14 +1099,24 @@ def _sprint152_tool_executor(
             "Run the read-only KRX real-research pipeline with explicit source provenance.",
             ToolRiskLevel.READ_ONLY,
             required_args=("request_text",),
-            allowed_args=("symbol",),
+            allowed_args=("symbol", "start_date", "end_date"),
         ),
         handle,
+    )
+    registry.register(
+        ToolDefinition(
+            "multi_symbol_research",
+            "Run deterministic multi-symbol research for conversation tests.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbols", "universe_type", "start_date", "end_date"),
+        ),
+        handle_multi,
     )
     return SafeToolExecutor(registry, store.tool_audit)
 
 
-def _sprint152_payload(symbol: str, *, fixture_backed: bool = True, zero_trade_symbols: tuple[str, ...] = ()) -> dict[str, object]:
+def _sprint152_payload(symbol: str, *, fixture_backed: bool = True, zero_trade_symbols: tuple[str, ...] = (), start_date: str = "2026-01-02", end_date: str = "2026-07-10", request_text: str = "") -> dict[str, object]:
     trades = {"005930": 1, "000660": 7}.get(symbol, 3)
     total_return = {"005930": 0.0123, "000660": 0.061}.get(symbol, 0.02)
     mdd = {"005930": 0.044, "000660": 0.091}.get(symbol, 0.05)
@@ -973,8 +1140,8 @@ def _sprint152_payload(symbol: str, *, fixture_backed: bool = True, zero_trade_s
                 "source": "fixture:sprint152" if fixture_backed else "real:yahoo-chart",
                 "market": "KOSPI",
                 "timeframe": "daily",
-                "start_date": "2026-01-02",
-                "end_date": "2026-07-10",
+                "start_date": start_date,
+                "end_date": end_date,
                 "fixture_backed": fixture_backed,
             },
         },
@@ -997,6 +1164,7 @@ def _sprint152_payload(symbol: str, *, fixture_backed: bool = True, zero_trade_s
         },
         "automatic_order": False,
         "automatic_champion_promotion": False,
+        "request_text": request_text,
     }
 
 

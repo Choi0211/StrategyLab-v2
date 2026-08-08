@@ -905,8 +905,13 @@ class RealAutonomousResearchPipeline:
         return None
 
 
-def krx_real_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930") -> dict[str, object]:
-    report = RealAutonomousResearchPipeline(connection, build_market_data_provider_from_env(os.environ)).run(request_text, symbol=symbol)
+def krx_real_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930", start_date: str | None = None, end_date: str | None = None) -> dict[str, object]:
+    kwargs: dict[str, object] = {"symbol": symbol}
+    if start_date is not None:
+        kwargs["start_date"] = start_date
+    if end_date is not None:
+        kwargs["end_date"] = end_date
+    report = RealAutonomousResearchPipeline(connection, build_market_data_provider_from_env(os.environ)).run(request_text, **kwargs)
     return report.to_json()
 
 
