@@ -1254,6 +1254,10 @@ class TelegramConversationAgentTests(unittest.TestCase):
             final_progression = continuations[-1].result["output"]["progression"]
             self.assertEqual(len(final_progression["historical_candidates"]), 2)
             self.assertEqual(len(final_progression["historical_tested_candidates"]), 2)
+            self.assertEqual(final_progression["historical_candidates"].count("candidate_kind=robust-breakout"), 1)
+            self.assertEqual(final_progression["historical_candidates"].count("candidate_kind=regime-filter"), 1)
+            self.assertEqual(final_progression["historical_tested_candidates"].count("candidate_kind=robust-breakout"), 1)
+            self.assertEqual(final_progression["historical_tested_candidates"].count("candidate_kind=regime-filter"), 1)
             self.assertEqual(final_progression["current_cycle_candidates"], [])
             self.assertEqual(len(final_progression["duplicate_candidates"]), 2)
             self.assertEqual(final_progression["continuation_count"], 2)
@@ -1261,6 +1265,8 @@ class TelegramConversationAgentTests(unittest.TestCase):
             final = client.sent[-1][1]
             self.assertIn("robust-breakout", final)
             self.assertIn("regime-filter", final)
+            self.assertEqual(final.count("robust-breakout"), 1)
+            self.assertEqual(final.count("regime-filter"), 1)
             self.assertIn("continuation_count=2", final)
             self.assertIn("terminal_state=no_new_research_path", final)
             self.assertNotIn("cost_assumptions", final)
@@ -1270,6 +1276,9 @@ class TelegramConversationAgentTests(unittest.TestCase):
 
     def test_hotfix1634_autonomous_history_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-autonomous-research-history-release-check", "--db", ":memory:"]), 0)
+
+    def test_hotfix1635_autonomous_candidate_identity_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-autonomous-candidate-identity-release-check", "--db", ":memory:"]), 0)
 
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
@@ -1575,8 +1584,8 @@ def _sprint163_autonomous_payload(symbol: str = "005930", *, mode: str = "valida
         "candidate_kind=regime-filter|changed_rules=[]|hypothesis=|status=tested",
     }
     candidate_identities = {
-        "candidate_kind=robust-breakout|changed_rules=[]",
-        "candidate_kind=regime-filter|changed_rules=[]",
+        "candidate_kind=robust-breakout",
+        "candidate_kind=regime-filter",
     }
     duplicate = mode == "continue" and candidate_keys.issubset(prior_tested)
     retests = [] if duplicate else [

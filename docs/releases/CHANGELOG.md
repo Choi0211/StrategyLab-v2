@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 163.5 - Autonomous Research Candidate Identity Integrity
+
+- Canonicalized autonomous historical candidate identities to `candidate_kind=<kind>` while preserving stricter `tested_candidate_keys` for duplicate prevention.
+- Normalized prior historical candidate state restored from proposal/retest/tested-key paths so `robust-breakout` and `regime-filter` appear once each in root history.
+- Added regression coverage for legacy `changed_rules`-bearing identities and Telegram progress comparison output.
+- Added `gaon-autonomous-candidate-identity-release-check`.
+- Preserved schema v36, no trading, no Champion auto-promotion, no approval bypass, and no strategy configuration mutation.
+
 ## Hotfix 163.4 - Autonomous Research History Integrity
 
 - Split autonomous progression state into historical candidates, historical TESTED candidates, current-cycle candidates, duplicate candidates, continuation count, and terminal state.

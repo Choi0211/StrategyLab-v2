@@ -242,6 +242,17 @@ not erased history. Root robust-breakout/regime-filter candidate and TESTED
 history remains visible in later comparison follow-ups, while the comparison
 question does not rerun autonomous tools or fabricate metric/assumption deltas.
 
+Hotfix 163.5 autonomous candidate identity integrity release check:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-candidate-identity-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+This verifies that proposal, retest, restored history, and
+`tested_candidate_keys` all resolve the same logical candidate to one canonical
+history identity, so robust-breakout and regime-filter are each shown once after
+repeated autonomous continuations.
+
 ## Windows PowerShell Example
 
 ```powershell

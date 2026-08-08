@@ -1074,8 +1074,8 @@ def telegram_autonomous_research_payload(connection: sqlite3.Connection, request
     cycle_json["critic_report"] = critic_report
     cycle_json["terminal_state"] = terminal_state
     continuation_count = _int(prior_state.get("continuation_count")) + (1 if mode == "continue" else 0)
-    prior_historical_candidates = {str(item) for item in prior_state.get("historical_candidates", ()) if item}
-    prior_historical_tested = {str(item) for item in prior_state.get("historical_tested_candidates", ()) if item}
+    prior_historical_candidates = {_identity_from_dedupe_key(item) for item in prior_state.get("historical_candidates", ()) if item}
+    prior_historical_tested = {_identity_from_dedupe_key(item) for item in prior_state.get("historical_tested_candidates", ()) if item}
     prior_historical_candidates.update(_identity_from_dedupe_key(item) for item in prior_tested)
     prior_historical_tested.update(_identity_from_dedupe_key(item) for item in prior_tested)
     current_candidate_identities = {_candidate_identity_key(item) for item in filtered_proposals} if filtered_proposals else {_candidate_identity_key(item) for item in filtered_retests}
@@ -1165,20 +1165,17 @@ def _candidate_dedupe_key(value: object) -> str:
 def _candidate_identity_key(value: object) -> str:
     item = _dict(value)
     candidate = _dict(item.get("candidate"))
-    changed_rules = candidate.get("changed_rules")
-    if not isinstance(changed_rules, list):
-        changed_rules = item.get("changed_rules") if isinstance(item.get("changed_rules"), list) else []
-    basis = {
-        "candidate_kind": _candidate_kind(str(item.get("candidate_id") or candidate.get("candidate_id") or item.get("proposal_id") or "")),
-        "changed_rules": sorted(str(rule) for rule in changed_rules),
-    }
-    return "|".join(f"{key}={basis[key]}" for key in sorted(basis))
+    kind = _candidate_kind(str(item.get("candidate_id") or candidate.get("candidate_id") or item.get("proposal_id") or ""))
+    return f"candidate_kind={kind or 'unknown'}"
 
 
 def _identity_from_dedupe_key(value: object) -> str:
     text = str(value)
-    parts = [part for part in text.split("|") if not part.startswith(("status=", "hypothesis="))]
-    return "|".join(parts)
+    for part in text.split("|"):
+        if part.startswith("candidate_kind="):
+            kind = part.split("=", 1)[1] or "unknown"
+            return f"candidate_kind={kind}"
+    return text or "candidate_kind=unknown"
 
 
 def _candidate_kind(candidate_id: str) -> str:

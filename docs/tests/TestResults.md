@@ -2,6 +2,20 @@
 
 Status: Passed
 
+## Hotfix 163.5 Autonomous Research Candidate Identity Integrity
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_completion.AutonomousResearchCycleTests.test_telegram_payload_uses_continuation_state_to_stop_duplicate_candidates tests.unit.test_autonomous_completion.AutonomousResearchCycleTests.test_telegram_payload_canonicalizes_legacy_candidate_history_identity -q`: PASS, 2 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1634_progress_comparison_preserves_root_candidate_history tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1635_autonomous_candidate_identity_release_check_passes -q`: PASS, 2 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-candidate-identity-release-check --db :memory:`: PASS, schema v36
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 609 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - Sprint 163 release-check regressions: PASS for Telegram autonomous routing, conversation context, progression, history, and candidate identity
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Hotfix 163.4 Autonomous Research History Integrity
 
 - Targeted local verification:

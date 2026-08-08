@@ -3,6 +3,24 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 163.5 Autonomous Research Candidate Identity Integrity
+
+Hotfix 163.5 fixes duplicate logical candidate labels in autonomous research
+history. Gaon now keeps duplicate-prevention keys strict while rendering
+historical candidate identity through one canonical representation,
+`candidate_kind=<kind>`.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-candidate-identity-release-check --db :memory:
+```
+
+The release check verifies that `robust-breakout` and `regime-filter` each
+appear exactly once in historical and TESTED candidate history after repeated
+`NO_NEW_RESEARCH_PATH` continuations. It does not enable trading, Champion
+promotion, approval bypass, or strategy mutation.
+
 ## Hotfix 163.4 Autonomous Research History Integrity
 
 Hotfix 163.4 fixes autonomous progress comparison after a

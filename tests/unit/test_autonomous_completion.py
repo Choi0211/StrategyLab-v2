@@ -309,6 +309,44 @@ class AutonomousResearchCycleTests(unittest.TestCase):
             store.close()
 
 
+    def test_telegram_payload_canonicalizes_legacy_candidate_history_identity(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            state = {
+                "current_cycle_id": "autonomous-cycle:legacy",
+                "root_cycle_id": "autonomous-cycle:legacy",
+                "continuation_count": 1,
+                "historical_candidates": [
+                    "candidate_kind=robust-breakout|changed_rules=['entry.breakout_lookback']",
+                    "candidate_kind=regime-filter|changed_rules=['filters.regime_guard']",
+                ],
+                "historical_tested_candidates": [
+                    "candidate_kind=robust-breakout|changed_rules=[]",
+                    "candidate_kind=regime-filter|changed_rules=[]",
+                ],
+                "tested_candidate_keys": [
+                    "candidate_kind=robust-breakout|changed_rules=[]|hypothesis=|status=tested",
+                    "candidate_kind=regime-filter|changed_rules=[]|hypothesis=|status=tested",
+                ],
+            }
+            result = telegram_autonomous_research_payload(
+                store._connection,
+                "계속 연구해줘",
+                symbol="005930",
+                mode="continue",
+                continuation_state=state,
+            )
+
+            progression = result["progression"]
+            self.assertEqual(progression["terminal_state"], "no_new_research_path")
+            self.assertEqual(progression["historical_candidates"], ["candidate_kind=regime-filter", "candidate_kind=robust-breakout"])
+            self.assertEqual(progression["historical_tested_candidates"], ["candidate_kind=regime-filter", "candidate_kind=robust-breakout"])
+            self.assertEqual(progression["current_cycle_candidates"], [])
+            self.assertEqual(len(progression["duplicate_candidates"]), 2)
+        finally:
+            store.close()
+
+
 class OperationalAutonomousResearchTests(unittest.TestCase):
     def _request(self, request_id: str = "operational:test", execute: bool = True) -> OperationalAutonomousResearchRequest:
         return OperationalAutonomousResearchRequest(
