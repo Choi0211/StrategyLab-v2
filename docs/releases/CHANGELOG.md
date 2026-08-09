@@ -1,5 +1,12 @@
 # Changelog
 
+## Sprint 185 - Human-gated Autonomous Research Promotion
+
+- Added `HumanGatedPromotionService` for explicit approval-token validation over promotion candidates.
+- Added manual-application-only approval receipts that store token digests without printing secrets.
+- Added `gaon-human-gated-promotion-release-check` and `gaon-autonomous-learning-production-gate-release-check`.
+- Preserved schema v36, no automatic Champion promotion, no strategy mutation, and no trading.
+
 ## Sprint 184 - Promotion Candidate Gate
 
 - Added `PromotionCandidateGate` and approval-required `PromotionCandidateRecord` contracts.

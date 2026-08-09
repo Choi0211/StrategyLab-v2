@@ -2,6 +2,19 @@
 
 Status: Passed
 
+## Sprint 185 Human-gated Autonomous Research Promotion
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_human_gated_promotion -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-human-gated-promotion-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-production-gate-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 764 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Sprint 184 Promotion Candidate Gate
 
 - Targeted local verification:

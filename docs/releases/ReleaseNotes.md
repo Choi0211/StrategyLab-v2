@@ -3,6 +3,23 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 185 Human-gated Autonomous Research Promotion
+
+Sprint 185 completes the Sprint 175-185 autonomous learning production gate.
+It validates explicit human approval tokens and emits auditable
+manual-application-only results. A valid approval does not mutate strategy
+configuration, promote a Champion, or place orders.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-human-gated-promotion-release-check
+python -m gaon.runtime.cli gaon-autonomous-learning-production-gate-release-check
+```
+
+The aggregate release check confirms the safe path through the human gate with
+manual application still required.
+
 ## Sprint 184 Promotion Candidate Gate
 
 Sprint 184 adds a review gate between robustness ranking and any future
