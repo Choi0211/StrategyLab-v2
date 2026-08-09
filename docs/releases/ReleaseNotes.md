@@ -3,6 +3,22 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 183 Strategy Robustness Ranking
+
+Sprint 183 ranks accepted validation results using only structured
+authoritative metrics. Missing metrics and blocked validation results fail
+closed, and ranked output is explicitly review-only.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-robustness-ranking-release-check
+```
+
+The release check verifies deterministic ranking and safety flags. Ranking
+does not create approval requests, mutate strategies, promote a Champion, or
+trade.
+
 ## Sprint 182 Autonomous Validation Loop v2
 
 Sprint 182 adds a read-only validation loop for strategy experiments. It

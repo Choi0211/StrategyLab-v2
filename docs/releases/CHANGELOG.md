@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 183 - Strategy Robustness Ranking
+
+- Added `StrategyRobustnessRanker` for evidence-only candidate ranking.
+- Required structured `trade_count`, `total_return`, `mdd`, `profit_factor`, and `win_rate` metrics before ranking.
+- Blocked non-accepted validation results and missing metrics.
+- Added `gaon-robustness-ranking-release-check`.
+- Preserved schema v36, no approval creation, no Champion promotion, no strategy mutation, and no trading.
+
 ## Sprint 182 - Autonomous Validation Loop v2
 
 - Added `AutonomousValidationLoopV2` to attach authoritative validation evidence to immutable strategy experiments.

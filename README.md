@@ -75,6 +75,7 @@ Included foundations:
 - Sprint 180 Evidence-backed Strategy Hypothesis with unvalidated memory-to-hypothesis lineage, falsification criteria, fabricated metric blocking, and `gaon-evidence-backed-hypothesis-release-check`
 - Sprint 181 Strategy Experiment Builder with proposed-hypothesis to immutable validation experiment contracts, stable fingerprints, no execution on creation, and `gaon-strategy-experiment-builder-release-check`
 - Sprint 182 Autonomous Validation Loop v2 with authoritative evidence attachment, data-quality fail-closed checks, sample sufficiency status, and `gaon-validation-loop-v2-release-check`
+- Sprint 183 Strategy Robustness Ranking with structured metric requirements, evidence-only scoring, no promotion semantics, and `gaon-robustness-ranking-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
