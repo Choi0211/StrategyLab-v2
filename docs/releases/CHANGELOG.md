@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 185.5 - Production External Research Network Wiring
+
+- Wired production Telegram Autonomous Learning V2 external research to an explicit `BoundedSourceDiscoveryExecutor` with `NetworkExecutionPolicy(network_enabled=True)`.
+- Preserved the Crossref/DataCite API host allowlist, HTTPS-only API transport, timeout, response-size, provider-call, and result budgets.
+- Kept content acquisition disabled by default so DOI/metadata-only discovery becomes `content_unavailable`, not `provider_failure`, and does not create claims or promotion eligibility.
+- Added observability fields for network policy, provider calls, query records, discovered titles, locators, failure kind, and content acquisition state.
+- Added `gaon-production-external-research-network-release-check`.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Hotfix 185.4 - Production Autonomous Learning Execution Integrity
 
 - Removed the production Telegram dependency on `autonomous_learning_e2e_release_check()`.

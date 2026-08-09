@@ -3,6 +3,25 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 185.5 Production External Research Network Wiring
+
+Telegram Autonomous Learning V2 production external research now explicitly
+wires `BoundedSourceDiscoveryExecutor` with
+`NetworkExecutionPolicy(network_enabled=True)` for bounded Crossref/DataCite
+metadata discovery. The route no longer falls through to the executor default
+of `network_enabled=False`.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-production-external-research-network-release-check
+```
+
+Content acquisition remains fail-closed and separate. DOI/metadata-only results
+are preserved as source metadata, reported as `content_unavailable`, and cannot
+produce claims, promotion candidates, human approval requests, strategy
+mutation, Champion promotion, or orders.
+
 ## Hotfix 185.4 Production Autonomous Learning Execution Integrity
 
 Telegram Autonomous Learning V2 production execution is now separated from the

@@ -12,8 +12,18 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import tempfile
 from typing import Mapping
 
+from gaon.storage.foundation import GaonStorage
+
+from .discovery_ingestion import DiscoveryEvidenceIngestor
+from .execution import (
+    DEFAULT_ALLOWED_API_HOSTS,
+    BoundedSourceDiscoveryExecutor,
+    JsonTransport,
+    NetworkExecutionPolicy,
+)
 from .external_research_execution import (
     AutonomousExternalResearchExecutor,
     ExternalResearchExecutionPolicy,
@@ -35,6 +45,10 @@ from .validation_loop_v2 import AuthoritativeValidationEvidence, AutonomousValid
 
 
 TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION = 2
+PRODUCTION_EXTERNAL_DISCOVERY_TIMEOUT_SECONDS = 10.0
+PRODUCTION_EXTERNAL_DISCOVERY_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+PRODUCTION_EXTERNAL_DISCOVERY_MAX_PROVIDER_CALLS = 1
+PRODUCTION_EXTERNAL_DISCOVERY_MAX_SOURCES = 1
 
 
 def telegram_autonomous_learning_payload(
@@ -251,7 +265,72 @@ def production_autonomous_learning_execution_release_check() -> Mapping[str, obj
     }
 
 
-def _run_production_external_research(request_text: str, *, symbol: str) -> Mapping[str, object]:
+def production_external_research_network_release_check() -> Mapping[str, object]:
+    transport = _ReleaseMetadataTransport()
+    with tempfile.TemporaryDirectory(prefix="gaon-production-external-network-release-") as tmp:
+        external = _run_production_external_research(
+            "?쇱꽦?꾩옄 ?꾨왂??泥섏쓬遺???ㅼ떆 ?곌뎄?댁쨾",
+            symbol="005930",
+            transport=transport,
+            storage_root=tmp,
+        )
+    payload = production_autonomous_learning_payload_from_baseline(
+        "?쇱꽦?꾩옄 ?꾨왂??泥섏쓬遺???ㅼ떆 ?곌뎄?댁쨾",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="real"),
+        external_research=external,
+    )
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    discovery = _as_dict(external.get("discovery_run"))
+    observability = _as_dict(external.get("observability"))
+    checks = {
+        "discovery_network_explicitly_enabled": observability.get("network_enabled") is True
+        and discovery.get("network_enabled") is True,
+        "provider_allowlist_preserved": tuple(observability.get("allowed_api_hosts") or ())
+        == DEFAULT_ALLOWED_API_HOSTS,
+        "metadata_discovery_executed": observability.get("network_executed") is True
+        and int(observability.get("provider_calls") or 0) == 1
+        and transport.calls == 1,
+        "metadata_only_not_claimed_as_content": observability.get("content_acquisition_state") == "metadata_only"
+        and int(external.get("acquired_sources") or 0) == 0
+        and not external.get("candidates"),
+        "content_unavailable_not_provider_failure": external.get("state") == ExternalResearchTerminalState.CONTENT_UNAVAILABLE.value,
+        "fixture_promotion_blocked": payload.get("fixture_promotion_blocked") is True
+        and learning.get("promotion_status") == "needs_real_validation",
+        "no_mutation": not payload.get("strategy_mutated")
+        and not payload.get("order_executed")
+        and not payload.get("broker_order_called")
+        and not payload.get("kis_order_called"),
+        "no_fixture_lineage": "example.org" not in json.dumps(payload, ensure_ascii=False).lower()
+        and "fixture research" not in json.dumps(payload, ensure_ascii=False).lower(),
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"production external research network release check failed: {failed}")
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "discovery_network_explicitly_enabled": True,
+        "provider_allowlist_preserved": True,
+        "metadata_discovery_executed": True,
+        "metadata_only_not_claimed_as_content": True,
+        "content_unavailable_not_provider_failure": True,
+        "fixture_promotion_blocked": True,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
+def _run_production_external_research(
+    request_text: str,
+    *,
+    symbol: str,
+    transport: JsonTransport | None = None,
+    network_enabled: bool = True,
+    storage_root: str | None = None,
+) -> Mapping[str, object]:
     question = ResearchQuestion(
         question_id=f"research-question:{_hash({'symbol': symbol, 'request_text': request_text})[:16]}",
         topic_key="strategy.breakout.robustness",
@@ -269,15 +348,93 @@ def _run_production_external_research(request_text: str, *, symbol: str) -> Mapp
         parent_conflict_id=f"knowledge-conflict:{_hash({'symbol': symbol, 'request_text': request_text})[:16]}",
         source_state=ConflictStatus.UNRESOLVED_CONFLICT,
     )
+    network_policy = NetworkExecutionPolicy(
+        network_enabled=network_enabled,
+        allowed_api_hosts=DEFAULT_ALLOWED_API_HOSTS,
+        timeout_seconds=PRODUCTION_EXTERNAL_DISCOVERY_TIMEOUT_SECONDS,
+        max_response_bytes=PRODUCTION_EXTERNAL_DISCOVERY_MAX_RESPONSE_BYTES,
+    )
+    discovery_executor = BoundedSourceDiscoveryExecutor(
+        network_policy=network_policy,
+        transport=transport,
+    )
     result = AutonomousExternalResearchExecutor(
+        discovery_executor=discovery_executor,
+        ingestion=(
+            DiscoveryEvidenceIngestor(GaonStorage(storage_root))
+            if storage_root
+            else None
+        ),
         policy=ExternalResearchExecutionPolicy(
             max_iterations=1,
-            max_provider_calls=1,
-            max_sources=1,
+            max_provider_calls=PRODUCTION_EXTERNAL_DISCOVERY_MAX_PROVIDER_CALLS,
+            max_sources=PRODUCTION_EXTERNAL_DISCOVERY_MAX_SOURCES,
             content_network_enabled=False,
         )
     ).run(question)
-    return result.to_json()
+    payload = result.to_json()
+    if _network_disabled_discovery(payload):
+        payload["state"] = "discovery_network_disabled"
+        payload["blockers"] = list(_as_list(payload.get("blockers"))) + ["discovery_network_disabled"]
+    payload["observability"] = _external_research_observability(
+        payload,
+        network_policy=network_policy,
+    )
+    return payload
+
+
+def _external_research_observability(
+    payload: Mapping[str, object],
+    *,
+    network_policy: NetworkExecutionPolicy,
+) -> dict[str, object]:
+    discovery = _as_dict(payload.get("discovery_run"))
+    records = [_as_dict(item) for item in _as_list(discovery.get("query_records"))]
+    results = [_as_dict(item) for item in _as_list(discovery.get("results"))]
+    failure_kinds = [str(item.get("failure_kind")) for item in records if item.get("failure_kind")]
+    content_blockers = [
+        str(item)
+        for item in _as_list(payload.get("blockers"))
+        if str(item).startswith("content_unavailable")
+    ]
+    if not bool(discovery.get("network_enabled", network_policy.network_enabled)):
+        terminal_state = "discovery_network_disabled"
+    elif failure_kinds and not results:
+        terminal_state = "provider_failure"
+    elif content_blockers and not payload.get("candidates"):
+        terminal_state = "metadata_only"
+    else:
+        terminal_state = str(payload.get("state") or "unknown")
+    return {
+        "network_enabled": bool(discovery.get("network_enabled", network_policy.network_enabled)),
+        "network_executed": bool(payload.get("network_executed") or discovery.get("network_executed")),
+        "provider_calls": int(payload.get("provider_calls") or discovery.get("provider_calls") or 0),
+        "allowed_api_hosts": list(network_policy.allowed_api_hosts),
+        "timeout_seconds": network_policy.timeout_seconds,
+        "max_response_bytes": network_policy.max_response_bytes,
+        "query_records": [
+            {
+                "provider": item.get("provider"),
+                "returned_results": item.get("returned_results"),
+                "accepted_results": item.get("accepted_results"),
+                "failure_kind": item.get("failure_kind"),
+                "error_message": item.get("error_message"),
+            }
+            for item in records
+        ],
+        "discovered_titles": [item.get("title") for item in results if item.get("title")],
+        "locators": [item.get("locator") for item in results if item.get("locator")],
+        "metadata_only": bool(results and not payload.get("normalized_records") and not payload.get("candidates")),
+        "content_acquisition_state": "metadata_only" if content_blockers and not payload.get("candidates") else "not_attempted",
+        "failure_kind": failure_kinds[0] if failure_kinds else None,
+        "terminal_state": terminal_state,
+    }
+
+
+def _network_disabled_discovery(payload: Mapping[str, object]) -> bool:
+    discovery = _as_dict(payload.get("discovery_run"))
+    records = [_as_dict(item) for item in _as_list(discovery.get("query_records"))]
+    return bool(records) and all(item.get("failure_kind") == "network_disabled" for item in records)
 
 
 def _select_candidate(baseline: Mapping[str, object]) -> dict[str, object]:
@@ -495,6 +652,40 @@ def _empty_external_research(symbol: str) -> dict[str, object]:
         "blockers": ["content_unavailable"],
         "network_executed": False,
     }
+
+
+class _ReleaseMetadataTransport:
+    def __init__(self, *, mode: str = "crossref_metadata") -> None:
+        self.mode = mode
+        self.calls = 0
+        self.urls: list[str] = []
+
+    def get_json(self, url: str, *, policy: NetworkExecutionPolicy) -> Mapping[str, object]:
+        from urllib.parse import urlparse
+
+        self.calls += 1
+        self.urls.append(url)
+        host = (urlparse(url).hostname or "").lower()
+        if host not in {item.lower() for item in DEFAULT_ALLOWED_API_HOSTS}:
+            raise PermissionError(f"blocked host: {host}")
+        if not policy.network_enabled:
+            raise PermissionError("network execution is disabled")
+        if self.mode == "provider_failure":
+            raise TimeoutError("release transport timeout")
+        if self.mode == "no_results":
+            return {"message": {"items": []}}
+        return {
+            "message": {
+                "items": [
+                    {
+                        "DOI": "10.1234/gaon-production-metadata",
+                        "title": ["Breakout robustness metadata"],
+                        "type": "journal-article",
+                        "URL": "https://doi.org/10.1234/gaon-production-metadata",
+                    }
+                ]
+            }
+        }
 
 
 def _release_baseline_payload(*, source: str) -> dict[str, object]:

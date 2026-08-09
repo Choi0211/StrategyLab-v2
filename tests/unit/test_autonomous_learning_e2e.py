@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from gaon.knowledge.autonomous_learning_e2e import autonomous_learning_e2e_release_check
+from gaon.knowledge.execution import DEFAULT_ALLOWED_API_HOSTS, NetworkExecutionPolicy
 from gaon.knowledge.telegram_autonomous_learning import (
+    _ReleaseMetadataTransport,
+    _run_production_external_research,
     production_autonomous_learning_execution_release_check,
+    production_external_research_network_release_check,
     production_autonomous_learning_payload_from_baseline,
     telegram_autonomous_learning_payload,
 )
@@ -148,6 +153,122 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
         self.assertTrue(payload["candidate_backtest_authoritative"])
         self.assertTrue(payload["candidate_strategy_fingerprint_matched"])
         self.assertTrue(payload["real_data_required"])
+        self.assertEqual("pass", payload["safety"])
+
+    def test_hotfix1855_production_external_research_enables_bounded_discovery(self) -> None:
+        transport = _ReleaseMetadataTransport()
+        external = _run_production_external_research(
+            "삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료도 찾아보고 검증해줘.",
+            symbol="005930",
+            transport=transport,
+            storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
+        )
+
+        observability = external["observability"]
+        discovery = external["discovery_run"]
+        self.assertTrue(observability["network_enabled"])
+        self.assertTrue(observability["network_executed"])
+        self.assertEqual(1, observability["provider_calls"])
+        self.assertEqual(1, transport.calls)
+        self.assertEqual(list(DEFAULT_ALLOWED_API_HOSTS), observability["allowed_api_hosts"])
+        self.assertTrue(discovery["network_enabled"])
+        self.assertNotEqual("network_disabled", observability["failure_kind"])
+
+    def test_hotfix1855_metadata_only_is_content_unavailable_not_provider_failure(self) -> None:
+        external = _run_production_external_research(
+            "삼성전자 외부 연구 자료를 찾아서 검증해줘.",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(),
+            storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
+        )
+
+        self.assertEqual("content_unavailable", external["state"])
+        self.assertEqual(0, external["acquired_sources"])
+        self.assertEqual([], external["candidates"])
+        self.assertEqual("metadata_only", external["observability"]["content_acquisition_state"])
+        self.assertEqual("metadata_only", external["observability"]["terminal_state"])
+
+    def test_hotfix1855_metadata_only_cannot_promote_candidate(self) -> None:
+        experiment = build_experiment()
+        candidate_backtest = build_real_backtest(experiment, source=MarketDataAvailability.REAL, trade_count=60)
+        baseline = _baseline_payload(experiment, candidate_backtest, baseline_fixture=False)
+        external = _run_production_external_research(
+            "삼성전자 외부 연구 자료를 찾아서 후보를 검증해줘.",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(),
+            storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
+        )
+
+        payload = production_autonomous_learning_payload_from_baseline(
+            "삼성전자 외부 연구 자료를 찾아서 후보를 검증해줘.",
+            symbol="005930",
+            mode="research",
+            baseline=baseline,
+            external_research=external,
+        )
+
+        self.assertEqual("needs_real_validation", payload["promotion_status"])
+        self.assertFalse(payload["approval_required"])
+        self.assertTrue(payload["fixture_promotion_blocked"])
+        self.assertIn("external_research_content_unavailable", payload["autonomous_learning_v2"]["blockers"])
+
+    def test_hotfix1855_provider_failure_is_distinct_from_content_unavailable(self) -> None:
+        external = _run_production_external_research(
+            "삼성전자 외부 연구 자료를 찾아줘.",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="provider_failure"),
+            storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
+        )
+
+        self.assertEqual("provider_failure", external["state"])
+        self.assertEqual("provider_failure", external["observability"]["terminal_state"])
+        self.assertEqual("timeout", external["observability"]["failure_kind"])
+
+    def test_hotfix1855_no_results_is_no_new_research_path(self) -> None:
+        external = _run_production_external_research(
+            "삼성전자 외부 연구 자료를 찾아줘.",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="no_results"),
+            storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
+        )
+
+        self.assertEqual("no_new_research_path", external["state"])
+        self.assertTrue(external["network_executed"])
+        self.assertEqual(0, len(external["discovery_run"]["results"]))
+
+    def test_hotfix1855_disabled_discovery_is_not_reported_as_provider_failure(self) -> None:
+        external = _run_production_external_research(
+            "삼성전자 외부 연구 자료를 찾아줘.",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(),
+            network_enabled=False,
+            storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
+        )
+
+        self.assertEqual("discovery_network_disabled", external["state"])
+        self.assertIn("discovery_network_disabled", external["blockers"])
+        self.assertFalse(external["observability"]["network_executed"])
+
+    def test_hotfix1855_network_host_policy_stays_allowlisted(self) -> None:
+        with self.assertRaises(ValueError):
+            NetworkExecutionPolicy(network_enabled=True, allowed_api_hosts=("api.crossref.org/path",))
+        external = _run_production_external_research(
+            "삼성전자 외부 연구 자료를 찾아줘.",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(),
+            storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
+        )
+        self.assertEqual(list(DEFAULT_ALLOWED_API_HOSTS), external["observability"]["allowed_api_hosts"])
+
+    def test_production_external_research_network_release_check_passes(self) -> None:
+        payload = production_external_research_network_release_check()
+
+        self.assertTrue(payload["discovery_network_explicitly_enabled"])
+        self.assertTrue(payload["provider_allowlist_preserved"])
+        self.assertTrue(payload["metadata_discovery_executed"])
+        self.assertTrue(payload["metadata_only_not_claimed_as_content"])
+        self.assertTrue(payload["content_unavailable_not_provider_failure"])
+        self.assertTrue(payload["fixture_promotion_blocked"])
         self.assertEqual("pass", payload["safety"])
 
 
