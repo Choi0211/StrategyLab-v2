@@ -263,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-external-research-memory-release-check")
     sub.add_parser("gaon-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-strategy-experiment-builder-release-check")
+    sub.add_parser("gaon-authoritative-experiment-execution-release-check")
     sub.add_parser("gaon-validation-loop-v2-release-check")
     sub.add_parser("gaon-robustness-ranking-release-check")
     sub.add_parser("gaon-promotion-candidate-gate-release-check")
@@ -1904,6 +1905,18 @@ def _run(args: argparse.Namespace) -> int:
             f"provider_calls={payload['provider_calls']} sources={payload['sources']} "
             f"claims={payload['claims']} "
             "network_executed=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-authoritative-experiment-execution-release-check":
+        from gaon.knowledge.experiment_execution import authoritative_experiment_execution_release_check
+
+        payload = authoritative_experiment_execution_release_check()
+        print(
+            "gaon-authoritative-experiment-execution-release-check: PASS "
+            f"schema_version={payload['schema_version']} status={payload['status']} "
+            f"ranking_status={payload['ranking_status']} trade_count={payload['trade_count']} "
+            "trusted_structured_source=true production_approved=false "
             "strategy_mutated=false order_executed=false safety=pass"
         )
 

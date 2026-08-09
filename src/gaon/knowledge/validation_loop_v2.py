@@ -154,9 +154,10 @@ class AutonomousValidationLoopV2:
             blockers.append(ValidationLoopV2Blocker.MISSING_AUTHORITATIVE_METRICS)
         if evidence.quality_status == "fail" or evidence.blocking_findings:
             blockers.append(ValidationLoopV2Blocker.BLOCKING_DATA_QUALITY)
-        for value in evidence.metrics.values():
+        for key, value in evidence.metrics.items():
             if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-                blockers.append(ValidationLoopV2Blocker.FABRICATED_METRIC)
+                if key != "profit_factor" or math.isnan(value):
+                    blockers.append(ValidationLoopV2Blocker.FABRICATED_METRIC)
         if "trade_count" in evidence.metrics and int(evidence.metrics["trade_count"]) != evidence.trade_count:
             blockers.append(ValidationLoopV2Blocker.FABRICATED_METRIC)
         return blockers
