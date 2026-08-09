@@ -26,6 +26,13 @@ CI/release verification uses injected temporary Gaon storage for discovery
 ingestion. Production defaults remain unchanged: when no explicit storage root
 is provided, Linux production still resolves to `/var/lib/strategylab/gaon-data`.
 
+Telegram safe-tool failures for `autonomous_learning_research` now preserve the
+same top-level production safety/provenance fields as successful structured
+payloads. Failure responses keep `production_uses_release_fixture=false`,
+`fixture_promotion_blocked=true`, `approval_required=false`,
+`promotion_status=needs_real_validation`, and no-order/no-mutation fields
+auditable instead of returning only a generic error object.
+
 ## Hotfix 185.4 Production Autonomous Learning Execution Integrity
 
 Telegram Autonomous Learning V2 production execution is now separated from the

@@ -11,12 +11,14 @@ from gaon.knowledge.execution import DEFAULT_ALLOWED_API_HOSTS, NetworkExecution
 from gaon.knowledge.telegram_autonomous_learning import (
     _ReleaseMetadataTransport,
     _run_production_external_research,
+    autonomous_learning_safe_failure_payload,
     production_autonomous_learning_execution_release_check,
     production_external_research_network_release_check,
     production_autonomous_learning_payload_from_baseline,
     telegram_autonomous_learning_payload,
 )
 from gaon.research.krx_real_pipeline import MarketDataAvailability
+from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRequest, ToolRiskLevel
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.storage.foundation import resolve_data_root
 from tests.fixtures.knowledge_pipeline import build_experiment, build_real_backtest
@@ -283,6 +285,58 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
         self.assertEqual("discovery_network_disabled", external["state"])
         self.assertIn("discovery_network_disabled", external["blockers"])
         self.assertFalse(external["observability"]["network_executed"])
+
+    def test_hotfix1855_safe_failure_payload_preserves_top_level_contract(self) -> None:
+        payload = autonomous_learning_safe_failure_payload(
+            "삼성전자 외부 연구 자료를 찾아서 검증해줘.",
+            symbol="005930",
+            error_type="PermissionError",
+            message="permission denied",
+        )
+
+        self.assertFalse(payload["production_uses_release_fixture"])
+        self.assertTrue(payload["fixture_promotion_blocked"])
+        self.assertFalse(payload["candidate_backtest_authoritative"])
+        self.assertFalse(payload["candidate_strategy_fingerprint_matched"])
+        self.assertTrue(payload["real_data_required"])
+        self.assertFalse(payload["approval_required"])
+        self.assertEqual("needs_real_validation", payload["promotion_status"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["broker_order_called"])
+        self.assertFalse(payload["kis_order_called"])
+        self.assertEqual("pass", payload["safety"])
+
+    def test_hotfix1855_safe_tool_failure_preserves_autonomous_learning_contract(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition(
+                "autonomous_learning_research",
+                "test autonomous learning failure",
+                ToolRiskLevel.READ_ONLY,
+                required_args=("request_text",),
+                allowed_args=("symbol", "mode"),
+            ),
+            lambda _args: (_ for _ in ()).throw(RuntimeError("synthetic failure")),
+        )
+        result = SafeToolExecutor(registry).execute(
+            ToolRequest(
+                "autonomous_learning_research",
+                {"request_text": "삼성전자 외부 연구 자료를 찾아서 검증해줘.", "symbol": "005930"},
+                "tester",
+                "2026-08-08T00:00:00Z",
+            )
+        )
+
+        self.assertEqual("denied", result.status)
+        self.assertFalse(result.output["production_uses_release_fixture"])
+        self.assertTrue(result.output["fixture_promotion_blocked"])
+        self.assertFalse(result.output["approval_required"])
+        self.assertEqual("needs_real_validation", result.output["promotion_status"])
+        self.assertFalse(result.output["strategy_mutated"])
+        self.assertFalse(result.output["order_executed"])
+        self.assertFalse(result.output["broker_order_called"])
+        self.assertFalse(result.output["kis_order_called"])
 
     def test_hotfix1855_network_host_policy_stays_allowlisted(self) -> None:
         with self.assertRaises(ValueError):

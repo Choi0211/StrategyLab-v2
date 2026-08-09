@@ -1558,7 +1558,10 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_hotfix1854_default_telegram_tool_path_blocks_release_fixture_promotion(self) -> None:
         store = RuntimeStateStore(":memory:")
         client = FakeTelegramClient(())
+        storage_tmp = tempfile.TemporaryDirectory(prefix="gaon-hotfix1855-integration-")
+        old_storage_root = os.environ.get("GAON_EXTERNAL_RESEARCH_STORAGE_ROOT")
         try:
+            os.environ["GAON_EXTERNAL_RESEARCH_STORAGE_ROOT"] = storage_tmp.name
             runtime = TelegramRuntime(
                 TelegramConversationAgent(
                     _config(assistant_enabled=True),
@@ -1592,6 +1595,11 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertFalse(output["broker_order_called"])
             self.assertFalse(output["kis_order_called"])
         finally:
+            if old_storage_root is None:
+                os.environ.pop("GAON_EXTERNAL_RESEARCH_STORAGE_ROOT", None)
+            else:
+                os.environ["GAON_EXTERNAL_RESEARCH_STORAGE_ROOT"] = old_storage_root
+            storage_tmp.cleanup()
             store.close()
 
     def test_hotfix1854_production_autonomous_learning_execution_release_check_passes(self) -> None:

@@ -218,6 +218,87 @@ def production_autonomous_learning_payload_from_baseline(
     }
 
 
+def autonomous_learning_safe_failure_payload(
+    request_text: str,
+    *,
+    symbol: str = "005930",
+    mode: str = "research",
+    error_type: str = "tool_failure",
+    message: str = "",
+) -> Mapping[str, object]:
+    """Return the stable production safety contract for failed tool execution."""
+
+    external = {
+        "schema_version": 1,
+        "state": ExternalResearchTerminalState.PROVIDER_FAILURE.value,
+        "question_id": f"research-question:{symbol}:production-tool-failure",
+        "discovery_run": None,
+        "normalized_records": [],
+        "candidates": [],
+        "blockers": [f"tool_failure:{error_type}"],
+        "network_executed": False,
+        "observability": {
+            "network_enabled": None,
+            "network_executed": False,
+            "provider_calls": 0,
+            "failure_kind": error_type,
+            "terminal_state": "provider_failure",
+        },
+    }
+    learning = {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "external_research_state": external["state"],
+        "hypothesis_status": "blocked",
+        "validation_status": "unavailable",
+        "ranking_status": "blocked",
+        "promotion_status": "needs_real_validation",
+        "human_gate_status": "not_requested",
+        "production_uses_release_fixture": False,
+        "fixture_promotion_blocked": True,
+        "candidate_backtest_authoritative": False,
+        "candidate_strategy_fingerprint_matched": False,
+        "candidate_backtest_executed": False,
+        "real_data_required": True,
+        "blockers": list(external["blockers"]),
+        "external_research": external,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "broker_order_called": False,
+        "kis_order_called": False,
+        "safety": "pass",
+    }
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "tool": "autonomous_learning_research",
+        "mode": mode,
+        "symbol": symbol,
+        "request_text": request_text,
+        "baseline": {},
+        "autonomous_learning_v2": learning,
+        "selected_orchestration": "autonomous_learning_v2",
+        "source": "unavailable",
+        "fixture_backed": False,
+        "quality_status": "unavailable",
+        "approval_required": False,
+        "promotion_status": "needs_real_validation",
+        "human_gate_status": "not_requested",
+        "production_uses_release_fixture": False,
+        "fixture_promotion_blocked": True,
+        "candidate_backtest_authoritative": False,
+        "candidate_strategy_fingerprint_matched": False,
+        "real_data_required": True,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "automatic_champion_promotion": False,
+        "automatic_config_apply": False,
+        "broker_order_called": False,
+        "kis_order_called": False,
+        "safety": "pass",
+        "error_type": error_type,
+        "message": message,
+    }
+
+
 def production_autonomous_learning_execution_release_check() -> Mapping[str, object]:
     real_payload = production_autonomous_learning_payload_from_baseline(
         "삼성전자 전략을 처음부터 다시 연구해줘",
