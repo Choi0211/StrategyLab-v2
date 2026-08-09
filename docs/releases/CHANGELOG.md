@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 175 - Safe Source Content Normalization
+
+- Added bounded, deterministic normalization for previously acquired external `text/plain`, `text/html`, and `application/json` source content.
+- Preserved acquisition/source provenance, raw and normalized checksums, and explicit evidence-not-instruction safety metadata.
+- Kept unsupported PDF and unsafe acquisition states fail-closed and ineligible for claim extraction.
+- Added `gaon-content-normalization-release-check`.
+- Preserved schema v36, no knowledge validation, no production approval, no strategy mutation, no trading, and no downloaded-content execution.
+
 ## Hotfix 163.5 - Autonomous Research Candidate Identity Integrity
 
 - Canonicalized autonomous historical candidate identities to `candidate_kind=<kind>` while preserving stricter `tested_candidate_keys` for duplicate prevention.

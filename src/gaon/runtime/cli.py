@@ -255,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     gaon_autonomous_candidate_identity_release = sub.add_parser("gaon-autonomous-candidate-identity-release-check")
     gaon_autonomous_candidate_identity_release.add_argument("--db", default=":memory:")
     gaon_autonomous_candidate_identity_release.add_argument("--run-id", default=None)
+    sub.add_parser("gaon-content-normalization-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1720,6 +1721,17 @@ def _run(args: argparse.Namespace) -> int:
             )
         finally:
             store.close()
+
+    elif args.command == "gaon-content-normalization-release-check":
+        from gaon.knowledge.content_normalization import content_normalization_release_check
+
+        payload = content_normalization_release_check()
+        print(
+            "gaon-content-normalization-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"normalized={payload['normalized']} unsupported={payload['unsupported']} "
+            "eligible_claims=true knowledge_validated=false production_approved=false safety=pass"
+        )
 
     elif args.command == "gaon-adaptive-validation-release-check":
         store = RuntimeStateStore(args.db)

@@ -3,6 +3,25 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 175 Safe Source Content Normalization
+
+Sprint 175 adds a bounded source-content normalization layer after Sprint 174
+content acquisition. Gaon can now turn acquired text, HTML, and JSON evidence
+into deterministic plain text while preserving acquisition provenance and
+checksums.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-content-normalization-release-check
+```
+
+The release check verifies HTML script/style/navigation stripping, JSON
+data-only extraction, unsupported PDF fail-closed handling, and that normalized
+content is only marked eligible for later claim extraction. It does not validate
+knowledge, approve production use, execute downloaded content, mutate strategy
+configuration, promote a Champion, or trade.
+
 ## Hotfix 163.5 Autonomous Research Candidate Identity Integrity
 
 Hotfix 163.5 fixes duplicate logical candidate labels in autonomous research

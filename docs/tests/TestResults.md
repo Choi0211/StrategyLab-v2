@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Sprint 175 Safe Source Content Normalization
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_content_normalization -q`: PASS, 7 tests
+  - `python -m gaon.runtime.cli gaon-content-normalization-release-check`: PASS, schema v36 unchanged
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 717 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Hotfix 163.5 Autonomous Research Candidate Identity Integrity
 
 - Targeted local verification:

@@ -67,6 +67,7 @@ Included foundations:
 - Hotfix 163.3 autonomous research progression integrity with continuation state handoff, parent/root cycle linkage, deterministic candidate dedupe, grounded progress comparison, no unsupported assumption deltas, and `gaon-autonomous-research-progression-release-check`
 - Hotfix 163.4 autonomous research history integrity with root history/current-cycle separation, preserved historical TESTED candidates after `NO_NEW_RESEARCH_PATH`, grounded comparison rendering, and `gaon-autonomous-research-history-release-check`
 - Hotfix 163.5 autonomous candidate identity integrity with canonical logical candidate history across proposal/retest/tested-key paths and `gaon-autonomous-candidate-identity-release-check`
+- Sprint 175 Safe Source Content Normalization with bounded UTF-8 text extraction for acquired text, HTML, and JSON evidence, explicit unsupported PDF fail-closed handling, preserved acquisition provenance, and `gaon-content-normalization-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
