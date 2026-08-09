@@ -768,6 +768,21 @@ class LLMConversationBrain:
         if self._tool_executor is None:
             return None
         context = self._mvp_context_for(request.session_id)
+        if (
+            context is not None
+            and context.last_result_kind == "autonomous_learning_v2"
+            and _is_promotion_candidate_presentation_request(request.text)
+        ):
+            response_route = f"conversation_autonomous_presentation_{route.intent.value}"
+            self._remember_mvp_response_context(request, route.intent, response_route)
+            return (
+                _render_autonomous_context_followup(context, route.intent, request.text),
+                response_route,
+                _dedupe((*warnings, "promotion candidate context preserved")),
+                references,
+                "deterministic",
+                (),
+            )
         mode = _autonomous_request_mode(request.text)
         learning_mode = _autonomous_learning_request_mode(request.text)
         if learning_mode is not None:
@@ -2153,6 +2168,33 @@ def _is_autonomous_presentation_intent(intent: ConversationalMVPIntent) -> bool:
         ConversationalMVPIntent.SHOW_DETAILS,
         ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
     }
+
+
+def _is_promotion_candidate_presentation_request(text: str) -> bool:
+    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
+    if not normalized:
+        return False
+    tokens = (
+        "승격후보",
+        "후보를자세히",
+        "후보자세히",
+        "후보id",
+        "fingerprint",
+        "근거를보여",
+        "근거를알려",
+        "참고자료",
+        "출처",
+        "외부자료",
+        "백테스트결과",
+        "검증결과",
+        "랭킹근거",
+        "주요위험",
+        "리스크",
+        "무엇이바뀌",
+        "뭐가바뀌",
+        "아직승인하지않",
+    )
+    return any(token in normalized for token in tokens)
 
 
 def _render_autonomous_context_followup(context: ConversationalMVPContext, intent: ConversationalMVPIntent, user_text: str) -> str:

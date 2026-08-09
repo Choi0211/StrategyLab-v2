@@ -276,6 +276,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_telegram_autonomous_learning_priority_release = sub.add_parser("gaon-telegram-autonomous-learning-priority-release-check")
     gaon_telegram_autonomous_learning_priority_release.add_argument("--db", default=":memory:")
     gaon_telegram_autonomous_learning_priority_release.add_argument("--run-id", default=None)
+    gaon_promotion_candidate_presentation_release = sub.add_parser("gaon-promotion-candidate-presentation-release-check")
+    gaon_promotion_candidate_presentation_release.add_argument("--db", default=":memory:")
+    gaon_promotion_candidate_presentation_release.add_argument("--run-id", default=None)
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2085,6 +2088,99 @@ def _run(args: argparse.Namespace) -> int:
                 "combined_tool=autonomous_learning_research legacy_tool=autonomous_research_cycle "
                 "v2_continuation=true fallback=false approval_required=true strategy_mutated=false "
                 "order_executed=false broker_order_called=false kis_order_called=false safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-promotion-candidate-presentation-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"gaon-promotion-candidate-presentation-release-check:{uuid4().hex}"
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100", "101"),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            client = _ReleaseCheckTelegramClient()
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(config, store._connection, tool_executor=_telegram_autonomous_research_release_tool_executor(store)),
+                allowed_chat_ids=("100", "101"),
+            )
+            initial = (
+                "삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료도 찾아보고 "
+                "지금까지 배운 내용과 실제 시장 데이터를 사용해서 개선 전략 후보를 만든 뒤 검증해줘. "
+                "좋은 전략 후보가 생기면 승격 승인을 요청하기 전까지 진행해줘."
+            )
+            detail = (
+                "아직 승인하지 않을게. 지금 생성한 승격 후보를 자세히 설명해줘. "
+                "후보 ID와 fingerprint, 기존 전략에서 무엇이 바뀌었는지, 연구 가설, "
+                "참고한 외부 자료와 출처, 실제 백테스트 결과, 검증 결과, 랭킹 근거, 주요 위험을 보여줘. "
+                "근거가 없는 숫자는 만들지 말고 승인이나 전략 변경도 하지 마."
+            )
+            other_chat_detail = "승격 후보 자세히 보여줘"
+            steps = (
+                ("initial", initial, "100"),
+                ("detail", detail, "100"),
+                ("other-chat", other_chat_detail, "101"),
+            )
+            for label, text, chat_id in steps:
+                result = process_update(
+                    parse_update_result(
+                        _telegram_update_with_text(run_id, label, text, chat_id=chat_id),
+                        received_at=_utc_now(),
+                    ),
+                    runtime,
+                    client,
+                )
+                if result.status != "sent":
+                    raise ConfigurationError(f"promotion candidate presentation release check failed at {label}: {result.status}")
+
+            audits = store.tool_audit.list(tool_name="autonomous_learning_research")
+            if len(audits) != 1:
+                raise ConfigurationError("promotion candidate presentation reran autonomous learning tool")
+            output = audits[0].result["output"]
+            context = dict(dict(output.get("autonomous_learning_v2", {})).get("promotion_candidate_context", {}))
+            if context.get("candidate_id") != "promotion-candidate:release-check-1853":
+                raise ConfigurationError("promotion candidate context did not preserve candidate_id")
+            if context.get("candidate_fingerprint") != "candidate-fingerprint-release-check-1853":
+                raise ConfigurationError("promotion candidate context did not preserve fingerprint")
+            detail_response = client.sent[1][1]
+            required_tokens = (
+                "promotion-candidate:release-check-1853",
+                "candidate-fingerprint-release-check-1853",
+                "strategy-experiment:release-check-1853",
+                "validation-evidence:release-check-1853",
+                "backtest:release-check-1853",
+                "Fixture research",
+                "claim:release-check-1853",
+                "trade_count: 60",
+                "total_return: 0.18",
+                "MDD: 0.09",
+                "Profit Factor: 1.6",
+                "requires_human_approval",
+                "awaiting_human_approval",
+            )
+            if any(token not in detail_response for token in required_tokens):
+                raise ConfigurationError("promotion candidate presentation did not render required authoritative evidence")
+            forbidden_tokens = ("trade_count: 0", "unknown ~ unknown", "external_research_state=", "hypothesis_status=", "ranking_status=ranked\n- promotion_status")
+            if any(token in detail_response for token in forbidden_tokens):
+                raise ConfigurationError("promotion candidate presentation fell back to generic or fabricated output")
+            if "직전" not in client.sent[2][1]:
+                raise ConfigurationError("promotion candidate presentation leaked candidate context across Telegram chats")
+            if output.get("strategy_mutated") or output.get("order_executed") or output.get("broker_order_called") or output.get("kis_order_called"):
+                raise ConfigurationError("promotion candidate presentation violated safety boundaries")
+            print(
+                "gaon-promotion-candidate-presentation-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "candidate_id=preserved fingerprint=preserved hypothesis=preserved changed_rules=preserved "
+                "source_lineage=preserved authoritative_metric_lineage=preserved ranking_context=preserved "
+                "presentation_no_rerun=true approval_state_unchanged=true fabricated_defaults_blocked=true "
+                "chat_isolation=pass strategy_mutated=false order_executed=false broker_order_called=false kis_order_called=false safety=pass"
             )
         finally:
             store.close()
@@ -4912,6 +5008,7 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
     def handle_autonomous_learning(tool_args):
         symbol = str(tool_args.get("symbol", "005930"))
         baseline = handle_research({"symbol": symbol, "request_text": tool_args.get("request_text", "")})
+        candidate_context = _release_check_promotion_candidate_context(symbol)
         return {
             "schema_version": 1,
             "tool": "autonomous_learning_research",
@@ -4928,6 +5025,7 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
                 "ranking_status": "ranked",
                 "promotion_status": "requires_human_approval",
                 "human_gate_status": "awaiting_human_approval",
+                "promotion_candidate_context": candidate_context,
                 "safety": "pass",
             },
             "selected_orchestration": "autonomous_learning_v2",
@@ -4977,6 +5075,136 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
         handle_autonomous_learning,
     )
     return SafeToolExecutor(registry, store.tool_audit)
+
+
+def _release_check_promotion_candidate_context(symbol: str = "005930") -> dict[str, object]:
+    metrics = {
+        "trade_count": 60,
+        "total_return": 0.18,
+        "mdd": 0.09,
+        "profit_factor": 1.6,
+        "win_rate": 0.56,
+        "cagr": 0.035,
+        "sharpe": 0.72,
+    }
+    return {
+        "candidate_id": "promotion-candidate:release-check-1853",
+        "candidate_fingerprint": "candidate-fingerprint-release-check-1853",
+        "baseline_strategy_id": "strategy:baseline",
+        "baseline_fingerprint": f"strategy:{symbol}",
+        "hypothesis": {
+            "hypothesis_id": "strategy-hypothesis:release-check-1853",
+            "topic_key": "strategy.breakout.robustness",
+            "changed_rules": ["add regime filter before breakout entries"],
+            "rationale": "External evidence indicates robustness depends on regime context.",
+            "mechanism": "A regime filter constrains entries before validation.",
+            "falsification_criteria": ["Reject if authoritative backtest metrics do not support robustness."],
+            "claim_ids": ["claim:release-check-1853"],
+        },
+        "changed_rules": ["add regime filter before breakout entries"],
+        "rationale": "External evidence indicates robustness depends on regime context.",
+        "expected_mechanism": "A regime filter constrains entries before validation.",
+        "falsification_criteria": ["Reject if authoritative backtest metrics do not support robustness."],
+        "research_memory": {
+            "memory_id": "external-research-memory:release-check-1853",
+            "claim_ids": ["claim:release-check-1853"],
+            "source_ids": ["source:release-check-1853"],
+        },
+        "claim_ids": ["claim:release-check-1853"],
+        "source_ids": ["source:release-check-1853"],
+        "source_lineage": [
+            {
+                "title": "Fixture research",
+                "source_type": "research_report",
+                "locator": "https://example.org/research.html",
+                "source_ids": ["source:release-check-1853"],
+                "claim_ids": ["claim:release-check-1853"],
+                "metadata_only": False,
+                "content_acquired": True,
+            }
+        ],
+        "experiment": {
+            "experiment_id": "strategy-experiment:release-check-1853",
+            "baseline_strategy_id": "strategy:baseline",
+            "baseline_strategy_fingerprint": f"strategy:{symbol}",
+            "assumptions_fingerprint": "assumptions-fingerprint-release-check-1853",
+            "changed_rules": ["add regime filter before breakout entries"],
+            "universe_symbols": [symbol],
+            "start": "2021-07-25",
+            "end": "2026-07-24",
+            "cost_model": "default_research_costs",
+            "status": "ready_for_validation",
+        },
+        "experiment_id": "strategy-experiment:release-check-1853",
+        "experiment_fingerprint": "experiment-fingerprint-release-check-1853",
+        "assumptions_fingerprint": "assumptions-fingerprint-release-check-1853",
+        "authoritative_validation_evidence": {
+            "evidence_id": "validation-evidence:release-check-1853",
+            "experiment_id": "strategy-experiment:release-check-1853",
+            "backtest_result_id": "backtest:release-check-1853",
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "quality_status": "pass",
+            "blocking_findings": [],
+            "metrics": metrics,
+            "trade_count": 60,
+        },
+        "validation": {"status": "accepted_for_review", "confidence": "high", "warnings": []},
+        "ranking": {
+            "status": "ranked",
+            "ranked": [
+                {
+                    "rank": 1,
+                    "experiment_id": "strategy-experiment:release-check-1853",
+                    "evidence_id": "validation-evidence:release-check-1853",
+                    "score": 4.2,
+                    "trade_count": 60,
+                    "total_return": 0.18,
+                    "mdd": 0.09,
+                    "profit_factor": 1.6,
+                    "win_rate": 0.56,
+                    "source": "real:yahoo-chart",
+                    "fixture_backed": False,
+                }
+            ],
+            "warnings": [],
+        },
+        "ranking_components": {
+            "score": 4.2,
+            "trade_count": 60,
+            "total_return": 0.18,
+            "mdd": 0.09,
+            "profit_factor": 1.6,
+            "win_rate": 0.56,
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+        },
+        "promotion_candidate": {
+            "candidate_id": "promotion-candidate:release-check-1853",
+            "experiment_id": "strategy-experiment:release-check-1853",
+            "evidence_id": "validation-evidence:release-check-1853",
+            "score": 4.2,
+            "rank": 1,
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "approval_required": True,
+            "rollback_target": "strategy-config:default:active",
+            "status": "requires_human_approval",
+            "blockers": [],
+        },
+        "risks": [],
+        "human_gate": {
+            "candidate_id": "promotion-candidate:release-check-1853",
+            "status": "awaiting_human_approval",
+            "blockers": ["missing_approval"],
+            "approval": None,
+        },
+        "approval_state": "awaiting_human_approval",
+        "strategy_mutated": False,
+        "order_executed": False,
+        "broker_order_called": False,
+        "kis_order_called": False,
+    }
 
 
 def _run_telegram_followup_release_sequence(store: RuntimeStateStore, run_id: str) -> tuple[str, ...]:

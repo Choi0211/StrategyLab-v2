@@ -2,6 +2,22 @@
 
 Status: Passed
 
+## Hotfix 185.3 Promotion Candidate Evidence Presentation Integrity
+
+- Targeted local verification:
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1853_promotion_candidate_detail_followup_preserves_evidence_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1853_missing_metric_and_metadata_only_source_are_not_fabricated tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1853_promotion_candidate_context_is_chat_isolated tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1853_promotion_candidate_presentation_release_check_passes -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-promotion-candidate-presentation-release-check --db :memory:`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 776 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 192 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `python -m gaon.runtime.cli gaon-telegram-autonomous-learning-routing-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-telegram-autonomous-learning-priority-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-e2e-release-check`: PASS
+  - `python -m gaon.runtime.cli research-context-isolation-release-check --db :memory:`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Hotfix 185.2 Telegram Autonomous Learning Priority Routing
 
 - Targeted local verification:

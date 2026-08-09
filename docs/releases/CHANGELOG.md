@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 185.3 - Promotion Candidate Evidence Presentation Integrity
+
+- Added structured `promotion_candidate_context` to Autonomous Learning V2 E2E output and Telegram release fixtures.
+- Preserved promotion candidate ID, fingerprint, changed rules, hypothesis, source lineage, validation evidence, ranking context, risks, and approval state for same-chat presentation follow-ups.
+- Routed promotion-candidate detail questions from stored context without rerunning autonomous learning, external research, backtests, ranking, or approval paths.
+- Rendered missing metrics as unavailable instead of defaulting to zero and preserved metadata-only source provenance.
+- Added `gaon-promotion-candidate-presentation-release-check`.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Hotfix 185.2 - Telegram Autonomous Learning Priority Routing
 
 - Prioritized explicit combined Autonomous Learning V2 Telegram intent before legacy autonomous retest/cycle routing.

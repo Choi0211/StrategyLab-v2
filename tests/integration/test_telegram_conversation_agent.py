@@ -1455,6 +1455,105 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_hotfix1852_telegram_autonomous_learning_priority_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-telegram-autonomous-learning-priority-release-check", "--db", ":memory:"]), 0)
 
+    def test_hotfix1853_promotion_candidate_detail_followup_preserves_evidence_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            initial = (
+                "삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료도 찾아보고 "
+                "지금까지 배운 내용과 실제 시장 데이터를 사용해서 개선 전략 후보를 만든 뒤 검증해줘. "
+                "좋은 전략 후보가 생기면 승격 승인을 요청하기 전까지 진행해줘."
+            )
+            detail = (
+                "아직 승인하지 않을게. 지금 생성한 승격 후보를 자세히 설명해줘. "
+                "후보 ID와 fingerprint, 기존 전략에서 무엇이 바뀌었는지, 연구 가설, "
+                "참고한 외부 자료와 출처, 실제 백테스트 결과, 검증 결과, 랭킹 근거, 주요 위험을 보여줘. "
+                "근거가 없는 숫자는 만들지 말고 승인이나 전략 변경도 하지 마."
+            )
+            process_update(parse_update_result(_update(880, 880, initial), received_at="2026-08-08T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(881, 881, detail), received_at="2026-08-08T00:00:01Z"), runtime, client)
+
+            audits = store.tool_audit.list(tool_name="autonomous_learning_research")
+            self.assertEqual(len(audits), 1)
+            final = client.sent[-1][1]
+            self.assertIn("[승격 후보]", final)
+            self.assertIn("promotion-candidate:test-1853", final)
+            self.assertIn("candidate-fingerprint-1853", final)
+            self.assertIn("strategy-experiment:test-1853", final)
+            self.assertIn("validation-evidence:test-1853", final)
+            self.assertIn("backtest:test-1853", final)
+            self.assertIn("Fixture research", final)
+            self.assertIn("claim:test-1853", final)
+            self.assertIn("trade_count: 60", final)
+            self.assertIn("total_return: 0.18", final)
+            self.assertIn("MDD: 0.09", final)
+            self.assertIn("Profit Factor: 1.6", final)
+            self.assertIn("requires_human_approval", final)
+            self.assertIn("awaiting_human_approval", final)
+            self.assertNotIn("trade_count: 0", final)
+            self.assertNotIn("unknown ~ unknown", final)
+            self.assertNotIn("external_research_state=", final)
+            output = audits[0].result["output"]
+            self.assertFalse(output["strategy_mutated"])
+            self.assertFalse(output["order_executed"])
+            self.assertFalse(output["broker_order_called"])
+            self.assertFalse(output["kis_order_called"])
+        finally:
+            store.close()
+
+    def test_hotfix1853_missing_metric_and_metadata_only_source_are_not_fabricated(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(
+                    _config(assistant_enabled=True),
+                    store._connection,
+                    tool_executor=_sprint152_tool_executor(
+                        store,
+                        fixture_backed=False,
+                        autonomous_learning_missing_profit_factor=True,
+                        autonomous_learning_metadata_only_source=True,
+                    ),
+                ),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(882, 882, "삼성전자 전략 연구해줘"), received_at="2026-08-08T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(883, 883, "승격 후보 자세히 보여줘. Profit Factor와 참고 자료 출처도 알려줘."), received_at="2026-08-08T00:00:01Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_learning_research")), 1)
+            final = client.sent[-1][1]
+            self.assertIn("Profit Factor: 확인된 구조화 결과 없음", final)
+            self.assertNotIn("Profit Factor: 0", final)
+            self.assertIn("metadata_only", final)
+            self.assertIn("메타데이터까지만 확보", final)
+        finally:
+            store.close()
+
+    def test_hotfix1853_promotion_candidate_context_is_chat_isolated(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100", "101"),
+            )
+            process_update(parse_update_result(_update(884, 884, "삼성전자 전략 연구해줘", chat_id=100), received_at="2026-08-08T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(885, 885, "승격 후보 자세히 보여줘", chat_id=101), received_at="2026-08-08T00:00:01Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_learning_research")), 1)
+            self.assertIn("직전", client.sent[-1][1])
+            self.assertNotIn("promotion-candidate:test-1853", client.sent[-1][1])
+        finally:
+            store.close()
+
+    def test_hotfix1853_promotion_candidate_presentation_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-promotion-candidate-presentation-release-check", "--db", ":memory:"]), 0)
+
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
 
@@ -1650,6 +1749,8 @@ def _sprint152_tool_executor(
     fixture_backed: bool = True,
     zero_trade_symbols: tuple[str, ...] = (),
     invalid_multi_result: bool = False,
+    autonomous_learning_missing_profit_factor: bool = False,
+    autonomous_learning_metadata_only_source: bool = False,
 ) -> SafeToolExecutor:
     registry = ToolRegistry()
 
@@ -1723,6 +1824,8 @@ def _sprint152_tool_executor(
             str(args.get("symbol", "005930")),
             mode=str(args.get("mode", "research")),
             request_text=str(args.get("request_text", "")),
+            include_profit_factor=not autonomous_learning_missing_profit_factor,
+            metadata_only_source=autonomous_learning_metadata_only_source,
         )
 
     registry.register(
@@ -1862,8 +1965,9 @@ def _sprint163_autonomous_payload(symbol: str = "005930", *, mode: str = "valida
     }
 
 
-def _sprint185_autonomous_learning_payload(symbol: str = "005930", *, mode: str = "research", request_text: str = "") -> dict[str, object]:
+def _sprint185_autonomous_learning_payload(symbol: str = "005930", *, mode: str = "research", request_text: str = "", include_profit_factor: bool = True, metadata_only_source: bool = False) -> dict[str, object]:
     baseline = _sprint152_payload(symbol, fixture_backed=False, request_text=request_text)
+    context = _sprint185_promotion_candidate_context(symbol, include_profit_factor=include_profit_factor, metadata_only_source=metadata_only_source)
     return {
         "schema_version": 1,
         "tool": "autonomous_learning_research",
@@ -1880,6 +1984,7 @@ def _sprint185_autonomous_learning_payload(symbol: str = "005930", *, mode: str 
             "ranking_status": "ranked",
             "promotion_status": "requires_human_approval",
             "human_gate_status": "awaiting_human_approval",
+            "promotion_candidate_context": context,
             "safety": "pass",
         },
         "selected_orchestration": "autonomous_learning_v2",
@@ -1896,6 +2001,141 @@ def _sprint185_autonomous_learning_payload(symbol: str = "005930", *, mode: str 
         "automatic_champion_promotion": False,
         "automatic_config_apply": False,
         "safety": "pass",
+    }
+
+
+def _sprint185_promotion_candidate_context(symbol: str = "005930", *, include_profit_factor: bool = True, metadata_only_source: bool = False) -> dict[str, object]:
+    metrics: dict[str, object] = {
+        "trade_count": 60,
+        "total_return": 0.18,
+        "mdd": 0.09,
+        "win_rate": 0.56,
+        "cagr": 0.035,
+        "sharpe": 0.72,
+    }
+    if include_profit_factor:
+        metrics["profit_factor"] = 1.6
+    return {
+        "candidate_id": "promotion-candidate:test-1853",
+        "candidate_fingerprint": "candidate-fingerprint-1853",
+        "baseline_strategy_id": "strategy:baseline",
+        "baseline_fingerprint": f"strategy:{symbol}",
+        "hypothesis": {
+            "hypothesis_id": "strategy-hypothesis:test-1853",
+            "topic_key": "strategy.breakout.robustness",
+            "changed_rules": ["add regime filter before breakout entries"],
+            "rationale": "External evidence indicates robustness depends on regime context.",
+            "mechanism": "A regime filter constrains entries before validation.",
+            "falsification_criteria": ["Reject if authoritative backtest metrics do not support robustness."],
+            "claim_ids": ["claim:test-1853"],
+        },
+        "changed_rules": ["add regime filter before breakout entries"],
+        "rationale": "External evidence indicates robustness depends on regime context.",
+        "expected_mechanism": "A regime filter constrains entries before validation.",
+        "falsification_criteria": ["Reject if authoritative backtest metrics do not support robustness."],
+        "research_memory": {
+            "memory_id": "external-research-memory:test-1853",
+            "claim_ids": ["claim:test-1853"],
+            "source_ids": ["source:test-1853"],
+        },
+        "claim_ids": ["claim:test-1853"],
+        "source_ids": ["source:test-1853"],
+        "source_lineage": [
+            {
+                "title": "Fixture research",
+                "source_type": "research_report",
+                "locator": "https://example.org/research.html",
+                "source_ids": ["source:test-1853"],
+                "claim_ids": ["claim:test-1853"],
+                "metadata_only": metadata_only_source,
+                "content_acquired": not metadata_only_source,
+            }
+        ],
+        "experiment": {
+            "experiment_id": "strategy-experiment:test-1853",
+            "baseline_strategy_id": "strategy:baseline",
+            "baseline_strategy_fingerprint": f"strategy:{symbol}",
+            "assumptions_fingerprint": "assumptions-fingerprint-1853",
+            "changed_rules": ["add regime filter before breakout entries"],
+            "universe_symbols": [symbol],
+            "start": "2021-07-25",
+            "end": "2026-07-24",
+            "cost_model": "default_research_costs",
+            "status": "ready_for_validation",
+        },
+        "experiment_id": "strategy-experiment:test-1853",
+        "experiment_fingerprint": "experiment-fingerprint-1853",
+        "assumptions_fingerprint": "assumptions-fingerprint-1853",
+        "authoritative_validation_evidence": {
+            "evidence_id": "validation-evidence:test-1853",
+            "experiment_id": "strategy-experiment:test-1853",
+            "backtest_result_id": "backtest:test-1853",
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "quality_status": "pass",
+            "blocking_findings": [],
+            "metrics": metrics,
+            "trade_count": metrics["trade_count"],
+        },
+        "validation": {
+            "status": "accepted_for_review",
+            "confidence": "high",
+            "warnings": ["fixture-backed rankings are not production approval"],
+        },
+        "ranking": {
+            "status": "ranked",
+            "ranked": [
+                {
+                    "rank": 1,
+                    "experiment_id": "strategy-experiment:test-1853",
+                    "evidence_id": "validation-evidence:test-1853",
+                    "score": 4.2,
+                    "trade_count": metrics["trade_count"],
+                    "total_return": metrics["total_return"],
+                    "mdd": metrics["mdd"],
+                    "profit_factor": metrics.get("profit_factor"),
+                    "win_rate": metrics["win_rate"],
+                    "source": "real:yahoo-chart",
+                    "fixture_backed": False,
+                }
+            ],
+            "warnings": ["fixture-backed rankings are not production approval"],
+        },
+        "ranking_components": {
+            "score": 4.2,
+            "trade_count": metrics["trade_count"],
+            "total_return": metrics["total_return"],
+            "mdd": metrics["mdd"],
+            "profit_factor": metrics.get("profit_factor"),
+            "win_rate": metrics["win_rate"],
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+        },
+        "promotion_candidate": {
+            "candidate_id": "promotion-candidate:test-1853",
+            "experiment_id": "strategy-experiment:test-1853",
+            "evidence_id": "validation-evidence:test-1853",
+            "score": 4.2,
+            "rank": 1,
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "approval_required": True,
+            "rollback_target": "strategy-config:default:active",
+            "status": "requires_human_approval",
+            "blockers": [],
+        },
+        "risks": ["fixture-backed rankings are not production approval"],
+        "human_gate": {
+            "candidate_id": "promotion-candidate:test-1853",
+            "status": "awaiting_human_approval",
+            "blockers": ["missing_approval"],
+            "approval": None,
+        },
+        "approval_state": "awaiting_human_approval",
+        "strategy_mutated": False,
+        "order_executed": False,
+        "broker_order_called": False,
+        "kis_order_called": False,
     }
 
 
