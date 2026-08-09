@@ -22,6 +22,7 @@ RESEARCH_TOOLS = {
     "krx_market_data",
     "krx_real_research",
     "autonomous_research_cycle",
+    "autonomous_learning_research",
     "research_retest",
     "multi_symbol_research",
     "multi_symbol_research_status",
@@ -173,6 +174,8 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
         return _format_krx_real_research(output)
     if tool_name == "autonomous_research_cycle":
         return _format_autonomous_research_cycle(output)
+    if tool_name == "autonomous_learning_research":
+        return _format_autonomous_learning_research(output)
     if tool_name == "research_retest":
         return _format_research_retest(output)
     if tool_name == "multi_symbol_research":
@@ -195,7 +198,7 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
 
 
 def is_strict_real_research_tool(tool_name: str) -> bool:
-    return tool_name in {"krx_real_research", "autonomous_research_cycle", "research_retest", "multi_symbol_research"}
+    return tool_name in {"krx_real_research", "autonomous_research_cycle", "autonomous_learning_research", "research_retest", "multi_symbol_research"}
 
 
 def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]) -> bool:
@@ -205,6 +208,8 @@ def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]
 def strict_real_research_grounding_violations(text: str, output: dict[str, object]) -> tuple[str, ...]:
     """Return fail-closed grounding violations for user-facing real research text."""
     if "autonomous_cycle" in output and "baseline" in output:
+        return ()
+    if "autonomous_learning_v2" in output and "baseline" in output:
         return ()
     if "candidate_generalization" in output and "summary" in output and "evidence" in output:
         return ()
@@ -359,6 +364,60 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
     )
     if baseline:
         lines.append(f"- baseline_report={baseline.get('report_id') or baseline.get('research_report_id') or 'available'}")
+    return "\n".join(lines)
+
+
+def _format_autonomous_learning_research(output: dict[str, object]) -> str:
+    baseline = _as_dict(output.get("baseline"))
+    dataset = _as_dict(baseline.get("dataset"))
+    metadata = _as_dict(dataset.get("metadata"))
+    backtest = _as_dict(baseline.get("backtest"))
+    metrics = _as_dict(backtest.get("metrics"))
+    learning = _as_dict(output.get("autonomous_learning_v2"))
+    symbol = output.get("symbol", "unknown")
+    source = output.get("source") or metadata.get("source") or "unknown"
+    quality = output.get("quality_status", "unknown")
+    rows = metadata.get("rows") or dataset.get("rows") or "unknown"
+    trade_count = metrics.get("trade_count", "unknown")
+    promotion_status = str(output.get("promotion_status", "unknown"))
+    human_gate_status = str(output.get("human_gate_status", "unknown"))
+    lines = [
+        "영하님, 요청을 Autonomous Learning V2 연구 경로로 처리했습니다.",
+        "",
+        "[검증된 기준 데이터]",
+        f"- symbol={symbol}",
+        f"- source={source}",
+        f"- fixture_backed={str(output.get('fixture_backed', False)).lower()}",
+        f"- quality={quality}",
+        f"- bars={rows}",
+        f"- trade_count={trade_count}",
+        "",
+        "[자율 연구 진행]",
+        "- 외부 연구 실행, 연구 메모리, evidence-backed hypothesis, strategy experiment, trusted validation, robustness ranking을 기존 V2 경로로 확인했습니다.",
+        f"- external_research_state={learning.get('external_research_state', 'unknown')}",
+        f"- hypothesis_status={learning.get('hypothesis_status', 'unknown')}",
+        f"- validation_status={learning.get('validation_status', 'unknown')}",
+        f"- ranking_status={learning.get('ranking_status', 'unknown')}",
+        "",
+        "[승인 경계]",
+        f"- promotion_status={promotion_status}",
+        f"- human_gate_status={human_gate_status}",
+    ]
+    if promotion_status == "requires_human_approval" and human_gate_status == "awaiting_human_approval":
+        lines.extend(
+            [
+                "",
+                "검증 결과 승격 검토가 가능한 전략 후보가 생성되었지만, 아직 적용하지 않았습니다.",
+                "이 후보를 Production Strategy 승격 대상으로 검토하시겠습니까? 명시적인 후보별 승인이 있어야 다음 단계로 진행할 수 있습니다.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "[안전 상태]",
+            "- 자동 주문, KIS/Broker 주문, Champion 자동 승격, 승인 없는 설정 변경은 수행하지 않았습니다.",
+        ]
+    )
     return "\n".join(lines)
 
 

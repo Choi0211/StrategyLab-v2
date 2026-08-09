@@ -136,6 +136,15 @@ class MultiSymbolResearchTests(unittest.TestCase):
         self.assertEqual(route_read_only_tool("삼성전자 실제 데이터로 자동 재검증해줘"), "research_retest")
         self.assertEqual(route_read_only_tool("삼성전자 실제 데이터로 백테스트하고 약점 분석해줘"), "krx_real_research")
 
+    def test_autonomous_learning_v2_request_has_priority_over_real_research(self) -> None:
+        request = (
+            "삼성전자 전략을 처음부터 다시 연구해줘. "
+            "외부 연구 자료를 찾아보고 실제 시장 데이터로 문제점을 찾고 개선 전략 후보를 검증해줘."
+        )
+
+        self.assertEqual(route_read_only_tool(request), "autonomous_learning_research")
+        self.assertEqual(route_read_only_tool("계속 연구해줘"), "autonomous_learning_research")
+
     def test_release_check_contract(self) -> None:
         result = multi_symbol_research_release_check(self.connection)
 

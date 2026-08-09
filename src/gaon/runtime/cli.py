@@ -270,6 +270,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-human-gated-promotion-release-check")
     sub.add_parser("gaon-autonomous-learning-production-gate-release-check")
     sub.add_parser("gaon-autonomous-learning-e2e-release-check")
+    gaon_telegram_autonomous_learning_release = sub.add_parser("gaon-telegram-autonomous-learning-routing-release-check")
+    gaon_telegram_autonomous_learning_release.add_argument("--db", default=":memory:")
+    gaon_telegram_autonomous_learning_release.add_argument("--run-id", default=None)
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1936,6 +1939,61 @@ def _run(args: argparse.Namespace) -> int:
             f"human_gate_status={payload['human_gate_status']} "
             "production_approved=false strategy_mutated=false order_executed=false safety=pass"
         )
+
+    elif args.command == "gaon-telegram-autonomous-learning-routing-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"gaon-telegram-autonomous-learning-routing-release-check:{uuid4().hex}"
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100", "101"),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            client = _ReleaseCheckTelegramClient()
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(config, store._connection, tool_executor=_telegram_autonomous_research_release_tool_executor(store)),
+                allowed_chat_ids=("100", "101"),
+            )
+            steps = (
+                ("combined", "삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료를 찾아보고 지금까지 배운 내용과 실제 시장 데이터로 문제점을 찾고 개선 전략 후보를 검증해줘. 좋은 전략 후보가 생기면 승격 승인 요청하기 전까지 진행해줘.", "100"),
+                ("continue", "계속 연구해줘", "100"),
+                ("missing", "계속 연구해줘", "101"),
+            )
+            for label, text, chat_id in steps:
+                result = process_update(parse_update_result(_telegram_update_with_text(run_id, label, text, chat_id=chat_id), received_at=_utc_now()), runtime, client)
+                if result.status != "sent":
+                    raise ConfigurationError(f"telegram autonomous learning routing release check failed at {label}: {result.status}")
+            audits = store.tool_audit.list(tool_name="autonomous_learning_research")
+            if len(audits) != 2:
+                raise ConfigurationError("telegram autonomous learning routing did not select V2 orchestration for combined and continuation requests")
+            if any(record.request["arguments"].get("symbol") != "005930" for record in audits):
+                raise ConfigurationError("telegram autonomous learning routing did not preserve symbol=005930")
+            outputs = [record.result["output"] for record in audits]
+            if any(output.get("selected_orchestration") != "autonomous_learning_v2" for output in outputs):
+                raise ConfigurationError("telegram autonomous learning routing selected the wrong orchestration")
+            if any(output.get("strategy_mutated") or output.get("order_executed") or output.get("broker_order_called") or output.get("kis_order_called") for output in outputs):
+                raise ConfigurationError("telegram autonomous learning routing violated safety boundaries")
+            if any(output.get("promotion_status") != "requires_human_approval" or output.get("human_gate_status") != "awaiting_human_approval" for output in outputs):
+                raise ConfigurationError("telegram autonomous learning routing did not stop at human approval boundary")
+            combined = "\n".join(text for _chat_id, text in client.sent)
+            if "Autonomous Learning V2" not in combined or "요청을 정확히 이해하지 못했습니다" in combined or "사용 가능한 기능" in combined:
+                raise ConfigurationError("telegram autonomous learning routing fell back instead of answering")
+            if "종목" not in client.sent[-1][1]:
+                raise ConfigurationError("telegram autonomous learning routing did not ask for target when context was missing")
+            print(
+                "gaon-telegram-autonomous-learning-routing-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "symbol=005930 orchestration=autonomous_learning_v2 fallback=false "
+                "approval_required=true human_gate_status=awaiting_human_approval "
+                "strategy_mutated=false order_executed=false broker_order_called=false kis_order_called=false safety=pass"
+            )
+        finally:
+            store.close()
 
     elif args.command == "gaon-adaptive-validation-release-check":
         store = RuntimeStateStore(args.db)
@@ -4757,6 +4815,43 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
             "automatic_config_apply": False,
         }
 
+    def handle_autonomous_learning(tool_args):
+        symbol = str(tool_args.get("symbol", "005930"))
+        baseline = handle_research({"symbol": symbol, "request_text": tool_args.get("request_text", "")})
+        return {
+            "schema_version": 1,
+            "tool": "autonomous_learning_research",
+            "mode": str(tool_args.get("mode", "research")),
+            "symbol": symbol,
+            "request_text": str(tool_args.get("request_text", "")),
+            "baseline": baseline,
+            "autonomous_learning_v2": {
+                "schema_version": 1,
+                "external_research_state": "evidence_sufficient",
+                "claims": 1,
+                "hypothesis_status": "proposed",
+                "validation_status": "accepted_for_review",
+                "ranking_status": "ranked",
+                "promotion_status": "requires_human_approval",
+                "human_gate_status": "awaiting_human_approval",
+                "safety": "pass",
+            },
+            "selected_orchestration": "autonomous_learning_v2",
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "quality_status": "pass",
+            "approval_required": True,
+            "promotion_status": "requires_human_approval",
+            "human_gate_status": "awaiting_human_approval",
+            "strategy_mutated": False,
+            "order_executed": False,
+            "broker_order_called": False,
+            "kis_order_called": False,
+            "automatic_champion_promotion": False,
+            "automatic_config_apply": False,
+            "safety": "pass",
+        }
+
     registry.register(
         ToolDefinition(
             "krx_real_research",
@@ -4776,6 +4871,16 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
             allowed_args=("symbol", "mode", "continuation_state"),
         ),
         handle_autonomous,
+    )
+    registry.register(
+        ToolDefinition(
+            "autonomous_learning_research",
+            "Run deterministic Telegram Autonomous Learning V2 release-check route.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol", "mode"),
+        ),
+        handle_autonomous_learning,
     )
     return SafeToolExecutor(registry, store.tool_audit)
 

@@ -12,6 +12,7 @@ from uuid import uuid4
 from gaon.runtime.assistant_provider import AssistantToolDefinition
 from gaon.runtime.external_research import ExternalResearchTool, structured_data
 from gaon.runtime.serialization import dumps_json, loads_json
+from gaon.knowledge.telegram_autonomous_learning import telegram_autonomous_learning_payload
 from gaon.research.quant_scientist import feature_discovery_payload
 from gaon.research.quant_research import KRXMarketDataTool
 from gaon.research.self_improving import (
@@ -284,6 +285,15 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
             symbol=str(args.get("symbol", "005930")),
             mode=str(args.get("mode", "validate")),
             continuation_state=args.get("continuation_state") if isinstance(args.get("continuation_state"), dict) else None,
+        ),
+    )
+    registry.register(
+        ToolDefinition("autonomous_learning_research", "Run the read-only Autonomous Learning V2 research orchestration behind Telegram.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol", "mode")),
+        lambda args: telegram_autonomous_learning_payload(
+            connection,
+            str(args["request_text"]),
+            symbol=str(args.get("symbol", "005930")),
+            mode=str(args.get("mode", "research")),
         ),
     )
     registry.register(
