@@ -3,6 +3,23 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 182 Autonomous Validation Loop v2
+
+Sprint 182 adds a read-only validation loop for strategy experiments. It
+accepts only structured authoritative evidence tied to the experiment ID,
+blocks quality failures and inconsistent metrics, and reports insufficient
+sample size without fabricating confidence.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-validation-loop-v2-release-check
+```
+
+The release check verifies evidence attachment and fail-closed behavior. It
+does not execute backtests, approve production use, mutate strategy
+configuration, promote a Champion, or trade.
+
 ## Sprint 181 Strategy Experiment Builder
 
 Sprint 181 turns proposed hypotheses into validation-ready experiment contracts.

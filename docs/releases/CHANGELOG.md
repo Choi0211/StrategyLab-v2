@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 182 - Autonomous Validation Loop v2
+
+- Added `AutonomousValidationLoopV2` to attach authoritative validation evidence to immutable strategy experiments.
+- Added fail-closed blockers for experiment mismatch, missing evidence, blocking data quality, and fabricated metric inconsistency.
+- Added sample sufficiency classification without executing backtests or approving production use.
+- Added `gaon-validation-loop-v2-release-check`.
+- Preserved schema v36, no strategy mutation, no Champion promotion, and no trading.
+
 ## Sprint 181 - Strategy Experiment Builder
 
 - Added `StrategyExperimentBuilder` and `StrategyResearchExperiment` contracts for validation-ready strategy experiments.

@@ -262,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-external-research-memory-release-check")
     sub.add_parser("gaon-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-strategy-experiment-builder-release-check")
+    sub.add_parser("gaon-validation-loop-v2-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1823,6 +1824,19 @@ def _run(args: argparse.Namespace) -> int:
             "backtest_executed=false tested=false "
             "production_approved=false strategy_mutated=false "
             "order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-validation-loop-v2-release-check":
+        from gaon.knowledge.validation_loop_v2 import validation_loop_v2_release_check
+
+        payload = validation_loop_v2_release_check()
+        print(
+            "gaon-validation-loop-v2-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} confidence={payload['confidence']} "
+            f"trade_count={payload['trade_count']} "
+            "backtest_executed=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
         )
 
     elif args.command == "gaon-adaptive-validation-release-check":
