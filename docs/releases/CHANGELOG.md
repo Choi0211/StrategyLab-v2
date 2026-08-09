@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 185.4 - Production Autonomous Learning Execution Integrity
+
+- Removed the production Telegram dependency on `autonomous_learning_e2e_release_check()`.
+- Kept release-check fixtures isolated while production Telegram starts from `krx_real_research_payload()` and its existing TESTED candidate backtests.
+- Required candidate strategy fingerprint and candidate backtest strategy fingerprint to match before production validation evidence can be used.
+- Blocked fixture-backed baseline/candidate evidence from requesting human approval or creating an eligible production promotion candidate.
+- Added `gaon-production-autonomous-learning-execution-release-check`.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Hotfix 185.3 - Promotion Candidate Evidence Presentation Integrity
 
 - Added structured `promotion_candidate_context` to Autonomous Learning V2 E2E output and Telegram release fixtures.

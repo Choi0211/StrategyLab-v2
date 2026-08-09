@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from gaon.integrations.telegram.contracts import TelegramResponse
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
@@ -9,7 +10,7 @@ from gaon.runtime.assistant_provider import AssistantProviderResponse, Assistant
 from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, _failure_tool_executor, _strict_real_research_payload, main as cli_main, poll_once
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.conversational_mvp import render_single_symbol_summary
-from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel
+from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel, default_tool_registry
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
 from gaon.research import autonomous_retest
@@ -1553,6 +1554,48 @@ class TelegramConversationAgentTests(unittest.TestCase):
 
     def test_hotfix1853_promotion_candidate_presentation_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-promotion-candidate-presentation-release-check", "--db", ":memory:"]), 0)
+
+    def test_hotfix1854_default_telegram_tool_path_blocks_release_fixture_promotion(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(
+                    _config(assistant_enabled=True),
+                    store._connection,
+                    tool_executor=SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit),
+                ),
+                allowed_chat_ids=("100",),
+            )
+            text = (
+                "삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료도 찾아보고 "
+                "지금까지 배운 내용과 실제 시장 데이터를 사용해서 개선 전략 후보를 만든 뒤 검증해줘. "
+                "좋은 전략 후보가 생기면 승격 승인을 요청하기 전까지 진행해줘."
+            )
+            with patch(
+                "gaon.knowledge.autonomous_learning_e2e.autonomous_learning_e2e_release_check",
+                side_effect=AssertionError("release fixture called"),
+            ):
+                process_update(parse_update_result(_update(886, 886, text), received_at="2026-08-08T00:00:00Z"), runtime, client)
+
+            audits = store.tool_audit.list(tool_name="autonomous_learning_research")
+            self.assertEqual(len(audits), 1)
+            output = audits[0].result["output"]
+            self.assertFalse(output["production_uses_release_fixture"])
+            self.assertTrue(output["fixture_promotion_blocked"])
+            self.assertFalse(output["approval_required"])
+            self.assertNotEqual("requires_human_approval", output["promotion_status"])
+            self.assertNotIn("Fixture research", client.sent[-1][1])
+            self.assertNotIn("example.org", client.sent[-1][1])
+            self.assertFalse(output["strategy_mutated"])
+            self.assertFalse(output["order_executed"])
+            self.assertFalse(output["broker_order_called"])
+            self.assertFalse(output["kis_order_called"])
+        finally:
+            store.close()
+
+    def test_hotfix1854_production_autonomous_learning_execution_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-production-autonomous-learning-execution-release-check"]), 0)
 
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)

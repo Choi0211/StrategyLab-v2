@@ -3,6 +3,26 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 185.4 Production Autonomous Learning Execution Integrity
+
+Telegram Autonomous Learning V2 production execution is now separated from the
+deterministic release-check E2E fixture path. Production Telegram no longer calls
+`autonomous_learning_e2e_release_check()` or fixture discovery/transport/backtest
+helpers. It starts from the existing KRX real-research payload, validates only
+candidate backtests produced by that pipeline, and blocks fixture-backed
+promotion evidence without requesting human approval.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-production-autonomous-learning-execution-release-check
+```
+
+The production path remains read-only. Fixture evidence, missing candidate
+backtests, fingerprint mismatches, unavailable external content, and
+unimplemented changed rules fail closed without fabricated results, strategy
+mutation, Champion promotion, or orders.
+
 ## Hotfix 185.3 Promotion Candidate Evidence Presentation Integrity
 
 Telegram promotion-candidate follow-up questions now preserve the active
