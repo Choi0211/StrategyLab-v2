@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 176 - Normalized Claim Bridge
+
+- Added `NormalizedContentClaimBridge` to connect Sprint 175 normalized evidence to Sprint 168 verbatim claim extraction.
+- Enforced source locator and raw checksum linkage before claim extraction.
+- Blocked unsupported normalization output, rejected evidence, checksum mismatch, and no-claim content.
+- Added `gaon-normalized-claim-bridge-release-check`.
+- Preserved schema v36, no Knowledge Validated transition, no production approval, no strategy mutation, and no trading.
+
 ## Sprint 175 - Safe Source Content Normalization
 
 - Added bounded, deterministic normalization for previously acquired external `text/plain`, `text/html`, and `application/json` source content.

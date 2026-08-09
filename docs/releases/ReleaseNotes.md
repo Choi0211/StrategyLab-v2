@@ -3,6 +3,24 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 176 Normalized Claim Bridge
+
+Sprint 176 connects normalized source content to the existing verbatim claim and
+Knowledge Candidate foundation. Gaon now checks provenance, raw content
+checksum, source quality, and normalization eligibility before extracting
+claims from normalized evidence.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-normalized-claim-bridge-release-check
+```
+
+The release check verifies verbatim claim extraction, unvalidated candidate
+creation, source/checksum linkage, and fail-closed blocking for unsupported
+normalized content. It does not validate knowledge, approve production use,
+mutate strategies, promote a Champion, or trade.
+
 ## Sprint 175 Safe Source Content Normalization
 
 Sprint 175 adds a bounded source-content normalization layer after Sprint 174

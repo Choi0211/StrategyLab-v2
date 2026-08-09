@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Sprint 176 Normalized Claim Bridge
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_content_claim_bridge -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-normalized-claim-bridge-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 722 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Sprint 175 Safe Source Content Normalization
 
 - Targeted local verification:
