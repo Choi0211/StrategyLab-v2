@@ -259,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-normalized-claim-bridge-release-check")
     sub.add_parser("gaon-evidence-conflict-reevaluation-release-check")
     sub.add_parser("gaon-autonomous-knowledge-research-loop-release-check")
+    sub.add_parser("gaon-autonomous-external-research-execution-release-check")
     sub.add_parser("gaon-external-research-memory-release-check")
     sub.add_parser("gaon-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-strategy-experiment-builder-release-check")
@@ -1890,6 +1891,19 @@ def _run(args: argparse.Namespace) -> int:
             "gaon-autonomous-learning-production-gate-release-check: PASS "
             f"schema_version={payload['schema_version']} status={payload['status']} "
             "manual_application_required=true automatic_champion_promotion=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-autonomous-external-research-execution-release-check":
+        from gaon.knowledge.external_research_execution import autonomous_external_research_execution_release_check
+
+        payload = autonomous_external_research_execution_release_check()
+        print(
+            "gaon-autonomous-external-research-execution-release-check: PASS "
+            f"schema_version={payload['schema_version']} state={payload['state']} "
+            f"provider_calls={payload['provider_calls']} sources={payload['sources']} "
+            f"claims={payload['claims']} "
+            "network_executed=false production_approved=false "
             "strategy_mutated=false order_executed=false safety=pass"
         )
 
