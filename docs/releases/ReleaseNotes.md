@@ -3,6 +3,22 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 184 Promotion Candidate Gate
+
+Sprint 184 adds a review gate between robustness ranking and any future
+production workflow. Real ranked evidence can become an approval-required
+candidate, while fixture-backed candidates are blocked for production by
+default.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-promotion-candidate-gate-release-check
+```
+
+The release check verifies the human approval requirement, fixture blocking,
+rollback target preservation, and no automatic promotion or mutation.
+
 ## Sprint 183 Strategy Robustness Ranking
 
 Sprint 183 ranks accepted validation results using only structured

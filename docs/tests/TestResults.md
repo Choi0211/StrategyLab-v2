@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Sprint 184 Promotion Candidate Gate
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_promotion_gate -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-promotion-candidate-gate-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 760 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Sprint 183 Strategy Robustness Ranking
 
 - Targeted local verification:

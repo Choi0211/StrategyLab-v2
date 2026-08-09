@@ -264,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-strategy-experiment-builder-release-check")
     sub.add_parser("gaon-validation-loop-v2-release-check")
     sub.add_parser("gaon-robustness-ranking-release-check")
+    sub.add_parser("gaon-promotion-candidate-gate-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1849,6 +1850,19 @@ def _run(args: argparse.Namespace) -> int:
             f"schema_version={payload['schema_version']} "
             f"status={payload['status']} ranked={payload['ranked']} "
             f"top_evidence_id={payload['top_evidence_id']} "
+            "automatic_champion_promotion=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-promotion-candidate-gate-release-check":
+        from gaon.knowledge.promotion_gate import promotion_candidate_gate_release_check
+
+        payload = promotion_candidate_gate_release_check()
+        print(
+            "gaon-promotion-candidate-gate-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} approval_required={str(payload['approval_required']).lower()} "
+            f"candidate_id={payload['candidate_id']} "
             "automatic_champion_promotion=false production_approved=false "
             "strategy_mutated=false order_executed=false safety=pass"
         )

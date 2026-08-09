@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 184 - Promotion Candidate Gate
+
+- Added `PromotionCandidateGate` and approval-required `PromotionCandidateRecord` contracts.
+- Blocked fixture-backed production candidates by default while preserving rollback targets.
+- Kept ranked candidates review-only until explicit human approval.
+- Added `gaon-promotion-candidate-gate-release-check`.
+- Preserved schema v36, no approval consumption, no Champion promotion, no strategy mutation, and no trading.
+
 ## Sprint 183 - Strategy Robustness Ranking
 
 - Added `StrategyRobustnessRanker` for evidence-only candidate ranking.
