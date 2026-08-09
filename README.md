@@ -82,6 +82,7 @@ Included foundations:
 - Hotfix 185.1 Telegram Autonomous Learning V2 routing with natural Korean research intent recognition, same-chat target continuation, authoritative KRX baseline grounding, human-approval-required stopping, and `gaon-telegram-autonomous-learning-routing-release-check`
 - Hotfix 185.2 Telegram Autonomous Learning V2 priority routing with combined research intent precedence over legacy autonomous retest/cycle routing and `gaon-telegram-autonomous-learning-priority-release-check`
 - Hotfix 185.3 promotion candidate evidence presentation with same-chat V2 candidate context preservation, no presentation-time tool rerun, authoritative metric/source/ranking rendering, and `gaon-promotion-candidate-presentation-release-check`
+- Hotfix 185.4 production Autonomous Learning execution integrity with release-check fixture isolation, production candidate backtest fingerprint validation, fixture promotion blocking, and `gaon-production-autonomous-learning-execution-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

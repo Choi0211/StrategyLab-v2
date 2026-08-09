@@ -279,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     gaon_promotion_candidate_presentation_release = sub.add_parser("gaon-promotion-candidate-presentation-release-check")
     gaon_promotion_candidate_presentation_release.add_argument("--db", default=":memory:")
     gaon_promotion_candidate_presentation_release.add_argument("--run-id", default=None)
+    sub.add_parser("gaon-production-autonomous-learning-execution-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2184,6 +2185,23 @@ def _run(args: argparse.Namespace) -> int:
             )
         finally:
             store.close()
+
+    elif args.command == "gaon-production-autonomous-learning-execution-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_autonomous_learning_execution_release_check
+
+        payload = production_autonomous_learning_execution_release_check()
+        print(
+            "gaon-production-autonomous-learning-execution-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"production_uses_release_fixture={str(payload['production_uses_release_fixture']).lower()} "
+            f"fixture_promotion_blocked={str(payload['fixture_promotion_blocked']).lower()} "
+            f"candidate_backtest_authoritative={str(payload['candidate_backtest_authoritative']).lower()} "
+            f"candidate_strategy_fingerprint_matched={str(payload['candidate_strategy_fingerprint_matched']).lower()} "
+            f"real_data_required={str(payload['real_data_required']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
 
     elif args.command == "gaon-adaptive-validation-release-check":
         store = RuntimeStateStore(args.db)
