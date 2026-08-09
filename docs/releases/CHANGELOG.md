@@ -1,5 +1,100 @@
 # Changelog
 
+## Sprint 175-185 Follow-up - Autonomous Learning Execution Integrity
+
+- Added `AutonomousExternalResearchExecutor` to run the existing discovery, ingestion, content acquisition, normalization, claim bridge, and reevaluation components from a `ResearchQuestion`.
+- Added `TrustedValidationEvidenceAdapter` and `AuthoritativeExperimentExecutor` so validation evidence is built from structured real research/backtest outputs, not arbitrary metric dictionaries.
+- Added final deterministic autonomous learning E2E release gate through external research, memory, hypothesis, experiment, validation, ranking, promotion candidate, and human approval required.
+- Added `gaon-autonomous-external-research-execution-release-check`, `gaon-authoritative-experiment-execution-release-check`, and `gaon-autonomous-learning-e2e-release-check`.
+- Preserved schema v36, no source execution, no fabricated metrics/evidence/claims, no automatic Champion promotion, no strategy mutation, and no trading.
+
+## Sprint 185 - Human-gated Autonomous Research Promotion
+
+- Added `HumanGatedPromotionService` for explicit approval-token validation over promotion candidates.
+- Added manual-application-only approval receipts that store token digests without printing secrets.
+- Added `gaon-human-gated-promotion-release-check` and `gaon-autonomous-learning-production-gate-release-check`.
+- Preserved schema v36, no automatic Champion promotion, no strategy mutation, and no trading.
+
+## Sprint 184 - Promotion Candidate Gate
+
+- Added `PromotionCandidateGate` and approval-required `PromotionCandidateRecord` contracts.
+- Blocked fixture-backed production candidates by default while preserving rollback targets.
+- Kept ranked candidates review-only until explicit human approval.
+- Added `gaon-promotion-candidate-gate-release-check`.
+- Preserved schema v36, no approval consumption, no Champion promotion, no strategy mutation, and no trading.
+
+## Sprint 183 - Strategy Robustness Ranking
+
+- Added `StrategyRobustnessRanker` for evidence-only candidate ranking.
+- Required structured `trade_count`, `total_return`, `mdd`, `profit_factor`, and `win_rate` metrics before ranking.
+- Blocked non-accepted validation results and missing metrics.
+- Added `gaon-robustness-ranking-release-check`.
+- Preserved schema v36, no approval creation, no Champion promotion, no strategy mutation, and no trading.
+
+## Sprint 182 - Autonomous Validation Loop v2
+
+- Added `AutonomousValidationLoopV2` to attach authoritative validation evidence to immutable strategy experiments.
+- Added fail-closed blockers for experiment mismatch, missing evidence, blocking data quality, and fabricated metric inconsistency.
+- Added sample sufficiency classification without executing backtests or approving production use.
+- Added `gaon-validation-loop-v2-release-check`.
+- Preserved schema v36, no strategy mutation, no Champion promotion, and no trading.
+
+## Sprint 181 - Strategy Experiment Builder
+
+- Added `StrategyExperimentBuilder` and `StrategyResearchExperiment` contracts for validation-ready strategy experiments.
+- Preserved baseline strategy, assumptions, universe, period, changed-rule, and cost-model fingerprints without executing backtests.
+- Blocked already-tested hypotheses, invalid periods, missing universe, missing baseline, and missing assumptions.
+- Added `gaon-strategy-experiment-builder-release-check`.
+- Preserved schema v36, no backtest execution, no production approval, no strategy mutation, and no trading.
+
+## Sprint 180 - Evidence-backed Strategy Hypothesis
+
+- Added `EvidenceBackedHypothesisGenerator` for proposed strategy hypotheses sourced from unvalidated external research memory.
+- Preserved memory, claim, source, and research-question lineage in hypothesis records.
+- Blocked no-memory, missing-evidence, prevalidated-memory, and fabricated-metric inputs.
+- Added `gaon-evidence-backed-hypothesis-release-check`.
+- Preserved schema v36, no tested status, no Knowledge Validated transition, no production approval, no strategy mutation, and no trading.
+
+## Sprint 179 - External Research Memory
+
+- Added append-only `ExternalResearchMemoryStore` under `GaonStorage` research-history memory.
+- Stored loop/topic/claim/question/source references as unvalidated evidence memory.
+- Added duplicate fingerprint reporting without overwrite or automatic merge.
+- Added `gaon-external-research-memory-release-check`.
+- Preserved schema v36, no Knowledge Validated transition, no production approval, no policy application, no strategy mutation, and no trading.
+
+## Sprint 178 - Autonomous Knowledge Research Loop
+
+- Added `AutonomousKnowledgeResearchLoop` to compose normalization, claim bridging, and conflict/gap reevaluation over explicit inert evidence.
+- Enforced source count, byte, and iteration budgets with structured fail-closed blockers.
+- Kept the loop network-free and prevented unsupported content from entering claim extraction.
+- Added `gaon-autonomous-knowledge-research-loop-release-check`.
+- Preserved schema v36, no Knowledge Validated transition, no production approval, no strategy mutation, and no trading.
+
+## Sprint 177 - Evidence Conflict Re-evaluation
+
+- Added `EvidenceConflictReevaluator` to re-run structured conflict and gap analysis when new Knowledge Candidates arrive.
+- Required explicit candidate stances and blocked missing stance, empty candidate sets, and prevalidated/approved inputs.
+- Generated bounded research questions for unresolved conflict states without automatic resolution.
+- Added `gaon-evidence-conflict-reevaluation-release-check`.
+- Preserved schema v36, no Knowledge Validated transition, no production approval, no strategy mutation, and no trading.
+
+## Sprint 176 - Normalized Claim Bridge
+
+- Added `NormalizedContentClaimBridge` to connect Sprint 175 normalized evidence to Sprint 168 verbatim claim extraction.
+- Enforced source locator and raw checksum linkage before claim extraction.
+- Blocked unsupported normalization output, rejected evidence, checksum mismatch, and no-claim content.
+- Added `gaon-normalized-claim-bridge-release-check`.
+- Preserved schema v36, no Knowledge Validated transition, no production approval, no strategy mutation, and no trading.
+
+## Sprint 175 - Safe Source Content Normalization
+
+- Added bounded, deterministic normalization for previously acquired external `text/plain`, `text/html`, and `application/json` source content.
+- Preserved acquisition/source provenance, raw and normalized checksums, and explicit evidence-not-instruction safety metadata.
+- Kept unsupported PDF and unsafe acquisition states fail-closed and ineligible for claim extraction.
+- Added `gaon-content-normalization-release-check`.
+- Preserved schema v36, no knowledge validation, no production approval, no strategy mutation, no trading, and no downloaded-content execution.
+
 ## Hotfix 163.5 - Autonomous Research Candidate Identity Integrity
 
 - Canonicalized autonomous historical candidate identities to `candidate_kind=<kind>` while preserving stricter `tested_candidate_keys` for duplicate prevention.

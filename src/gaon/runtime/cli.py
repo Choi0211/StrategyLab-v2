@@ -255,6 +255,21 @@ def main(argv: list[str] | None = None) -> int:
     gaon_autonomous_candidate_identity_release = sub.add_parser("gaon-autonomous-candidate-identity-release-check")
     gaon_autonomous_candidate_identity_release.add_argument("--db", default=":memory:")
     gaon_autonomous_candidate_identity_release.add_argument("--run-id", default=None)
+    sub.add_parser("gaon-content-normalization-release-check")
+    sub.add_parser("gaon-normalized-claim-bridge-release-check")
+    sub.add_parser("gaon-evidence-conflict-reevaluation-release-check")
+    sub.add_parser("gaon-autonomous-knowledge-research-loop-release-check")
+    sub.add_parser("gaon-autonomous-external-research-execution-release-check")
+    sub.add_parser("gaon-external-research-memory-release-check")
+    sub.add_parser("gaon-evidence-backed-hypothesis-release-check")
+    sub.add_parser("gaon-strategy-experiment-builder-release-check")
+    sub.add_parser("gaon-authoritative-experiment-execution-release-check")
+    sub.add_parser("gaon-validation-loop-v2-release-check")
+    sub.add_parser("gaon-robustness-ranking-release-check")
+    sub.add_parser("gaon-promotion-candidate-gate-release-check")
+    sub.add_parser("gaon-human-gated-promotion-release-check")
+    sub.add_parser("gaon-autonomous-learning-production-gate-release-check")
+    sub.add_parser("gaon-autonomous-learning-e2e-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1720,6 +1735,207 @@ def _run(args: argparse.Namespace) -> int:
             )
         finally:
             store.close()
+
+    elif args.command == "gaon-content-normalization-release-check":
+        from gaon.knowledge.content_normalization import content_normalization_release_check
+
+        payload = content_normalization_release_check()
+        print(
+            "gaon-content-normalization-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"normalized={payload['normalized']} unsupported={payload['unsupported']} "
+            "eligible_claims=true knowledge_validated=false production_approved=false safety=pass"
+        )
+
+    elif args.command == "gaon-normalized-claim-bridge-release-check":
+        from gaon.knowledge.content_claim_bridge import content_claim_bridge_release_check
+
+        payload = content_claim_bridge_release_check()
+        print(
+            "gaon-normalized-claim-bridge-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"claims={payload['claims']} candidates={payload['candidates']} "
+            f"status={payload['status']} "
+            "verbatim=true knowledge_validated=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-evidence-conflict-reevaluation-release-check":
+        from gaon.knowledge.evidence_reevaluation import evidence_conflict_reevaluation_release_check
+
+        payload = evidence_conflict_reevaluation_release_check()
+        print(
+            "gaon-evidence-conflict-reevaluation-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} "
+            f"conflict_status={payload['conflict_status']} "
+            f"questions={payload['questions']} "
+            "automatic_resolution=false knowledge_validated=false "
+            "production_approved=false strategy_mutated=false "
+            "order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-autonomous-knowledge-research-loop-release-check":
+        from gaon.knowledge.autonomous_knowledge_loop import autonomous_knowledge_research_loop_release_check
+
+        payload = autonomous_knowledge_research_loop_release_check()
+        print(
+            "gaon-autonomous-knowledge-research-loop-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} "
+            f"sources={payload['processed_sources']} "
+            f"claims={payload['claims']} questions={payload['questions']} "
+            "network_used=false knowledge_validated=false "
+            "production_approved=false strategy_mutated=false "
+            "order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-external-research-memory-release-check":
+        from gaon.knowledge.external_research_memory import external_research_memory_release_check
+
+        payload = external_research_memory_release_check()
+        print(
+            "gaon-external-research-memory-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"records={payload['records']} "
+            f"duplicate={payload['duplicate']} "
+            f"claim_refs={payload['claim_refs']} "
+            "knowledge_validated=false production_approved=false "
+            "policy_applied=false strategy_mutated=false "
+            "order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-evidence-backed-hypothesis-release-check":
+        from gaon.knowledge.evidence_hypothesis import evidence_backed_hypothesis_release_check
+
+        payload = evidence_backed_hypothesis_release_check()
+        print(
+            "gaon-evidence-backed-hypothesis-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} "
+            f"memory_refs={payload['memory_refs']} "
+            f"claim_refs={payload['claim_refs']} "
+            "tested=false fabricated_metrics=blocked "
+            "knowledge_validated=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-strategy-experiment-builder-release-check":
+        from gaon.knowledge.strategy_experiment import strategy_experiment_builder_release_check
+
+        payload = strategy_experiment_builder_release_check()
+        print(
+            "gaon-strategy-experiment-builder-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} symbols={payload['symbols']} "
+            "backtest_executed=false tested=false "
+            "production_approved=false strategy_mutated=false "
+            "order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-validation-loop-v2-release-check":
+        from gaon.knowledge.validation_loop_v2 import validation_loop_v2_release_check
+
+        payload = validation_loop_v2_release_check()
+        print(
+            "gaon-validation-loop-v2-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} confidence={payload['confidence']} "
+            f"trade_count={payload['trade_count']} "
+            "backtest_executed=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-robustness-ranking-release-check":
+        from gaon.knowledge.robustness_ranking import robustness_ranking_release_check
+
+        payload = robustness_ranking_release_check()
+        print(
+            "gaon-robustness-ranking-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} ranked={payload['ranked']} "
+            f"top_evidence_id={payload['top_evidence_id']} "
+            "automatic_champion_promotion=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-promotion-candidate-gate-release-check":
+        from gaon.knowledge.promotion_gate import promotion_candidate_gate_release_check
+
+        payload = promotion_candidate_gate_release_check()
+        print(
+            "gaon-promotion-candidate-gate-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} approval_required={str(payload['approval_required']).lower()} "
+            f"candidate_id={payload['candidate_id']} "
+            "automatic_champion_promotion=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-human-gated-promotion-release-check":
+        from gaon.knowledge.human_gated_promotion import human_gated_promotion_release_check
+
+        payload = human_gated_promotion_release_check()
+        print(
+            "gaon-human-gated-promotion-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} "
+            f"manual_application_required={str(payload['manual_application_required']).lower()} "
+            "automatic_champion_promotion=false production_approved=true "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-autonomous-learning-production-gate-release-check":
+        from gaon.knowledge.human_gated_promotion import autonomous_learning_production_gate_release_check
+
+        payload = autonomous_learning_production_gate_release_check()
+        print(
+            "gaon-autonomous-learning-production-gate-release-check: PASS "
+            f"schema_version={payload['schema_version']} status={payload['status']} "
+            "manual_application_required=true automatic_champion_promotion=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-autonomous-external-research-execution-release-check":
+        from gaon.knowledge.external_research_execution import autonomous_external_research_execution_release_check
+
+        payload = autonomous_external_research_execution_release_check()
+        print(
+            "gaon-autonomous-external-research-execution-release-check: PASS "
+            f"schema_version={payload['schema_version']} state={payload['state']} "
+            f"provider_calls={payload['provider_calls']} sources={payload['sources']} "
+            f"claims={payload['claims']} "
+            "network_executed=false production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-authoritative-experiment-execution-release-check":
+        from gaon.knowledge.experiment_execution import authoritative_experiment_execution_release_check
+
+        payload = authoritative_experiment_execution_release_check()
+        print(
+            "gaon-authoritative-experiment-execution-release-check: PASS "
+            f"schema_version={payload['schema_version']} status={payload['status']} "
+            f"ranking_status={payload['ranking_status']} trade_count={payload['trade_count']} "
+            "trusted_structured_source=true production_approved=false "
+            "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-autonomous-learning-e2e-release-check":
+        from gaon.knowledge.autonomous_learning_e2e import autonomous_learning_e2e_release_check
+
+        payload = autonomous_learning_e2e_release_check()
+        print(
+            "gaon-autonomous-learning-e2e-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"external_research_state={payload['external_research_state']} "
+            f"hypothesis_status={payload['hypothesis_status']} "
+            f"validation_status={payload['validation_status']} "
+            f"ranking_status={payload['ranking_status']} "
+            f"promotion_status={payload['promotion_status']} "
+            f"human_gate_status={payload['human_gate_status']} "
+            "production_approved=false strategy_mutated=false order_executed=false safety=pass"
+        )
 
     elif args.command == "gaon-adaptive-validation-release-check":
         store = RuntimeStateStore(args.db)

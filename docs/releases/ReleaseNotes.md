@@ -3,6 +3,217 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 175-185 Follow-up: Autonomous Learning Execution Integrity
+
+This follow-up closes the reviewed integration gaps in the autonomous learning
+production gate. The external research path now starts from a structured
+research question and executes the existing bounded discovery, metadata
+ingestion, source acquisition, safe normalization, claim bridge, and evidence
+reevaluation components. Strategy experiment validation now accepts evidence
+through a trusted adapter backed by existing real research/backtest result
+objects.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-external-research-execution-release-check
+python -m gaon.runtime.cli gaon-authoritative-experiment-execution-release-check
+python -m gaon.runtime.cli gaon-autonomous-learning-e2e-release-check
+```
+
+The E2E gate proves the deterministic path can reach a promotion candidate and
+then stop at `awaiting_human_approval` without production approval, Champion
+promotion, strategy mutation, or trading.
+
+## Sprint 185 Human-gated Autonomous Research Promotion
+
+Sprint 185 completes the Sprint 175-185 autonomous learning production gate.
+It validates explicit human approval tokens and emits auditable
+manual-application-only results. A valid approval does not mutate strategy
+configuration, promote a Champion, or place orders.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-human-gated-promotion-release-check
+python -m gaon.runtime.cli gaon-autonomous-learning-production-gate-release-check
+```
+
+The aggregate release check confirms the safe path through the human gate with
+manual application still required.
+
+## Sprint 184 Promotion Candidate Gate
+
+Sprint 184 adds a review gate between robustness ranking and any future
+production workflow. Real ranked evidence can become an approval-required
+candidate, while fixture-backed candidates are blocked for production by
+default.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-promotion-candidate-gate-release-check
+```
+
+The release check verifies the human approval requirement, fixture blocking,
+rollback target preservation, and no automatic promotion or mutation.
+
+## Sprint 183 Strategy Robustness Ranking
+
+Sprint 183 ranks accepted validation results using only structured
+authoritative metrics. Missing metrics and blocked validation results fail
+closed, and ranked output is explicitly review-only.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-robustness-ranking-release-check
+```
+
+The release check verifies deterministic ranking and safety flags. Ranking
+does not create approval requests, mutate strategies, promote a Champion, or
+trade.
+
+## Sprint 182 Autonomous Validation Loop v2
+
+Sprint 182 adds a read-only validation loop for strategy experiments. It
+accepts only structured authoritative evidence tied to the experiment ID,
+blocks quality failures and inconsistent metrics, and reports insufficient
+sample size without fabricating confidence.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-validation-loop-v2-release-check
+```
+
+The release check verifies evidence attachment and fail-closed behavior. It
+does not execute backtests, approve production use, mutate strategy
+configuration, promote a Champion, or trade.
+
+## Sprint 181 Strategy Experiment Builder
+
+Sprint 181 turns proposed hypotheses into validation-ready experiment contracts.
+Each experiment preserves baseline strategy and assumption fingerprints,
+universe symbols, period, changed rules, and cost model while remaining
+unexecuted.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-strategy-experiment-builder-release-check
+```
+
+The release check verifies stable experiment identity, blocked invalid inputs,
+and no backtest execution. It does not validate evidence, approve production
+use, mutate strategies, promote a Champion, or trade.
+
+## Sprint 180 Evidence-backed Strategy Hypothesis
+
+Sprint 180 converts unvalidated external research memory into proposed,
+falsifiable strategy hypotheses. Hypotheses carry memory and claim lineage, but
+they remain untested and cannot include fabricated performance metrics.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-evidence-backed-hypothesis-release-check
+```
+
+The release check verifies evidence lineage, proposed-only status, falsification
+criteria, and fabricated-metric blocking. It does not backtest, validate
+knowledge, approve production use, mutate strategies, promote a Champion, or
+trade.
+
+## Sprint 179 External Research Memory
+
+Sprint 179 stores autonomous knowledge-loop outcomes as append-only,
+evidence-backed memory. Records retain claim, question, source, and loop
+lineage while remaining unvalidated and unavailable for production policy use.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-external-research-memory-release-check
+```
+
+The release check verifies first-write storage, duplicate fingerprint reporting,
+topic retrieval, and safety blockers. It does not validate knowledge, apply
+policy, approve production use, mutate strategies, promote a Champion, or trade.
+
+## Sprint 178 Autonomous Knowledge Research Loop
+
+Sprint 178 adds a bounded autonomous knowledge research loop over explicit
+inert evidence inputs. The loop reuses the safe normalizer, normalized-claim
+bridge, and evidence conflict reevaluator to produce structured conflict state
+and research questions.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-knowledge-research-loop-release-check
+```
+
+The release check verifies budget enforcement, conflict/question generation, no
+network use, and fail-closed unsupported-content handling. It does not validate
+knowledge, approve production use, mutate strategies, promote a Champion, or
+trade.
+
+## Sprint 177 Evidence Conflict Re-evaluation
+
+Sprint 177 adds a structured reevaluation gate for new claim evidence. Gaon can
+now compare explicit positioned claims for a topic, detect conflict-state
+changes, and emit bounded research questions without pretending to resolve the
+conflict.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-evidence-conflict-reevaluation-release-check
+```
+
+The release check verifies insufficient-independence to unresolved-conflict
+progression, missing-stance blocking, bounded research-question generation, and
+no automatic resolution. It does not validate knowledge, approve production use,
+mutate strategies, promote a Champion, or trade.
+
+## Sprint 176 Normalized Claim Bridge
+
+Sprint 176 connects normalized source content to the existing verbatim claim and
+Knowledge Candidate foundation. Gaon now checks provenance, raw content
+checksum, source quality, and normalization eligibility before extracting
+claims from normalized evidence.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-normalized-claim-bridge-release-check
+```
+
+The release check verifies verbatim claim extraction, unvalidated candidate
+creation, source/checksum linkage, and fail-closed blocking for unsupported
+normalized content. It does not validate knowledge, approve production use,
+mutate strategies, promote a Champion, or trade.
+
+## Sprint 175 Safe Source Content Normalization
+
+Sprint 175 adds a bounded source-content normalization layer after Sprint 174
+content acquisition. Gaon can now turn acquired text, HTML, and JSON evidence
+into deterministic plain text while preserving acquisition provenance and
+checksums.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-content-normalization-release-check
+```
+
+The release check verifies HTML script/style/navigation stripping, JSON
+data-only extraction, unsupported PDF fail-closed handling, and that normalized
+content is only marked eligible for later claim extraction. It does not validate
+knowledge, approve production use, execute downloaded content, mutate strategy
+configuration, promote a Champion, or trade.
+
 ## Hotfix 163.5 Autonomous Research Candidate Identity Integrity
 
 Hotfix 163.5 fixes duplicate logical candidate labels in autonomous research

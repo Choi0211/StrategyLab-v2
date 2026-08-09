@@ -67,6 +67,18 @@ Included foundations:
 - Hotfix 163.3 autonomous research progression integrity with continuation state handoff, parent/root cycle linkage, deterministic candidate dedupe, grounded progress comparison, no unsupported assumption deltas, and `gaon-autonomous-research-progression-release-check`
 - Hotfix 163.4 autonomous research history integrity with root history/current-cycle separation, preserved historical TESTED candidates after `NO_NEW_RESEARCH_PATH`, grounded comparison rendering, and `gaon-autonomous-research-history-release-check`
 - Hotfix 163.5 autonomous candidate identity integrity with canonical logical candidate history across proposal/retest/tested-key paths and `gaon-autonomous-candidate-identity-release-check`
+- Sprint 175 Safe Source Content Normalization with bounded UTF-8 text extraction for acquired text, HTML, and JSON evidence, explicit unsupported PDF fail-closed handling, preserved acquisition provenance, and `gaon-content-normalization-release-check`
+- Sprint 176 Normalized Claim Bridge with provenance/checksum-checked verbatim claim extraction from normalized evidence, unvalidated Knowledge Candidate creation, rejected/unsupported evidence blocking, and `gaon-normalized-claim-bridge-release-check`
+- Sprint 177 Evidence Conflict Re-evaluation with explicit-stance positioned claims, conflict/gap reanalysis, bounded research-question generation, no automatic resolution, and `gaon-evidence-conflict-reevaluation-release-check`
+- Sprint 178 Autonomous Knowledge Research Loop with bounded inert evidence processing through normalization, claim bridging, conflict/gap reevaluation, no network use, and `gaon-autonomous-knowledge-research-loop-release-check`
+- Sprint 179 External Research Memory with append-only evidence-backed JSONL storage, topic search, duplicate fingerprint reporting, unvalidated lifecycle, and `gaon-external-research-memory-release-check`
+- Sprint 180 Evidence-backed Strategy Hypothesis with unvalidated memory-to-hypothesis lineage, falsification criteria, fabricated metric blocking, and `gaon-evidence-backed-hypothesis-release-check`
+- Sprint 181 Strategy Experiment Builder with proposed-hypothesis to immutable validation experiment contracts, stable fingerprints, no execution on creation, and `gaon-strategy-experiment-builder-release-check`
+- Sprint 182 Autonomous Validation Loop v2 with authoritative evidence attachment, data-quality fail-closed checks, sample sufficiency status, and `gaon-validation-loop-v2-release-check`
+- Sprint 183 Strategy Robustness Ranking with structured metric requirements, evidence-only scoring, no promotion semantics, and `gaon-robustness-ranking-release-check`
+- Sprint 184 Promotion Candidate Gate with approval-required candidate records, fixture production blocking, rollback target preservation, and `gaon-promotion-candidate-gate-release-check`
+- Sprint 185 Human-gated Autonomous Research Promotion with explicit approval token validation, manual-application-only results, aggregate production gate release check, and no automatic mutation
+- Sprint 175-185 follow-up execution integrity with real discovery/acquisition/normalization/claim/reevaluation orchestration, trusted structured backtest-to-validation evidence, and end-to-end human-approval-required release gates
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

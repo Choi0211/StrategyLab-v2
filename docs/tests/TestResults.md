@@ -2,6 +2,154 @@
 
 Status: Passed
 
+## Sprint 175-185 Follow-up Autonomous Learning Execution Integrity
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_external_research_execution tests.unit.test_authoritative_experiment_execution tests.unit.test_autonomous_learning_e2e -q`: PASS, 10 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-external-research-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-authoritative-experiment-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-e2e-release-check`: PASS
+  - Sprint 175-185 release-check regression bundle: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 774 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 185 Human-gated Autonomous Research Promotion
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_human_gated_promotion -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-human-gated-promotion-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-production-gate-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 764 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 184 Promotion Candidate Gate
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_promotion_gate -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-promotion-candidate-gate-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 760 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 183 Strategy Robustness Ranking
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_robustness_ranking -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-robustness-ranking-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 755 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 182 Autonomous Validation Loop v2
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_validation_loop_v2 -q`: PASS, 6 tests
+  - `python -m gaon.runtime.cli gaon-validation-loop-v2-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 751 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 181 Strategy Experiment Builder
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_strategy_experiment -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-strategy-experiment-builder-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 745 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 180 Evidence-backed Strategy Hypothesis
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_evidence_hypothesis -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-evidence-backed-hypothesis-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 740 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 179 External Research Memory
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_external_research_memory -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-external-research-memory-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 735 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 178 Autonomous Knowledge Research Loop
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_knowledge_loop -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-knowledge-research-loop-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 731 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 177 Evidence Conflict Re-evaluation
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_evidence_reevaluation -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-evidence-conflict-reevaluation-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 726 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 176 Normalized Claim Bridge
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_content_claim_bridge -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-normalized-claim-bridge-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 722 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
+## Sprint 175 Safe Source Content Normalization
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_content_normalization -q`: PASS, 7 tests
+  - `python -m gaon.runtime.cli gaon-content-normalization-release-check`: PASS, schema v36 unchanged
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 717 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Hotfix 163.5 Autonomous Research Candidate Identity Integrity
 
 - Targeted local verification:
