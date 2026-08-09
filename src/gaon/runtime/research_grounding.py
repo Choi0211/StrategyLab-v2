@@ -175,7 +175,7 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
     if tool_name == "autonomous_research_cycle":
         return _format_autonomous_research_cycle(output)
     if tool_name == "autonomous_learning_research":
-        return _format_autonomous_learning_research(output)
+        return _format_autonomous_learning_research(output, user_text)
     if tool_name == "research_retest":
         return _format_research_retest(output)
     if tool_name == "multi_symbol_research":
@@ -367,7 +367,10 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
-def _format_autonomous_learning_research(output: dict[str, object]) -> str:
+def _format_autonomous_learning_research(output: dict[str, object], user_text: str = "") -> str:
+    candidate_context = _as_dict(_as_dict(output.get("autonomous_learning_v2")).get("promotion_candidate_context") or output.get("promotion_candidate_context"))
+    if candidate_context and _promotion_candidate_detail_requested(user_text, candidate_context):
+        return _format_promotion_candidate_evidence(output, candidate_context)
     baseline = _as_dict(output.get("baseline"))
     dataset = _as_dict(baseline.get("dataset"))
     metadata = _as_dict(dataset.get("metadata"))
@@ -419,6 +422,194 @@ def _format_autonomous_learning_research(output: dict[str, object]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _promotion_candidate_detail_requested(user_text: str, candidate_context: dict[str, object]) -> bool:
+    normalized = re.sub(r"[\s\W_]+", "", user_text.casefold(), flags=re.UNICODE)
+    if not normalized:
+        return False
+    detail_tokens = (
+        "후보를자세히",
+        "후보자세히",
+        "승격후보",
+        "후보id",
+        "fingerprint",
+        "근거를보여",
+        "근거를알려",
+        "어떤외부자료",
+        "참고자료",
+        "출처",
+        "백테스트결과",
+        "검증결과",
+        "무엇이바뀌",
+        "뭐가바뀌",
+        "위험",
+        "리스크",
+        "아직승인하지않",
+        "자세히설명",
+    )
+    return bool(candidate_context) and any(token in normalized for token in detail_tokens)
+
+
+def _format_promotion_candidate_evidence(output: dict[str, object], context: dict[str, object]) -> str:
+    learning = _as_dict(output.get("autonomous_learning_v2"))
+    candidate = _as_dict(context.get("promotion_candidate"))
+    hypothesis = _as_dict(context.get("hypothesis"))
+    experiment = _as_dict(context.get("experiment"))
+    evidence = _as_dict(context.get("authoritative_validation_evidence"))
+    validation = _as_dict(context.get("validation"))
+    ranking = _as_dict(context.get("ranking"))
+    ranking_components = _as_dict(context.get("ranking_components"))
+    human_gate = _as_dict(context.get("human_gate"))
+    metrics = _as_dict(evidence.get("metrics"))
+    baseline = _as_dict(output.get("baseline"))
+    baseline_backtest = _as_dict(baseline.get("backtest"))
+    baseline_strategy = _as_dict(baseline.get("strategy"))
+    dataset = _as_dict(baseline.get("dataset"))
+    metadata = _as_dict(dataset.get("metadata"))
+    quality = _as_dict(baseline.get("quality"))
+    changed_rules = _list_text(context.get("changed_rules") or hypothesis.get("changed_rules"))
+    falsification = _list_text(context.get("falsification_criteria") or hypothesis.get("falsification_criteria"))
+    source_lineage = _as_list(context.get("source_lineage"))
+    risks = _list_text(context.get("risks"))
+    blockers = _list_text(candidate.get("blockers") or context.get("blockers"))
+    lines = [
+        "[승격 후보]",
+        f"- 후보 ID: {_field(candidate.get('candidate_id') or context.get('candidate_id'))}",
+        f"- Candidate fingerprint: {_field(context.get('candidate_fingerprint'))}",
+        f"- 현재 상태: {_field(candidate.get('status') or output.get('promotion_status') or learning.get('promotion_status'))}",
+        f"- 승인 상태: {_field(human_gate.get('status') or output.get('human_gate_status') or learning.get('human_gate_status'))}",
+        "",
+        "[기존 전략 대비 변경]",
+        f"- baseline fingerprint: {_field(context.get('baseline_fingerprint') or baseline_strategy.get('fingerprint'))}",
+        f"- experiment_id: {_field(experiment.get('experiment_id') or context.get('experiment_id'))}",
+        f"- experiment fingerprint: {_field(context.get('experiment_fingerprint'))}",
+        f"- assumptions fingerprint: {_field(context.get('assumptions_fingerprint') or experiment.get('assumptions_fingerprint'))}",
+        "- 변경 규칙:",
+        *_bullet_or_unavailable(changed_rules),
+        "- 변경하지 않은 가정:",
+        f"  - cost_model={_field(experiment.get('cost_model'))}",
+        f"  - universe={', '.join(_list_text(experiment.get('universe_symbols'))) or _field(None)}",
+        f"  - period={_field(experiment.get('start'))} ~ {_field(experiment.get('end'))}",
+        "",
+        "[연구 가설]",
+        f"- hypothesis_id: {_field(hypothesis.get('hypothesis_id'))}",
+        f"- hypothesis: {_field(hypothesis.get('topic_key'))}",
+        f"- rationale: {_field(context.get('rationale') or hypothesis.get('rationale'))}",
+        f"- expected mechanism: {_field(context.get('expected_mechanism') or hypothesis.get('mechanism'))}",
+        "- falsification criteria:",
+        *_bullet_or_unavailable(falsification),
+        "",
+        "[참고한 외부 연구 근거]",
+    ]
+    if source_lineage:
+        for item in source_lineage:
+            source = _as_dict(item)
+            metadata_only = bool(source.get("metadata_only")) and not bool(source.get("content_acquired"))
+            lines.extend(
+                [
+                    f"- title: {_field(source.get('title'))}",
+                    f"  - source_type={_field(source.get('source_type'))}",
+                    f"  - locator={_field(source.get('locator'))}",
+                    f"  - provenance/source IDs={', '.join(_list_text(source.get('source_ids'))) or _field(None)}",
+                    f"  - Claim IDs={', '.join(_list_text(source.get('claim_ids'))) or _field(None)}",
+                    f"  - evidence_state={'metadata_only' if metadata_only else 'content_acquired'}",
+                ]
+            )
+            if metadata_only:
+                lines.append("  - 이 자료는 메타데이터까지만 확보되었으며 본문 근거로 사용하지 않았습니다.")
+    else:
+        lines.append("- 확인된 구조화 source lineage가 없습니다.")
+    lines.extend(
+        [
+            "",
+            "[실제 검증]",
+            f"- symbol/universe: {_field(output.get('symbol') or metadata.get('symbol'))}",
+            f"- test period: {_field(experiment.get('start') or metadata.get('start_date'))} ~ {_field(experiment.get('end') or metadata.get('end_date'))}",
+            f"- bars: {_field(metadata.get('rows') or len(_as_list(dataset.get('bars'))) if dataset else None)}",
+            f"- data source: {_field(evidence.get('source') or output.get('source') or metadata.get('source'))}",
+            f"- fixture_backed: {_field(evidence.get('fixture_backed') if 'fixture_backed' in evidence else output.get('fixture_backed'))}",
+            f"- quality_status: {_field(evidence.get('quality_status') or output.get('quality_status') or quality.get('status'))}",
+            f"- authoritative result/report ID: {_field(evidence.get('backtest_result_id') or baseline_backtest.get('result_id'))}",
+            *_metric_detail_lines(metrics),
+            "",
+            "[검증 결과]",
+            f"- validation_status={_field(validation.get('status') or learning.get('validation_status'))}",
+            f"- evidence_id={_field(evidence.get('evidence_id') or candidate.get('evidence_id'))}",
+            f"- retest/validation attempts={_field(_as_dict(learning.get('execution')).get('attempts'))}",
+            f"- assumptions immutable={_field(experiment.get('assumptions_fingerprint') == context.get('assumptions_fingerprint') if experiment.get('assumptions_fingerprint') and context.get('assumptions_fingerprint') else True)}",
+            "",
+            "[랭킹 근거]",
+            f"- ranking_status={_field(ranking.get('status') or learning.get('ranking_status'))}",
+            f"- rank={_field(candidate.get('rank') or ranking_components.get('rank'))}",
+            f"- score={_field(candidate.get('score') or ranking_components.get('score'))}",
+            *_ranking_component_lines(ranking_components),
+            "",
+            "[주요 위험]",
+            *_bullet_or_unavailable(risks or blockers or _list_text(validation.get("warnings")) or _list_text(ranking.get("warnings"))),
+            "",
+            "[승인 상태]",
+            f"- promotion_status={_field(output.get('promotion_status') or candidate.get('status'))}",
+            f"- human_gate_status={_field(output.get('human_gate_status') or human_gate.get('status'))}",
+            "- 현재는 승인 대기 상태를 유지하고 있습니다.",
+            "- 자동 주문, KIS/Broker 주문, Champion 자동 승격, 승인 없는 전략 변경은 수행하지 않았습니다.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _field(value: object) -> str:
+    if value is None or value == "":
+        return "확인된 구조화 결과 없음"
+    return str(value)
+
+
+def _list_text(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None and str(item) != ""]
+    if isinstance(value, tuple):
+        return [str(item) for item in value if item is not None and str(item) != ""]
+    if value is None or value == "":
+        return []
+    return [str(value)]
+
+
+def _bullet_or_unavailable(items: list[str]) -> list[str]:
+    if not items:
+        return ["  - 확인된 구조화 결과 없음"]
+    return [f"  - {item}" for item in items]
+
+
+def _metric_detail_lines(metrics: dict[str, object]) -> list[str]:
+    labels = (
+        ("trade_count", "trade_count"),
+        ("total_return", "total_return"),
+        ("mdd", "MDD"),
+        ("cagr", "CAGR"),
+        ("win_rate", "win_rate"),
+        ("profit_factor", "Profit Factor"),
+        ("sharpe", "Sharpe"),
+        ("expectancy", "expectancy"),
+        ("exposure", "exposure"),
+    )
+    lines: list[str] = []
+    for key, label in labels:
+        if key in metrics and metrics[key] is not None:
+            lines.append(f"- {label}: {metrics[key]}")
+        else:
+            lines.append(f"- {label}: 확인된 구조화 결과 없음")
+    return lines
+
+
+def _ranking_component_lines(components: dict[str, object]) -> list[str]:
+    keys = ("trade_count", "total_return", "mdd", "profit_factor", "win_rate", "source", "fixture_backed")
+    lines: list[str] = []
+    for key in keys:
+        if key in components and components[key] is not None:
+            lines.append(f"- {key}={components[key]}")
+    if not lines:
+        return ["- ranking component: 확인된 구조화 결과 없음"]
+    return lines
 
 
 def _candidate_display_label(retest: dict[str, object]) -> str:

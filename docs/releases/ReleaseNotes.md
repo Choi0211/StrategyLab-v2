@@ -3,6 +3,25 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 185.3 Promotion Candidate Evidence Presentation Integrity
+
+Telegram promotion-candidate follow-up questions now preserve the active
+Autonomous Learning V2 evidence context instead of rerunning the autonomous
+learning tool or falling back to a generic status/backtest renderer. Candidate
+ID, fingerprint, hypothesis, changed rules, source lineage, validation evidence,
+ranking context, risks, and approval state are rendered from the structured
+promotion-candidate context.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-promotion-candidate-presentation-release-check --db :memory:
+```
+
+The presentation path is read-only, chat-isolated, and does not fabricate
+missing metrics, default `trade_count=0`, unknown periods, approvals, strategy
+mutations, or trading side effects.
+
 ## Hotfix 185.1 Telegram Autonomous Learning Routing
 
 Telegram natural-language research requests now route to the existing

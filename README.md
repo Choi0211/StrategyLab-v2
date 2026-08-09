@@ -80,6 +80,8 @@ Included foundations:
 - Sprint 185 Human-gated Autonomous Research Promotion with explicit approval token validation, manual-application-only results, aggregate production gate release check, and no automatic mutation
 - Sprint 175-185 follow-up execution integrity with real discovery/acquisition/normalization/claim/reevaluation orchestration, trusted structured backtest-to-validation evidence, and end-to-end human-approval-required release gates
 - Hotfix 185.1 Telegram Autonomous Learning V2 routing with natural Korean research intent recognition, same-chat target continuation, authoritative KRX baseline grounding, human-approval-required stopping, and `gaon-telegram-autonomous-learning-routing-release-check`
+- Hotfix 185.2 Telegram Autonomous Learning V2 priority routing with combined research intent precedence over legacy autonomous retest/cycle routing and `gaon-telegram-autonomous-learning-priority-release-check`
+- Hotfix 185.3 promotion candidate evidence presentation with same-chat V2 candidate context preservation, no presentation-time tool rerun, authoritative metric/source/ranking rendering, and `gaon-promotion-candidate-presentation-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

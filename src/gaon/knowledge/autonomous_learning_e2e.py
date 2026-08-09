@@ -124,6 +124,14 @@ def autonomous_learning_e2e_release_check() -> Mapping[str, object]:
     if not all(checks.values()):
         failed = ",".join(name for name, ok in checks.items() if not ok)
         raise RuntimeError(f"autonomous learning e2e release check failed: {failed}")
+    candidate_payload = promotion.to_json()
+    hypothesis_payload = hypothesis.to_json()
+    experiment_payload = experiment.to_json()
+    evidence_payload = execution.evidence.to_json()
+    validation_payload = execution.validation.to_json()
+    ranking_payload = execution.ranking.to_json()
+    external_research_payload = research.to_json()
+    memory_payload = memory.to_json()
     return {
         "schema_version": AUTONOMOUS_LEARNING_E2E_SCHEMA_VERSION,
         "external_research_state": research.state.value,
@@ -133,6 +141,39 @@ def autonomous_learning_e2e_release_check() -> Mapping[str, object]:
         "ranking_status": execution.ranking.status.value,
         "promotion_status": promotion.status.value,
         "human_gate_status": human_gate.status.value,
+        "promotion_candidate": candidate_payload,
+        "promotion_candidate_context": {
+            "candidate_id": promotion.candidate_id,
+            "candidate_fingerprint": _payload_fingerprint(candidate_payload),
+            "baseline_strategy_id": experiment.baseline_strategy_id,
+            "baseline_fingerprint": experiment.baseline_strategy_fingerprint,
+            "hypothesis": hypothesis_payload,
+            "changed_rules": list(hypothesis.changed_rules),
+            "rationale": hypothesis.rationale,
+            "expected_mechanism": hypothesis.mechanism,
+            "falsification_criteria": list(hypothesis.falsification_criteria),
+            "research_memory": memory_payload,
+            "claim_ids": list(hypothesis.claim_ids),
+            "source_ids": list(memory.source_ids),
+            "source_lineage": _source_lineage(external_research_payload),
+            "experiment": experiment_payload,
+            "experiment_id": experiment.experiment_id,
+            "experiment_fingerprint": _payload_fingerprint(experiment_payload),
+            "assumptions_fingerprint": experiment.assumptions_fingerprint,
+            "authoritative_validation_evidence": evidence_payload,
+            "authoritative_backtest_result_id": evidence_payload["backtest_result_id"],
+            "validation": validation_payload,
+            "ranking": ranking_payload,
+            "ranking_components": _ranking_components(ranking_payload),
+            "blockers": list(promotion.blockers),
+            "risks": _candidate_risks(external_research_payload, validation_payload, ranking_payload, candidate_payload),
+            "human_gate": human_gate.to_json(),
+            "approval_state": human_gate.status.value,
+            "strategy_mutated": False,
+            "order_executed": False,
+            "broker_order_called": False,
+            "kis_order_called": False,
+        },
         "checks": checks,
         "safety": "pass",
     }
@@ -199,3 +240,92 @@ def _memory_from_research(research) -> ExternalResearchMemoryRecord:  # type: ig
         source_ids=tuple(sorted({candidate.source_id for candidate in research.candidates})),
         created_at="2026-08-08T00:00:00+00:00",
     )
+
+
+def _payload_fingerprint(payload: Mapping[str, object]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _source_lineage(external_research: Mapping[str, object]) -> list[dict[str, object]]:
+    discovery = external_research.get("discovery_run")
+    discovery_results = discovery.get("results", []) if isinstance(discovery, dict) else []
+    normalized = external_research.get("normalized_records")
+    normalized_records = normalized if isinstance(normalized, list) else []
+    candidates = external_research.get("candidates")
+    candidate_records = candidates if isinstance(candidates, list) else []
+    normalized_source_ids = {
+        str(record.get("source_id"))
+        for record in normalized_records
+        if isinstance(record, dict) and record.get("source_id") is not None
+    }
+    lineage: list[dict[str, object]] = []
+    for result in discovery_results:
+        if not isinstance(result, dict):
+            continue
+        result_id = str(result.get("result_id", ""))
+        source_ids = sorted(
+            {
+                str(candidate.get("source_id"))
+                for candidate in candidate_records
+                if isinstance(candidate, dict) and candidate.get("source_id") is not None
+            }
+        )
+        claim_ids = sorted(
+            {
+                str(candidate.get("claim_id"))
+                for candidate in candidate_records
+                if isinstance(candidate, dict) and candidate.get("claim_id") is not None
+            }
+        )
+        lineage.append(
+            {
+                "discovery_result_id": result_id,
+                "title": result.get("title"),
+                "source_type": result.get("source_type"),
+                "locator": result.get("locator"),
+                "source_ids": source_ids,
+                "claim_ids": claim_ids,
+                "metadata_only": not any(source_id in normalized_source_ids for source_id in source_ids),
+                "content_acquired": any(source_id in normalized_source_ids for source_id in source_ids),
+            }
+        )
+    return lineage
+
+
+def _ranking_components(ranking: Mapping[str, object]) -> dict[str, object]:
+    ranked = ranking.get("ranked")
+    rows = ranked if isinstance(ranked, list) else []
+    top = rows[0] if rows and isinstance(rows[0], dict) else {}
+    components: dict[str, object] = {}
+    for key in ("score", "trade_count", "total_return", "mdd", "profit_factor", "win_rate", "source", "fixture_backed"):
+        if key in top:
+            components[key] = top[key]
+    if ranking.get("status") is not None:
+        components["ranking_status"] = ranking["status"]
+    warnings = ranking.get("warnings")
+    if isinstance(warnings, list):
+        components["warnings"] = warnings
+    return components
+
+
+def _candidate_risks(
+    external_research: Mapping[str, object],
+    validation: Mapping[str, object],
+    ranking: Mapping[str, object],
+    candidate: Mapping[str, object],
+) -> list[str]:
+    risks: list[str] = []
+    blockers = candidate.get("blockers")
+    if isinstance(blockers, list):
+        risks.extend(str(item) for item in blockers)
+    validation_warnings = validation.get("warnings")
+    if isinstance(validation_warnings, list):
+        risks.extend(str(item) for item in validation_warnings)
+    ranking_warnings = ranking.get("warnings")
+    if isinstance(ranking_warnings, list):
+        risks.extend(str(item) for item in ranking_warnings)
+    external_blockers = external_research.get("blockers")
+    if isinstance(external_blockers, list):
+        risks.extend(str(item) for item in external_blockers)
+    return list(dict.fromkeys(risks))
