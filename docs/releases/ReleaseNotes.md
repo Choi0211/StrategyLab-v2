@@ -3,6 +3,24 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 177 Evidence Conflict Re-evaluation
+
+Sprint 177 adds a structured reevaluation gate for new claim evidence. Gaon can
+now compare explicit positioned claims for a topic, detect conflict-state
+changes, and emit bounded research questions without pretending to resolve the
+conflict.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-evidence-conflict-reevaluation-release-check
+```
+
+The release check verifies insufficient-independence to unresolved-conflict
+progression, missing-stance blocking, bounded research-question generation, and
+no automatic resolution. It does not validate knowledge, approve production use,
+mutate strategies, promote a Champion, or trade.
+
 ## Sprint 176 Normalized Claim Bridge
 
 Sprint 176 connects normalized source content to the existing verbatim claim and

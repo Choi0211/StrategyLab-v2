@@ -257,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     gaon_autonomous_candidate_identity_release.add_argument("--run-id", default=None)
     sub.add_parser("gaon-content-normalization-release-check")
     sub.add_parser("gaon-normalized-claim-bridge-release-check")
+    sub.add_parser("gaon-evidence-conflict-reevaluation-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1745,6 +1746,21 @@ def _run(args: argparse.Namespace) -> int:
             f"status={payload['status']} "
             "verbatim=true knowledge_validated=false production_approved=false "
             "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-evidence-conflict-reevaluation-release-check":
+        from gaon.knowledge.evidence_reevaluation import evidence_conflict_reevaluation_release_check
+
+        payload = evidence_conflict_reevaluation_release_check()
+        print(
+            "gaon-evidence-conflict-reevaluation-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} "
+            f"conflict_status={payload['conflict_status']} "
+            f"questions={payload['questions']} "
+            "automatic_resolution=false knowledge_validated=false "
+            "production_approved=false strategy_mutated=false "
+            "order_executed=false safety=pass"
         )
 
     elif args.command == "gaon-adaptive-validation-release-check":

@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 177 - Evidence Conflict Re-evaluation
+
+- Added `EvidenceConflictReevaluator` to re-run structured conflict and gap analysis when new Knowledge Candidates arrive.
+- Required explicit candidate stances and blocked missing stance, empty candidate sets, and prevalidated/approved inputs.
+- Generated bounded research questions for unresolved conflict states without automatic resolution.
+- Added `gaon-evidence-conflict-reevaluation-release-check`.
+- Preserved schema v36, no Knowledge Validated transition, no production approval, no strategy mutation, and no trading.
+
 ## Sprint 176 - Normalized Claim Bridge
 
 - Added `NormalizedContentClaimBridge` to connect Sprint 175 normalized evidence to Sprint 168 verbatim claim extraction.

@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Sprint 177 Evidence Conflict Re-evaluation
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_evidence_reevaluation -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-evidence-conflict-reevaluation-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 726 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Sprint 176 Normalized Claim Bridge
 
 - Targeted local verification:
