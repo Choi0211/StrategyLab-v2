@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import tempfile
 from typing import Mapping
@@ -57,13 +58,18 @@ def telegram_autonomous_learning_payload(
     *,
     symbol: str = "005930",
     mode: str = "research",
+    storage_root: str | None = None,
 ) -> Mapping[str, object]:
     """Run the production Autonomous Learning V2 route behind Telegram."""
 
     from gaon.research.krx_real_pipeline import krx_real_research_payload
 
     baseline = krx_real_research_payload(connection, request_text, symbol=symbol)
-    external = _run_production_external_research(request_text, symbol=symbol)
+    external = _run_production_external_research(
+        request_text,
+        symbol=symbol,
+        storage_root=storage_root,
+    )
     return production_autonomous_learning_payload_from_baseline(
         request_text,
         symbol=symbol,
@@ -331,6 +337,7 @@ def _run_production_external_research(
     network_enabled: bool = True,
     storage_root: str | None = None,
 ) -> Mapping[str, object]:
+    storage_root = storage_root or os.environ.get("GAON_EXTERNAL_RESEARCH_STORAGE_ROOT")
     question = ResearchQuestion(
         question_id=f"research-question:{_hash({'symbol': symbol, 'request_text': request_text})[:16]}",
         topic_key="strategy.breakout.robustness",

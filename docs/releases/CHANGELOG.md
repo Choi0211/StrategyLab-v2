@@ -3,6 +3,7 @@
 ## Hotfix 185.5 - Production External Research Network Wiring
 
 - Wired production Telegram Autonomous Learning V2 external research to an explicit `BoundedSourceDiscoveryExecutor` with `NetworkExecutionPolicy(network_enabled=True)`.
+- Added isolated test/release storage injection for production external research verification so unprivileged CI never writes to the production `/var/lib/strategylab/gaon-data` default.
 - Preserved the Crossref/DataCite API host allowlist, HTTPS-only API transport, timeout, response-size, provider-call, and result budgets.
 - Kept content acquisition disabled by default so DOI/metadata-only discovery becomes `content_unavailable`, not `provider_failure`, and does not create claims or promotion eligibility.
 - Added observability fields for network policy, provider calls, query records, discovered titles, locators, failure kind, and content acquisition state.

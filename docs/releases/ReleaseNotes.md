@@ -22,6 +22,10 @@ are preserved as source metadata, reported as `content_unavailable`, and cannot
 produce claims, promotion candidates, human approval requests, strategy
 mutation, Champion promotion, or orders.
 
+CI/release verification uses injected temporary Gaon storage for discovery
+ingestion. Production defaults remain unchanged: when no explicit storage root
+is provided, Linux production still resolves to `/var/lib/strategylab/gaon-data`.
+
 ## Hotfix 185.4 Production Autonomous Learning Execution Integrity
 
 Telegram Autonomous Learning V2 production execution is now separated from the

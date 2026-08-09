@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import os
+from pathlib import Path
 from unittest.mock import patch
 
 from gaon.knowledge.autonomous_learning_e2e import autonomous_learning_e2e_release_check
@@ -16,10 +18,23 @@ from gaon.knowledge.telegram_autonomous_learning import (
 )
 from gaon.research.krx_real_pipeline import MarketDataAvailability
 from gaon.runtime.storage import RuntimeStateStore
+from gaon.storage.foundation import resolve_data_root
 from tests.fixtures.knowledge_pipeline import build_experiment, build_real_backtest
 
 
 class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._storage_tmp = tempfile.TemporaryDirectory(prefix="gaon-hotfix1855-class-")
+        self._old_storage_root = os.environ.get("GAON_EXTERNAL_RESEARCH_STORAGE_ROOT")
+        os.environ["GAON_EXTERNAL_RESEARCH_STORAGE_ROOT"] = self._storage_tmp.name
+
+    def tearDown(self) -> None:
+        if self._old_storage_root is None:
+            os.environ.pop("GAON_EXTERNAL_RESEARCH_STORAGE_ROOT", None)
+        else:
+            os.environ["GAON_EXTERNAL_RESEARCH_STORAGE_ROOT"] = self._old_storage_root
+        self._storage_tmp.cleanup()
+
     def test_release_check_reaches_human_approval_required(self) -> None:
         payload = autonomous_learning_e2e_release_check()
 
@@ -33,11 +48,13 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
     def test_telegram_wrapper_blocks_fixture_release_evidence_in_production(self) -> None:
         store = RuntimeStateStore(":memory:")
         try:
-            payload = telegram_autonomous_learning_payload(
+            with tempfile.TemporaryDirectory(prefix="gaon-hotfix1855-wrapper-") as tmp:
+                payload = telegram_autonomous_learning_payload(
                 store._connection,
                 "삼성전자 전략을 처음부터 다시 연구해줘",
-                symbol="005930",
-            )
+                    symbol="005930",
+                    storage_root=tmp,
+                )
 
             self.assertEqual("autonomous_learning_research", payload["tool"])
             self.assertEqual("005930", payload["symbol"])
@@ -154,6 +171,24 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
         self.assertTrue(payload["candidate_strategy_fingerprint_matched"])
         self.assertTrue(payload["real_data_required"])
         self.assertEqual("pass", payload["safety"])
+
+    def test_hotfix1855_production_storage_default_remains_unchanged(self) -> None:
+        self.assertEqual(Path("/var/lib/strategylab/gaon-data"), resolve_data_root(env={}, system="Linux"))
+
+    def test_hotfix1855_injected_storage_is_used_and_cleaned_up(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gaon-hotfix1855-cleanup-") as tmp:
+            root = Path(tmp)
+            external = _run_production_external_research(
+                "삼성전자 외부 연구 자료를 찾아줘.",
+                symbol="005930",
+                transport=_ReleaseMetadataTransport(),
+                storage_root=tmp,
+            )
+            self.assertEqual("content_unavailable", external["state"])
+            self.assertTrue((root / "knowledge").exists())
+            self.assertFalse(Path("/var/lib/strategylab").exists() and (root == Path("/var/lib/strategylab")))
+            saved_root = root
+        self.assertFalse(saved_root.exists())
 
     def test_hotfix1855_production_external_research_enables_bounded_discovery(self) -> None:
         transport = _ReleaseMetadataTransport()
