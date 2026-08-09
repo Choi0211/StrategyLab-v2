@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 178 - Autonomous Knowledge Research Loop
+
+- Added `AutonomousKnowledgeResearchLoop` to compose normalization, claim bridging, and conflict/gap reevaluation over explicit inert evidence.
+- Enforced source count, byte, and iteration budgets with structured fail-closed blockers.
+- Kept the loop network-free and prevented unsupported content from entering claim extraction.
+- Added `gaon-autonomous-knowledge-research-loop-release-check`.
+- Preserved schema v36, no Knowledge Validated transition, no production approval, no strategy mutation, and no trading.
+
 ## Sprint 177 - Evidence Conflict Re-evaluation
 
 - Added `EvidenceConflictReevaluator` to re-run structured conflict and gap analysis when new Knowledge Candidates arrive.

@@ -3,6 +3,24 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 178 Autonomous Knowledge Research Loop
+
+Sprint 178 adds a bounded autonomous knowledge research loop over explicit
+inert evidence inputs. The loop reuses the safe normalizer, normalized-claim
+bridge, and evidence conflict reevaluator to produce structured conflict state
+and research questions.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-knowledge-research-loop-release-check
+```
+
+The release check verifies budget enforcement, conflict/question generation, no
+network use, and fail-closed unsupported-content handling. It does not validate
+knowledge, approve production use, mutate strategies, promote a Champion, or
+trade.
+
 ## Sprint 177 Evidence Conflict Re-evaluation
 
 Sprint 177 adds a structured reevaluation gate for new claim evidence. Gaon can

@@ -70,6 +70,7 @@ Included foundations:
 - Sprint 175 Safe Source Content Normalization with bounded UTF-8 text extraction for acquired text, HTML, and JSON evidence, explicit unsupported PDF fail-closed handling, preserved acquisition provenance, and `gaon-content-normalization-release-check`
 - Sprint 176 Normalized Claim Bridge with provenance/checksum-checked verbatim claim extraction from normalized evidence, unvalidated Knowledge Candidate creation, rejected/unsupported evidence blocking, and `gaon-normalized-claim-bridge-release-check`
 - Sprint 177 Evidence Conflict Re-evaluation with explicit-stance positioned claims, conflict/gap reanalysis, bounded research-question generation, no automatic resolution, and `gaon-evidence-conflict-reevaluation-release-check`
+- Sprint 178 Autonomous Knowledge Research Loop with bounded inert evidence processing through normalization, claim bridging, conflict/gap reevaluation, no network use, and `gaon-autonomous-knowledge-research-loop-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts
