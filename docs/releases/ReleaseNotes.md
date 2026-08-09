@@ -3,6 +3,23 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 180 Evidence-backed Strategy Hypothesis
+
+Sprint 180 converts unvalidated external research memory into proposed,
+falsifiable strategy hypotheses. Hypotheses carry memory and claim lineage, but
+they remain untested and cannot include fabricated performance metrics.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-evidence-backed-hypothesis-release-check
+```
+
+The release check verifies evidence lineage, proposed-only status, falsification
+criteria, and fabricated-metric blocking. It does not backtest, validate
+knowledge, approve production use, mutate strategies, promote a Champion, or
+trade.
+
 ## Sprint 179 External Research Memory
 
 Sprint 179 stores autonomous knowledge-loop outcomes as append-only,

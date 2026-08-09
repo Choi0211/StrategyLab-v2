@@ -72,6 +72,7 @@ Included foundations:
 - Sprint 177 Evidence Conflict Re-evaluation with explicit-stance positioned claims, conflict/gap reanalysis, bounded research-question generation, no automatic resolution, and `gaon-evidence-conflict-reevaluation-release-check`
 - Sprint 178 Autonomous Knowledge Research Loop with bounded inert evidence processing through normalization, claim bridging, conflict/gap reevaluation, no network use, and `gaon-autonomous-knowledge-research-loop-release-check`
 - Sprint 179 External Research Memory with append-only evidence-backed JSONL storage, topic search, duplicate fingerprint reporting, unvalidated lifecycle, and `gaon-external-research-memory-release-check`
+- Sprint 180 Evidence-backed Strategy Hypothesis with unvalidated memory-to-hypothesis lineage, falsification criteria, fabricated metric blocking, and `gaon-evidence-backed-hypothesis-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

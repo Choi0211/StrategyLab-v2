@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 180 - Evidence-backed Strategy Hypothesis
+
+- Added `EvidenceBackedHypothesisGenerator` for proposed strategy hypotheses sourced from unvalidated external research memory.
+- Preserved memory, claim, source, and research-question lineage in hypothesis records.
+- Blocked no-memory, missing-evidence, prevalidated-memory, and fabricated-metric inputs.
+- Added `gaon-evidence-backed-hypothesis-release-check`.
+- Preserved schema v36, no tested status, no Knowledge Validated transition, no production approval, no strategy mutation, and no trading.
+
 ## Sprint 179 - External Research Memory
 
 - Added append-only `ExternalResearchMemoryStore` under `GaonStorage` research-history memory.
