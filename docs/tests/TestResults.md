@@ -2,6 +2,19 @@
 
 Status: Passed
 
+## Hotfix 185.2 Telegram Autonomous Learning Priority Routing
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_multi_symbol_research.MultiSymbolResearchTests.test_autonomous_learning_v2_request_has_priority_over_real_research tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_autonomous_learning_continuation_keeps_symbol tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1852_production_combined_request_prioritizes_v2_over_legacy_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1852_v2_context_continuation_keeps_v2 -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-telegram-autonomous-learning-priority-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-telegram-autonomous-learning-routing-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-e2e-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 776 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 188 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+
 ## Hotfix 185.1 Telegram Autonomous Learning Routing
 
 - Targeted local verification:

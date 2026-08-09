@@ -1324,10 +1324,69 @@ class TelegramConversationAgentTests(unittest.TestCase):
             process_update(parse_update_result(_update(861, 861, "삼성전자 분석해줘"), received_at="2026-08-08T00:00:00Z"), runtime, client)
             process_update(parse_update_result(_update(862, 862, "계속 연구해줘"), received_at="2026-08-08T00:00:01Z"), runtime, client)
 
+            audits = store.tool_audit.list(tool_name="autonomous_research_cycle")
+            self.assertEqual(len(audits), 1)
+            self.assertEqual(audits[0].request["arguments"]["symbol"], "005930")
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_learning_research")), 0)
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertIn("자율 연구", client.sent[-1][1])
+        finally:
+            store.close()
+
+    def test_hotfix1852_production_combined_request_prioritizes_v2_over_legacy_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            text = (
+                "삼성전자 전략을 처음부터 다시 연구해줘.\n"
+                "외부 연구 자료도 찾아보고,\n"
+                "지금까지 배운 내용과 실제 시장 데이터를 사용해서\n"
+                "문제점을 찾고 개선 전략 후보를 만든 뒤 검증해줘.\n"
+                "좋은 전략 후보가 생기면 승격 승인을 요청하기 전까지 진행해줘."
+            )
+            process_update(parse_update_result(_update(868, 868, "삼성전자 분석해줘"), received_at="2026-08-08T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(869, 869, text), received_at="2026-08-08T00:00:01Z"), runtime, client)
+
             audits = store.tool_audit.list(tool_name="autonomous_learning_research")
             self.assertEqual(len(audits), 1)
             self.assertEqual(audits[0].request["arguments"]["symbol"], "005930")
-            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertEqual(audits[0].request["arguments"]["mode"], "approval_review")
+            self.assertEqual(audits[0].result["output"]["selected_orchestration"], "autonomous_learning_v2")
+            self.assertEqual(len(store.tool_audit.list(tool_name="research_retest")), 0)
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
+            final = client.sent[-1][1]
+            self.assertIn("Autonomous Learning V2", final)
+            self.assertIn("외부 연구 실행", final)
+            self.assertIn("requires_human_approval", final)
+            self.assertNotIn("adequacy_status", final)
+            self.assertNotIn("planner_steps", final)
+            self.assertNotIn("historical_TESTED_candidates", final)
+            self.assertNotIn("robust-breakout", final)
+            self.assertNotIn("regime-filter", final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].tool_calls, ("autonomous_learning_research",))
+        finally:
+            store.close()
+
+    def test_hotfix1852_v2_context_continuation_keeps_v2(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(870, 870, "삼성전자 전략 연구해줘"), received_at="2026-08-08T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(871, 871, "계속 연구해줘"), received_at="2026-08-08T00:00:01Z"), runtime, client)
+
+            audits = store.tool_audit.list(tool_name="autonomous_learning_research")
+            self.assertEqual(len(audits), 2)
+            self.assertEqual(audits[-1].request["arguments"]["symbol"], "005930")
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
             self.assertIn("Autonomous Learning V2", client.sent[-1][1])
         finally:
             store.close()
@@ -1392,6 +1451,9 @@ class TelegramConversationAgentTests(unittest.TestCase):
 
     def test_hotfix1851_telegram_autonomous_learning_routing_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-telegram-autonomous-learning-routing-release-check", "--db", ":memory:"]), 0)
+
+    def test_hotfix1852_telegram_autonomous_learning_priority_release_check_passes(self) -> None:
+        self.assertEqual(cli_main(["gaon-telegram-autonomous-learning-priority-release-check", "--db", ":memory:"]), 0)
 
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)

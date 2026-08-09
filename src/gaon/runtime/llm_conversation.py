@@ -771,14 +771,18 @@ class LLMConversationBrain:
         mode = _autonomous_request_mode(request.text)
         learning_mode = _autonomous_learning_request_mode(request.text)
         if learning_mode is not None:
+            explicit_v2 = _has_explicit_autonomous_learning_v2_intent(request.text)
+            active_v2_context = context is not None and context.last_result_kind == "autonomous_learning_v2"
             legacy_cycle_context = (
                 context is not None
                 and context.last_result_kind in _AUTONOMOUS_CONTEXT_KINDS
                 and context.last_result_kind != "autonomous_learning_v2"
             )
-            legacy_cycle_request = learning_mode != "external_research" and mode in {"validate", "critique", "compare"} and context is not None
+            legacy_cycle_request = not explicit_v2 and mode in {"validate", "critique", "compare"} and context is not None
             legacy_cycle_continuation = mode == "continue" and legacy_cycle_context
-            if not (
+            if learning_mode == "continue" and context is not None and not active_v2_context:
+                pass
+            elif not (
                 legacy_cycle_request
                 or legacy_cycle_continuation
             ):
@@ -1884,6 +1888,39 @@ def _autonomous_learning_request_mode(text: str) -> str | None:
     if any(token in normalized for token in plain_start) and not any(token in normalized for token in ("백테스트", "실제데이터", "실제시장데이터", "다중종목", "여러종목", "재검증", "검증해봐")):
         return "research"
     return None
+
+
+def _has_explicit_autonomous_learning_v2_intent(text: str) -> bool:
+    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
+    if not normalized:
+        return False
+    signals = (
+        "처음부터다시연구",
+        "외부자료",
+        "외부연구",
+        "외부연구자료",
+        "자료를찾아",
+        "자료를찾아서연구",
+        "연구자료를찾아",
+        "지금까지배운내용",
+        "지금까지배운",
+        "배운내용",
+        "개선전략후보",
+        "전략후보",
+        "후보전략",
+        "가장좋은후보",
+        "좋은전략후보",
+        "승격승인",
+        "승인요청",
+        "전략을만들어서검증",
+        "전략을만들어검증",
+        "autonomouslearning",
+        "externalresearch",
+        "promotioncandidate",
+    )
+    if any(token in normalized for token in signals):
+        return True
+    return "개선" in normalized and "후보" in normalized and "검증" in normalized and "연구" in normalized
 
 
 def _resolve_autonomous_symbol(route, context: ConversationalMVPContext | None) -> str:

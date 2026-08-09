@@ -143,7 +143,8 @@ class MultiSymbolResearchTests(unittest.TestCase):
         )
 
         self.assertEqual(route_read_only_tool(request), "autonomous_learning_research")
-        self.assertEqual(route_read_only_tool("계속 연구해줘"), "autonomous_learning_research")
+        self.assertIsNone(route_read_only_tool("계속 연구해줘"))
+        self.assertNotEqual(route_read_only_tool("삼성전자 전략을 더 검증해봐"), "autonomous_learning_research")
 
     def test_release_check_contract(self) -> None:
         result = multi_symbol_research_release_check(self.connection)
