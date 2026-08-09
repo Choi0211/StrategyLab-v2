@@ -2,6 +2,20 @@
 
 Status: Passed
 
+## Hotfix 185.1 Telegram Autonomous Learning Routing
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_learning_e2e tests.unit.test_multi_symbol_research tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_combined_autonomous_learning_request_routes_to_v2 tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_autonomous_learning_continuation_keeps_symbol tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_external_research_continuation_keeps_current_target tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_autonomous_learning_missing_context_asks_target tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_approval_sounding_phrase_does_not_mutate tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_telegram_autonomous_learning_routing_release_check_passes -q`: PASS, 21 tests
+  - `python -m gaon.runtime.cli gaon-telegram-autonomous-learning-routing-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-e2e-release-check`: PASS
+  - `python -m gaon.runtime.cli research-context-isolation-release-check --db :memory:`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 776 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 185 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Sprint 175-185 Follow-up Autonomous Learning Execution Integrity
 
 - Targeted local verification:

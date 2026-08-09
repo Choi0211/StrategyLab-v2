@@ -17,6 +17,8 @@ def route_read_only_tool(text: str) -> str | None:
         return "multi_symbol_research_status"
     if _multi_symbol_research_ascii(normalized):
         return "multi_symbol_research"
+    if _autonomous_learning_research_ascii(normalized):
+        return "autonomous_learning_research"
     if _autonomous_retest_execution_ascii(normalized):
         return "research_retest"
     if _research_retest_history(normalized):
@@ -95,6 +97,74 @@ def _autonomous_research_cycle(value: str) -> bool:
         "자율검증사이클",
     )
     return _contains_any(value, explicit)
+
+
+def _autonomous_learning_research_ascii(value: str) -> bool:
+    if _autonomous_retest_ascii(value):
+        return False
+    memory_specific = ("비슷한", "유사", "지난연구", "이전연구", "연구했", "기억", "메모리", "memory", "저장된")
+    if _contains_any(value, memory_specific):
+        return False
+    if _strategy_quality(value):
+        return False
+    v2_specific = (
+        "처음부터다시연구",
+        "처음부터다시연구해",
+        "다시연구",
+        "자료를찾아",
+        "자료찾아",
+        "연구자료를찾아",
+        "외부연구자료",
+        "근거자료",
+        "외부자료",
+        "지금까지배운",
+        "배운내용",
+        "후보가있",
+        "승격승인",
+        "승인을요청",
+        "승인요청",
+        "autonomouslearning",
+        "autonomousresearch",
+        "externalresearch",
+        "findevidence",
+        "continuelearning",
+    )
+    plain_v2_start = (
+        "전략연구",
+        "전략을연구",
+        "전략연구해",
+        "autonomousresearch",
+        "autonomouslearning",
+    )
+    research = (
+        "전략",
+        "연구",
+        "검증",
+        "백테스트",
+        "분석",
+        "삼성전자",
+        "005930",
+        "krx",
+        "실제",
+        "시장데이터",
+        "strategy",
+        "research",
+        "validate",
+        "backtest",
+    )
+    continuation_only = (
+        "계속연구",
+        "더연구",
+        "계속검증",
+        "다음연구",
+        "continuelearning",
+        "continueresearch",
+    )
+    if _contains_any(value, v2_specific) and _contains_any(value, research):
+        return True
+    if _contains_any(value, plain_v2_start) and not _contains_any(value, ("백테스트", "실제데이터", "실제시장데이터", "다중종목", "여러종목", "재검증", "검증해봐")):
+        return True
+    return _contains_any(value, continuation_only)
 
 
 def _multi_symbol_research_ascii(value: str) -> bool:
@@ -283,6 +353,8 @@ def _v5_pipeline_history(value: str) -> bool:
 
 
 def _blocked(value: str) -> bool:
+    if _autonomous_learning_research_ascii(value) and not _contains_any(value, ("매수", "매도", "주문", "broker", "kis", "shell", "cmd", "powershell", "sql")):
+        return False
     if _safe_boundary_negation(value):
         return False
     return _contains_any(

@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 185.1 - Telegram Autonomous Learning Routing
+
+- Added a read-only `autonomous_learning_research` safe tool wrapper that routes Telegram natural-language autonomous research requests into the existing Autonomous Learning V2 E2E orchestration.
+- Updated deterministic tool routing and conversation handling so Korean combined research requests, same-chat continuations, external-research follow-ups, and approval-sounding phrases preserve target context and approval boundaries.
+- Added deterministic Korean grounded rendering for Autonomous Learning V2 results, including baseline real-market evidence, external research progress, promotion candidate status, and explicit human approval stop.
+- Added `gaon-telegram-autonomous-learning-routing-release-check`.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Sprint 175-185 Follow-up - Autonomous Learning Execution Integrity
 
 - Added `AutonomousExternalResearchExecutor` to run the existing discovery, ingestion, content acquisition, normalization, claim bridge, and reevaluation components from a `ResearchQuestion`.

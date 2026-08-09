@@ -198,6 +198,19 @@ to the read-only autonomous research cycle. Presentation-only follow-ups must no
 rerun research, and another Telegram chat must not read the prior chat's
 autonomous context.
 
+Hotfix 185.1 Telegram Autonomous Learning V2 routing release check:
+
+```bash
+python -m gaon.runtime.cli gaon-telegram-autonomous-learning-routing-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+Run this after deployment when `gaon-autonomous-learning-e2e-release-check`
+passes but natural Telegram research requests do not appear to enter the V2
+learning route. The check verifies Korean intent routing, `symbol=005930`
+resolution, continuation target preservation, V2 orchestration selection,
+human approval boundary preservation, and no strategy mutation or broker/KIS
+order calls.
+
 Hotfix 163.2 autonomous conversation context integrity release check:
 
 ```bash

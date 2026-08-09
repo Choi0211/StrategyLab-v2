@@ -71,6 +71,7 @@ TOOL_RESULT_TTL_SECONDS = {
     "compare_backtests": 300,
     "krx_real_research": 300,
     "autonomous_research_cycle": 300,
+    "autonomous_learning_research": 300,
     "multi_symbol_research": 300,
     "multi_symbol_research_status": 300,
     "multi_symbol_research_history": 300,
@@ -79,6 +80,7 @@ _AUTONOMOUS_CONTEXT_KINDS = frozenset(
     {
         "autonomous_research_cycle",
         "autonomous_continuation",
+        "autonomous_learning_v2",
         "autonomous_learning_memory_summary",
         "autonomous_critique",
     }
@@ -442,6 +444,10 @@ class LLMConversationBrain:
         if warning:
             approval_required = True
             warnings = (warning,)
+        if approval_required and _is_autonomous_learning_boundary_request(request.text):
+            mvp = self._try_conversational_mvp(request, (*warnings, "human approval boundary preserved"), references)
+            if mvp is not None:
+                return mvp
         if approval_required:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
@@ -763,6 +769,20 @@ class LLMConversationBrain:
             return None
         context = self._mvp_context_for(request.session_id)
         mode = _autonomous_request_mode(request.text)
+        learning_mode = _autonomous_learning_request_mode(request.text)
+        if learning_mode is not None:
+            legacy_cycle_context = (
+                context is not None
+                and context.last_result_kind in _AUTONOMOUS_CONTEXT_KINDS
+                and context.last_result_kind != "autonomous_learning_v2"
+            )
+            legacy_cycle_request = learning_mode != "external_research" and mode in {"validate", "critique", "compare"} and context is not None
+            legacy_cycle_continuation = mode == "continue" and legacy_cycle_context
+            if not (
+                legacy_cycle_request
+                or legacy_cycle_continuation
+            ):
+                return self._try_autonomous_learning_v2_conversation(request, route, context, learning_mode, warnings, references)
         if mode is None:
             return None
         if mode == "learning_query":
@@ -811,6 +831,34 @@ class LLMConversationBrain:
             "autonomous research cycle invoked",
         )
         return text, "conversation_autonomous_research_cycle", _dedupe((*warnings, *result.warnings, *audit_warnings)), _dedupe((*references, "tool:autonomous_research_cycle")), "deterministic", ("autonomous_research_cycle",)
+
+    def _try_autonomous_learning_v2_conversation(self, request: LLMConversationRequest, route, context: ConversationalMVPContext | None, mode: str, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+        if context is None and not route.symbols:
+            return "영하님, 직전 연구나 전략 맥락이 없습니다. 이어서 자율 연구할 종목을 먼저 삼성전자처럼 말씀해 주세요.", "conversation_autonomous_learning_missing_target", _dedupe((*warnings, "autonomous learning requires target")), references, "deterministic", ()
+        symbol = _resolve_autonomous_symbol(route, context)
+        original_text = previous_request_text(context, request.text) if context is not None else request.text
+        result = self._tool_executor.execute(
+            ToolRequest(
+                "autonomous_learning_research",
+                {"request_text": original_text, "symbol": symbol, "mode": mode},
+                request.user_ref,
+                request.received_at,
+            )
+        )
+        self._record_tool_result(request.session_id, result, request.received_at)
+        if result.status != "success":
+            failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+            return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", ("autonomous_learning_research",)
+        text = _format_tool_response("autonomous_learning_research", result.output, request.text)
+        self._remember_autonomous_learning_v2_context(request, result.output, text)
+        audit = _as_dict(result.output.get("autonomous_learning_v2"))
+        audit_warnings = (
+            "autonomous_learning_v2_invoked",
+            f"promotion_status={result.output.get('promotion_status', 'unknown')}",
+            f"human_gate_status={result.output.get('human_gate_status', 'unknown')}",
+            f"external_research_state={audit.get('external_research_state', 'unknown')}",
+        )
+        return text, "conversation_autonomous_learning_v2", _dedupe((*warnings, *result.warnings, *audit_warnings)), _dedupe((*references, "tool:autonomous_learning_research")), "deterministic", ("autonomous_learning_research",)
 
     def _try_conversational_research_execution(self, request: LLMConversationRequest, context: ConversationalMVPContext, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
@@ -1116,6 +1164,32 @@ class LLMConversationBrain:
             updated_at=request.received_at,
         )
         self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route="conversation_autonomous_research_cycle")
+
+    def _remember_autonomous_learning_v2_context(self, request: LLMConversationRequest, payload: dict[str, object], text: str) -> None:
+        baseline = _as_dict(payload.get("baseline"))
+        dataset = _as_dict(baseline.get("dataset"))
+        metadata = _as_dict(dataset.get("metadata"))
+        quality = _as_dict(baseline.get("quality"))
+        symbol = str(payload.get("symbol") or "005930")
+        source = str(payload.get("source") or metadata.get("source") or "unknown")
+        self._mvp_contexts[request.session_id] = ConversationalMVPContext(
+            last_intent="autonomous_learning_v2",
+            last_symbols=(symbol,),
+            last_result_kind="autonomous_learning_v2",
+            last_research_result_ids=(str(payload.get("run_id") or payload.get("selected_orchestration") or "autonomous-learning-v2"),),
+            last_rendered_result=text,
+            last_payloads=(payload,),
+            last_structured_results=(payload,),
+            last_summary=text,
+            last_detail_payload=dict(payload),
+            last_source=source,
+            last_fixture_backed=bool(payload.get("fixture_backed", metadata.get("fixture_backed", False))),
+            last_quality_status=str(payload.get("quality_status") or quality.get("status") or "unknown"),
+            detail_level="summary",
+            created_at=request.received_at,
+            updated_at=request.received_at,
+        )
+        self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route="conversation_autonomous_learning_v2")
 
     def _remember_autonomous_learning_context(self, request: LLMConversationRequest, context: ConversationalMVPContext, text: str) -> None:
         self._mvp_contexts[request.session_id] = ConversationalMVPContext(
@@ -1477,6 +1551,13 @@ def _requires_manual_boundary(text: str) -> bool:
     return any(token in normalized for token in blocked)
 
 
+def _is_autonomous_learning_boundary_request(text: str) -> bool:
+    normalized = text.casefold()
+    if any(token in normalized for token in ("매수", "매도", "주문", "buy", "sell", "order", "broker", "kis", "shell", "powershell", "cmd", "sql", "secret")):
+        return False
+    return _autonomous_learning_request_mode(text) is not None
+
+
 def _safe_boundary_negation(value: str) -> bool:
     safety_terms = ("자동주문", "champion자동승격", "승인없는config변경", "승인없는", "nolivetrading", "noapprovalbypass", "nobroker", "nokis")
     negation_terms = ("하지마", "하지말", "하지말고", "하지않", "금지", "없는", "no", "not", "without")
@@ -1717,6 +1798,8 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
         return {"request_text": text, "symbol": "005930"}
     if tool_name == "autonomous_research_cycle":
         return {"request_text": text, "symbol": "005930", "mode": _autonomous_request_mode(text) or "validate"}
+    if tool_name == "autonomous_learning_research":
+        return {"request_text": text, "symbol": "005930", "mode": _autonomous_learning_request_mode(text) or "research"}
     if tool_name == "multi_symbol_research":
         start_date, end_date = _extract_date_range(text)
         return {
@@ -1768,6 +1851,38 @@ def _autonomous_request_mode(text: str) -> str | None:
         return "continue"
     if any(token in normalized for token in validate) and any(token in normalized for token in ("전략", "연구", "분석", "백테스트", "삼성전자", "005930", "strategy", "research")):
         return "validate"
+    return None
+
+
+def _autonomous_learning_request_mode(text: str) -> str | None:
+    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
+    if not normalized:
+        return None
+    if any(token in normalized for token in ("다중종목", "여러종목", "복수종목", "모든종목", "crosssymbol", "multisymbol", "multi-symbol")):
+        return None
+    if any(token in normalized for token in ("품질점수", "연구품질점수", "퀄리티", "quality", "score", "점수")):
+        return None
+    if any(token in normalized for token in ("비슷한", "유사", "지난연구", "이전연구", "연구했", "기억", "메모리", "저장된", "memory")):
+        return None
+    approval = ("승인요청", "승격승인", "좋은전략후보", "가장좋은후보", "좋으면알아서적용", "좋으면적용", "알아서적용", "bestcandidate", "promotioncandidate")
+    continuation = ("계속연구", "더연구", "추가연구", "자료를더", "근거를더", "continueresearch", "continuelearning")
+    external = ("자료를찾아", "자료찾아", "연구자료", "연구자료를찾아", "외부연구자료", "외부자료", "근거자료", "evidence", "externalresearch", "findevidence")
+    improvement = ("문제점을찾", "약점을찾", "후보를만", "다시연구", "처음부터다시연구", "처음부터다시연구해")
+    learning = ("지금까지배운", "배운내용", "학습내용", "learningmemory")
+    plain_start = ("전략연구", "전략을연구", "전략연구해", "autonomousresearch", "autonomouslearning")
+    subject = ("삼성전자", "005930", "전략", "연구", "검증", "백테스트", "실제", "시장데이터", "strategy", "research", "validate")
+    if any(token in normalized for token in approval):
+        return "approval_review"
+    if any(token in normalized for token in learning) and any(token in normalized for token in ("바탕", "기반", "개선", "검증", "전략", "research", "strategy")):
+        return "research"
+    if any(token in normalized for token in external) and any(token in normalized for token in subject):
+        return "external_research"
+    if any(token in normalized for token in continuation):
+        return "continue"
+    if any(token in normalized for token in improvement) and any(token in normalized for token in subject):
+        return "research"
+    if any(token in normalized for token in plain_start) and not any(token in normalized for token in ("백테스트", "실제데이터", "실제시장데이터", "다중종목", "여러종목", "재검증", "검증해봐")):
+        return "research"
     return None
 
 
@@ -2009,6 +2124,10 @@ def _render_autonomous_context_followup(context: ConversationalMVPContext, inten
         payload = _as_dict(context.last_structured_results[0])
     if context.last_result_kind == "autonomous_learning_memory_summary":
         return _render_autonomous_learning_presentation(payload, intent, user_text)
+    if context.last_result_kind == "autonomous_learning_v2":
+        grounded_v2 = format_grounded_tool_response("autonomous_learning_research", payload, user_text)
+        if grounded_v2 is not None:
+            return grounded_v2
     if intent is ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT:
         assessment = _as_dict(payload.get("assessment"))
         plan = _as_dict(payload.get("plan"))

@@ -3,6 +3,24 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 185.1 Telegram Autonomous Learning Routing
+
+Telegram natural-language research requests now route to the existing
+Autonomous Learning V2 orchestration instead of falling back to generic help.
+The route resolves Samsung Electronics to `005930`, preserves the same-chat
+target for continuation requests, runs through the read-only safe tool boundary,
+and stops at `requires_human_approval` / `awaiting_human_approval`.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-telegram-autonomous-learning-routing-release-check --db :memory:
+```
+
+The route does not infer approval from approval-sounding language and does not
+mutate strategy configuration, promote a Champion, or call KIS/Broker order
+paths.
+
 ## Sprint 175-185 Follow-up: Autonomous Learning Execution Integrity
 
 This follow-up closes the reviewed integration gaps in the autonomous learning
