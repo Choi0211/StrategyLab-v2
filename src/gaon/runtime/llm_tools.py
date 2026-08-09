@@ -143,7 +143,19 @@ class SafeToolExecutor:
             output = self._registry.handler(request.tool_name)(dict(request.arguments))
             result = ToolResult(request.tool_name, "success", output)
         except Exception as exc:  # noqa: BLE001 - denied tool calls must be auditable.
-            result = ToolResult(request.tool_name, "denied", {"error_type": exc.__class__.__name__, "message": str(exc)}, warnings=("tool denied",))
+            if request.tool_name == "autonomous_learning_research":
+                from gaon.knowledge.telegram_autonomous_learning import autonomous_learning_safe_failure_payload
+
+                output = autonomous_learning_safe_failure_payload(
+                    str(request.arguments.get("request_text", "")),
+                    symbol=str(request.arguments.get("symbol", "005930")),
+                    mode=str(request.arguments.get("mode", "research")),
+                    error_type=exc.__class__.__name__,
+                    message=str(exc),
+                )
+            else:
+                output = {"error_type": exc.__class__.__name__, "message": str(exc)}
+            result = ToolResult(request.tool_name, "denied", dict(output), warnings=("tool denied",))
         self._append_audit(request, result)
         return result
 

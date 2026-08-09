@@ -280,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     gaon_promotion_candidate_presentation_release.add_argument("--db", default=":memory:")
     gaon_promotion_candidate_presentation_release.add_argument("--run-id", default=None)
     sub.add_parser("gaon-production-autonomous-learning-execution-release-check")
+    sub.add_parser("gaon-production-external-research-network-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2198,6 +2199,24 @@ def _run(args: argparse.Namespace) -> int:
             f"candidate_backtest_authoritative={str(payload['candidate_backtest_authoritative']).lower()} "
             f"candidate_strategy_fingerprint_matched={str(payload['candidate_strategy_fingerprint_matched']).lower()} "
             f"real_data_required={str(payload['real_data_required']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-external-research-network-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_external_research_network_release_check
+
+        payload = production_external_research_network_release_check()
+        print(
+            "gaon-production-external-research-network-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"discovery_network_explicitly_enabled={str(payload['discovery_network_explicitly_enabled']).lower()} "
+            f"provider_allowlist_preserved={str(payload['provider_allowlist_preserved']).lower()} "
+            f"metadata_discovery_executed={str(payload['metadata_discovery_executed']).lower()} "
+            f"metadata_only_not_claimed_as_content={str(payload['metadata_only_not_claimed_as_content']).lower()} "
+            f"content_unavailable_not_provider_failure={str(payload['content_unavailable_not_provider_failure']).lower()} "
+            f"fixture_promotion_blocked={str(payload['fixture_promotion_blocked']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"
