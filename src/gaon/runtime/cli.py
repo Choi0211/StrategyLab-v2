@@ -273,6 +273,9 @@ def main(argv: list[str] | None = None) -> int:
     gaon_telegram_autonomous_learning_release = sub.add_parser("gaon-telegram-autonomous-learning-routing-release-check")
     gaon_telegram_autonomous_learning_release.add_argument("--db", default=":memory:")
     gaon_telegram_autonomous_learning_release.add_argument("--run-id", default=None)
+    gaon_telegram_autonomous_learning_priority_release = sub.add_parser("gaon-telegram-autonomous-learning-priority-release-check")
+    gaon_telegram_autonomous_learning_priority_release.add_argument("--db", default=":memory:")
+    gaon_telegram_autonomous_learning_priority_release.add_argument("--run-id", default=None)
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1991,6 +1994,97 @@ def _run(args: argparse.Namespace) -> int:
                 "symbol=005930 orchestration=autonomous_learning_v2 fallback=false "
                 "approval_required=true human_gate_status=awaiting_human_approval "
                 "strategy_mutated=false order_executed=false broker_order_called=false kis_order_called=false safety=pass"
+            )
+        finally:
+            store.close()
+
+    elif args.command == "gaon-telegram-autonomous-learning-priority-release-check":
+        store = RuntimeStateStore(args.db)
+        try:
+            run_id = args.run_id or f"gaon-telegram-autonomous-learning-priority-release-check:{uuid4().hex}"
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100", "101", "102"),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            client = _ReleaseCheckTelegramClient()
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(config, store._connection, tool_executor=_telegram_autonomous_research_release_tool_executor(store)),
+                allowed_chat_ids=("100", "101", "102"),
+            )
+            combined_request = (
+                "삼성전자 전략을 처음부터 다시 연구해줘.\n"
+                "외부 연구 자료도 찾아보고,\n"
+                "지금까지 배운 내용과 실제 시장 데이터를 사용해서\n"
+                "문제점을 찾고 개선 전략 후보를 만든 뒤 검증해줘.\n"
+                "좋은 전략 후보가 생기면 승격 승인을 요청하기 전까지 진행해줘."
+            )
+            steps = (
+                ("baseline", "삼성전자 분석해줘", "100"),
+                ("combined-v2", combined_request, "100"),
+                ("legacy-baseline", "삼성전자 분석해줘", "101"),
+                ("legacy-validate", "삼성전자 전략을 더 검증해봐", "101"),
+                ("v2-start", "삼성전자 전략 연구해줘", "102"),
+                ("v2-continue", "계속 연구해줘", "102"),
+            )
+            for label, text, chat_id in steps:
+                result = process_update(
+                    parse_update_result(
+                        _telegram_update_with_text(run_id, label, text, chat_id=chat_id),
+                        received_at=_utc_now(),
+                    ),
+                    runtime,
+                    client,
+                )
+                if result.status != "sent":
+                    raise ConfigurationError(f"telegram autonomous learning priority release check failed at {label}: {result.status}")
+
+            v2_audits = store.tool_audit.list(tool_name="autonomous_learning_research")
+            legacy_audits = store.tool_audit.list(tool_name="autonomous_research_cycle")
+            retest_audits = store.tool_audit.list(tool_name="research_retest")
+            if len(v2_audits) != 3:
+                raise ConfigurationError("autonomous learning priority release check expected exactly 3 V2 tool calls")
+            if len(legacy_audits) != 1:
+                raise ConfigurationError("autonomous learning priority release check expected exactly 1 legacy autonomous cycle call")
+            if retest_audits:
+                raise ConfigurationError("autonomous learning priority release check unexpectedly routed to research_retest")
+
+            combined_audit = v2_audits[0]
+            combined_output = combined_audit.result["output"]
+            if combined_audit.request["arguments"].get("symbol") != "005930":
+                raise ConfigurationError("autonomous learning priority release check did not preserve symbol=005930")
+            if combined_audit.request["arguments"].get("mode") != "approval_review":
+                raise ConfigurationError("autonomous learning priority release check did not select approval_review mode")
+            if combined_output.get("selected_orchestration") != "autonomous_learning_v2":
+                raise ConfigurationError("autonomous learning priority release check selected the wrong orchestration")
+            if combined_output.get("promotion_status") != "requires_human_approval":
+                raise ConfigurationError("autonomous learning priority release check bypassed promotion approval")
+
+            combined_response = client.sent[1][1]
+            forbidden_legacy = ("adequacy_status", "planner_steps", "historical_TESTED_candidates", "robust-breakout", "regime-filter")
+            if "Autonomous Learning V2" not in combined_response or "외부 연구 실행" not in combined_response:
+                raise ConfigurationError("autonomous learning priority release check did not render the V2 stage summary")
+            if any(token in combined_response for token in forbidden_legacy):
+                raise ConfigurationError("autonomous learning priority release check leaked legacy autonomous research response")
+
+            legacy_output = legacy_audits[0].result["output"]
+            if legacy_output.get("tool") != "autonomous_research_cycle":
+                raise ConfigurationError("autonomous learning priority release check did not preserve simple legacy validation routing")
+            if not any(record.request["arguments"].get("mode") == "continue" for record in v2_audits):
+                raise ConfigurationError("autonomous learning priority release check did not continue active V2 context")
+            if any(output.result["output"].get("strategy_mutated") or output.result["output"].get("order_executed") for output in v2_audits):
+                raise ConfigurationError("autonomous learning priority release check violated safety boundaries")
+            print(
+                "gaon-telegram-autonomous-learning-priority-release-check: PASS "
+                f"schema_version={store.status().schema_version} run_id={run_id} "
+                "combined_tool=autonomous_learning_research legacy_tool=autonomous_research_cycle "
+                "v2_continuation=true fallback=false approval_required=true strategy_mutated=false "
+                "order_executed=false broker_order_called=false kis_order_called=false safety=pass"
             )
         finally:
             store.close()

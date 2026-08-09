@@ -1,5 +1,13 @@
 # Changelog
 
+## Hotfix 185.2 - Telegram Autonomous Learning Priority Routing
+
+- Prioritized explicit combined Autonomous Learning V2 Telegram intent before legacy autonomous retest/cycle routing.
+- Kept simple legacy requests such as `삼성전자 전략을 더 검증해봐` on the legacy autonomous cycle.
+- Kept `계속 연구해줘` on V2 only when the active chat context is already Autonomous Learning V2.
+- Added `gaon-telegram-autonomous-learning-priority-release-check`.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Hotfix 185.1 - Telegram Autonomous Learning Routing
 
 - Added a read-only `autonomous_learning_research` safe tool wrapper that routes Telegram natural-language autonomous research requests into the existing Autonomous Learning V2 E2E orchestration.

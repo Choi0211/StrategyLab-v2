@@ -21,6 +21,22 @@ The route does not infer approval from approval-sounding language and does not
 mutate strategy configuration, promote a Champion, or call KIS/Broker order
 paths.
 
+## Hotfix 185.2 Telegram Autonomous Learning Priority Routing
+
+Telegram now gives explicit combined Autonomous Learning V2 requests priority
+over the legacy autonomous research/retest cycle, even when an older Samsung
+research context already exists in the chat. Simple follow-ups such as
+`계속 연구해줘` and `삼성전자 전략을 더 검증해봐` still preserve the legacy
+cycle unless the active context is already Autonomous Learning V2.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-telegram-autonomous-learning-priority-release-check --db :memory:
+```
+
+The route remains read-only and preserves the human approval boundary.
+
 ## Sprint 175-185 Follow-up: Autonomous Learning Execution Integrity
 
 This follow-up closes the reviewed integration gaps in the autonomous learning

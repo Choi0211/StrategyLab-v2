@@ -115,19 +115,27 @@ def _autonomous_learning_research_ascii(value: str) -> bool:
         "자료찾아",
         "연구자료를찾아",
         "외부연구자료",
+        "외부연구",
         "근거자료",
         "외부자료",
         "지금까지배운",
+        "지금까지배운내용",
         "배운내용",
+        "개선전략후보",
+        "전략후보",
+        "후보전략",
+        "가장좋은후보",
+        "좋은전략후보",
         "후보가있",
         "승격승인",
         "승인을요청",
         "승인요청",
+        "전략을만들어서검증",
+        "전략을만들어검증",
         "autonomouslearning",
         "autonomousresearch",
         "externalresearch",
         "findevidence",
-        "continuelearning",
     )
     plain_v2_start = (
         "전략연구",
@@ -152,19 +160,11 @@ def _autonomous_learning_research_ascii(value: str) -> bool:
         "validate",
         "backtest",
     )
-    continuation_only = (
-        "계속연구",
-        "더연구",
-        "계속검증",
-        "다음연구",
-        "continuelearning",
-        "continueresearch",
-    )
     if _contains_any(value, v2_specific) and _contains_any(value, research):
         return True
     if _contains_any(value, plain_v2_start) and not _contains_any(value, ("백테스트", "실제데이터", "실제시장데이터", "다중종목", "여러종목", "재검증", "검증해봐")):
         return True
-    return _contains_any(value, continuation_only)
+    return False
 
 
 def _multi_symbol_research_ascii(value: str) -> bool:
