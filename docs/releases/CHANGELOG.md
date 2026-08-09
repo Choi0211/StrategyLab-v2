@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 181 - Strategy Experiment Builder
+
+- Added `StrategyExperimentBuilder` and `StrategyResearchExperiment` contracts for validation-ready strategy experiments.
+- Preserved baseline strategy, assumptions, universe, period, changed-rule, and cost-model fingerprints without executing backtests.
+- Blocked already-tested hypotheses, invalid periods, missing universe, missing baseline, and missing assumptions.
+- Added `gaon-strategy-experiment-builder-release-check`.
+- Preserved schema v36, no backtest execution, no production approval, no strategy mutation, and no trading.
+
 ## Sprint 180 - Evidence-backed Strategy Hypothesis
 
 - Added `EvidenceBackedHypothesisGenerator` for proposed strategy hypotheses sourced from unvalidated external research memory.

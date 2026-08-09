@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Sprint 181 Strategy Experiment Builder
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_strategy_experiment -q`: PASS, 5 tests
+  - `python -m gaon.runtime.cli gaon-strategy-experiment-builder-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 745 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Sprint 180 Evidence-backed Strategy Hypothesis
 
 - Targeted local verification:

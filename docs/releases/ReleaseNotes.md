@@ -3,6 +3,23 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 181 Strategy Experiment Builder
+
+Sprint 181 turns proposed hypotheses into validation-ready experiment contracts.
+Each experiment preserves baseline strategy and assumption fingerprints,
+universe symbols, period, changed rules, and cost model while remaining
+unexecuted.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-strategy-experiment-builder-release-check
+```
+
+The release check verifies stable experiment identity, blocked invalid inputs,
+and no backtest execution. It does not validate evidence, approve production
+use, mutate strategies, promote a Champion, or trade.
+
 ## Sprint 180 Evidence-backed Strategy Hypothesis
 
 Sprint 180 converts unvalidated external research memory into proposed,
