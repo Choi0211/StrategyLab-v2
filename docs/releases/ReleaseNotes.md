@@ -3,6 +3,22 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 179 External Research Memory
+
+Sprint 179 stores autonomous knowledge-loop outcomes as append-only,
+evidence-backed memory. Records retain claim, question, source, and loop
+lineage while remaining unvalidated and unavailable for production policy use.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-external-research-memory-release-check
+```
+
+The release check verifies first-write storage, duplicate fingerprint reporting,
+topic retrieval, and safety blockers. It does not validate knowledge, apply
+policy, approve production use, mutate strategies, promote a Champion, or trade.
+
 ## Sprint 178 Autonomous Knowledge Research Loop
 
 Sprint 178 adds a bounded autonomous knowledge research loop over explicit

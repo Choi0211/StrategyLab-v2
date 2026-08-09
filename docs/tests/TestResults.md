@@ -2,6 +2,18 @@
 
 Status: Passed
 
+## Sprint 179 External Research Memory
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_external_research_memory -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-external-research-memory-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 735 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Sprint 178 Autonomous Knowledge Research Loop
 
 - Targeted local verification:

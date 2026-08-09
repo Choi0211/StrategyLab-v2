@@ -259,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-normalized-claim-bridge-release-check")
     sub.add_parser("gaon-evidence-conflict-reevaluation-release-check")
     sub.add_parser("gaon-autonomous-knowledge-research-loop-release-check")
+    sub.add_parser("gaon-external-research-memory-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1776,6 +1777,21 @@ def _run(args: argparse.Namespace) -> int:
             f"claims={payload['claims']} questions={payload['questions']} "
             "network_used=false knowledge_validated=false "
             "production_approved=false strategy_mutated=false "
+            "order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-external-research-memory-release-check":
+        from gaon.knowledge.external_research_memory import external_research_memory_release_check
+
+        payload = external_research_memory_release_check()
+        print(
+            "gaon-external-research-memory-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"records={payload['records']} "
+            f"duplicate={payload['duplicate']} "
+            f"claim_refs={payload['claim_refs']} "
+            "knowledge_validated=false production_approved=false "
+            "policy_applied=false strategy_mutated=false "
             "order_executed=false safety=pass"
         )
 

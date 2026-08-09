@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 179 - External Research Memory
+
+- Added append-only `ExternalResearchMemoryStore` under `GaonStorage` research-history memory.
+- Stored loop/topic/claim/question/source references as unvalidated evidence memory.
+- Added duplicate fingerprint reporting without overwrite or automatic merge.
+- Added `gaon-external-research-memory-release-check`.
+- Preserved schema v36, no Knowledge Validated transition, no production approval, no policy application, no strategy mutation, and no trading.
+
 ## Sprint 178 - Autonomous Knowledge Research Loop
 
 - Added `AutonomousKnowledgeResearchLoop` to compose normalization, claim bridging, and conflict/gap reevaluation over explicit inert evidence.
