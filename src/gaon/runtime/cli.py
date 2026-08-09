@@ -269,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-promotion-candidate-gate-release-check")
     sub.add_parser("gaon-human-gated-promotion-release-check")
     sub.add_parser("gaon-autonomous-learning-production-gate-release-check")
+    sub.add_parser("gaon-autonomous-learning-e2e-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -1918,6 +1919,22 @@ def _run(args: argparse.Namespace) -> int:
             f"ranking_status={payload['ranking_status']} trade_count={payload['trade_count']} "
             "trusted_structured_source=true production_approved=false "
             "strategy_mutated=false order_executed=false safety=pass"
+        )
+
+    elif args.command == "gaon-autonomous-learning-e2e-release-check":
+        from gaon.knowledge.autonomous_learning_e2e import autonomous_learning_e2e_release_check
+
+        payload = autonomous_learning_e2e_release_check()
+        print(
+            "gaon-autonomous-learning-e2e-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"external_research_state={payload['external_research_state']} "
+            f"hypothesis_status={payload['hypothesis_status']} "
+            f"validation_status={payload['validation_status']} "
+            f"ranking_status={payload['ranking_status']} "
+            f"promotion_status={payload['promotion_status']} "
+            f"human_gate_status={payload['human_gate_status']} "
+            "production_approved=false strategy_mutated=false order_executed=false safety=pass"
         )
 
     elif args.command == "gaon-adaptive-validation-release-check":

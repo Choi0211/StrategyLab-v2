@@ -1,5 +1,13 @@
 # Changelog
 
+## Sprint 175-185 Follow-up - Autonomous Learning Execution Integrity
+
+- Added `AutonomousExternalResearchExecutor` to run the existing discovery, ingestion, content acquisition, normalization, claim bridge, and reevaluation components from a `ResearchQuestion`.
+- Added `TrustedValidationEvidenceAdapter` and `AuthoritativeExperimentExecutor` so validation evidence is built from structured real research/backtest outputs, not arbitrary metric dictionaries.
+- Added final deterministic autonomous learning E2E release gate through external research, memory, hypothesis, experiment, validation, ranking, promotion candidate, and human approval required.
+- Added `gaon-autonomous-external-research-execution-release-check`, `gaon-authoritative-experiment-execution-release-check`, and `gaon-autonomous-learning-e2e-release-check`.
+- Preserved schema v36, no source execution, no fabricated metrics/evidence/claims, no automatic Champion promotion, no strategy mutation, and no trading.
+
 ## Sprint 185 - Human-gated Autonomous Research Promotion
 
 - Added `HumanGatedPromotionService` for explicit approval-token validation over promotion candidates.

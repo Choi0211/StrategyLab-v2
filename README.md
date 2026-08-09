@@ -78,6 +78,7 @@ Included foundations:
 - Sprint 183 Strategy Robustness Ranking with structured metric requirements, evidence-only scoring, no promotion semantics, and `gaon-robustness-ranking-release-check`
 - Sprint 184 Promotion Candidate Gate with approval-required candidate records, fixture production blocking, rollback target preservation, and `gaon-promotion-candidate-gate-release-check`
 - Sprint 185 Human-gated Autonomous Research Promotion with explicit approval token validation, manual-application-only results, aggregate production gate release check, and no automatic mutation
+- Sprint 175-185 follow-up execution integrity with real discovery/acquisition/normalization/claim/reevaluation orchestration, trusted structured backtest-to-validation evidence, and end-to-end human-approval-required release gates
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

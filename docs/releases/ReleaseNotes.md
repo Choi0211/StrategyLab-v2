@@ -3,6 +3,28 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 175-185 Follow-up: Autonomous Learning Execution Integrity
+
+This follow-up closes the reviewed integration gaps in the autonomous learning
+production gate. The external research path now starts from a structured
+research question and executes the existing bounded discovery, metadata
+ingestion, source acquisition, safe normalization, claim bridge, and evidence
+reevaluation components. Strategy experiment validation now accepts evidence
+through a trusted adapter backed by existing real research/backtest result
+objects.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-autonomous-external-research-execution-release-check
+python -m gaon.runtime.cli gaon-authoritative-experiment-execution-release-check
+python -m gaon.runtime.cli gaon-autonomous-learning-e2e-release-check
+```
+
+The E2E gate proves the deterministic path can reach a promotion candidate and
+then stop at `awaiting_human_approval` without production approval, Champion
+promotion, strategy mutation, or trading.
+
 ## Sprint 185 Human-gated Autonomous Research Promotion
 
 Sprint 185 completes the Sprint 175-185 autonomous learning production gate.

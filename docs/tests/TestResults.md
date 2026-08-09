@@ -2,6 +2,21 @@
 
 Status: Passed
 
+## Sprint 175-185 Follow-up Autonomous Learning Execution Integrity
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_external_research_execution tests.unit.test_authoritative_experiment_execution tests.unit.test_autonomous_learning_e2e -q`: PASS, 10 tests
+  - `python -m gaon.runtime.cli gaon-autonomous-external-research-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-authoritative-experiment-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-e2e-release-check`: PASS
+  - Sprint 175-185 release-check regression bundle: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 774 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 179 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Sprint 185 Human-gated Autonomous Research Promotion
 
 - Targeted local verification:
