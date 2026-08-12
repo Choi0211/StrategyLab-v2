@@ -4,6 +4,8 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
+from urllib.error import HTTPError
+from urllib.request import Request
 
 from gaon.knowledge.content_acquisition import (
     BoundedSourceContentAcquirer,
@@ -12,6 +14,7 @@ from gaon.knowledge.content_acquisition import (
     ContentAcquisitionTarget,
     ContentFailureKind,
     FixtureBinaryTransport,
+    SameHostRedirectHandler,
     canonical_acquisition_id,
     content_acquisition_release_check,
     validate_content_url,
@@ -284,6 +287,20 @@ class SourceContentAcquisitionTests(
             self.assertEqual(
                 record.failure_kind,
                 ContentFailureKind.SIZE_EXCEEDED,
+            )
+
+    def test_redirect_limit_is_enforced(
+        self,
+    ) -> None:
+        handler = SameHostRedirectHandler(max_redirects=0)
+        with self.assertRaises(HTTPError):
+            handler.redirect_request(
+                Request("https://content.example.org/a"),
+                None,
+                302,
+                "Found",
+                {},
+                "https://content.example.org/b",
             )
 
     def test_non_discovered_result_cannot_be_target(

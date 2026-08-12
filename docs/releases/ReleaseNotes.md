@@ -3,6 +3,25 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 186 Production Safe Content Acquisition
+
+Telegram Autonomous Learning V2 production external research now attempts safe
+content acquisition after bounded metadata discovery. The content path uses an
+explicit host allowlist, HTTPS-only URL validation, same-host redirect limits,
+timeout and byte budgets, MIME validation, and source count limits.
+
+Acquired source bodies remain inert evidence. They can be normalized and passed
+through the verbatim claim bridge, but they cannot execute instructions, mutate
+strategy configuration, request promotion by themselves, or create broker/KIS
+orders. Metadata-only, blocked, unsupported, and failed content remain
+fail-closed and cannot support promotion evidence.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-production-safe-content-acquisition-release-check
+```
+
 ## Hotfix 185.5 Production External Research Network Wiring
 
 Telegram Autonomous Learning V2 production external research now explicitly

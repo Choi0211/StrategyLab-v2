@@ -18,6 +18,12 @@ from typing import Mapping
 
 from gaon.storage.foundation import GaonStorage
 
+from .content_acquisition import (
+    BoundedSourceContentAcquirer,
+    ContentAcquisitionPolicy,
+    FetchPayload,
+    HttpsBinaryTransport,
+)
 from .discovery_ingestion import DiscoveryEvidenceIngestor
 from .execution import (
     DEFAULT_ALLOWED_API_HOSTS,
@@ -50,6 +56,22 @@ PRODUCTION_EXTERNAL_DISCOVERY_TIMEOUT_SECONDS = 10.0
 PRODUCTION_EXTERNAL_DISCOVERY_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 PRODUCTION_EXTERNAL_DISCOVERY_MAX_PROVIDER_CALLS = 1
 PRODUCTION_EXTERNAL_DISCOVERY_MAX_SOURCES = 1
+PRODUCTION_EXTERNAL_CONTENT_TIMEOUT_SECONDS = 12.0
+PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES = 256 * 1024
+PRODUCTION_EXTERNAL_CONTENT_ALLOWED_HOSTS = (
+    "doi.org",
+    "arxiv.org",
+    "export.arxiv.org",
+    "zenodo.org",
+    "figshare.com",
+    "www.nber.org",
+)
+PRODUCTION_EXTERNAL_ALLOWED_CONTENT_TYPES = (
+    "text/plain",
+    "text/html",
+    "application/json",
+    "application/pdf",
+)
 
 
 def telegram_autonomous_learning_payload(
@@ -359,6 +381,7 @@ def production_external_research_network_release_check() -> Mapping[str, object]
             "?쇱꽦?꾩옄 ?꾨왂??泥섏쓬遺???ㅼ떆 ?곌뎄?댁쨾",
             symbol="005930",
             transport=transport,
+            content_network_enabled=False,
             storage_root=tmp,
         )
     payload = production_autonomous_learning_payload_from_baseline(
@@ -410,15 +433,88 @@ def production_external_research_network_release_check() -> Mapping[str, object]
     }
 
 
+def production_safe_content_acquisition_release_check() -> Mapping[str, object]:
+    transport = _ReleaseMetadataTransport(mode="direct_content")
+    content_transport = _ReleaseContentTransport()
+    with tempfile.TemporaryDirectory(prefix="gaon-production-safe-content-release-") as tmp:
+        external = _run_production_external_research(
+            "Samsung breakout strategy external evidence safe content acquisition",
+            symbol="005930",
+            transport=transport,
+            content_transport=content_transport,
+            allowed_content_hosts=("content.example.org",),
+            storage_root=tmp,
+        )
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung breakout strategy external evidence safe content acquisition",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="real"),
+        external_research=external,
+    )
+    observability = _as_dict(external.get("observability"))
+    content_sources = [_as_dict(item) for item in _as_list(observability.get("content_sources"))]
+    first_source = content_sources[0] if content_sources else {}
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    checks = {
+        "allowed_content_acquired": external.get("state") in {
+            ExternalResearchTerminalState.EVIDENCE_SUFFICIENT.value,
+            ExternalResearchTerminalState.UNRESOLVED_CONFLICT.value,
+        }
+        and int(external.get("acquired_sources") or 0) == 1
+        and observability.get("content_acquisition_state") == "content_acquired",
+        "content_hash_preserved": bool(first_source.get("content_sha256"))
+        and len(str(first_source.get("content_sha256"))) == 64
+        and first_source.get("content_sha256") in set(observability.get("acquired_content_hashes") or ()),
+        "mime_preserved": first_source.get("content_type") == "text/html",
+        "claim_pipeline_connected": bool(external.get("normalized_records")) and bool(external.get("candidates")),
+        "metadata_only_not_promotion_evidence": _metadata_only_payload_is_blocked(),
+        "arbitrary_host_blocked": _blocked_content_state("https://evil.example/research.html") == "content_blocked",
+        "unsupported_mime_blocked": _blocked_content_state("https://content.example.org/research.bin", content_type="application/octet-stream")
+        == "unsupported_content_type",
+        "byte_limit_blocked": _blocked_content_state("https://content.example.org/large.html", content=b"x" * (PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES + 1))
+        == "content_blocked",
+        "timeout_fail_closed": _blocked_content_state("https://content.example.org/timeout.html", failure=TimeoutError("timeout"))
+        == "fetch_failure",
+        "fixture_promotion_blocked": payload.get("fixture_promotion_blocked") is True
+        and learning.get("promotion_status") == "needs_real_validation",
+        "no_mutation": not payload.get("strategy_mutated")
+        and not payload.get("order_executed")
+        and not payload.get("broker_order_called")
+        and not payload.get("kis_order_called"),
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"production safe content acquisition release check failed: {failed}")
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "content_acquisition_state": "content_acquired",
+        "content_source": first_source.get("final_url"),
+        "content_hash": first_source.get("content_sha256"),
+        "evidence_candidates": len(_as_list(external.get("candidates"))),
+        "metadata_only_evidence_blocked": True,
+        "fixture_promotion_blocked": True,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
 def _run_production_external_research(
     request_text: str,
     *,
     symbol: str,
     transport: JsonTransport | None = None,
+    content_transport: HttpsBinaryTransport | None = None,
     network_enabled: bool = True,
+    content_network_enabled: bool = True,
+    allowed_content_hosts: tuple[str, ...] = PRODUCTION_EXTERNAL_CONTENT_ALLOWED_HOSTS,
     storage_root: str | None = None,
 ) -> Mapping[str, object]:
     storage_root = storage_root or os.environ.get("GAON_EXTERNAL_RESEARCH_STORAGE_ROOT")
+    configured_content_hosts = _configured_content_hosts(allowed_content_hosts)
+    storage = GaonStorage(storage_root) if storage_root else GaonStorage()
     question = ResearchQuestion(
         question_id=f"research-question:{_hash({'symbol': symbol, 'request_text': request_text})[:16]}",
         topic_key="strategy.breakout.robustness",
@@ -448,16 +544,25 @@ def _run_production_external_research(
     )
     result = AutonomousExternalResearchExecutor(
         discovery_executor=discovery_executor,
-        ingestion=(
-            DiscoveryEvidenceIngestor(GaonStorage(storage_root))
-            if storage_root
-            else None
+        ingestion=DiscoveryEvidenceIngestor(storage),
+        acquirer=BoundedSourceContentAcquirer(
+            storage,
+            policy=ContentAcquisitionPolicy(
+                network_enabled=content_network_enabled,
+                allowed_hosts=configured_content_hosts,
+                allowed_content_types=PRODUCTION_EXTERNAL_ALLOWED_CONTENT_TYPES,
+                max_content_bytes=PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES,
+                timeout_seconds=PRODUCTION_EXTERNAL_CONTENT_TIMEOUT_SECONDS,
+            ),
+            transport=content_transport,
         ),
         policy=ExternalResearchExecutionPolicy(
             max_iterations=1,
             max_provider_calls=PRODUCTION_EXTERNAL_DISCOVERY_MAX_PROVIDER_CALLS,
             max_sources=PRODUCTION_EXTERNAL_DISCOVERY_MAX_SOURCES,
-            content_network_enabled=False,
+            max_total_download_bytes=PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES,
+            content_network_enabled=content_network_enabled,
+            allowed_content_hosts=configured_content_hosts,
         )
     ).run(question)
     payload = result.to_json()
@@ -467,6 +572,8 @@ def _run_production_external_research(
     payload["observability"] = _external_research_observability(
         payload,
         network_policy=network_policy,
+        allowed_content_hosts=configured_content_hosts,
+        content_network_enabled=content_network_enabled,
     )
     return payload
 
@@ -475,22 +582,43 @@ def _external_research_observability(
     payload: Mapping[str, object],
     *,
     network_policy: NetworkExecutionPolicy,
+    allowed_content_hosts: tuple[str, ...],
+    content_network_enabled: bool,
 ) -> dict[str, object]:
     discovery = _as_dict(payload.get("discovery_run"))
     records = [_as_dict(item) for item in _as_list(discovery.get("query_records"))]
     results = [_as_dict(item) for item in _as_list(discovery.get("results"))]
     failure_kinds = [str(item.get("failure_kind")) for item in records if item.get("failure_kind")]
+    blockers = [str(item) for item in _as_list(payload.get("blockers"))]
     content_blockers = [
-        str(item)
-        for item in _as_list(payload.get("blockers"))
-        if str(item).startswith("content_unavailable")
+        item
+        for item in blockers
+        if item.startswith(("content_unavailable", "content_blocked", "unsupported_content_type", "fetch_failure"))
     ]
+    acquisitions = [_as_dict(item) for item in _as_list(payload.get("acquisition_records"))]
+    normalized_records = [_as_dict(item) for item in _as_list(payload.get("normalized_records"))]
+    acquired = [item for item in acquisitions if item.get("status") == "acquired"]
+    failed = [item for item in acquisitions if item.get("status") != "acquired"]
+    if acquired and payload.get("candidates"):
+        content_state = "content_acquired"
+    elif acquired:
+        content_state = "content_acquired_no_claims"
+    elif any(item.startswith("unsupported_content_type") for item in content_blockers):
+        content_state = "unsupported_content_type"
+    elif any(item.startswith("content_blocked") for item in content_blockers):
+        content_state = "content_blocked"
+    elif any(item.startswith("fetch_failure") for item in content_blockers):
+        content_state = "fetch_failure"
+    elif content_blockers:
+        content_state = "metadata_only"
+    else:
+        content_state = "not_attempted"
     if not bool(discovery.get("network_enabled", network_policy.network_enabled)):
         terminal_state = "discovery_network_disabled"
     elif failure_kinds and not results:
         terminal_state = "provider_failure"
     elif content_blockers and not payload.get("candidates"):
-        terminal_state = "metadata_only"
+        terminal_state = content_state
     else:
         terminal_state = str(payload.get("state") or "unknown")
     return {
@@ -500,6 +628,10 @@ def _external_research_observability(
         "allowed_api_hosts": list(network_policy.allowed_api_hosts),
         "timeout_seconds": network_policy.timeout_seconds,
         "max_response_bytes": network_policy.max_response_bytes,
+        "content_network_enabled": content_network_enabled,
+        "allowed_content_hosts": list(allowed_content_hosts),
+        "content_timeout_seconds": PRODUCTION_EXTERNAL_CONTENT_TIMEOUT_SECONDS,
+        "max_content_bytes": PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES,
         "query_records": [
             {
                 "provider": item.get("provider"),
@@ -513,10 +645,37 @@ def _external_research_observability(
         "discovered_titles": [item.get("title") for item in results if item.get("title")],
         "locators": [item.get("locator") for item in results if item.get("locator")],
         "metadata_only": bool(results and not payload.get("normalized_records") and not payload.get("candidates")),
-        "content_acquisition_state": "metadata_only" if content_blockers and not payload.get("candidates") else "not_attempted",
+        "content_acquisition_state": content_state,
+        "content_sources": [
+            {
+                "discovery_result_id": item.get("discovery_result_id"),
+                "source_locator": item.get("source_locator"),
+                "content_url": item.get("content_url"),
+                "final_url": item.get("final_url"),
+                "content_type": item.get("content_type"),
+                "byte_count": item.get("byte_count"),
+                "content_sha256": item.get("content_sha256"),
+                "source_id": item.get("source_id"),
+                "status": item.get("status"),
+                "failure_kind": item.get("failure_kind"),
+            }
+            for item in acquisitions
+        ],
+        "acquired_content_hashes": [item.get("content_sha256") for item in acquired if item.get("content_sha256")],
+        "normalized_source_ids": [item.get("source_id") for item in normalized_records if item.get("source_id")],
+        "blocked_reasons": content_blockers
+        + [str(item.get("failure_kind")) for item in failed if item.get("failure_kind")],
         "failure_kind": failure_kinds[0] if failure_kinds else None,
         "terminal_state": terminal_state,
     }
+
+
+def _configured_content_hosts(default_hosts: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.environ.get("GAON_EXTERNAL_RESEARCH_CONTENT_ALLOWED_HOSTS")
+    if not raw:
+        return default_hosts
+    hosts = tuple(item.strip().lower() for item in raw.split(",") if item.strip())
+    return hosts or default_hosts
 
 
 def _network_disabled_discovery(payload: Mapping[str, object]) -> bool:
@@ -762,6 +921,19 @@ class _ReleaseMetadataTransport:
             raise TimeoutError("release transport timeout")
         if self.mode == "no_results":
             return {"message": {"items": []}}
+        if self.mode == "direct_content":
+            return {
+                "message": {
+                    "items": [
+                        {
+                            "DOI": "",
+                            "title": ["Breakout robustness safe content"],
+                            "type": "journal-article",
+                            "URL": "https://content.example.org/research.html",
+                        }
+                    ]
+                }
+            }
         return {
             "message": {
                 "items": [
@@ -774,6 +946,91 @@ class _ReleaseMetadataTransport:
                 ]
             }
         }
+
+
+class _ReleaseContentTransport:
+    def __init__(
+        self,
+        *,
+        content_type: str = "text/html",
+        content: bytes = (
+            b"<html><body>Claim: breakout filters can reduce false signals. "
+            b"Claim: independent validation should be required before promotion.</body></html>"
+        ),
+        failure: BaseException | None = None,
+    ) -> None:
+        self.content_type = content_type
+        self.content = content
+        self.failure = failure
+        self.calls = 0
+
+    def fetch(self, target, *, policy):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self.failure is not None:
+            raise self.failure
+        return FetchPayload(
+            final_url=target.content_url,
+            content_type=self.content_type,
+            content=self.content,
+        )
+
+
+def _metadata_only_payload_is_blocked() -> bool:
+    with tempfile.TemporaryDirectory(prefix="gaon-production-safe-content-metadata-") as tmp:
+        external = _run_production_external_research(
+            "metadata only external research",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(),
+            content_network_enabled=False,
+            storage_root=tmp,
+        )
+    payload = production_autonomous_learning_payload_from_baseline(
+        "metadata only external research",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="real"),
+        external_research=external,
+    )
+    return (
+        external.get("state") == ExternalResearchTerminalState.CONTENT_UNAVAILABLE.value
+        and not external.get("candidates")
+        and payload.get("approval_required") is False
+        and payload.get("promotion_status") == "needs_real_validation"
+    )
+
+
+def _blocked_content_state(
+    content_url: str,
+    *,
+    content_type: str = "text/html",
+    content: bytes = b"<html><body>Claim: safe content.</body></html>",
+    failure: BaseException | None = None,
+) -> str:
+    mode = "direct_content"
+    with tempfile.TemporaryDirectory(prefix="gaon-production-safe-content-blocked-") as tmp:
+        external = _run_production_external_research(
+            "blocked content external research",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode=mode),
+            content_transport=_ReleaseContentTransport(content_type=content_type, content=content, failure=failure),
+            allowed_content_hosts=("content.example.org",),
+            storage_root=tmp,
+        )
+    # The direct-content fixture always returns content.example.org; override by
+    # invoking the execution stack through a one-off resolver would be larger
+    # than needed. Reclassify host blocking directly through the acquisition
+    # policy by using a targeted synthetic transport URL when requested.
+    if "evil.example" in content_url:
+        with tempfile.TemporaryDirectory(prefix="gaon-production-safe-content-host-") as tmp:
+            external = _run_production_external_research(
+                "blocked host external research",
+                symbol="005930",
+                transport=_ReleaseMetadataTransport(mode="direct_content"),
+                content_transport=_ReleaseContentTransport(),
+                allowed_content_hosts=("other.example.org",),
+                storage_root=tmp,
+            )
+    return str(_as_dict(external.get("observability")).get("content_acquisition_state"))
 
 
 def _release_baseline_payload(*, source: str) -> dict[str, object]:

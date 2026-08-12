@@ -9,11 +9,13 @@ from unittest.mock import patch
 from gaon.knowledge.autonomous_learning_e2e import autonomous_learning_e2e_release_check
 from gaon.knowledge.execution import DEFAULT_ALLOWED_API_HOSTS, NetworkExecutionPolicy
 from gaon.knowledge.telegram_autonomous_learning import (
+    _ReleaseContentTransport,
     _ReleaseMetadataTransport,
     _run_production_external_research,
     autonomous_learning_safe_failure_payload,
     production_autonomous_learning_execution_release_check,
     production_external_research_network_release_check,
+    production_safe_content_acquisition_release_check,
     production_autonomous_learning_payload_from_baseline,
     telegram_autonomous_learning_payload,
 )
@@ -182,10 +184,11 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
             root = Path(tmp)
             external = _run_production_external_research(
                 "삼성전자 외부 연구 자료를 찾아줘.",
-                symbol="005930",
-                transport=_ReleaseMetadataTransport(),
-                storage_root=tmp,
-            )
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(),
+            content_network_enabled=False,
+            storage_root=tmp,
+        )
             self.assertEqual("content_unavailable", external["state"])
             self.assertTrue((root / "knowledge").exists())
             self.assertFalse(Path("/var/lib/strategylab").exists() and (root == Path("/var/lib/strategylab")))
@@ -198,6 +201,7 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
             "삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료도 찾아보고 검증해줘.",
             symbol="005930",
             transport=transport,
+            content_network_enabled=False,
             storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
         )
 
@@ -216,6 +220,7 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
             "삼성전자 외부 연구 자료를 찾아서 검증해줘.",
             symbol="005930",
             transport=_ReleaseMetadataTransport(),
+            content_network_enabled=False,
             storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
         )
 
@@ -233,6 +238,7 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
             "삼성전자 외부 연구 자료를 찾아서 후보를 검증해줘.",
             symbol="005930",
             transport=_ReleaseMetadataTransport(),
+            content_network_enabled=False,
             storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
         )
 
@@ -254,6 +260,7 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
             "삼성전자 외부 연구 자료를 찾아줘.",
             symbol="005930",
             transport=_ReleaseMetadataTransport(mode="provider_failure"),
+            content_network_enabled=False,
             storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
         )
 
@@ -266,6 +273,7 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
             "삼성전자 외부 연구 자료를 찾아줘.",
             symbol="005930",
             transport=_ReleaseMetadataTransport(mode="no_results"),
+            content_network_enabled=False,
             storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
         )
 
@@ -278,6 +286,7 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
             "삼성전자 외부 연구 자료를 찾아줘.",
             symbol="005930",
             transport=_ReleaseMetadataTransport(),
+            content_network_enabled=False,
             network_enabled=False,
             storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
         )
@@ -345,6 +354,7 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
             "삼성전자 외부 연구 자료를 찾아줘.",
             symbol="005930",
             transport=_ReleaseMetadataTransport(),
+            content_network_enabled=False,
             storage_root=tempfile.mkdtemp(prefix="gaon-hotfix1855-test-"),
         )
         self.assertEqual(list(DEFAULT_ALLOWED_API_HOSTS), external["observability"]["allowed_api_hosts"])
@@ -357,6 +367,89 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
         self.assertTrue(payload["metadata_discovery_executed"])
         self.assertTrue(payload["metadata_only_not_claimed_as_content"])
         self.assertTrue(payload["content_unavailable_not_provider_failure"])
+        self.assertTrue(payload["fixture_promotion_blocked"])
+        self.assertEqual("pass", payload["safety"])
+
+    def test_sprint186_allowed_content_acquisition_creates_evidence(self) -> None:
+        external = _run_production_external_research(
+            "Samsung breakout strategy external evidence safe content acquisition",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="direct_content"),
+            content_transport=_ReleaseContentTransport(),
+            allowed_content_hosts=("content.example.org",),
+            storage_root=tempfile.mkdtemp(prefix="gaon-sprint186-test-"),
+        )
+
+        observability = external["observability"]
+        self.assertEqual("content_acquired", observability["content_acquisition_state"])
+        self.assertEqual(1, external["acquired_sources"])
+        self.assertTrue(external["normalized_records"])
+        self.assertTrue(external["candidates"])
+        self.assertEqual("text/html", observability["content_sources"][0]["content_type"])
+        self.assertEqual(64, len(observability["content_sources"][0]["content_sha256"]))
+
+    def test_sprint186_arbitrary_content_host_is_blocked(self) -> None:
+        external = _run_production_external_research(
+            "blocked host external research",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="direct_content"),
+            content_transport=_ReleaseContentTransport(),
+            allowed_content_hosts=("other.example.org",),
+            storage_root=tempfile.mkdtemp(prefix="gaon-sprint186-test-"),
+        )
+
+        self.assertEqual("content_blocked", external["observability"]["content_acquisition_state"])
+        self.assertFalse(external["candidates"])
+
+    def test_sprint186_unsupported_mime_and_byte_limit_fail_closed(self) -> None:
+        unsupported = _run_production_external_research(
+            "unsupported mime external research",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="direct_content"),
+            content_transport=_ReleaseContentTransport(content_type="application/octet-stream"),
+            allowed_content_hosts=("content.example.org",),
+            storage_root=tempfile.mkdtemp(prefix="gaon-sprint186-test-"),
+        )
+        oversized = _run_production_external_research(
+            "oversized external research",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="direct_content"),
+            content_transport=_ReleaseContentTransport(content=b"x" * 262145),
+            allowed_content_hosts=("content.example.org",),
+            storage_root=tempfile.mkdtemp(prefix="gaon-sprint186-test-"),
+        )
+
+        self.assertEqual("unsupported_content_type", unsupported["observability"]["content_acquisition_state"])
+        self.assertEqual("content_blocked", oversized["observability"]["content_acquisition_state"])
+        self.assertFalse(unsupported["candidates"])
+        self.assertFalse(oversized["candidates"])
+
+    def test_sprint186_timeout_failure_is_not_promotable(self) -> None:
+        external = _run_production_external_research(
+            "timeout external research",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="direct_content"),
+            content_transport=_ReleaseContentTransport(failure=TimeoutError("timeout")),
+            allowed_content_hosts=("content.example.org",),
+            storage_root=tempfile.mkdtemp(prefix="gaon-sprint186-test-"),
+        )
+        result = production_autonomous_learning_payload_from_baseline(
+            "timeout external research",
+            symbol="005930",
+            mode="research",
+            baseline=_baseline_payload(build_experiment(), build_real_backtest(build_experiment(), source=MarketDataAvailability.REAL), baseline_fixture=False),
+            external_research=external,
+        )
+
+        self.assertEqual("fetch_failure", external["observability"]["content_acquisition_state"])
+        self.assertFalse(result["approval_required"])
+        self.assertEqual("needs_real_validation", result["promotion_status"])
+
+    def test_sprint186_release_check_passes(self) -> None:
+        payload = production_safe_content_acquisition_release_check()
+
+        self.assertEqual("content_acquired", payload["content_acquisition_state"])
+        self.assertTrue(payload["metadata_only_evidence_blocked"])
         self.assertTrue(payload["fixture_promotion_blocked"])
         self.assertEqual("pass", payload["safety"])
 

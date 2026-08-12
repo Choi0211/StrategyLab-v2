@@ -13,9 +13,11 @@ from typing import Mapping, Protocol
 
 from .content_acquisition import (
     BoundedSourceContentAcquirer,
+    ContentAcquisitionRecord,
     ContentAcquisitionPolicy,
     ContentAcquisitionStatus,
     ContentAcquisitionTarget,
+    ContentFailureKind,
 )
 from .content_claim_bridge import ContentClaimBridgeStatus, NormalizedContentClaimBridge
 from .content_normalization import NormalizedContentRecord, SafeContentNormalizer
@@ -85,6 +87,7 @@ class AutonomousExternalResearchExecutionResult:
     state: ExternalResearchTerminalState
     question_id: str
     discovery_run: DiscoveryExecutionRun | None
+    acquisition_records: tuple[ContentAcquisitionRecord, ...]
     normalized_records: tuple[NormalizedContentRecord, ...]
     candidates: tuple[KnowledgeCandidate, ...]
     reevaluation: EvidenceReevaluationResult | None
@@ -105,6 +108,7 @@ class AutonomousExternalResearchExecutionResult:
             "state": self.state.value,
             "question_id": self.question_id,
             "discovery_run": self.discovery_run.to_json() if self.discovery_run else None,
+            "acquisition_records": [item.to_json() for item in self.acquisition_records],
             "normalized_records": [item.to_json() for item in self.normalized_records],
             "candidates": [item.to_json() for item in self.candidates],
             "reevaluation": self.reevaluation.to_json() if self.reevaluation else None,
@@ -166,6 +170,7 @@ class AutonomousExternalResearchExecutor:
     ) -> AutonomousExternalResearchExecutionResult:
         blockers: list[str] = []
         normalized: list[NormalizedContentRecord] = []
+        acquisition_records: list[ContentAcquisitionRecord] = []
         candidates: list[KnowledgeCandidate] = []
         downloaded_bytes = 0
         acquired = 0
@@ -174,14 +179,14 @@ class AutonomousExternalResearchExecutor:
         plan = self.planner.build(question)
         execution = self.discovery_executor.execute(plan)
         if execution.provider_calls > self.policy.max_provider_calls:
-            return self._result(ExternalResearchTerminalState.BUDGET_EXHAUSTED, question, execution, (), (), None, blockers, 0, 0)
+            return self._result(ExternalResearchTerminalState.BUDGET_EXHAUSTED, question, execution, (), (), (), None, blockers, 0, 0)
         if not execution.results:
             state = (
                 ExternalResearchTerminalState.PROVIDER_FAILURE
                 if any(record.failure_kind for record in execution.query_records)
                 else ExternalResearchTerminalState.NO_NEW_RESEARCH_PATH
             )
-            return self._result(state, question, execution, (), (), None, blockers, 0, 0)
+            return self._result(state, question, execution, (), (), (), None, blockers, 0, 0)
 
         try:
             self.ingestion.ingest_execution(execution)
@@ -193,19 +198,23 @@ class AutonomousExternalResearchExecutor:
             if result.result_id in seen_results:
                 continue
             seen_results.add(result.result_id)
+            if not self.policy.content_network_enabled:
+                blockers.append(f"content_unavailable:{result.result_id}")
+                continue
             content_url = self.resolver.content_url_for(result.locator)
             if content_url is None:
                 blockers.append(f"content_unavailable:{result.result_id}")
                 continue
             target = ContentAcquisitionTarget.from_discovery(result, content_url=content_url)
             acquisition = self.acquirer.acquire(target)
+            acquisition_records.append(acquisition)
             if acquisition.status is not ContentAcquisitionStatus.ACQUIRED:
-                blockers.append(f"content_unavailable:{result.result_id}:{acquisition.failure_kind.value if acquisition.failure_kind else 'failed'}")
+                blockers.append(_content_blocker(result.result_id, acquisition.failure_kind))
                 continue
             downloaded_bytes += acquisition.byte_count
             if downloaded_bytes > self.policy.max_total_download_bytes:
                 blockers.append("budget_exhausted:download_bytes")
-                return self._result(ExternalResearchTerminalState.BUDGET_EXHAUSTED, question, execution, tuple(normalized), tuple(candidates), None, blockers, acquired, downloaded_bytes)
+                return self._result(ExternalResearchTerminalState.BUDGET_EXHAUSTED, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), None, blockers, acquired, downloaded_bytes)
             acquired += 1
             source = SourceProvenance.create(
                 source_type=result.source_type,
@@ -226,9 +235,9 @@ class AutonomousExternalResearchExecutor:
             candidates.extend(bridge.candidates)
 
         if blockers and not candidates:
-            return self._result(ExternalResearchTerminalState.CONTENT_UNAVAILABLE, question, execution, tuple(normalized), (), None, blockers, acquired, downloaded_bytes)
+            return self._result(ExternalResearchTerminalState.CONTENT_UNAVAILABLE, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes)
         if not candidates:
-            return self._result(ExternalResearchTerminalState.NO_NEW_RESEARCH_PATH, question, execution, tuple(normalized), (), None, blockers, acquired, downloaded_bytes)
+            return self._result(ExternalResearchTerminalState.NO_NEW_RESEARCH_PATH, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes)
 
         combined_candidates = tuple(existing_candidates) + tuple(candidates)
         reevaluation = self.reevaluator.reevaluate(
@@ -242,7 +251,7 @@ class AutonomousExternalResearchExecutor:
             state = ExternalResearchTerminalState.EVIDENCE_SUFFICIENT
         else:
             state = ExternalResearchTerminalState.UNRESOLVED_CONFLICT
-        return self._result(state, question, execution, tuple(normalized), tuple(candidates), reevaluation, blockers, acquired, downloaded_bytes)
+        return self._result(state, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), reevaluation, blockers, acquired, downloaded_bytes)
 
     def _content_for(self, acquisition: object) -> bytes:
         path = getattr(acquisition, "raw_path", "")
@@ -259,6 +268,7 @@ class AutonomousExternalResearchExecutor:
         state: ExternalResearchTerminalState,
         question: ResearchQuestion,
         execution: DiscoveryExecutionRun | None,
+        acquisition_records: tuple[ContentAcquisitionRecord, ...],
         normalized: tuple[NormalizedContentRecord, ...],
         candidates: tuple[KnowledgeCandidate, ...],
         reevaluation: EvidenceReevaluationResult | None,
@@ -270,6 +280,7 @@ class AutonomousExternalResearchExecutor:
             state=state,
             question_id=question.question_id,
             discovery_run=execution,
+            acquisition_records=acquisition_records,
             normalized_records=normalized,
             candidates=candidates,
             reevaluation=reevaluation,
@@ -389,3 +400,28 @@ def source_trust_level(source_type: object):
     if source_type is SourceType.RESEARCH_REPORT:
         return TrustLevel.MODERATE
     return TrustLevel.UNKNOWN
+
+
+def _content_blocker(result_id: str, failure_kind: ContentFailureKind | None) -> str:
+    value = failure_kind.value if failure_kind else "failed"
+    if failure_kind is ContentFailureKind.MIME_BLOCKED:
+        state = "unsupported_content_type"
+    elif failure_kind in {
+        ContentFailureKind.TIMEOUT,
+        ContentFailureKind.NETWORK_ERROR,
+        ContentFailureKind.HTTP_ERROR,
+        ContentFailureKind.INVALID_RESPONSE,
+    }:
+        state = "fetch_failure"
+    elif failure_kind in {
+        ContentFailureKind.NETWORK_DISABLED,
+        ContentFailureKind.INVALID_URL,
+        ContentFailureKind.HOST_NOT_ALLOWED,
+        ContentFailureKind.NON_PUBLIC_DESTINATION,
+        ContentFailureKind.SIZE_EXCEEDED,
+        ContentFailureKind.REDIRECT_BLOCKED,
+    }:
+        state = "content_blocked"
+    else:
+        state = "content_unavailable"
+    return f"{state}:{result_id}:{value}"

@@ -281,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     gaon_promotion_candidate_presentation_release.add_argument("--run-id", default=None)
     sub.add_parser("gaon-production-autonomous-learning-execution-release-check")
     sub.add_parser("gaon-production-external-research-network-release-check")
+    sub.add_parser("gaon-production-safe-content-acquisition-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2216,6 +2217,22 @@ def _run(args: argparse.Namespace) -> int:
             f"metadata_discovery_executed={str(payload['metadata_discovery_executed']).lower()} "
             f"metadata_only_not_claimed_as_content={str(payload['metadata_only_not_claimed_as_content']).lower()} "
             f"content_unavailable_not_provider_failure={str(payload['content_unavailable_not_provider_failure']).lower()} "
+            f"fixture_promotion_blocked={str(payload['fixture_promotion_blocked']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-safe-content-acquisition-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_safe_content_acquisition_release_check
+
+        payload = production_safe_content_acquisition_release_check()
+        print(
+            "gaon-production-safe-content-acquisition-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"content_acquisition_state={payload['content_acquisition_state']} "
+            f"evidence_candidates={payload['evidence_candidates']} "
+            f"metadata_only_evidence_blocked={str(payload['metadata_only_evidence_blocked']).lower()} "
             f"fixture_promotion_blocked={str(payload['fixture_promotion_blocked']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
