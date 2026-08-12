@@ -1,5 +1,15 @@
 # Changelog
 
+## Sprint 186 - Production Safe Content Acquisition
+
+- Enabled bounded production content acquisition after Crossref/DataCite metadata discovery for Telegram Autonomous Learning V2.
+- Added explicit content host allowlist, HTTPS-only URL validation, timeout, byte, redirect, provider/source, and MIME controls.
+- Preserved acquisition provenance including source locator, content URL/final URL, MIME type, byte count, content SHA-256, source ID, and blocked reason.
+- Connected acquired HTML/text/JSON content to safe normalization, verbatim claim extraction, and evidence reevaluation.
+- Kept metadata-only, blocked, unsupported, and failed content paths fail-closed for claims, promotion evidence, and human approval.
+- Added `gaon-production-safe-content-acquisition-release-check`.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Hotfix 185.5 - Production External Research Network Wiring
 
 - Wired production Telegram Autonomous Learning V2 external research to an explicit `BoundedSourceDiscoveryExecutor` with `NetworkExecutionPolicy(network_enabled=True)`.

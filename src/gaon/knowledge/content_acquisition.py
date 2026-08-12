@@ -89,6 +89,7 @@ class ContentAcquisitionPolicy:
     user_agent: str = "StrategyLab-Gaon/0.1"
     require_https: bool = True
     allow_cross_host_redirects: bool = False
+    max_redirects: int = 3
 
     def __post_init__(self) -> None:
         if self.max_content_bytes <= 0:
@@ -99,6 +100,9 @@ class ContentAcquisitionPolicy:
 
         if not self.user_agent.strip():
             raise ValueError("user_agent is required")
+
+        if self.max_redirects < 0:
+            raise ValueError("max_redirects cannot be negative")
 
         normalized = tuple(
             item.strip().lower()
@@ -291,6 +295,11 @@ def validate_content_url(
 
 
 class SameHostRedirectHandler(HTTPRedirectHandler):
+    def __init__(self, *, max_redirects: int = 3) -> None:
+        super().__init__()
+        self.max_redirects = max_redirects
+        self.redirect_count = 0
+
     def redirect_request(
         self,
         req,
@@ -302,6 +311,16 @@ class SameHostRedirectHandler(HTTPRedirectHandler):
     ):
         old = urlparse(req.full_url)
         new = urlparse(newurl)
+        self.redirect_count += 1
+
+        if self.redirect_count > self.max_redirects:
+            raise HTTPError(
+                req.full_url,
+                403,
+                "redirect limit exceeded",
+                headers,
+                fp,
+            )
 
         if (
             new.scheme != "https"
@@ -357,7 +376,7 @@ class HttpsBinaryTransport:
         )
 
         opener = build_opener(
-            SameHostRedirectHandler()
+            SameHostRedirectHandler(max_redirects=policy.max_redirects)
         )
 
         with opener.open(

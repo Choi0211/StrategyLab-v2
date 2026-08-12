@@ -2,6 +2,28 @@
 
 Status: Passed
 
+## Sprint 186 Production Safe Content Acquisition
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_autonomous_learning_e2e -q`: PASS, 25 tests
+  - `python -m unittest tests.unit.test_external_research_execution tests.unit.test_source_content_acquisition -q`: PASS, 16 tests
+  - `python -m gaon.runtime.cli gaon-production-safe-content-acquisition-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-external-research-network-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-autonomous-learning-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-telegram-autonomous-learning-routing-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-telegram-autonomous-learning-priority-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli gaon-autonomous-learning-e2e-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-promotion-candidate-presentation-release-check --db :memory:`: PASS
+  - `python -m gaon.runtime.cli research-context-isolation-release-check --db :memory:`: PASS
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_sprint186_production_safe_content_acquisition_release_check_passes -v`: PASS, 1 test
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1854_default_telegram_tool_path_blocks_release_fixture_promotion -v`: PASS, 1 test
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 800 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 195 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+
 ## Hotfix 185.5 Production External Research Network Wiring
 
 - Targeted local verification:
