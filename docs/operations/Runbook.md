@@ -61,6 +61,16 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-learning-state-semantics-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-real-academic-content-resolution-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-learning-loop-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-multi-source-research-contract-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-web-news-research-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-youtube-research-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-community-idea-research-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-evidence-fusion-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-source-independence-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-cross-source-conflict-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-multi-source-experiment-loop-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-research-prompt-injection-safety-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-validation-sample-diagnostic-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -68,8 +78,10 @@ of irrelevant non-financial papers, DOI redirect safety, academic DOI/resource
 resolution, resilient fallback after an unavailable relevant source, bounded
 source-attempt budgets, content-grounded evidence, evidence-backed hypotheses,
 candidate experiment lineage, authoritative real candidate validation, robust
-state semantics, robustness ranking, and the human-only promotion gate without
-mutating strategy configuration or placing orders.
+state semantics, multi-source provider contracts, source independence,
+cross-source conflict detection, validation sample diagnostics, robustness
+ranking, and the human-only promotion gate without mutating strategy
+configuration or placing orders.
 
 ## Phase A Diagnostics
 

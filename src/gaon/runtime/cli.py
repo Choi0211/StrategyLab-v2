@@ -288,6 +288,16 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-academic-source-fallback-release-check")
     sub.add_parser("gaon-production-academic-source-budget-release-check")
     sub.add_parser("gaon-production-autonomous-learning-state-semantics-release-check")
+    sub.add_parser("gaon-production-multi-source-research-contract-release-check")
+    sub.add_parser("gaon-production-web-news-research-release-check")
+    sub.add_parser("gaon-production-youtube-research-release-check")
+    sub.add_parser("gaon-production-community-idea-research-release-check")
+    sub.add_parser("gaon-production-evidence-fusion-release-check")
+    sub.add_parser("gaon-production-source-independence-release-check")
+    sub.add_parser("gaon-production-cross-source-conflict-release-check")
+    sub.add_parser("gaon-production-multi-source-experiment-loop-release-check")
+    sub.add_parser("gaon-production-research-prompt-injection-safety-release-check")
+    sub.add_parser("gaon-production-validation-sample-diagnostic-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2348,6 +2358,62 @@ def _run(args: argparse.Namespace) -> int:
             f"real_missing_hypothesis_status={payload['real_missing_hypothesis_status']} "
             f"fixture_promotion_status={payload['fixture_promotion_status']} "
             f"real_ready_hypothesis_status={payload['real_ready_hypothesis_status']} "
+            "safety=pass"
+        )
+
+    elif args.command in {
+        "gaon-production-multi-source-research-contract-release-check",
+        "gaon-production-web-news-research-release-check",
+        "gaon-production-youtube-research-release-check",
+        "gaon-production-community-idea-research-release-check",
+        "gaon-production-evidence-fusion-release-check",
+        "gaon-production-source-independence-release-check",
+        "gaon-production-cross-source-conflict-release-check",
+        "gaon-production-multi-source-experiment-loop-release-check",
+        "gaon-production-research-prompt-injection-safety-release-check",
+        "gaon-production-validation-sample-diagnostic-release-check",
+    }:
+        from gaon.knowledge.multi_source_research import (
+            production_community_idea_research_release_check,
+            production_cross_source_conflict_release_check,
+            production_evidence_fusion_release_check,
+            production_multi_source_experiment_loop_release_check,
+            production_multi_source_research_contract_release_check,
+            production_research_prompt_injection_safety_release_check,
+            production_source_independence_release_check,
+            production_validation_sample_diagnostic_release_check,
+            production_web_news_research_release_check,
+            production_youtube_research_release_check,
+        )
+
+        handlers = {
+            "gaon-production-multi-source-research-contract-release-check": production_multi_source_research_contract_release_check,
+            "gaon-production-web-news-research-release-check": production_web_news_research_release_check,
+            "gaon-production-youtube-research-release-check": production_youtube_research_release_check,
+            "gaon-production-community-idea-research-release-check": production_community_idea_research_release_check,
+            "gaon-production-evidence-fusion-release-check": production_evidence_fusion_release_check,
+            "gaon-production-source-independence-release-check": production_source_independence_release_check,
+            "gaon-production-cross-source-conflict-release-check": production_cross_source_conflict_release_check,
+            "gaon-production-multi-source-experiment-loop-release-check": production_multi_source_experiment_loop_release_check,
+            "gaon-production-research-prompt-injection-safety-release-check": production_research_prompt_injection_safety_release_check,
+            "gaon-production-validation-sample-diagnostic-release-check": production_validation_sample_diagnostic_release_check,
+        }
+        payload = handlers[args.command]()
+        print(
+            f"{args.command}: PASS "
+            f"schema_version={payload['schema_version']} state={payload['state']} "
+            f"providers_attempted={payload['providers_attempted']} "
+            f"sources_acquired={payload['sources_acquired']} "
+            f"claims={payload['claims_extracted']} "
+            f"independent_sources={payload['independent_sources']} "
+            f"conflict_status={payload['conflict_status']} "
+            f"evidence_strength={payload['evidence_strength']} "
+            f"hypotheses={payload['hypotheses']} "
+            f"candidate_experiments={payload['candidate_experiments']} "
+            f"sufficiency_status={payload['sufficiency_status']} "
+            f"promotion_status={payload['promotion_status']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"
         )
 
