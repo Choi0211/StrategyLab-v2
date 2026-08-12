@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 192.1 - Real Academic Content Resolution
+
+- Added a dedicated academic content resolver for DOI URLs, raw DOI strings, direct HTTPS content locators, and Crossref/DataCite metadata resource URLs.
+- Preserved Crossref/DataCite DOI and metadata resource provenance in `DiscoveryResult`.
+- Added `resolution_records` and Telegram production observability for locator kind, DOI, resolution status, resolved URL/host, redirect chain, and resolution failure kind.
+- Kept metadata-only results, unauthorized publisher hosts, HTTP targets, unsupported MIME, oversized content, timeout/fetch failure, fixture-backed evidence, and fingerprint mismatch fail-closed.
+- Added `gaon-production-real-academic-content-resolution-release-check` to prove academic metadata -> DOI/resource resolution -> content acquisition -> normalization -> grounded evidence -> production loop.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Sprint 187-192 - Integrated Autonomous Learning Production Loop
 
 - Added explicit production loop stages for grounded evidence, evidence-backed hypotheses, candidate strategy experiments, authoritative candidate validation, robustness ranking, and human promotion gating.

@@ -3,6 +3,29 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 192.1 Real Academic Content Resolution
+
+Production Autonomous Learning V2 can now bridge Crossref/DataCite academic
+metadata into safe content acquisition when a DOI or provider-supplied metadata
+resource URL can be resolved to an allowlisted HTTPS content URL.
+
+Sprint 186 release checks passed because they used deterministic direct content
+URLs. Real production discovery commonly returns DOI-style academic locators,
+which exposed a missing DOI/resource resolution bridge. Hotfix 192.1 adds that
+bridge without allowing arbitrary web fetching.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-production-real-academic-content-resolution-release-check
+```
+
+The command proves DOI/resource resolution, content acquisition, normalization,
+claim extraction, grounded evidence, and the existing Sprint 187-192 production
+loop. It also proves fail-closed behavior for blocked hosts, HTTP targets,
+unsupported MIME, oversized content, timeouts, metadata-only records, fixture
+evidence, and candidate fingerprint mismatches.
+
 ## Sprint 187-192 Integrated Autonomous Learning Production Loop
 
 Autonomous Learning V2 now exposes the full production research loop from safe

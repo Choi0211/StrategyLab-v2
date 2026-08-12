@@ -461,6 +461,8 @@ class DiscoveryResult:
     quality_evaluated: bool = False
     knowledge_validated: bool = False
     production_approved: bool = False
+    doi: str | None = None
+    metadata_resource_url: str | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -477,6 +479,8 @@ class DiscoveryResult:
             "quality_evaluated": self.quality_evaluated,
             "knowledge_validated": self.knowledge_validated,
             "production_approved": self.production_approved,
+            "doi": self.doi,
+            "metadata_resource_url": self.metadata_resource_url,
         }
 
 

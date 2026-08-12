@@ -32,6 +32,7 @@ from .execution import (
     NetworkExecutionPolicy,
 )
 from .external_research_execution import (
+    AcademicContentResolver,
     AutonomousExternalResearchExecutor,
     ExternalResearchExecutionPolicy,
     ExternalResearchTerminalState,
@@ -684,6 +685,73 @@ def production_autonomous_learning_loop_release_check() -> Mapping[str, object]:
     return _release_stage_payload(payload, "production_autonomous_learning_loop", checks)
 
 
+def production_real_academic_content_resolution_release_check() -> Mapping[str, object]:
+    external = _release_academic_content_external()
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung breakout strategy academic DOI content resolution",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="real"),
+        external_research=external,
+    )
+    observability = _as_dict(external.get("observability"))
+    resolutions = [_as_dict(item) for item in _as_list(observability.get("content_resolution"))]
+    first_resolution = resolutions[0] if resolutions else {}
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    blocked_doi = _academic_resolution_state(
+        doi_final_url="https://blocked-publisher.example/research.html",
+        allowed_content_hosts=("content.example.org", "doi.org"),
+    )
+    http_doi = _academic_resolution_state(
+        doi_final_url="http://content.example.org/research.html",
+        allowed_content_hosts=("content.example.org", "doi.org"),
+    )
+    unsupported = _academic_resolution_state(content_type="application/octet-stream")
+    oversized = _academic_resolution_state(content=b"x" * (PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES + 1))
+    timeout = _academic_resolution_state(failure=TimeoutError("timeout"))
+    checks = {
+        "starts_from_academic_locator": first_resolution.get("locator_kind") == "doi_url"
+        and first_resolution.get("doi") == "10.1234/gaon-production-academic-content",
+        "metadata_resource_resolved": first_resolution.get("resolution_status") == "metadata_resource_url"
+        and first_resolution.get("final_host") == "content.example.org",
+        "content_acquired": observability.get("content_acquisition_state") == "content_acquired"
+        and int(external.get("acquired_sources") or 0) == 1,
+        "grounded_evidence_created": len(_as_list(learning.get("grounded_evidence"))) >= 1,
+        "hypothesis_and_experiment_connected": len(_as_list(learning.get("hypotheses"))) >= 1
+        and len(_as_list(learning.get("candidate_experiments"))) >= 1,
+        "blocked_publisher_fails_closed": blocked_doi["resolution_status"] == "content_blocked",
+        "http_target_blocked": http_doi["resolution_status"] == "content_blocked",
+        "unsupported_mime_blocked": unsupported["content_state"] == "unsupported_content_type",
+        "oversized_content_blocked": oversized["content_state"] == "content_blocked",
+        "timeout_fail_closed": timeout["content_state"] == "fetch_failure",
+        "metadata_only_rejected": _metadata_only_payload_is_blocked(),
+        "fixture_promotion_blocked": _fixture_academic_payload_is_blocked(),
+        "fingerprint_mismatch_blocked": _fingerprint_mismatch_payload_is_blocked(),
+        "no_mutation": not payload.get("strategy_mutated")
+        and not payload.get("order_executed")
+        and not payload.get("broker_order_called")
+        and not payload.get("kis_order_called"),
+    }
+    _raise_if_failed("production real academic content resolution", checks)
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "discovered_locator": first_resolution.get("original_locator"),
+        "locator_kind": first_resolution.get("locator_kind"),
+        "resolution_status": first_resolution.get("resolution_status"),
+        "resolved_host": first_resolution.get("final_host"),
+        "content_acquisition_state": observability.get("content_acquisition_state"),
+        "acquired_sources": external.get("acquired_sources"),
+        "grounded_evidence_count": len(_as_list(learning.get("grounded_evidence"))),
+        "hypothesis_count": len(_as_list(learning.get("hypotheses"))),
+        "candidate_experiment_count": len(_as_list(learning.get("candidate_experiments"))),
+        "promotion_status": payload.get("promotion_status"),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
 def _run_production_external_research(
     request_text: str,
     *,
@@ -694,6 +762,7 @@ def _run_production_external_research(
     content_network_enabled: bool = True,
     allowed_content_hosts: tuple[str, ...] = PRODUCTION_EXTERNAL_CONTENT_ALLOWED_HOSTS,
     storage_root: str | None = None,
+    doi_resolution_transport: object | None = None,
 ) -> Mapping[str, object]:
     storage_root = storage_root or os.environ.get("GAON_EXTERNAL_RESEARCH_STORAGE_ROOT")
     configured_content_hosts = _configured_content_hosts(allowed_content_hosts)
@@ -725,20 +794,22 @@ def _run_production_external_research(
         network_policy=network_policy,
         transport=transport,
     )
+    content_policy = ContentAcquisitionPolicy(
+        network_enabled=content_network_enabled,
+        allowed_hosts=configured_content_hosts,
+        allowed_content_types=PRODUCTION_EXTERNAL_ALLOWED_CONTENT_TYPES,
+        max_content_bytes=PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES,
+        timeout_seconds=PRODUCTION_EXTERNAL_CONTENT_TIMEOUT_SECONDS,
+    )
     result = AutonomousExternalResearchExecutor(
         discovery_executor=discovery_executor,
         ingestion=DiscoveryEvidenceIngestor(storage),
         acquirer=BoundedSourceContentAcquirer(
             storage,
-            policy=ContentAcquisitionPolicy(
-                network_enabled=content_network_enabled,
-                allowed_hosts=configured_content_hosts,
-                allowed_content_types=PRODUCTION_EXTERNAL_ALLOWED_CONTENT_TYPES,
-                max_content_bytes=PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES,
-                timeout_seconds=PRODUCTION_EXTERNAL_CONTENT_TIMEOUT_SECONDS,
-            ),
+            policy=content_policy,
             transport=content_transport,
         ),
+        resolver=AcademicContentResolver(policy=content_policy, doi_transport=doi_resolution_transport),  # type: ignore[arg-type]
         policy=ExternalResearchExecutionPolicy(
             max_iterations=1,
             max_provider_calls=PRODUCTION_EXTERNAL_DISCOVERY_MAX_PROVIDER_CALLS,
@@ -779,6 +850,7 @@ def _external_research_observability(
         if item.startswith(("content_unavailable", "content_blocked", "unsupported_content_type", "fetch_failure"))
     ]
     acquisitions = [_as_dict(item) for item in _as_list(payload.get("acquisition_records"))]
+    resolutions = [_as_dict(item) for item in _as_list(payload.get("resolution_records"))]
     normalized_records = [_as_dict(item) for item in _as_list(payload.get("normalized_records"))]
     acquired = [item for item in acquisitions if item.get("status") == "acquired"]
     failed = [item for item in acquisitions if item.get("status") != "acquired"]
@@ -844,6 +916,26 @@ def _external_research_observability(
             }
             for item in acquisitions
         ],
+        "content_resolution": [
+            {
+                "discovery_result_id": item.get("discovery_result_id"),
+                "provider": item.get("provider"),
+                "title": item.get("title"),
+                "original_locator": item.get("original_locator"),
+                "locator_kind": item.get("locator_kind"),
+                "doi": item.get("doi"),
+                "resolution_attempted": item.get("resolution_attempted"),
+                "resolution_status": item.get("resolution_status"),
+                "resolved_content_url": item.get("resolved_content_url"),
+                "final_url": item.get("final_url"),
+                "final_host": item.get("final_host"),
+                "redirect_chain": item.get("redirect_chain"),
+                "failure_kind": item.get("failure_kind"),
+                "error_message": item.get("error_message"),
+            }
+            for item in resolutions
+        ],
+        "resolution_statuses": [item.get("resolution_status") for item in resolutions if item.get("resolution_status")],
         "acquired_content_hashes": [item.get("content_sha256") for item in acquired if item.get("content_sha256")],
         "normalized_source_ids": [item.get("source_id") for item in normalized_records if item.get("source_id")],
         "blocked_reasons": content_blockers
@@ -949,11 +1041,13 @@ def _grounded_evidence_records(external_research: Mapping[str, object]) -> list[
         for item in (_as_dict(row) for row in _as_list(external_research.get("acquisition_records")))
         if item.get("status") == "acquired" and item.get("source_id") and item.get("content_sha256")
     }
+    acquired_list = list(acquisitions.values())
     normalized = {
         str(item.get("source_id")): item
         for item in (_as_dict(row) for row in _as_list(external_research.get("normalized_records")))
         if item.get("status") == "normalized" and item.get("source_id") and item.get("raw_content_sha256")
     }
+    normalized_list = list(normalized.values())
     discovery = _as_dict(external_research.get("discovery_run"))
     discovery_results = {
         str(item.get("result_id")): item
@@ -964,8 +1058,8 @@ def _grounded_evidence_records(external_research: Mapping[str, object]) -> list[
     for index, row in enumerate(_as_list(external_research.get("candidates")), start=1):
         candidate = _as_dict(row)
         source_id = str(candidate.get("source_id") or "")
-        acquisition = acquisitions.get(source_id)
-        normalized_record = normalized.get(source_id)
+        acquisition = acquisitions.get(source_id) or (acquired_list[0] if len(acquired_list) == 1 else None)
+        normalized_record = normalized.get(source_id) or (normalized_list[0] if len(normalized_list) == 1 else None)
         claim_text = str(candidate.get("claim_text") or "").strip()
         claim_id = str(candidate.get("claim_id") or candidate.get("candidate_id") or "")
         if not acquisition or not normalized_record or not claim_text or not claim_id:
@@ -1388,6 +1482,25 @@ class _ReleaseMetadataTransport:
                     ]
                 }
             }
+        if self.mode == "doi_with_resource":
+            return {
+                "message": {
+                    "items": [
+                        {
+                            "DOI": "10.1234/gaon-production-academic-content",
+                            "title": ["Breakout robustness academic content"],
+                            "type": "journal-article",
+                            "URL": "https://doi.org/10.1234/gaon-production-academic-content",
+                            "link": [
+                                {
+                                    "URL": "https://content.example.org/research.html",
+                                    "content-type": "text/html",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
         return {
             "message": {
                 "items": [
@@ -1427,6 +1540,26 @@ class _ReleaseContentTransport:
             content_type=self.content_type,
             content=self.content,
         )
+
+
+class _ReleaseDoiResolutionTransport:
+    def __init__(
+        self,
+        *,
+        final_url: str = "https://content.example.org/research.html",
+        failure: BaseException | None = None,
+    ) -> None:
+        self.final_url = final_url
+        self.failure = failure
+        self.calls = 0
+
+    def resolve(self, url: str, *, policy: ContentAcquisitionPolicy):  # type: ignore[no-untyped-def]
+        from gaon.knowledge.external_research_execution import ContentResolutionPayload
+
+        self.calls += 1
+        if self.failure is not None:
+            raise self.failure
+        return ContentResolutionPayload(final_url=self.final_url, redirect_chain=(url, self.final_url))
 
 
 def _metadata_only_payload_is_blocked() -> bool:
@@ -1634,6 +1767,53 @@ def _release_content_external() -> dict[str, object]:
         )
 
 
+def _release_academic_content_external(
+    *,
+    transport: _ReleaseMetadataTransport | None = None,
+    content_transport: _ReleaseContentTransport | None = None,
+    doi_resolution_transport: _ReleaseDoiResolutionTransport | None = None,
+    allowed_content_hosts: tuple[str, ...] = ("content.example.org", "doi.org"),
+) -> dict[str, object]:
+    with tempfile.TemporaryDirectory(prefix="gaon-production-academic-resolution-") as tmp:
+        return dict(
+            _run_production_external_research(
+                "Samsung breakout strategy academic DOI content resolution",
+                symbol="005930",
+                transport=transport or _ReleaseMetadataTransport(mode="doi_with_resource"),
+                content_transport=content_transport or _ReleaseContentTransport(),
+                doi_resolution_transport=doi_resolution_transport,
+                allowed_content_hosts=allowed_content_hosts,
+                storage_root=tmp,
+            )
+        )
+
+
+def _academic_resolution_state(
+    *,
+    doi_final_url: str = "https://content.example.org/research.html",
+    allowed_content_hosts: tuple[str, ...] = ("content.example.org", "doi.org"),
+    content_type: str = "text/html",
+    content: bytes = b"<html><body>Claim: breakout filters can reduce false signals.</body></html>",
+    failure: BaseException | None = None,
+) -> dict[str, object]:
+    external = _release_academic_content_external(
+        transport=_ReleaseMetadataTransport(),
+        content_transport=_ReleaseContentTransport(content_type=content_type, content=content, failure=failure),
+        doi_resolution_transport=_ReleaseDoiResolutionTransport(final_url=doi_final_url),
+        allowed_content_hosts=allowed_content_hosts,
+    )
+    observability = _as_dict(external.get("observability"))
+    resolutions = [_as_dict(item) for item in _as_list(observability.get("content_resolution"))]
+    first_resolution = resolutions[0] if resolutions else {}
+    return {
+        "resolution_status": first_resolution.get("resolution_status"),
+        "resolved_host": first_resolution.get("final_host"),
+        "content_state": observability.get("content_acquisition_state"),
+        "state": external.get("state"),
+        "blockers": list(_as_list(external.get("blockers"))),
+    }
+
+
 def _release_production_learning_payload_with_content() -> Mapping[str, object]:
     return production_autonomous_learning_payload_from_baseline(
         "Samsung breakout strategy external evidence backed autonomous learning loop",
@@ -1666,6 +1846,42 @@ def _raise_if_failed(label: str, checks: Mapping[str, bool]) -> None:
     if not all(checks.values()):
         failed = ",".join(name for name, ok in checks.items() if not ok)
         raise RuntimeError(f"{label} release check failed: {failed}")
+
+
+def _fixture_academic_payload_is_blocked() -> bool:
+    payload = production_autonomous_learning_payload_from_baseline(
+        "fixture evidence must not promote",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="fixture"),
+        external_research=_release_academic_content_external(),
+    )
+    return payload.get("approval_required") is False and payload.get("promotion_status") == "blocked_fixture"
+
+
+def _fingerprint_mismatch_payload_is_blocked() -> bool:
+    baseline = _release_baseline_payload(source="real")
+    candidates = _as_list(baseline.get("candidates"))
+    if candidates and isinstance(candidates[0], dict):
+        strategy = candidates[0].get("strategy")
+        if isinstance(strategy, dict):
+            strategy["fingerprint"] = "fingerprint:mismatch"
+        backtest = candidates[0].get("backtest_result")
+        if isinstance(backtest, dict) and isinstance(backtest.get("strategy"), dict):
+            backtest["strategy"] = dict(backtest["strategy"])
+            backtest["strategy"]["fingerprint"] = "candidate-fingerprint-release-1854"
+    payload = production_autonomous_learning_payload_from_baseline(
+        "fingerprint mismatch must not promote",
+        symbol="005930",
+        mode="research",
+        baseline=baseline,
+        external_research=_release_academic_content_external(),
+    )
+    return (
+        payload.get("approval_required") is False
+        and payload.get("promotion_status") in {"blocked_fixture", "needs_real_validation"}
+        and payload.get("candidate_strategy_fingerprint_matched") is False
+    )
 
 
 def _as_dict(value: object) -> dict[str, object]:

@@ -86,6 +86,7 @@ Included foundations:
 - Hotfix 185.5 production external research network wiring with explicit bounded Crossref/DataCite discovery, metadata-only terminal-state handling, fixture promotion blocking, and `gaon-production-external-research-network-release-check`
 - Sprint 186 Production Safe Content Acquisition with allowlisted inert content fetch, MIME/timeout/byte/redirect controls, provenance/hash observability, metadata-only promotion blocking, and `gaon-production-safe-content-acquisition-release-check`
 - Sprint 187-192 Integrated Autonomous Learning Production Loop with content-grounded evidence, evidence-backed hypotheses, candidate experiment lineage, authoritative real candidate validation, robustness ranking, and human promotion gate release checks
+- Hotfix 192.1 real academic content resolution with DOI/metadata-resource resolution, resolution lineage observability, fail-closed host/MIME/timeout/size blocking, and `gaon-production-real-academic-content-resolution-release-check`
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

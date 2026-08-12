@@ -7,8 +7,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gaon.knowledge.autonomous_learning_e2e import autonomous_learning_e2e_release_check
+from gaon.knowledge.content_acquisition import ContentAcquisitionPolicy
+from gaon.knowledge.discovery import DiscoveryProvider, DiscoveryResult, DiscoveryStatus
+from gaon.knowledge.external_research_execution import AcademicContentResolver, ContentResolutionStatus
 from gaon.knowledge.execution import DEFAULT_ALLOWED_API_HOSTS, NetworkExecutionPolicy
 from gaon.knowledge.telegram_autonomous_learning import (
+    _ReleaseDoiResolutionTransport,
     _ReleaseContentTransport,
     _ReleaseMetadataTransport,
     _run_production_external_research,
@@ -20,12 +24,14 @@ from gaon.knowledge.telegram_autonomous_learning import (
     production_external_research_network_release_check,
     production_grounded_evidence_release_check,
     production_human_promotion_gate_release_check,
+    production_real_academic_content_resolution_release_check,
     production_robustness_ranking_release_check,
     production_safe_content_acquisition_release_check,
     production_strategy_experiment_release_check,
     production_autonomous_learning_payload_from_baseline,
     telegram_autonomous_learning_payload,
 )
+from gaon.knowledge.provenance import SourceType
 from gaon.research.krx_real_pipeline import MarketDataAvailability
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRequest, ToolRiskLevel
 from gaon.runtime.storage import RuntimeStateStore
@@ -535,6 +541,60 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
         self.assertEqual("needs_real_validation", payload["promotion_status"])
         self.assertIn("grounded_evidence_unavailable", learning["blockers"])
 
+    def test_hotfix1921_academic_resolver_handles_doi_and_resource_links(self) -> None:
+        resolver = AcademicContentResolver(
+            policy=ContentAcquisitionPolicy(
+                network_enabled=True,
+                allowed_hosts=("doi.org", "content.example.org"),
+            ),
+            doi_transport=_ReleaseDoiResolutionTransport(),
+        )
+        doi_result = _discovery_result("https://doi.org/10.1234/example", doi="10.1234/example")
+        resource_result = _discovery_result(
+            "https://doi.org/10.1234/resource",
+            doi="10.1234/resource",
+            metadata_resource_url="https://content.example.org/research.html",
+        )
+
+        doi_resolution = resolver.resolve(doi_result)
+        resource_resolution = resolver.resolve(resource_result)
+
+        self.assertEqual(ContentResolutionStatus.DOI_RESOLVED, doi_resolution.status)
+        self.assertEqual("doi_url", doi_resolution.locator_kind)
+        self.assertEqual("content.example.org", doi_resolution.final_host)
+        self.assertEqual(ContentResolutionStatus.METADATA_RESOURCE_URL, resource_resolution.status)
+        self.assertEqual("content.example.org", resource_resolution.final_host)
+
+    def test_hotfix1921_academic_resolver_blocks_unsafe_targets(self) -> None:
+        resolver = AcademicContentResolver(
+            policy=ContentAcquisitionPolicy(
+                network_enabled=True,
+                allowed_hosts=("doi.org", "content.example.org"),
+            ),
+            doi_transport=_ReleaseDoiResolutionTransport(final_url="https://blocked-publisher.example/research.html"),
+        )
+        blocked = resolver.resolve(_discovery_result("https://doi.org/10.1234/blocked", doi="10.1234/blocked"))
+        http = AcademicContentResolver(
+            policy=ContentAcquisitionPolicy(
+                network_enabled=True,
+                allowed_hosts=("doi.org", "content.example.org"),
+            ),
+            doi_transport=_ReleaseDoiResolutionTransport(final_url="http://content.example.org/research.html"),
+        ).resolve(_discovery_result("https://doi.org/10.1234/http", doi="10.1234/http"))
+
+        self.assertEqual(ContentResolutionStatus.CONTENT_BLOCKED, blocked.status)
+        self.assertEqual("content_blocked", blocked.failure_kind)
+        self.assertEqual(ContentResolutionStatus.CONTENT_BLOCKED, http.status)
+
+    def test_hotfix1921_real_academic_content_resolution_release_check_passes(self) -> None:
+        payload = production_real_academic_content_resolution_release_check()
+
+        self.assertEqual("doi_url", payload["locator_kind"])
+        self.assertEqual("metadata_resource_url", payload["resolution_status"])
+        self.assertEqual("content_acquired", payload["content_acquisition_state"])
+        self.assertGreaterEqual(payload["grounded_evidence_count"], 1)
+        self.assertEqual("pass", payload["safety"])
+
 
 def _baseline_payload(experiment, candidate_backtest, *, baseline_fixture: bool, changed_fields=("entry.breakout_lookback",)) -> dict[str, object]:
     strategy = candidate_backtest.strategy.to_json()
@@ -607,6 +667,25 @@ def _external_ready() -> dict[str, object]:
         "blockers": [],
         "network_executed": False,
     }
+
+
+def _discovery_result(
+    locator: str,
+    *,
+    doi: str | None = None,
+    metadata_resource_url: str | None = None,
+) -> DiscoveryResult:
+    return DiscoveryResult(
+        result_id=f"discovery-result:test:{abs(hash(locator))}",
+        query_id="query:test",
+        provider=DiscoveryProvider.ACADEMIC_SEARCH,
+        title="Academic resolver test",
+        locator=locator,
+        source_type=SourceType.ACADEMIC_PAPER,
+        status=DiscoveryStatus.DISCOVERED,
+        doi=doi,
+        metadata_resource_url=metadata_resource_url,
+    )
 
 
 if __name__ == "__main__":
