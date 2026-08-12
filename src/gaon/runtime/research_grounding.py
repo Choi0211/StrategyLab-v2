@@ -406,6 +406,18 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
         f"- promotion_status={promotion_status}",
         f"- human_gate_status={human_gate_status}",
     ]
+    external = _as_dict(learning.get("external_research"))
+    observability = _as_dict(external.get("observability"))
+    if (
+        learning.get("external_research_state") == "no_relevant_research_path"
+        or observability.get("content_acquisition_state") == "academic_results_irrelevant"
+    ):
+        lines.extend(
+            [
+                "",
+                "- 관련성이 충분한 외부 학술 연구 자료를 확보하지 못했습니다. 무관한 자료를 근거로 사용하지 않겠습니다.",
+            ]
+        )
     if promotion_status == "requires_human_approval" and human_gate_status == "awaiting_human_approval":
         lines.extend(
             [

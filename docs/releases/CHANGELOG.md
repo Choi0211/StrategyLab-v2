@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 192.2 - Relevant Academic Discovery and Safe DOI Redirect Resolution
+
+- Replaced overly generic breakout-strategy academic discovery wording with deterministic financial-market, trend-following, moving-average, volume-confirmation, and robustness query terms.
+- Added deterministic academic relevance screening before content acquisition, including observable relevance status, score, matched terms, rejected reason, and selected-for-content flag.
+- Rejected irrelevant non-financial `strategy` results such as tuple recovery / distributed-systems papers before fetch, normalization, evidence, hypothesis, ranking, or promotion gates.
+- Updated DOI resolution so controlled HTTP intermediate redirect hops may be observed only inside the DOI resolver while final content acquisition remains HTTPS-only and allowlisted.
+- Added `gaon-production-relevant-academic-discovery-release-check`, `gaon-production-safe-doi-redirect-release-check`, and `gaon-production-relevant-academic-content-loop-release-check`.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Hotfix 192.1 - Real Academic Content Resolution
 
 - Added a dedicated academic content resolver for DOI URLs, raw DOI strings, direct HTTPS content locators, and Crossref/DataCite metadata resource URLs.

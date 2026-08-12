@@ -53,14 +53,19 @@ copied package and the service must not be treated as upgraded.
 For Autonomous Learning V2 production-loop verification, run:
 
 ```bash
+.venv/bin/python -m gaon.runtime.cli gaon-production-relevant-academic-discovery-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-safe-doi-redirect-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-relevant-academic-content-loop-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-real-academic-content-resolution-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-learning-loop-release-check
 ```
 
-These checks verify academic DOI/resource resolution, content-grounded evidence,
-evidence-backed hypotheses, candidate experiment lineage, authoritative real
-candidate validation, robustness ranking, and the human-only promotion gate
-without mutating strategy configuration or placing orders.
+These checks verify strategy-specific academic relevance screening, rejection
+of irrelevant non-financial papers, DOI redirect safety, academic DOI/resource
+resolution, content-grounded evidence, evidence-backed hypotheses, candidate
+experiment lineage, authoritative real candidate validation, robustness
+ranking, and the human-only promotion gate without mutating strategy
+configuration or placing orders.
 
 ## Phase A Diagnostics
 

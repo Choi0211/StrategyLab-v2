@@ -26,6 +26,7 @@ def make_question(
     gap_type: KnowledgeGapType,
     *,
     question_id: str = "research-question:test",
+    topic_key: str = "trend.regime.robustness",
 ) -> ResearchQuestion:
     source_state = {
         KnowledgeGapType.CONTRADICTION:
@@ -38,7 +39,7 @@ def make_question(
 
     return ResearchQuestion(
         question_id=question_id,
-        topic_key="trend.regime.robustness",
+        topic_key=topic_key,
         gap_type=gap_type,
         question="Test research question",
         priority=(
@@ -188,6 +189,21 @@ class SourceDiscoveryTests(unittest.TestCase):
         )
 
         self.assertGreaterEqual(len(plan.queries), 1)
+
+    def test_hotfix1922_breakout_strategy_query_uses_financial_terms(self) -> None:
+        plan = SourceDiscoveryPlanner().build(
+            make_question(
+                KnowledgeGapType.INSUFFICIENT_INDEPENDENCE,
+                topic_key="strategy.breakout.robustness",
+            )
+        )
+
+        first_query = plan.queries[0].query
+
+        self.assertIn("financial markets", first_query)
+        self.assertIn("breakout", first_query)
+        self.assertIn("trend following", first_query)
+        self.assertIn("trading rules", first_query)
 
     def test_plan_never_validates_or_authorizes_execution(self) -> None:
         plan = SourceDiscoveryPlanner().build(

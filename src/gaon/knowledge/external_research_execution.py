@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import ipaddress
+import socket
 from typing import Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -45,6 +47,7 @@ class ExternalResearchTerminalState(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     PROVIDER_FAILURE = "provider_failure"
     CONTENT_UNAVAILABLE = "content_unavailable"
+    NO_RELEVANT_RESEARCH_PATH = "no_relevant_research_path"
     DATA_FAILURE = "data_failure"
 
 
@@ -70,6 +73,164 @@ class ExternalResearchExecutionPolicy:
 
 class ContentResolver(Protocol):
     def content_url_for(self, result_locator: str) -> str | None: ...
+
+
+class AcademicRelevanceStatus(str, Enum):
+    RELEVANT = "relevant"
+    INSUFFICIENT_RELEVANCE = "insufficient_relevance"
+    WRONG_DOMAIN = "wrong_domain"
+    INSUFFICIENT_METADATA = "insufficient_metadata"
+
+
+@dataclass(frozen=True)
+class AcademicRelevanceRecord:
+    discovery_result_id: str
+    provider: str
+    title: str
+    doi: str | None
+    relevance_status: AcademicRelevanceStatus
+    relevance_score: int
+    matched_research_terms: tuple[str, ...]
+    matched_domain_terms: tuple[str, ...]
+    matched_negative_terms: tuple[str, ...]
+    rejected_reason: str | None
+    selected_for_content_acquisition: bool
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": EXTERNAL_RESEARCH_EXECUTION_SCHEMA_VERSION,
+            "discovery_result_id": self.discovery_result_id,
+            "provider": self.provider,
+            "title": self.title,
+            "doi": self.doi,
+            "relevance_status": self.relevance_status.value,
+            "relevance_score": self.relevance_score,
+            "matched_research_terms": list(self.matched_research_terms),
+            "matched_domain_terms": list(self.matched_domain_terms),
+            "matched_negative_terms": list(self.matched_negative_terms),
+            "rejected_reason": self.rejected_reason,
+            "selected_for_content_acquisition": self.selected_for_content_acquisition,
+        }
+
+
+class AcademicRelevanceScreener:
+    """Deterministic financial/trading metadata relevance gate."""
+
+    DOMAIN_TERMS = (
+        "financial market",
+        "financial markets",
+        "asset price",
+        "asset prices",
+        "stock market",
+        "equity market",
+        "securities",
+        "investment",
+        "portfolio",
+        "trading",
+        "technical trading",
+        "market timing",
+        "returns",
+        "price momentum",
+    )
+    RESEARCH_TERMS = (
+        "breakout",
+        "trend following",
+        "time-series momentum",
+        "time series momentum",
+        "moving average",
+        "technical analysis",
+        "trading rule",
+        "trading rules",
+        "volume confirmation",
+        "stop-loss",
+        "stop loss",
+        "trailing exit",
+        "transaction cost",
+        "out-of-sample",
+        "out of sample",
+        "robustness",
+        "parameter sensitivity",
+        "false breakout",
+    )
+    NEGATIVE_TERMS = (
+        "tuple recovery",
+        "replication independent",
+        "distributed system",
+        "distributed systems",
+        "database recovery",
+        "software architecture",
+        "networking",
+        "protocol",
+        "data replication",
+    )
+
+    def screen(self, question: ResearchQuestion, result: object) -> AcademicRelevanceRecord:
+        provider = getattr(getattr(result, "provider", ""), "value", str(getattr(result, "provider", "")))
+        title = str(getattr(result, "title", "") or "")
+        metadata = " ".join(
+            item
+            for item in (
+                title,
+                str(getattr(result, "abstract", "") or ""),
+                " ".join(str(item) for item in getattr(result, "subjects", ()) or ()),
+                str(getattr(result, "publisher", "") or ""),
+                str(getattr(result, "container_title", "") or ""),
+            )
+            if item
+        ).lower()
+        title_text = title.lower().strip()
+        matched_domain = _matched_terms(metadata, self.DOMAIN_TERMS)
+        matched_research = _matched_terms(metadata, self.RESEARCH_TERMS)
+        matched_negative = _matched_terms(metadata, self.NEGATIVE_TERMS)
+
+        if not title_text:
+            return self._record(result, provider, title, AcademicRelevanceStatus.INSUFFICIENT_METADATA, 0, matched_research, matched_domain, matched_negative, "missing_title")
+
+        # Strong software/domain negatives are blocking unless the result also
+        # names a financial/trading domain explicitly.
+        if matched_negative and not matched_domain:
+            return self._record(result, provider, title, AcademicRelevanceStatus.WRONG_DOMAIN, -3, matched_research, matched_domain, matched_negative, "negative_non_financial_domain")
+
+        score = (2 * len(matched_domain)) + len(matched_research) - (3 * len(matched_negative))
+        selected = bool(matched_domain and matched_research and score >= 3)
+        if selected:
+            return self._record(result, provider, title, AcademicRelevanceStatus.RELEVANT, score, matched_research, matched_domain, matched_negative, None)
+        if not matched_domain:
+            status = AcademicRelevanceStatus.WRONG_DOMAIN if matched_negative else AcademicRelevanceStatus.INSUFFICIENT_RELEVANCE
+            reason = "no_financial_trading_domain"
+        elif not matched_research:
+            status = AcademicRelevanceStatus.INSUFFICIENT_RELEVANCE
+            reason = "no_strategy_mechanism_match"
+        else:
+            status = AcademicRelevanceStatus.INSUFFICIENT_RELEVANCE
+            reason = "score_below_threshold"
+        return self._record(result, provider, title, status, score, matched_research, matched_domain, matched_negative, reason)
+
+    def _record(
+        self,
+        result: object,
+        provider: object,
+        title: str,
+        status: AcademicRelevanceStatus,
+        score: int,
+        matched_research: tuple[str, ...],
+        matched_domain: tuple[str, ...],
+        matched_negative: tuple[str, ...],
+        reason: str | None,
+    ) -> AcademicRelevanceRecord:
+        return AcademicRelevanceRecord(
+            discovery_result_id=str(getattr(result, "result_id", "")),
+            provider=str(provider),
+            title=title,
+            doi=str(getattr(result, "doi", "") or "") or None,
+            relevance_status=status,
+            relevance_score=score,
+            matched_research_terms=matched_research,
+            matched_domain_terms=matched_domain,
+            matched_negative_terms=matched_negative,
+            rejected_reason=reason,
+            selected_for_content_acquisition=status is AcademicRelevanceStatus.RELEVANT,
+        )
 
 
 class LocatorContentResolver:
@@ -159,7 +320,7 @@ class _AcademicRedirectHandler(HTTPRedirectHandler):
         self.redirect_count += 1
         if self.redirect_count > self.max_redirects:
             raise HTTPError(req.full_url, 403, "redirect limit exceeded", headers, fp)
-        validate_content_url(newurl, policy=self.policy, resolve_dns=True)
+        _validate_doi_resolution_hop(newurl)
         self.redirect_chain.append(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -345,6 +506,48 @@ def _host(url: str | None) -> str | None:
     return urlparse(url).hostname.lower() if urlparse(url).hostname else None
 
 
+def _validate_doi_resolution_hop(url: str) -> None:
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise PermissionError("unsafe DOI redirect scheme is blocked")
+    if not parsed.hostname:
+        raise PermissionError("DOI redirect hostname is required")
+    if parsed.username or parsed.password:
+        raise PermissionError("URL userinfo is not allowed")
+    if parsed.port not in (None, 80, 443):
+        raise PermissionError("unsafe DOI redirect port is blocked")
+    host = parsed.hostname.lower()
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        _raise_if_non_public(literal)
+        return
+    for info in socket.getaddrinfo(host, None):
+        _raise_if_non_public(ipaddress.ip_address(info[4][0]))
+
+
+def _raise_if_non_public(address: ipaddress._BaseAddress) -> None:
+    if (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        raise PermissionError(f"non-public DOI redirect destination blocked: {address}")
+
+
+def _matched_terms(text: str, terms: tuple[str, ...]) -> tuple[str, ...]:
+    found = []
+    for term in terms:
+        if term.lower() in text:
+            found.append(term)
+    return tuple(found)
+
+
 def _doi_url(doi: str) -> str:
     value = doi.strip()
     if value.startswith("https://doi.org/"):
@@ -386,6 +589,7 @@ class AutonomousExternalResearchExecutionResult:
     state: ExternalResearchTerminalState
     question_id: str
     discovery_run: DiscoveryExecutionRun | None
+    relevance_records: tuple[AcademicRelevanceRecord, ...]
     resolution_records: tuple[ContentResolutionRecord, ...]
     acquisition_records: tuple[ContentAcquisitionRecord, ...]
     normalized_records: tuple[NormalizedContentRecord, ...]
@@ -408,6 +612,7 @@ class AutonomousExternalResearchExecutionResult:
             "state": self.state.value,
             "question_id": self.question_id,
             "discovery_run": self.discovery_run.to_json() if self.discovery_run else None,
+            "relevance_records": [item.to_json() for item in self.relevance_records],
             "resolution_records": [item.to_json() for item in self.resolution_records],
             "acquisition_records": [item.to_json() for item in self.acquisition_records],
             "normalized_records": [item.to_json() for item in self.normalized_records],
@@ -438,6 +643,7 @@ class AutonomousExternalResearchExecutor:
         claim_bridge: NormalizedContentClaimBridge | None = None,
         reevaluator: EvidenceConflictReevaluator | None = None,
         resolver: ContentResolver | None = None,
+        relevance_screener: AcademicRelevanceScreener | None = None,
         policy: ExternalResearchExecutionPolicy | None = None,
     ) -> None:
         self.policy = policy or ExternalResearchExecutionPolicy()
@@ -461,6 +667,7 @@ class AutonomousExternalResearchExecutor:
         self.claim_bridge = claim_bridge or NormalizedContentClaimBridge()
         self.reevaluator = reevaluator or EvidenceConflictReevaluator()
         self.resolver = resolver or LocatorContentResolver()
+        self.relevance_screener = relevance_screener or AcademicRelevanceScreener()
 
     def run(
         self,
@@ -472,6 +679,7 @@ class AutonomousExternalResearchExecutor:
         blockers: list[str] = []
         normalized: list[NormalizedContentRecord] = []
         acquisition_records: list[ContentAcquisitionRecord] = []
+        relevance_records: list[AcademicRelevanceRecord] = []
         resolution_records: list[ContentResolutionRecord] = []
         candidates: list[KnowledgeCandidate] = []
         downloaded_bytes = 0
@@ -496,10 +704,29 @@ class AutonomousExternalResearchExecutor:
             blockers.append(f"discovery_ingestion_blocked:{exc}")
 
         source_by_id: dict[str, SourceProvenance] = {}
-        for result in execution.results[: self.policy.max_sources]:
+        selected_results: list[object] = []
+        for result in execution.results:
             if result.result_id in seen_results:
                 continue
             seen_results.add(result.result_id)
+            relevance = self.relevance_screener.screen(question, result)
+            relevance_records.append(relevance)
+            if relevance.relevance_status is not AcademicRelevanceStatus.RELEVANT:
+                blockers.append(f"{relevance.relevance_status.value}:{result.result_id}")
+                continue
+            selected_results.append(result)
+
+        selected_results = sorted(
+            selected_results,
+            key=lambda item: next(
+                record.relevance_score
+                for record in relevance_records
+                if record.discovery_result_id == str(getattr(item, "result_id", ""))
+            ),
+            reverse=True,
+        )[: self.policy.max_sources]
+
+        for result in selected_results:
             if not self.policy.content_network_enabled:
                 blockers.append(f"content_unavailable:{result.result_id}")
                 continue
@@ -522,7 +749,7 @@ class AutonomousExternalResearchExecutor:
             downloaded_bytes += acquisition.byte_count
             if downloaded_bytes > self.policy.max_total_download_bytes:
                 blockers.append("budget_exhausted:download_bytes")
-                return self._result(ExternalResearchTerminalState.BUDGET_EXHAUSTED, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), None, blockers, acquired, downloaded_bytes, tuple(resolution_records))
+                return self._result(ExternalResearchTerminalState.BUDGET_EXHAUSTED, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), None, blockers, acquired, downloaded_bytes, tuple(resolution_records), tuple(relevance_records))
             acquired += 1
             source = SourceProvenance.create(
                 source_type=result.source_type,
@@ -543,9 +770,13 @@ class AutonomousExternalResearchExecutor:
             candidates.extend(bridge.candidates)
 
         if blockers and not candidates:
-            return self._result(ExternalResearchTerminalState.CONTENT_UNAVAILABLE, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes, tuple(resolution_records))
+            if relevance_records and not any(item.selected_for_content_acquisition for item in relevance_records):
+                state = ExternalResearchTerminalState.NO_RELEVANT_RESEARCH_PATH
+            else:
+                state = ExternalResearchTerminalState.CONTENT_UNAVAILABLE
+            return self._result(state, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes, tuple(resolution_records), tuple(relevance_records))
         if not candidates:
-            return self._result(ExternalResearchTerminalState.NO_NEW_RESEARCH_PATH, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes, tuple(resolution_records))
+            return self._result(ExternalResearchTerminalState.NO_NEW_RESEARCH_PATH, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes, tuple(resolution_records), tuple(relevance_records))
 
         combined_candidates = tuple(existing_candidates) + tuple(candidates)
         reevaluation = self.reevaluator.reevaluate(
@@ -559,7 +790,7 @@ class AutonomousExternalResearchExecutor:
             state = ExternalResearchTerminalState.EVIDENCE_SUFFICIENT
         else:
             state = ExternalResearchTerminalState.UNRESOLVED_CONFLICT
-        return self._result(state, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), reevaluation, blockers, acquired, downloaded_bytes, tuple(resolution_records))
+        return self._result(state, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), reevaluation, blockers, acquired, downloaded_bytes, tuple(resolution_records), tuple(relevance_records))
 
     def _resolve_content(self, result: object) -> ContentResolutionRecord:
         resolve = getattr(self.resolver, "resolve", None)
@@ -617,11 +848,13 @@ class AutonomousExternalResearchExecutor:
         acquired: int,
         downloaded_bytes: int,
         resolution_records: tuple[ContentResolutionRecord, ...] = (),
+        relevance_records: tuple[AcademicRelevanceRecord, ...] = (),
     ) -> AutonomousExternalResearchExecutionResult:
         return AutonomousExternalResearchExecutionResult(
             state=state,
             question_id=question.question_id,
             discovery_run=execution,
+            relevance_records=relevance_records,
             resolution_records=resolution_records,
             acquisition_records=acquisition_records,
             normalized_records=normalized,
@@ -654,10 +887,14 @@ def autonomous_external_research_execution_release_check() -> Mapping[str, objec
                 result_id="discovery-result:fixture",
                 query_id=plan.queries[0].query_id,
                 provider=DiscoveryProvider.ACADEMIC_SEARCH,
-                title="Fixture research",
+                title="Financial market breakout trading rule fixture research",
                 locator="https://example.org/research.html",
                 source_type=SourceType.RESEARCH_REPORT,
                 status=DiscoveryStatus.DISCOVERED,
+                abstract=(
+                    "Fixture evidence about equity market trend following, "
+                    "breakout rules, and out-of-sample robustness."
+                ),
             )
             return DiscoveryExecutionRun(
                 run_id="source-discovery-run:fixture",

@@ -2039,3 +2039,39 @@ The new release check verifies DOI/academic metadata resolution into
 allowlisted content acquisition, grounded evidence generation, production
 fixture-promotion blocking, fingerprint-mismatch blocking, and no strategy or
 order mutation. Schema remains v36; no migration was added.
+
+# Hotfix 192.2
+
+Final local verification:
+
+- full unit tests: PASS, 818 tests
+- full integration tests: PASS, 196 tests
+- targeted autonomous learning/source discovery tests: PASS, 57 tests
+- `scripts/verify_release.py`: PASS
+- `deployment-import-path-check --expected-source .\src\gaon`: PASS
+- `gaon-production-relevant-academic-discovery-release-check`: PASS
+- `gaon-production-safe-doi-redirect-release-check`: PASS
+- `gaon-production-relevant-academic-content-loop-release-check`: PASS
+- `gaon-production-real-academic-content-resolution-release-check`: PASS
+- `gaon-production-safe-content-acquisition-release-check`: PASS
+- `gaon-production-grounded-evidence-release-check`: PASS
+- `gaon-production-evidence-backed-hypothesis-release-check`: PASS
+- `gaon-production-strategy-experiment-release-check`: PASS
+- `gaon-production-authoritative-candidate-validation-release-check`: PASS
+- `gaon-production-robustness-ranking-release-check`: PASS
+- `gaon-production-human-promotion-gate-release-check`: PASS
+- `gaon-production-autonomous-learning-loop-release-check`: PASS
+- `gaon-production-external-research-network-release-check`: PASS
+- `gaon-production-autonomous-learning-execution-release-check`: PASS
+- `gaon-autonomous-learning-e2e-release-check`: PASS
+- `gaon-telegram-autonomous-learning-routing-release-check`: PASS
+- `gaon-telegram-autonomous-learning-priority-release-check`: PASS
+- `gaon-promotion-candidate-presentation-release-check`: PASS
+- `research-context-isolation-release-check`: PASS
+
+The new release checks prove strategy-specific academic query construction,
+financial/trading relevance screening, rejection of the production
+`Tuple Recovery Strategy` incident before fetch, controlled DOI redirect
+resolution through an HTTP intermediate to an approved HTTPS final URL,
+content acquisition, normalization, grounded evidence, hypothesis generation,
+and candidate experiment creation. Schema remains v36; no migration was added.

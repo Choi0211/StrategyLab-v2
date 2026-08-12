@@ -1611,6 +1611,9 @@ class TelegramConversationAgentTests(unittest.TestCase):
     def test_sprint187_192_production_autonomous_learning_loop_release_checks_pass(self) -> None:
         commands = (
             "gaon-production-real-academic-content-resolution-release-check",
+            "gaon-production-relevant-academic-discovery-release-check",
+            "gaon-production-safe-doi-redirect-release-check",
+            "gaon-production-relevant-academic-content-loop-release-check",
             "gaon-production-grounded-evidence-release-check",
             "gaon-production-evidence-backed-hypothesis-release-check",
             "gaon-production-strategy-experiment-release-check",

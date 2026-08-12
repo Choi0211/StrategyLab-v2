@@ -3,6 +3,31 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 192.2 Relevant Academic Discovery and Safe DOI Redirect Resolution
+
+Production Telegram Autonomous Learning V2 now filters academic discovery
+results for financial-market/trading relevance before content acquisition. This
+prevents unrelated papers such as tuple recovery or distributed-systems
+`strategy` results from becoming evidence.
+
+DOI resolution now has a dedicated redirect policy: a temporary HTTP
+intermediate hop may be observed only inside DOI resolution, while the final
+content URL must still be HTTPS, allowlisted, public, credential-free, and
+bounded by the normal content acquisition policy.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-production-relevant-academic-discovery-release-check
+python -m gaon.runtime.cli gaon-production-safe-doi-redirect-release-check
+python -m gaon.runtime.cli gaon-production-relevant-academic-content-loop-release-check
+```
+
+The integrated check proves strategy-specific query generation, relevant
+academic selection, irrelevant-source rejection, safe DOI resolution, content
+acquisition, normalization, grounded evidence, hypothesis generation, and
+candidate experiment creation without strategy mutation or orders.
+
 ## Hotfix 192.1 Real Academic Content Resolution
 
 Production Autonomous Learning V2 can now bridge Crossref/DataCite academic
