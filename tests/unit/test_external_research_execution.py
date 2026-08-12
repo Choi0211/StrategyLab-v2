@@ -59,10 +59,14 @@ class FixtureDiscoveryExecutor:
             result_id="discovery-result:test",
             query_id=plan.queries[0].query_id,
             provider=DiscoveryProvider.ACADEMIC_SEARCH,
-            title="Fixture research",
+            title="Financial market breakout trading rule fixture research",
             locator=self.locator,
             source_type=SourceType.RESEARCH_REPORT,
             status=DiscoveryStatus.DISCOVERED,
+            abstract=(
+                "Fixture evidence about equity market trend following, "
+                "breakout rules, and out-of-sample robustness."
+            ),
         )
         return DiscoveryExecutionRun(
             run_id="source-discovery-run:test",

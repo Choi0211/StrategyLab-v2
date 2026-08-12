@@ -7,9 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gaon.knowledge.autonomous_learning_e2e import autonomous_learning_e2e_release_check
+from gaon.knowledge.conflicts import ConflictStatus
 from gaon.knowledge.content_acquisition import ContentAcquisitionPolicy
 from gaon.knowledge.discovery import DiscoveryProvider, DiscoveryResult, DiscoveryStatus
-from gaon.knowledge.external_research_execution import AcademicContentResolver, ContentResolutionStatus
+from gaon.knowledge.external_research_execution import AcademicContentResolver, AcademicRelevanceScreener, ContentResolutionStatus, _validate_doi_resolution_hop
 from gaon.knowledge.execution import DEFAULT_ALLOWED_API_HOSTS, NetworkExecutionPolicy
 from gaon.knowledge.telegram_autonomous_learning import (
     _ReleaseDoiResolutionTransport,
@@ -24,13 +25,17 @@ from gaon.knowledge.telegram_autonomous_learning import (
     production_external_research_network_release_check,
     production_grounded_evidence_release_check,
     production_human_promotion_gate_release_check,
+    production_relevant_academic_content_loop_release_check,
+    production_relevant_academic_discovery_release_check,
     production_real_academic_content_resolution_release_check,
     production_robustness_ranking_release_check,
+    production_safe_doi_redirect_release_check,
     production_safe_content_acquisition_release_check,
     production_strategy_experiment_release_check,
     production_autonomous_learning_payload_from_baseline,
     telegram_autonomous_learning_payload,
 )
+from gaon.knowledge.gaps import KnowledgeGapType, RequiredEvidence, RequiredEvidenceType, ResearchPriority, ResearchQuestion, ResearchStopCondition
 from gaon.knowledge.provenance import SourceType
 from gaon.research.krx_real_pipeline import MarketDataAvailability
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRequest, ToolRiskLevel
@@ -595,6 +600,98 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
         self.assertGreaterEqual(payload["grounded_evidence_count"], 1)
         self.assertEqual("pass", payload["safety"])
 
+    def test_hotfix1922_academic_relevance_accepts_trading_metadata(self) -> None:
+        screener = AcademicRelevanceScreener()
+        result = _discovery_result(
+            "https://doi.org/10.1234/trading",
+            doi="10.1234/trading",
+            title="Financial market trend following and breakout trading rules",
+            abstract="Out-of-sample robustness of moving average filters in equity trading.",
+        )
+
+        relevance = screener.screen(_academic_question(), result)
+
+        self.assertEqual("relevant", relevance.relevance_status.value)
+        self.assertTrue(relevance.selected_for_content_acquisition)
+        self.assertIn("financial market", relevance.matched_domain_terms)
+        self.assertIn("breakout", relevance.matched_research_terms)
+
+    def test_hotfix1922_academic_relevance_rejects_tuple_recovery_strategy(self) -> None:
+        screener = AcademicRelevanceScreener()
+        result = _discovery_result(
+            "https://doi.org/10.1007/978-3-322-93860-2_11",
+            doi="10.1007/978-3-322-93860-2_11",
+            title="The Location and Replication Independent Tuple Recovery Strategy",
+            abstract="Distributed systems tuple recovery and data replication strategy.",
+        )
+
+        relevance = screener.screen(_academic_question(), result)
+
+        self.assertEqual("wrong_domain", relevance.relevance_status.value)
+        self.assertFalse(relevance.selected_for_content_acquisition)
+        self.assertIn("tuple recovery", relevance.matched_negative_terms)
+
+    def test_hotfix1922_irrelevant_academic_source_is_not_fetched(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="gaon-hotfix1922-irrelevant-") as tmp:
+            content_transport = _ReleaseContentTransport()
+            external = _run_production_external_research(
+                "Samsung breakout strategy irrelevant academic source",
+                symbol="005930",
+                transport=_ReleaseMetadataTransport(mode="irrelevant_tuple"),
+                content_transport=content_transport,
+                doi_resolution_transport=_ReleaseDoiResolutionTransport(),
+                allowed_content_hosts=("content.example.org", "doi.org"),
+                storage_root=tmp,
+            )
+
+        observability = external["observability"]
+        relevance = observability["academic_relevance"]
+
+        self.assertEqual("no_relevant_research_path", external["state"])
+        self.assertEqual(0, content_transport.calls)
+        self.assertEqual("wrong_domain", relevance[0]["relevance_status"])
+        self.assertEqual([], external["candidates"])
+
+    def test_hotfix1922_release_checks_pass(self) -> None:
+        self.assertEqual("pass", production_relevant_academic_discovery_release_check()["safety"])
+        self.assertEqual("pass", production_safe_doi_redirect_release_check()["safety"])
+        self.assertEqual("pass", production_relevant_academic_content_loop_release_check()["safety"])
+
+    def test_hotfix1922_safe_doi_redirect_blocks_unsafe_final_targets(self) -> None:
+        resolver = AcademicContentResolver(
+            policy=ContentAcquisitionPolicy(
+                network_enabled=True,
+                allowed_hosts=("doi.org", "content.example.org"),
+            ),
+            doi_transport=_ReleaseDoiResolutionTransport(
+                final_url="http://content.example.org/research.html",
+                redirect_chain=(
+                    "https://doi.org/10.1234/http-final",
+                    "http://content.example.org/research.html",
+                ),
+            ),
+        )
+
+        resolution = resolver.resolve(
+            _discovery_result("https://doi.org/10.1234/http-final", doi="10.1234/http-final")
+        )
+
+        self.assertEqual(ContentResolutionStatus.CONTENT_BLOCKED, resolution.status)
+        self.assertEqual("content_blocked", resolution.failure_kind)
+
+    def test_hotfix1922_doi_resolution_hop_policy_allows_public_http_intermediate_only(self) -> None:
+        with patch(
+            "gaon.knowledge.external_research_execution.socket.getaddrinfo",
+            return_value=[(None, None, None, None, ("93.184.216.34", 80))],
+        ):
+            _validate_doi_resolution_hop("http://doi-proxy.example.org/temporary")
+
+        with self.assertRaises(PermissionError):
+            _validate_doi_resolution_hop("http://127.0.0.1/temporary")
+
+        with self.assertRaises(PermissionError):
+            _validate_doi_resolution_hop("ftp://doi-proxy.example.org/temporary")
+
 
 def _baseline_payload(experiment, candidate_backtest, *, baseline_fixture: bool, changed_fields=("entry.breakout_lookback",)) -> dict[str, object]:
     strategy = candidate_backtest.strategy.to_json()
@@ -674,17 +771,44 @@ def _discovery_result(
     *,
     doi: str | None = None,
     metadata_resource_url: str | None = None,
+    title: str = "Academic resolver test",
+    abstract: str | None = None,
 ) -> DiscoveryResult:
     return DiscoveryResult(
         result_id=f"discovery-result:test:{abs(hash(locator))}",
         query_id="query:test",
         provider=DiscoveryProvider.ACADEMIC_SEARCH,
-        title="Academic resolver test",
+        title=title,
         locator=locator,
         source_type=SourceType.ACADEMIC_PAPER,
         status=DiscoveryStatus.DISCOVERED,
         doi=doi,
         metadata_resource_url=metadata_resource_url,
+        abstract=abstract,
+    )
+
+
+def _academic_question() -> ResearchQuestion:
+    return ResearchQuestion(
+        question_id="research-question:hotfix1922",
+        topic_key="strategy.breakout.robustness",
+        gap_type=KnowledgeGapType.INSUFFICIENT_INDEPENDENCE,
+        question=(
+            "financial markets breakout trend following trading rules "
+            "moving average volume confirmation stop-loss trailing exit "
+            "out-of-sample robustness evidence"
+        ),
+        priority=ResearchPriority.MEDIUM,
+        required_evidence=(
+            RequiredEvidence(
+                evidence_type=RequiredEvidenceType.INDEPENDENT_SUPPORTING_SOURCE,
+                minimum_independent_sources=1,
+                rationale="test",
+            ),
+        ),
+        stop_conditions=(ResearchStopCondition.EVIDENCE_BUDGET_EXHAUSTED,),
+        parent_conflict_id="knowledge-conflict:hotfix1922",
+        source_state=ConflictStatus.UNRESOLVED_CONFLICT,
     )
 
 

@@ -282,6 +282,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-autonomous-learning-execution-release-check")
     sub.add_parser("gaon-production-external-research-network-release-check")
     sub.add_parser("gaon-production-safe-content-acquisition-release-check")
+    sub.add_parser("gaon-production-relevant-academic-discovery-release-check")
+    sub.add_parser("gaon-production-safe-doi-redirect-release-check")
+    sub.add_parser("gaon-production-relevant-academic-content-loop-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2242,6 +2245,58 @@ def _run(args: argparse.Namespace) -> int:
             f"evidence_candidates={payload['evidence_candidates']} "
             f"metadata_only_evidence_blocked={str(payload['metadata_only_evidence_blocked']).lower()} "
             f"fixture_promotion_blocked={str(payload['fixture_promotion_blocked']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-relevant-academic-discovery-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_relevant_academic_discovery_release_check
+
+        payload = production_relevant_academic_discovery_release_check()
+        print(
+            "gaon-production-relevant-academic-discovery-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"returned_results={payload['returned_results']} "
+            f"selected_relevant={payload['selected_relevant']} "
+            f"rejected_irrelevant={payload['rejected_irrelevant']} "
+            f"tuple_recovery_status={payload['tuple_recovery_status']} "
+            f"content_acquisition_state={payload['content_acquisition_state']} "
+            f"grounded_evidence={payload['grounded_evidence_count']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-safe-doi-redirect-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_safe_doi_redirect_release_check
+
+        payload = production_safe_doi_redirect_release_check()
+        print(
+            "gaon-production-safe-doi-redirect-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"positive_resolution_status={payload['positive_resolution_status']} "
+            "http_intermediate_allowed=true "
+            "http_final_blocked=true private_host_blocked=true "
+            "redirect_limit_blocked=true unsafe_scheme_blocked=true "
+            "unauthorized_host_blocked=true credentials_blocked=true "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-relevant-academic-content-loop-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_relevant_academic_content_loop_release_check
+
+        payload = production_relevant_academic_content_loop_release_check()
+        print(
+            "gaon-production-relevant-academic-content-loop-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"content_acquisition_state={payload['content_acquisition_state']} "
+            f"relevance_records={payload['relevance_records']} "
+            f"selected_relevant={payload['selected_relevant']} "
+            f"grounded_evidence={payload['grounded_evidence_count']} "
+            f"hypotheses={payload['hypothesis_count']} "
+            f"candidate_experiments={payload['candidate_experiment_count']} "
+            f"promotion_status={payload['promotion_status']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"

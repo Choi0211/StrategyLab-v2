@@ -504,6 +504,7 @@ Default execution mode is `DISABLED`. PAPER execution reuses the existing paper 
 - `gaon.learning.retrieval`: deterministic related-memory ranking with score breakdown
 - `gaon.learning.integration`: Research Brain to Learning Memory candidate preparation without automatic save
 - `gaon.runtime`: configuration, event bus, deterministic Korean conversation runtime, assistant provider boundary, notifications, reports, scheduler, safe CLI
+- `gaon.knowledge.external_research_execution`: bounded academic discovery, relevance screening, safe DOI/resource resolution, content acquisition, normalization, and grounded evidence execution
 - `gaon.runtime.memory_context`: read-only Learning Memory context builder for conversation
 - `gaon.runtime.providers`: deterministic and OpenAI-compatible guarded assistant providers
 - `gaon.research.orchestrator`: guarded research proposal, approval, run, and queue contracts

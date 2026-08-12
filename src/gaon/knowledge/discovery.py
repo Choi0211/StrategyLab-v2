@@ -372,6 +372,46 @@ class SourceDiscoveryPlanner:
     ]:
         topic = question.topic_key.replace(".", " ").replace(":", " ")
 
+        if "strategy" in question.topic_key and (
+            "breakout" in question.topic_key
+            or "trend" in question.topic_key
+            or "robustness" in question.topic_key
+        ):
+            return (
+                (
+                    DiscoveryProvider.ACADEMIC_SEARCH,
+                    (
+                        "financial markets breakout trend following "
+                        "moving average volume trading rules robustness"
+                    ),
+                    (
+                        SourceType.ACADEMIC_PAPER,
+                        SourceType.RESEARCH_REPORT,
+                    ),
+                ),
+                (
+                    DiscoveryProvider.ACADEMIC_SEARCH,
+                    (
+                        "technical trading rules momentum stop-loss "
+                        "out-of-sample validation transaction costs"
+                    ),
+                    (
+                        SourceType.ACADEMIC_PAPER,
+                        SourceType.RESEARCH_REPORT,
+                    ),
+                ),
+                (
+                    DiscoveryProvider.DATASET_CATALOG,
+                    (
+                        "equity market price momentum trading strategy "
+                        "dataset"
+                    ),
+                    (
+                        SourceType.DATASET,
+                    ),
+                ),
+            )
+
         if question.gap_type is KnowledgeGapType.CONTRADICTION:
             return (
                 (
@@ -463,6 +503,10 @@ class DiscoveryResult:
     production_approved: bool = False
     doi: str | None = None
     metadata_resource_url: str | None = None
+    abstract: str | None = None
+    subjects: tuple[str, ...] = ()
+    publisher: str | None = None
+    container_title: str | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -481,6 +525,10 @@ class DiscoveryResult:
             "production_approved": self.production_approved,
             "doi": self.doi,
             "metadata_resource_url": self.metadata_resource_url,
+            "abstract": self.abstract,
+            "subjects": list(self.subjects),
+            "publisher": self.publisher,
+            "container_title": self.container_title,
         }
 
 

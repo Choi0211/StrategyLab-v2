@@ -116,11 +116,13 @@ class QueryExecutionRecord:
     accepted_results: int
     failure_kind: ExecutionFailureKind | None = None
     error_message: str | None = None
+    query: str | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
             "query_id": self.query_id,
             "provider": self.provider.value,
+            "query": self.query,
             "status": self.status.value,
             "provider_calls": self.provider_calls,
             "returned_results": self.returned_results,
@@ -411,6 +413,32 @@ def _first_text(value: object) -> str | None:
     return None
 
 
+def _text_tuple(value: object) -> tuple[str, ...]:
+    if isinstance(value, list):
+        items = []
+        for item in value:
+            text = _first_text(item)
+            if text:
+                items.append(text)
+        return tuple(items)
+    text = _first_text(value)
+    return (text,) if text else ()
+
+
+def _datacite_subjects(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    subjects = []
+    for item in value:
+        if isinstance(item, dict):
+            text = _first_text(item.get("subject"))
+        else:
+            text = _first_text(item)
+        if text:
+            subjects.append(text)
+    return tuple(subjects)
+
+
 class CrossrefDiscoveryProvider:
     BASE_URL = "https://api.crossref.org/works"
 
@@ -442,7 +470,8 @@ class CrossrefDiscoveryProvider:
             "rows": str(limit),
             "select": (
                 "DOI,title,type,publisher,"
-                "published,URL,author,license"
+                "published,URL,author,license,"
+                "abstract,subject,container-title,link"
             ),
         }
 
@@ -541,6 +570,10 @@ class CrossrefDiscoveryProvider:
                     production_approved=False,
                     doi=doi or None,
                     metadata_resource_url=resource_url,
+                    abstract=_first_text(item.get("abstract")),
+                    subjects=_text_tuple(item.get("subject")),
+                    publisher=_first_text(item.get("publisher")),
+                    container_title=_first_text(item.get("container-title")),
                 )
             )
 
@@ -642,6 +675,8 @@ class DataCiteDiscoveryProvider:
                     or ""
                 )
             )
+            if resource_url and (urlparse(resource_url).hostname or "").lower() == "doi.org":
+                resource_url = None
 
             locator = (
                 _doi_locator(doi)
@@ -672,6 +707,10 @@ class DataCiteDiscoveryProvider:
                     production_approved=False,
                     doi=doi or None,
                     metadata_resource_url=resource_url,
+                    abstract=_first_text(attributes.get("descriptions")),
+                    subjects=_datacite_subjects(attributes.get("subjects")),
+                    publisher=_first_text(attributes.get("publisher")),
+                    container_title=_first_text(attributes.get("container-title")),
                 )
             )
 
@@ -726,6 +765,7 @@ class BoundedSourceDiscoveryExecutor:
                     error_message=(
                         "network execution is disabled"
                     ),
+                    query=query.query,
                 )
                 for query in plan.queries
             )
@@ -777,6 +817,7 @@ class BoundedSourceDiscoveryExecutor:
                         failure_kind=(
                             ExecutionFailureKind.BUDGET_EXHAUSTED
                         ),
+                        query=query.query,
                     )
                 )
                 continue
@@ -799,6 +840,7 @@ class BoundedSourceDiscoveryExecutor:
                         error_message=(
                             "provider not permitted by plan"
                         ),
+                        query=query.query,
                     )
                 )
                 continue
@@ -822,6 +864,7 @@ class BoundedSourceDiscoveryExecutor:
                         error_message=(
                             "provider execution not implemented"
                         ),
+                        query=query.query,
                     )
                 )
                 continue
@@ -858,6 +901,7 @@ class BoundedSourceDiscoveryExecutor:
                             ExecutionFailureKind.HOST_BLOCKED
                         ),
                         error_message=str(exc),
+                        query=query.query,
                     )
                 )
                 continue
@@ -878,6 +922,7 @@ class BoundedSourceDiscoveryExecutor:
                             ExecutionFailureKind.TIMEOUT
                         ),
                         error_message=str(exc),
+                        query=query.query,
                     )
                 )
                 continue
@@ -897,6 +942,7 @@ class BoundedSourceDiscoveryExecutor:
                         error_message=(
                             f"HTTP {exc.code}"
                         ),
+                        query=query.query,
                     )
                 )
                 continue
@@ -916,6 +962,7 @@ class BoundedSourceDiscoveryExecutor:
                         error_message=str(
                             exc.reason
                         ),
+                        query=query.query,
                     )
                 )
                 continue
@@ -938,6 +985,7 @@ class BoundedSourceDiscoveryExecutor:
                             ExecutionFailureKind.INVALID_RESPONSE
                         ),
                         error_message=str(exc),
+                        query=query.query,
                     )
                 )
                 continue
@@ -991,6 +1039,7 @@ class BoundedSourceDiscoveryExecutor:
                         raw_results
                     ),
                     accepted_results=accepted_now,
+                    query=query.query,
                 )
             )
 
