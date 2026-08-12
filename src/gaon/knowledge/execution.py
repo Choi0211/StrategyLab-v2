@@ -380,6 +380,21 @@ def _doi_locator(doi: str) -> str | None:
     return f"https://doi.org/{value}"
 
 
+def _metadata_resource_url(item: Mapping[str, object]) -> str | None:
+    links = item.get("link")
+    if isinstance(links, list):
+        for link in links:
+            if not isinstance(link, dict):
+                continue
+            locator = _https_locator(str(link.get("URL") or link.get("url") or ""))
+            if locator and (urlparse(locator).hostname or "").lower() != "doi.org":
+                return locator
+    locator = _https_locator(str(item.get("URL") or item.get("url") or ""))
+    if locator and (urlparse(locator).hostname or "").lower() != "doi.org":
+        return locator
+    return None
+
+
 def _first_text(value: object) -> str | None:
     if isinstance(value, str):
         normalized = " ".join(
@@ -495,12 +510,11 @@ class CrossrefDiscoveryProvider:
             doi = str(
                 item.get("DOI") or ""
             ).strip()
+            resource_url = _metadata_resource_url(item)
 
             locator = (
                 _doi_locator(doi)
-                or _https_locator(
-                    str(item.get("URL") or "")
-                )
+                or resource_url
             )
 
             if not locator:
@@ -525,6 +539,8 @@ class CrossrefDiscoveryProvider:
                     quality_evaluated=False,
                     knowledge_validated=False,
                     production_approved=False,
+                    doi=doi or None,
+                    metadata_resource_url=resource_url,
                 )
             )
 
@@ -620,15 +636,16 @@ class DataCiteDiscoveryProvider:
                 or item.get("id")
                 or ""
             ).strip()
+            resource_url = _https_locator(
+                str(
+                    attributes.get("url")
+                    or ""
+                )
+            )
 
             locator = (
                 _doi_locator(doi)
-                or _https_locator(
-                    str(
-                        attributes.get("url")
-                        or ""
-                    )
-                )
+                or resource_url
             )
 
             if not locator:
@@ -653,6 +670,8 @@ class DataCiteDiscoveryProvider:
                     quality_evaluated=False,
                     knowledge_validated=False,
                     production_approved=False,
+                    doi=doi or None,
+                    metadata_resource_url=resource_url,
                 )
             )
 

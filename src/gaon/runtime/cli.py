@@ -289,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-robustness-ranking-release-check")
     sub.add_parser("gaon-production-human-promotion-gate-release-check")
     sub.add_parser("gaon-production-autonomous-learning-loop-release-check")
+    sub.add_parser("gaon-production-real-academic-content-resolution-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2284,6 +2285,27 @@ def _run(args: argparse.Namespace) -> int:
             f"grounded_evidence={payload['grounded_evidence_count']} "
             f"hypotheses={payload['hypothesis_count']} "
             f"candidate_experiments={payload['candidate_experiment_count']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-real-academic-content-resolution-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_real_academic_content_resolution_release_check
+
+        payload = production_real_academic_content_resolution_release_check()
+        print(
+            "gaon-production-real-academic-content-resolution-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"locator_kind={payload['locator_kind']} "
+            f"resolution_status={payload['resolution_status']} "
+            f"resolved_host={payload['resolved_host']} "
+            f"content_acquisition_state={payload['content_acquisition_state']} "
+            f"acquired_sources={payload['acquired_sources']} "
+            f"grounded_evidence={payload['grounded_evidence_count']} "
+            f"hypotheses={payload['hypothesis_count']} "
+            f"candidate_experiments={payload['candidate_experiment_count']} "
+            f"promotion_status={payload['promotion_status']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"

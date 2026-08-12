@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .content_acquisition import (
     BoundedSourceContentAcquirer,
@@ -18,6 +21,7 @@ from .content_acquisition import (
     ContentAcquisitionStatus,
     ContentAcquisitionTarget,
     ContentFailureKind,
+    validate_content_url,
 )
 from .content_claim_bridge import ContentClaimBridgeStatus, NormalizedContentClaimBridge
 from .content_normalization import NormalizedContentRecord, SafeContentNormalizer
@@ -82,11 +86,307 @@ class LocatorContentResolver:
         return None
 
 
+class ContentResolutionStatus(str, Enum):
+    DIRECT_CONTENT_URL = "direct_content_url"
+    DOI_RESOLVED = "doi_resolved"
+    METADATA_RESOURCE_URL = "metadata_resource_url"
+    CONTENT_UNAVAILABLE = "content_unavailable"
+    CONTENT_BLOCKED = "content_blocked"
+    RESOLUTION_FAILURE = "resolution_failure"
+
+
+@dataclass(frozen=True)
+class ContentResolutionRecord:
+    discovery_result_id: str
+    provider: str
+    title: str
+    original_locator: str
+    locator_kind: str
+    doi: str | None
+    resolution_attempted: bool
+    status: ContentResolutionStatus
+    resolved_content_url: str | None = None
+    final_url: str | None = None
+    final_host: str | None = None
+    redirect_chain: tuple[str, ...] = ()
+    failure_kind: str | None = None
+    error_message: str | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": EXTERNAL_RESEARCH_EXECUTION_SCHEMA_VERSION,
+            "discovery_result_id": self.discovery_result_id,
+            "provider": self.provider,
+            "title": self.title,
+            "original_locator": self.original_locator,
+            "locator_kind": self.locator_kind,
+            "doi": self.doi,
+            "resolution_attempted": self.resolution_attempted,
+            "resolution_status": self.status.value,
+            "resolved_content_url": self.resolved_content_url,
+            "final_url": self.final_url,
+            "final_host": self.final_host,
+            "redirect_chain": list(self.redirect_chain),
+            "failure_kind": self.failure_kind,
+            "error_message": self.error_message,
+        }
+
+
+@dataclass(frozen=True)
+class ContentResolutionPayload:
+    final_url: str
+    redirect_chain: tuple[str, ...] = ()
+
+
+class DoiResolutionTransport(Protocol):
+    def resolve(
+        self,
+        url: str,
+        *,
+        policy: ContentAcquisitionPolicy,
+    ) -> ContentResolutionPayload: ...
+
+
+class _AcademicRedirectHandler(HTTPRedirectHandler):
+    def __init__(self, *, policy: ContentAcquisitionPolicy, max_redirects: int) -> None:
+        super().__init__()
+        self.policy = policy
+        self.max_redirects = max_redirects
+        self.redirect_count = 0
+        self.redirect_chain: list[str] = []
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        self.redirect_count += 1
+        if self.redirect_count > self.max_redirects:
+            raise HTTPError(req.full_url, 403, "redirect limit exceeded", headers, fp)
+        validate_content_url(newurl, policy=self.policy, resolve_dns=True)
+        self.redirect_chain.append(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class HttpsDoiResolutionTransport:
+    def resolve(
+        self,
+        url: str,
+        *,
+        policy: ContentAcquisitionPolicy,
+    ) -> ContentResolutionPayload:
+        validate_content_url(url, policy=policy, resolve_dns=True)
+        handler = _AcademicRedirectHandler(policy=policy, max_redirects=policy.max_redirects)
+        opener = build_opener(handler)
+        request = Request(
+            url,
+            headers={"User-Agent": policy.user_agent, "Accept": ", ".join(policy.allowed_content_types)},
+            method="GET",
+        )
+        with opener.open(request, timeout=policy.timeout_seconds) as response:
+            final_url = response.geturl()
+        validate_content_url(final_url, policy=policy, resolve_dns=True)
+        return ContentResolutionPayload(final_url=final_url, redirect_chain=tuple(handler.redirect_chain))
+
+
+class AcademicContentResolver:
+    """Resolves academic locators without weakening generic content fetching."""
+
+    def __init__(
+        self,
+        *,
+        policy: ContentAcquisitionPolicy,
+        doi_transport: DoiResolutionTransport | None = None,
+    ) -> None:
+        self.policy = policy
+        self.doi_transport = doi_transport or HttpsDoiResolutionTransport()
+
+    def content_url_for(self, result_locator: str) -> str | None:
+        value = result_locator.strip()
+        if not value:
+            return None
+        parsed = urlparse(value)
+        if parsed.scheme == "https" and parsed.hostname and parsed.hostname.lower() != "doi.org":
+            return value
+        return None
+
+    def resolve(self, result: object) -> ContentResolutionRecord:
+        locator = str(getattr(result, "locator", "") or "").strip()
+        doi = str(getattr(result, "doi", "") or "").strip() or _doi_from_locator(locator)
+        metadata_resource_url = str(getattr(result, "metadata_resource_url", "") or "").strip()
+        provider = getattr(getattr(result, "provider", ""), "value", str(getattr(result, "provider", "")))
+        locator_kind = _locator_kind(locator, doi=doi)
+        base = {
+            "discovery_result_id": str(getattr(result, "result_id", "")),
+            "provider": str(provider),
+            "title": str(getattr(result, "title", "")),
+            "original_locator": locator,
+            "locator_kind": locator_kind,
+            "doi": doi or None,
+        }
+
+        if metadata_resource_url:
+            return self._record_from_url(
+                metadata_resource_url,
+                status=ContentResolutionStatus.METADATA_RESOURCE_URL,
+                resolution_attempted=True,
+                **base,
+            )
+
+        if doi:
+            doi_url = _doi_url(doi)
+            try:
+                payload = self.doi_transport.resolve(doi_url, policy=self.policy)
+            except PermissionError as exc:
+                return ContentResolutionRecord(
+                    **base,
+                    resolution_attempted=True,
+                    status=ContentResolutionStatus.CONTENT_BLOCKED,
+                    failure_kind="content_blocked",
+                    error_message=str(exc),
+                )
+            except (HTTPError, TimeoutError, URLError, OSError, ValueError) as exc:
+                return ContentResolutionRecord(
+                    **base,
+                    resolution_attempted=True,
+                    status=ContentResolutionStatus.RESOLUTION_FAILURE,
+                    failure_kind="resolution_failure",
+                    error_message=str(exc),
+                )
+            return self._record_from_url(
+                payload.final_url,
+                status=ContentResolutionStatus.DOI_RESOLVED,
+                resolution_attempted=True,
+                redirect_chain=payload.redirect_chain,
+                **base,
+            )
+
+        if locator.startswith("https://"):
+            return self._record_from_url(
+                locator,
+                status=ContentResolutionStatus.DIRECT_CONTENT_URL,
+                resolution_attempted=False,
+                **base,
+            )
+
+        return ContentResolutionRecord(
+            **base,
+            resolution_attempted=False,
+            status=ContentResolutionStatus.CONTENT_UNAVAILABLE,
+            failure_kind="content_unavailable",
+            error_message="no resolvable academic content locator",
+        )
+
+    def _record_from_url(
+        self,
+        url: str,
+        *,
+        status: ContentResolutionStatus,
+        resolution_attempted: bool,
+        discovery_result_id: str,
+        provider: str,
+        title: str,
+        original_locator: str,
+        locator_kind: str,
+        doi: str | None,
+        redirect_chain: tuple[str, ...] = (),
+    ) -> ContentResolutionRecord:
+        try:
+            resolved = validate_content_url(url, policy=self.policy, resolve_dns=False)
+        except PermissionError as exc:
+            return ContentResolutionRecord(
+                discovery_result_id=discovery_result_id,
+                provider=provider,
+                title=title,
+                original_locator=original_locator,
+                locator_kind=locator_kind,
+                doi=doi,
+                resolution_attempted=resolution_attempted,
+                status=ContentResolutionStatus.CONTENT_BLOCKED,
+                resolved_content_url=url,
+                final_url=url,
+                final_host=_host(url),
+                redirect_chain=redirect_chain,
+                failure_kind="content_blocked",
+                error_message=str(exc),
+            )
+        except ValueError as exc:
+            return ContentResolutionRecord(
+                discovery_result_id=discovery_result_id,
+                provider=provider,
+                title=title,
+                original_locator=original_locator,
+                locator_kind=locator_kind,
+                doi=doi,
+                resolution_attempted=resolution_attempted,
+                status=ContentResolutionStatus.CONTENT_UNAVAILABLE,
+                resolved_content_url=url,
+                final_url=url,
+                final_host=_host(url),
+                redirect_chain=redirect_chain,
+                failure_kind="content_unavailable",
+                error_message=str(exc),
+            )
+        return ContentResolutionRecord(
+            discovery_result_id=discovery_result_id,
+            provider=provider,
+            title=title,
+            original_locator=original_locator,
+            locator_kind=locator_kind,
+            doi=doi,
+            resolution_attempted=resolution_attempted,
+            status=status,
+            resolved_content_url=resolved,
+            final_url=resolved,
+            final_host=_host(resolved),
+            redirect_chain=redirect_chain,
+        )
+
+
+def _host(url: str | None) -> str | None:
+    if not url:
+        return None
+    return urlparse(url).hostname.lower() if urlparse(url).hostname else None
+
+
+def _doi_url(doi: str) -> str:
+    value = doi.strip()
+    if value.startswith("https://doi.org/"):
+        return value
+    if value.lower().startswith("doi:"):
+        value = value[4:].strip()
+    return f"https://doi.org/{value}"
+
+
+def _doi_from_locator(locator: str) -> str | None:
+    value = locator.strip()
+    if not value:
+        return None
+    if value.startswith("10.") and "/" in value:
+        return value
+    parsed = urlparse(value)
+    if parsed.scheme == "https" and parsed.hostname and parsed.hostname.lower() == "doi.org":
+        doi = parsed.path.lstrip("/")
+        return doi or None
+    return None
+
+
+def _locator_kind(locator: str, *, doi: str | None) -> str:
+    value = locator.strip()
+    if doi and value.startswith("10."):
+        return "doi"
+    parsed = urlparse(value)
+    if parsed.scheme == "https" and parsed.hostname and parsed.hostname.lower() == "doi.org":
+        return "doi_url"
+    if parsed.scheme == "https":
+        return "direct_https"
+    if doi:
+        return "doi"
+    return "unknown"
+
+
 @dataclass(frozen=True)
 class AutonomousExternalResearchExecutionResult:
     state: ExternalResearchTerminalState
     question_id: str
     discovery_run: DiscoveryExecutionRun | None
+    resolution_records: tuple[ContentResolutionRecord, ...]
     acquisition_records: tuple[ContentAcquisitionRecord, ...]
     normalized_records: tuple[NormalizedContentRecord, ...]
     candidates: tuple[KnowledgeCandidate, ...]
@@ -108,6 +408,7 @@ class AutonomousExternalResearchExecutionResult:
             "state": self.state.value,
             "question_id": self.question_id,
             "discovery_run": self.discovery_run.to_json() if self.discovery_run else None,
+            "resolution_records": [item.to_json() for item in self.resolution_records],
             "acquisition_records": [item.to_json() for item in self.acquisition_records],
             "normalized_records": [item.to_json() for item in self.normalized_records],
             "candidates": [item.to_json() for item in self.candidates],
@@ -171,6 +472,7 @@ class AutonomousExternalResearchExecutor:
         blockers: list[str] = []
         normalized: list[NormalizedContentRecord] = []
         acquisition_records: list[ContentAcquisitionRecord] = []
+        resolution_records: list[ContentResolutionRecord] = []
         candidates: list[KnowledgeCandidate] = []
         downloaded_bytes = 0
         acquired = 0
@@ -201,9 +503,15 @@ class AutonomousExternalResearchExecutor:
             if not self.policy.content_network_enabled:
                 blockers.append(f"content_unavailable:{result.result_id}")
                 continue
-            content_url = self.resolver.content_url_for(result.locator)
-            if content_url is None:
-                blockers.append(f"content_unavailable:{result.result_id}")
+            resolution = self._resolve_content(result)
+            resolution_records.append(resolution)
+            content_url = resolution.resolved_content_url
+            if content_url is None or resolution.status in {
+                ContentResolutionStatus.CONTENT_UNAVAILABLE,
+                ContentResolutionStatus.CONTENT_BLOCKED,
+                ContentResolutionStatus.RESOLUTION_FAILURE,
+            }:
+                blockers.append(f"{resolution.status.value}:{result.result_id}")
                 continue
             target = ContentAcquisitionTarget.from_discovery(result, content_url=content_url)
             acquisition = self.acquirer.acquire(target)
@@ -214,16 +522,16 @@ class AutonomousExternalResearchExecutor:
             downloaded_bytes += acquisition.byte_count
             if downloaded_bytes > self.policy.max_total_download_bytes:
                 blockers.append("budget_exhausted:download_bytes")
-                return self._result(ExternalResearchTerminalState.BUDGET_EXHAUSTED, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), None, blockers, acquired, downloaded_bytes)
+                return self._result(ExternalResearchTerminalState.BUDGET_EXHAUSTED, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), None, blockers, acquired, downloaded_bytes, tuple(resolution_records))
             acquired += 1
             source = SourceProvenance.create(
                 source_type=result.source_type,
                 title=result.title,
-                locator=acquisition.final_url,
+                locator=acquisition.source_locator,
                 content_sha256=acquisition.content_sha256,
                 trust_level=source_trust_level(result.source_type),
                 ingested_at="2026-08-08T00:00:00+00:00",
-                notes=f"discovery_result_id={result.result_id}",
+                notes=f"discovery_result_id={result.result_id}; final_url={acquisition.final_url}",
             )
             source_by_id[acquisition.source_id] = source
             record = self.normalizer.normalize(acquisition, self._content_for(acquisition))
@@ -235,9 +543,9 @@ class AutonomousExternalResearchExecutor:
             candidates.extend(bridge.candidates)
 
         if blockers and not candidates:
-            return self._result(ExternalResearchTerminalState.CONTENT_UNAVAILABLE, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes)
+            return self._result(ExternalResearchTerminalState.CONTENT_UNAVAILABLE, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes, tuple(resolution_records))
         if not candidates:
-            return self._result(ExternalResearchTerminalState.NO_NEW_RESEARCH_PATH, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes)
+            return self._result(ExternalResearchTerminalState.NO_NEW_RESEARCH_PATH, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes, tuple(resolution_records))
 
         combined_candidates = tuple(existing_candidates) + tuple(candidates)
         reevaluation = self.reevaluator.reevaluate(
@@ -251,7 +559,40 @@ class AutonomousExternalResearchExecutor:
             state = ExternalResearchTerminalState.EVIDENCE_SUFFICIENT
         else:
             state = ExternalResearchTerminalState.UNRESOLVED_CONFLICT
-        return self._result(state, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), reevaluation, blockers, acquired, downloaded_bytes)
+        return self._result(state, question, execution, tuple(acquisition_records), tuple(normalized), tuple(candidates), reevaluation, blockers, acquired, downloaded_bytes, tuple(resolution_records))
+
+    def _resolve_content(self, result: object) -> ContentResolutionRecord:
+        resolve = getattr(self.resolver, "resolve", None)
+        if callable(resolve):
+            return resolve(result)
+        content_url = self.resolver.content_url_for(str(getattr(result, "locator", "") or ""))
+        provider = getattr(getattr(result, "provider", ""), "value", str(getattr(result, "provider", "")))
+        if content_url is None:
+            return ContentResolutionRecord(
+                discovery_result_id=str(getattr(result, "result_id", "")),
+                provider=str(provider),
+                title=str(getattr(result, "title", "")),
+                original_locator=str(getattr(result, "locator", "")),
+                locator_kind=_locator_kind(str(getattr(result, "locator", "")), doi=None),
+                doi=None,
+                resolution_attempted=False,
+                status=ContentResolutionStatus.CONTENT_UNAVAILABLE,
+                failure_kind="content_unavailable",
+                error_message="resolver returned no content URL",
+            )
+        return ContentResolutionRecord(
+            discovery_result_id=str(getattr(result, "result_id", "")),
+            provider=str(provider),
+            title=str(getattr(result, "title", "")),
+            original_locator=str(getattr(result, "locator", "")),
+            locator_kind=_locator_kind(str(getattr(result, "locator", "")), doi=None),
+            doi=None,
+            resolution_attempted=False,
+            status=ContentResolutionStatus.DIRECT_CONTENT_URL,
+            resolved_content_url=content_url,
+            final_url=content_url,
+            final_host=_host(content_url),
+        )
 
     def _content_for(self, acquisition: object) -> bytes:
         path = getattr(acquisition, "raw_path", "")
@@ -275,11 +616,13 @@ class AutonomousExternalResearchExecutor:
         blockers: list[str],
         acquired: int,
         downloaded_bytes: int,
+        resolution_records: tuple[ContentResolutionRecord, ...] = (),
     ) -> AutonomousExternalResearchExecutionResult:
         return AutonomousExternalResearchExecutionResult(
             state=state,
             question_id=question.question_id,
             discovery_run=execution,
+            resolution_records=resolution_records,
             acquisition_records=acquisition_records,
             normalized_records=normalized,
             candidates=candidates,
