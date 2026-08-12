@@ -52,6 +52,7 @@ from .promotion_gate import PromotionCandidateGate, PromotionGateStatus
 from .robustness_ranking import StrategyRobustnessRanker
 from .strategy_experiment import StrategyExperimentStatus, StrategyResearchExperiment
 from .validation_loop_v2 import AuthoritativeValidationEvidence, AutonomousValidationLoopV2
+from .autonomous_quant_partner import autonomous_quant_partner_payload
 from .multi_source_research import (
     AcquisitionState,
     DeterministicMultiSourceAdapter,
@@ -235,6 +236,12 @@ def production_autonomous_learning_payload_from_baseline(
         promotion_status = "blocked_fixture" if _has_fixture_blocker(production_blockers) else "needs_real_validation"
         human_gate_status = "not_requested"
     hypothesis_status = "proposed" if hypotheses else "needs_evidence" if not grounded_evidence else "not_generated"
+    autonomous_quant_partner = autonomous_quant_partner_payload(
+        request_text,
+        symbol=symbol,
+        baseline=baseline,
+        multi_source_research=multi_source_research or None,
+    )
 
     learning = {
         "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
@@ -244,6 +251,7 @@ def production_autonomous_learning_payload_from_baseline(
         "ranking_status": ranking.status.value,
         "promotion_status": promotion_status,
         "human_gate_status": human_gate_status,
+        "autonomous_quant_partner_status": _as_dict(autonomous_quant_partner.get("promotion_readiness_report")).get("status"),
         "production_uses_release_fixture": False,
         "fixture_promotion_blocked": bool(production_blockers),
         "candidate_backtest_authoritative": bool(evidence and candidate_backtest),
@@ -256,6 +264,7 @@ def production_autonomous_learning_payload_from_baseline(
         "blockers": production_blockers,
         "external_research": external,
         "multi_source_research": multi_source_research,
+        "autonomous_quant_partner": autonomous_quant_partner,
         "grounded_evidence": grounded_evidence,
         "hypotheses": hypotheses,
         "candidate_experiments": candidate_experiments,

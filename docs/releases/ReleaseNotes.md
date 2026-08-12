@@ -3,6 +3,43 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 199-240 Autonomous Quant Research Partner
+
+Gaon now models the remaining Autonomous Research path as a bounded production
+research partner loop. The new contract starts with real baseline evidence,
+uses multi-source research context, searches for counter-evidence, generates
+evidence-backed next actions, evaluates validation sufficiency, runs a bounded
+iteration plan, records robustness diagnostics, ranks baseline/candidates in a
+tournament, feeds learning memory, and emits a PromotionReadinessReport.
+
+The loop can stop for sufficient evidence, exhausted budget, no safe next
+action, blocked provider, or human approval required. When evidence is
+sufficient, Gaon stops at the human approval boundary. When evidence is
+insufficient, it reports the missing evidence and validation dimensions instead
+of fabricating metrics or requesting promotion.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-production-provider-registry-release-check
+python -m gaon.runtime.cli gaon-production-authoritative-source-acquisition-release-check
+python -m gaon.runtime.cli gaon-production-source-diversification-planner-release-check
+python -m gaon.runtime.cli gaon-production-counter-evidence-release-check
+python -m gaon.runtime.cli gaon-production-validation-sufficiency-v2-release-check
+python -m gaon.runtime.cli gaon-production-iterative-research-loop-release-check
+python -m gaon.runtime.cli gaon-production-robust-strategy-validation-release-check
+python -m gaon.runtime.cli gaon-production-strategy-tournament-release-check
+python -m gaon.runtime.cli gaon-production-learning-memory-closed-loop-release-check
+python -m gaon.runtime.cli gaon-production-promotion-readiness-release-check
+python -m gaon.runtime.cli gaon-production-research-observability-release-check
+python -m gaon.runtime.cli gaon-production-autonomous-quant-partner-acceptance-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged: no live trading, no
+KIS/Broker order, no automatic Champion promotion, no approval bypass, no
+strategy mutation, no fixture/metadata-only promotion evidence, and no
+fabricated evidence or metrics.
+
 ## Sprint 193-198 Multi-Source Autonomous Research
 
 Autonomous Learning V2 now has a unified multi-source research contract that
