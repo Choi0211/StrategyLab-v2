@@ -282,6 +282,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-autonomous-learning-execution-release-check")
     sub.add_parser("gaon-production-external-research-network-release-check")
     sub.add_parser("gaon-production-safe-content-acquisition-release-check")
+    sub.add_parser("gaon-production-grounded-evidence-release-check")
+    sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
+    sub.add_parser("gaon-production-strategy-experiment-release-check")
+    sub.add_parser("gaon-production-authoritative-candidate-validation-release-check")
+    sub.add_parser("gaon-production-robustness-ranking-release-check")
+    sub.add_parser("gaon-production-human-promotion-gate-release-check")
+    sub.add_parser("gaon-production-autonomous-learning-loop-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2234,6 +2241,49 @@ def _run(args: argparse.Namespace) -> int:
             f"evidence_candidates={payload['evidence_candidates']} "
             f"metadata_only_evidence_blocked={str(payload['metadata_only_evidence_blocked']).lower()} "
             f"fixture_promotion_blocked={str(payload['fixture_promotion_blocked']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command in {
+        "gaon-production-grounded-evidence-release-check",
+        "gaon-production-evidence-backed-hypothesis-release-check",
+        "gaon-production-strategy-experiment-release-check",
+        "gaon-production-authoritative-candidate-validation-release-check",
+        "gaon-production-robustness-ranking-release-check",
+        "gaon-production-human-promotion-gate-release-check",
+        "gaon-production-autonomous-learning-loop-release-check",
+    }:
+        from gaon.knowledge.telegram_autonomous_learning import (
+            production_authoritative_candidate_validation_release_check,
+            production_autonomous_learning_loop_release_check,
+            production_evidence_backed_hypothesis_release_check,
+            production_grounded_evidence_release_check,
+            production_human_promotion_gate_release_check,
+            production_robustness_ranking_release_check,
+            production_strategy_experiment_release_check,
+        )
+
+        release_checks = {
+            "gaon-production-grounded-evidence-release-check": production_grounded_evidence_release_check,
+            "gaon-production-evidence-backed-hypothesis-release-check": production_evidence_backed_hypothesis_release_check,
+            "gaon-production-strategy-experiment-release-check": production_strategy_experiment_release_check,
+            "gaon-production-authoritative-candidate-validation-release-check": production_authoritative_candidate_validation_release_check,
+            "gaon-production-robustness-ranking-release-check": production_robustness_ranking_release_check,
+            "gaon-production-human-promotion-gate-release-check": production_human_promotion_gate_release_check,
+            "gaon-production-autonomous-learning-loop-release-check": production_autonomous_learning_loop_release_check,
+        }
+        payload = release_checks[args.command]()
+        print(
+            f"{args.command}: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"stage={payload['stage']} "
+            f"promotion_status={payload['promotion_status']} "
+            f"human_gate_status={payload['human_gate_status']} "
+            f"grounded_evidence={payload['grounded_evidence_count']} "
+            f"hypotheses={payload['hypothesis_count']} "
+            f"candidate_experiments={payload['candidate_experiment_count']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"

@@ -13,9 +13,16 @@ from gaon.knowledge.telegram_autonomous_learning import (
     _ReleaseMetadataTransport,
     _run_production_external_research,
     autonomous_learning_safe_failure_payload,
+    production_authoritative_candidate_validation_release_check,
     production_autonomous_learning_execution_release_check,
+    production_autonomous_learning_loop_release_check,
+    production_evidence_backed_hypothesis_release_check,
     production_external_research_network_release_check,
+    production_grounded_evidence_release_check,
+    production_human_promotion_gate_release_check,
+    production_robustness_ranking_release_check,
     production_safe_content_acquisition_release_check,
+    production_strategy_experiment_release_check,
     production_autonomous_learning_payload_from_baseline,
     telegram_autonomous_learning_payload,
 )
@@ -453,6 +460,81 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
         self.assertTrue(payload["fixture_promotion_blocked"])
         self.assertEqual("pass", payload["safety"])
 
+    def test_sprint187_grounded_evidence_release_check_passes(self) -> None:
+        payload = production_grounded_evidence_release_check()
+
+        self.assertEqual("grounded_evidence", payload["stage"])
+        self.assertGreaterEqual(payload["grounded_evidence_count"], 1)
+        self.assertEqual("pass", payload["safety"])
+
+    def test_sprint188_evidence_backed_hypothesis_release_check_passes(self) -> None:
+        payload = production_evidence_backed_hypothesis_release_check()
+
+        self.assertEqual("evidence_backed_hypothesis", payload["stage"])
+        self.assertGreaterEqual(payload["hypothesis_count"], 1)
+        self.assertEqual("pass", payload["safety"])
+
+    def test_sprint189_strategy_experiment_release_check_passes(self) -> None:
+        payload = production_strategy_experiment_release_check()
+
+        self.assertEqual("strategy_experiment", payload["stage"])
+        self.assertGreaterEqual(payload["candidate_experiment_count"], 1)
+        self.assertEqual("pass", payload["safety"])
+
+    def test_sprint190_authoritative_candidate_validation_release_check_passes(self) -> None:
+        payload = production_authoritative_candidate_validation_release_check()
+
+        self.assertEqual("authoritative_candidate_validation", payload["stage"])
+        self.assertEqual("pass", payload["safety"])
+
+    def test_sprint191_robustness_ranking_release_check_passes(self) -> None:
+        payload = production_robustness_ranking_release_check()
+
+        self.assertEqual("robustness_ranking", payload["stage"])
+        self.assertEqual("pass", payload["safety"])
+
+    def test_sprint192_human_promotion_gate_release_check_passes(self) -> None:
+        payload = production_human_promotion_gate_release_check()
+
+        self.assertEqual("human_promotion_gate", payload["stage"])
+        self.assertEqual("requires_human_approval", payload["promotion_status"])
+        self.assertEqual("awaiting_human_approval", payload["human_gate_status"])
+        self.assertEqual("pass", payload["safety"])
+
+    def test_sprint187_192_integrated_loop_release_check_passes(self) -> None:
+        payload = production_autonomous_learning_loop_release_check()
+
+        self.assertEqual("production_autonomous_learning_loop", payload["stage"])
+        self.assertGreaterEqual(payload["grounded_evidence_count"], 1)
+        self.assertGreaterEqual(payload["hypothesis_count"], 1)
+        self.assertGreaterEqual(payload["candidate_experiment_count"], 1)
+        self.assertEqual("requires_human_approval", payload["promotion_status"])
+        self.assertEqual("pass", payload["safety"])
+
+    def test_sprint187_metadata_only_cannot_create_grounded_evidence(self) -> None:
+        experiment = build_experiment()
+        candidate_backtest = build_real_backtest(experiment, source=MarketDataAvailability.REAL, trade_count=60)
+        payload = production_autonomous_learning_payload_from_baseline(
+            "metadata only external research",
+            symbol="005930",
+            mode="research",
+            baseline=_baseline_payload(experiment, candidate_backtest, baseline_fixture=False),
+            external_research={
+                "schema_version": 1,
+                "state": "content_unavailable",
+                "discovery_run": {"results": [{"result_id": "discovery:metadata", "locator": "https://doi.org/10.0000/metadata"}]},
+                "normalized_records": [],
+                "acquisition_records": [],
+                "candidates": [{"candidate_id": "claim:metadata", "source_id": "source:metadata"}],
+                "blockers": ["content_unavailable"],
+            },
+        )
+
+        learning = payload["autonomous_learning_v2"]
+        self.assertEqual([], learning["grounded_evidence"])
+        self.assertEqual("needs_real_validation", payload["promotion_status"])
+        self.assertIn("grounded_evidence_unavailable", learning["blockers"])
+
 
 def _baseline_payload(experiment, candidate_backtest, *, baseline_fixture: bool, changed_fields=("entry.breakout_lookback",)) -> dict[str, object]:
     strategy = candidate_backtest.strategy.to_json()
@@ -508,6 +590,20 @@ def _external_ready() -> dict[str, object]:
         },
         "normalized_records": [],
         "candidates": [{"candidate_id": "claim:test", "source_id": "source:test"}],
+        "grounded_evidence": [
+            {
+                "evidence_id": "grounded-evidence:test",
+                "claim_id": "claim:test",
+                "source_id": "source:test",
+                "source_locator": "https://doi.org/10.0000/example",
+                "content_type": "text/html",
+                "content_sha256": "1" * 64,
+                "verbatim_excerpt": "Breakout filters can reduce false signals.",
+                "metadata_only": False,
+                "fixture_backed": False,
+                "grounded": True,
+            }
+        ],
         "blockers": [],
         "network_executed": False,
     }

@@ -50,6 +50,17 @@ The import-path check must show `actual=/opt/strategylab-v2/src/gaon`. A
 `.venv/lib/python*/site-packages/gaon` path means the VPS is running a stale
 copied package and the service must not be treated as upgraded.
 
+For Autonomous Learning V2 production-loop verification, run:
+
+```bash
+.venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-learning-loop-release-check
+```
+
+This check verifies content-grounded evidence, evidence-backed hypotheses,
+candidate experiment lineage, authoritative real candidate validation,
+robustness ranking, and the human-only promotion gate without mutating strategy
+configuration or placing orders.
+
 ## Phase A Diagnostics
 
 ```powershell
