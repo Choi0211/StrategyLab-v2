@@ -1,5 +1,19 @@
 # Changelog
 
+## Hotfix 240.1 - Real Production Autonomous Research Wiring
+
+- Added production-only multi-source adapters for acquired academic evidence,
+  real KRX/Yahoo official-market baseline evidence, and honest
+  provider-not-configured states.
+- Removed release-check fixture research as the implicit fallback from
+  `autonomous_quant_partner_payload()`; release checks now opt in explicitly.
+- Projected partner promotion readiness separately under Autonomous Learning V2
+  and updated Telegram rendering to show partner source, counter-evidence,
+  iteration, validation, tournament, blocker, and readiness diagnostics.
+- Added `gaon-production-autonomous-research-wiring-release-check`.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Sprint 199-240 - Autonomous Quant Research Partner
 
 - Added `gaon.knowledge.autonomous_quant_partner` with ResearchBudget, ResearchGapReport, NextResearchAction, RobustnessReport, CandidateRanking, and PromotionReadinessReport contracts.

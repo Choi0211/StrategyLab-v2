@@ -2,6 +2,23 @@
 
 Status: Passed
 
+## Hotfix 240.1 Real Production Autonomous Research Wiring
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\telegram_autonomous_learning.py src\gaon\knowledge\autonomous_quant_partner.py src\gaon\runtime\research_grounding.py src\gaon\runtime\cli.py tests\unit\test_autonomous_quant_partner.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner -q`: PASS, 7 tests
+  - `python -m unittest tests.unit.test_autonomous_learning_e2e -q`: PASS, 44 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_combined_autonomous_learning_request_routes_to_v2 tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1852_production_combined_request_prioritizes_v2_over_legacy_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1854_default_telegram_tool_path_blocks_release_fixture_promotion tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_sprint199_240_autonomous_quant_partner_release_checks_pass -q`: PASS, 4 tests
+  - `python -m gaon.runtime.cli gaon-production-autonomous-research-wiring-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 833 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 198 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fixture/metadata-only promotion evidence, no fabricated metrics/evidence.
+
 ## Sprint 199-240 Autonomous Quant Research Partner
 
 - Targeted local verification:

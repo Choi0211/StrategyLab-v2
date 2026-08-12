@@ -55,12 +55,18 @@ from .validation_loop_v2 import AuthoritativeValidationEvidence, AutonomousValid
 from .autonomous_quant_partner import autonomous_quant_partner_payload
 from .multi_source_research import (
     AcquisitionState,
+    ClaimStance,
+    CredibilityTier,
     DeterministicMultiSourceAdapter,
     MultiSourceResearchOrchestrator,
     MultiSourceResearchPlan,
     MultiSourceResearchPolicy,
+    ProviderResearchReport,
     ProviderState,
     SourceCategory,
+    UnifiedAcquiredSource,
+    UnifiedClaim,
+    UnifiedDiscoveryResult,
     validation_sample_diagnostics,
 )
 
@@ -242,16 +248,30 @@ def production_autonomous_learning_payload_from_baseline(
         baseline=baseline,
         multi_source_research=multi_source_research or None,
     )
+    partner_readiness = _as_dict(autonomous_quant_partner.get("promotion_readiness_report"))
+    partner_status = str(partner_readiness.get("status") or "needs_more_evidence")
+    legacy_promotion_status = promotion_status
+    partner_projected_promotion_status = _project_partner_promotion_status(
+        legacy_status=legacy_promotion_status,
+        partner_status=partner_status,
+        partner_approval_required=bool(autonomous_quant_partner.get("approval_required")),
+        production_blockers=production_blockers,
+    )
 
     learning = {
         "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "selected_execution_orchestration": "autonomous_quant_partner",
         "external_research_state": external.get("state", "unknown"),
         "hypothesis_status": hypothesis_status,
         "validation_status": validation.status.value,
         "ranking_status": ranking.status.value,
+        "legacy_promotion_status": legacy_promotion_status,
+        "autonomous_quant_partner_promotion_status": partner_projected_promotion_status,
         "promotion_status": promotion_status,
         "human_gate_status": human_gate_status,
-        "autonomous_quant_partner_status": _as_dict(autonomous_quant_partner.get("promotion_readiness_report")).get("status"),
+        "autonomous_quant_partner_status": partner_status,
+        "autonomous_quant_partner_stop_reason": autonomous_quant_partner.get("stop_reason"),
+        "autonomous_quant_partner_validation_status": _as_dict(autonomous_quant_partner.get("validation_sufficiency_v2")).get("status"),
         "production_uses_release_fixture": False,
         "fixture_promotion_blocked": bool(production_blockers),
         "candidate_backtest_authoritative": bool(evidence and candidate_backtest),
@@ -466,6 +486,80 @@ def production_autonomous_learning_execution_release_check() -> Mapping[str, obj
         "order_executed": False,
         "broker_order_called": False,
         "kis_order_called": False,
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
+def production_autonomous_research_wiring_release_check() -> Mapping[str, object]:
+    baseline = _release_baseline_payload(source="real")
+    baseline["backtest"]["metrics"]["trade_count"] = 1  # type: ignore[index]
+    for candidate in baseline["candidates"]:  # type: ignore[index]
+        candidate["backtest_result"]["metrics"]["trade_count"] = 1  # type: ignore[index]
+    external = {
+        "schema_version": 1,
+        "state": ExternalResearchTerminalState.ACADEMIC_CONTENT_EXHAUSTED.value,
+        "question_id": "research-question:hotfix-2401",
+        "discovery_run": {"results": []},
+        "normalized_records": [],
+        "candidates": [],
+        "blockers": ["academic_content_exhausted"],
+        "network_executed": True,
+    }
+    external["multi_source_research"] = _run_production_multi_source_research(
+        "Samsung autonomous quant partner production wiring",
+        symbol="005930",
+        baseline=baseline,
+        academic_external=external,
+    )
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung autonomous quant partner production wiring",
+        symbol="005930",
+        mode="research",
+        baseline=baseline,
+        external_research=external,
+    )
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    partner = _as_dict(learning.get("autonomous_quant_partner"))
+    acquisition = _as_dict(partner.get("source_acquisition"))
+    counter = _as_dict(partner.get("counter_evidence"))
+    validation = _as_dict(partner.get("validation_coverage"))
+    tournament = _as_dict(partner.get("strategy_tournament"))
+    checks = {
+        "partner_selected_for_final_state": learning.get("selected_execution_orchestration") == "autonomous_quant_partner",
+        "academic_exhaustion_not_terminal": "official_market" in _as_list(acquisition.get("source_categories_acquired")),
+        "provider_not_configured_honest": _as_dict(acquisition.get("provider_states")).get("news") == ProviderState.NOT_CONFIGURED.value,
+        "no_release_fixture_adapter": "deterministic:" not in json.dumps(partner, ensure_ascii=False).lower()
+        and "example.org" not in json.dumps(partner, ensure_ascii=False).lower(),
+        "metadata_only_evidence_blocked": acquisition.get("metadata_only_claims") == 0,
+        "counter_evidence_attempted": counter.get("attempted") is True,
+        "iterations_recorded": len(_as_list(partner.get("research_iterations"))) > 0,
+        "candidate_count": int(tournament.get("candidate_count") or 0) >= 2,
+        "insufficient_sample_not_sufficient": validation.get("status") != "sufficient"
+        and int(validation.get("trade_count") or 0) == 1,
+        "partner_status_projected": learning.get("autonomous_quant_partner_promotion_status") == "needs_more_evidence"
+        and learning.get("autonomous_quant_partner_status") == "needs_more_evidence",
+        "no_mutation_or_order": payload.get("strategy_mutated") is False
+        and payload.get("order_executed") is False
+        and payload.get("broker_order_called") is False
+        and payload.get("kis_order_called") is False,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"production autonomous research wiring release check failed: {failed}")
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "status": learning.get("autonomous_quant_partner_status"),
+        "stop_reason": partner.get("stop_reason"),
+        "approval_required": payload.get("approval_required"),
+        "promotion_status": learning.get("autonomous_quant_partner_promotion_status"),
+        "sources_acquired": acquisition.get("sources_acquired"),
+        "source_categories_acquired": acquisition.get("source_categories_acquired"),
+        "counter_evidence_attempted": counter.get("attempted"),
+        "candidate_count": tournament.get("candidate_count"),
+        "research_iterations": len(_as_list(partner.get("research_iterations"))),
+        "strategy_mutated": False,
+        "order_executed": False,
         "checks": checks,
         "safety": "pass",
     }
@@ -1246,35 +1340,17 @@ def _run_production_multi_source_research(
     `not_configured`; they do not synthesize claims or promotion evidence.
     """
 
-    academic_state = str(academic_external.get("state") or ExternalResearchTerminalState.CONTENT_UNAVAILABLE.value)
-    academic_provider_state = ProviderState.CONTENT_UNAVAILABLE
-    academic_claim_texts = tuple(
-        str(item.get("verbatim_excerpt") or item.get("claim_text") or "")
-        for item in _grounded_evidence_records(academic_external)
-        if str(item.get("verbatim_excerpt") or item.get("claim_text") or "").strip()
-    )
-    if academic_claim_texts and academic_state in {
-        ExternalResearchTerminalState.EVIDENCE_SUFFICIENT.value,
-        ExternalResearchTerminalState.UNRESOLVED_CONFLICT.value,
-    }:
-        academic_provider_state = ProviderState.SUCCESS
     adapters = (
-        DeterministicMultiSourceAdapter(
-            SourceCategory.ACADEMIC,
-            state=academic_provider_state,
-            claim_texts=academic_claim_texts,
-            provider="production:academic_external_research",
-            fixture_backed=False,
-        ),
-        DeterministicMultiSourceAdapter(SourceCategory.OFFICIAL_MARKET, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
-        DeterministicMultiSourceAdapter(SourceCategory.CORPORATE, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
-        DeterministicMultiSourceAdapter(SourceCategory.REGULATORY, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
-        DeterministicMultiSourceAdapter(SourceCategory.NEWS, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
-        DeterministicMultiSourceAdapter(SourceCategory.PROFESSIONAL_RESEARCH, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
-        DeterministicMultiSourceAdapter(SourceCategory.WEB, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
-        DeterministicMultiSourceAdapter(SourceCategory.YOUTUBE, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
-        DeterministicMultiSourceAdapter(SourceCategory.COMMUNITY, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
-        DeterministicMultiSourceAdapter(SourceCategory.SOCIAL, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        _ProductionAcademicExternalAdapter(academic_external),
+        _ProductionBaselineMarketAdapter(symbol=symbol, baseline=baseline),
+        _ProductionProviderNotConfiguredAdapter(SourceCategory.CORPORATE),
+        _ProductionProviderNotConfiguredAdapter(SourceCategory.REGULATORY),
+        _ProductionProviderNotConfiguredAdapter(SourceCategory.NEWS),
+        _ProductionProviderNotConfiguredAdapter(SourceCategory.PROFESSIONAL_RESEARCH),
+        _ProductionProviderNotConfiguredAdapter(SourceCategory.WEB),
+        _ProductionProviderNotConfiguredAdapter(SourceCategory.YOUTUBE),
+        _ProductionProviderNotConfiguredAdapter(SourceCategory.COMMUNITY),
+        _ProductionProviderNotConfiguredAdapter(SourceCategory.SOCIAL),
     )
     plan = MultiSourceResearchPlan(
         plan_id=f"multi-source-plan:{_hash({'symbol': symbol, 'request_text': request_text})[:16]}",
@@ -1286,6 +1362,231 @@ def _run_production_multi_source_research(
         policy=MultiSourceResearchPolicy(),
     )
     return MultiSourceResearchOrchestrator(adapters).run(plan, validation_payload=baseline)
+
+
+class _ProductionAcademicExternalAdapter:
+    category = SourceCategory.ACADEMIC
+    provider = "production:academic_external_research"
+
+    def __init__(self, external_research: Mapping[str, object]) -> None:
+        self._external = external_research
+
+    def research(self, plan: MultiSourceResearchPlan) -> ProviderResearchReport:
+        queries = tuple(plan.queries.get(self.category.value, ()))
+        evidence = _grounded_evidence_records(self._external)
+        if not evidence:
+            state = _provider_state_from_external(self._external)
+            blockers = tuple(str(item) for item in _as_list(self._external.get("blockers")) if str(item))
+            if not blockers:
+                blockers = (state.value,)
+            return ProviderResearchReport(
+                self.provider,
+                self.category,
+                state,
+                queries,
+                blockers=blockers,
+                fixture_backed=False,
+            )
+        discovered: list[UnifiedDiscoveryResult] = []
+        acquired: list[UnifiedAcquiredSource] = []
+        claims: list[UnifiedClaim] = []
+        for index, row in enumerate(evidence, start=1):
+            text = str(row.get("verbatim_excerpt") or row.get("claim_text") or "").strip()
+            digest = str(row.get("content_sha256") or "")
+            source_id = str(row.get("source_id") or f"source:academic:{_hash(row)[:16]}")
+            locator = str(row.get("final_url") or row.get("content_url") or row.get("source_locator") or "")
+            if not text or len(digest) != 64 or not locator:
+                continue
+            result = UnifiedDiscoveryResult(
+                source_type=self.category,
+                provider=self.provider,
+                source_id=f"discovery:academic:{_hash({'source_id': source_id, 'locator': locator})[:24]}",
+                title=str(row.get("title") or "acquired academic source"),
+                locator=locator,
+                query=queries[0] if queries else "",
+                research_topic=plan.research_topic,
+                canonical_url=locator,
+                content_url=str(row.get("content_url") or locator),
+                metadata={"doi": row.get("doi"), "retrieval_timestamp": row.get("retrieval_timestamp")},
+                relevance=5,
+                credibility=CredibilityTier.TIER_B_RESEARCH_PROFESSIONAL,
+                fixture_backed=False,
+            )
+            discovered.append(result)
+            acquired.append(_production_acquired_source(result, source_id, digest, row))
+            claims.append(_production_claim(result, source_id, text, digest))
+        state = ProviderState.SUCCESS if claims else ProviderState.CONTENT_UNAVAILABLE
+        blockers = () if claims else ("content_unavailable",)
+        return ProviderResearchReport(
+            self.provider,
+            self.category,
+            state,
+            queries,
+            tuple(discovered),
+            tuple(acquired),
+            tuple(claims),
+            blockers=blockers,
+            fixture_backed=False,
+        )
+
+
+class _ProductionBaselineMarketAdapter:
+    category = SourceCategory.OFFICIAL_MARKET
+    provider = "production:real_market_baseline"
+
+    def __init__(self, *, symbol: str, baseline: Mapping[str, object]) -> None:
+        self._symbol = symbol
+        self._baseline = baseline
+
+    def research(self, plan: MultiSourceResearchPlan) -> ProviderResearchReport:
+        queries = tuple(plan.queries.get(self.category.value, ()))
+        dataset = _as_dict(self._baseline.get("dataset"))
+        metadata = _as_dict(dataset.get("metadata"))
+        quality = _as_dict(self._baseline.get("quality"))
+        backtest = _as_dict(self._baseline.get("backtest"))
+        metrics = _as_dict(backtest.get("metrics"))
+        source = str(metadata.get("source") or self._baseline.get("source") or backtest.get("source") or "")
+        fixture_backed = bool(metadata.get("fixture_backed") or self._baseline.get("fixture_backed") or source.startswith("fixture"))
+        if fixture_backed or not source.startswith("real:"):
+            return ProviderResearchReport(
+                self.provider,
+                self.category,
+                ProviderState.CONTENT_UNAVAILABLE,
+                queries,
+                blockers=("real_market_baseline_unavailable",),
+                fixture_backed=False,
+            )
+        text = (
+            f"Official market baseline for {self._symbol} used {source} data from "
+            f"{metadata.get('start_date', 'unknown')} to {metadata.get('end_date', 'unknown')} "
+            f"with {metadata.get('rows', 'unknown')} bars, quality={quality.get('status', 'unknown')}, "
+            f"trade_count={metrics.get('trade_count', 'unknown')}."
+        )
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        locator = f"real-market://{source}/{self._symbol}/{metadata.get('start_date', 'unknown')}/{metadata.get('end_date', 'unknown')}"
+        discovery = UnifiedDiscoveryResult(
+            source_type=self.category,
+            provider=self.provider,
+            source_id=f"discovery:official-market:{_hash({'symbol': self._symbol, 'source': source, 'period': locator})[:24]}",
+            title=f"{self._symbol} authoritative real market baseline",
+            locator=locator,
+            query=queries[0] if queries else "",
+            research_topic=plan.research_topic,
+            canonical_url=locator,
+            content_url=locator,
+            metadata={
+                "dataset_source": source,
+                "fixture_backed": False,
+                "quality_status": quality.get("status"),
+                "rows": metadata.get("rows"),
+                "trade_count": metrics.get("trade_count"),
+            },
+            relevance=5,
+            credibility=CredibilityTier.TIER_A_AUTHORITATIVE,
+            fixture_backed=False,
+        )
+        acquired = UnifiedAcquiredSource(
+            source_id=f"source:official-market:{_hash({'locator': locator, 'hash': digest})[:24]}",
+            source_type=self.category,
+            provider=self.provider,
+            final_url=locator,
+            content_type="application/vnd.gaon.real-market-baseline+json",
+            content_hash=digest,
+            acquired_at=str(backtest.get("generated_at") or "2026-08-13T00:00:00+09:00"),
+            byte_count=len(text.encode("utf-8")),
+            normalization_status="normalized",
+            fixture_backed=False,
+            acquisition_state=AcquisitionState.CONTENT_ACQUIRED,
+        )
+        claim = _production_claim(discovery, acquired.source_id, text, digest)
+        return ProviderResearchReport(
+            self.provider,
+            self.category,
+            ProviderState.SUCCESS,
+            queries,
+            (discovery,),
+            (acquired,),
+            (claim,),
+            fixture_backed=False,
+        )
+
+
+class _ProductionProviderNotConfiguredAdapter:
+    provider = "production:provider_not_configured"
+
+    def __init__(self, category: SourceCategory) -> None:
+        self.category = category
+        self.provider = f"production:{category.value}:not_configured"
+
+    def research(self, plan: MultiSourceResearchPlan) -> ProviderResearchReport:
+        return ProviderResearchReport(
+            self.provider,
+            self.category,
+            ProviderState.NOT_CONFIGURED,
+            tuple(plan.queries.get(self.category.value, ())),
+            blockers=("provider_not_configured",),
+            fixture_backed=False,
+        )
+
+
+def _provider_state_from_external(external_research: Mapping[str, object]) -> ProviderState:
+    state = str(external_research.get("state") or "")
+    if state == ExternalResearchTerminalState.PROVIDER_FAILURE.value:
+        return ProviderState.PROVIDER_FAILURE
+    if state in {"access_blocked", "content_blocked", "unsupported_content_type"}:
+        return ProviderState.ACCESS_BLOCKED
+    if state in {
+        ExternalResearchTerminalState.NO_NEW_RESEARCH_PATH.value,
+        "no_relevant_research_path",
+    }:
+        return ProviderState.NO_RESULTS
+    return ProviderState.CONTENT_UNAVAILABLE
+
+
+def _production_acquired_source(
+    result: UnifiedDiscoveryResult,
+    source_id: str,
+    digest: str,
+    evidence: Mapping[str, object],
+) -> UnifiedAcquiredSource:
+    return UnifiedAcquiredSource(
+        source_id=source_id,
+        source_type=result.source_type,
+        provider=result.provider,
+        final_url=str(evidence.get("final_url") or evidence.get("content_url") or result.locator),
+        content_type=str(evidence.get("content_type") or "text/plain"),
+        content_hash=digest,
+        acquired_at=str(evidence.get("retrieval_timestamp") or "2026-08-13T00:00:00+09:00"),
+        byte_count=max(1, len(str(evidence.get("verbatim_excerpt") or evidence.get("claim_text") or "").encode("utf-8"))),
+        normalization_status="normalized",
+        fixture_backed=False,
+        acquisition_state=AcquisitionState.CONTENT_ACQUIRED,
+    )
+
+
+def _production_claim(result: UnifiedDiscoveryResult, source_id: str, text: str, digest: str) -> UnifiedClaim:
+    normalized = " ".join(text.lower().strip().split())
+    stance = ClaimStance.CONTRADICTING if any(
+        token in normalized
+        for token in ("weak", "risk", "overfit", "false positive", "insufficient", "blocked")
+    ) else ClaimStance.SUPPORTING
+    return UnifiedClaim(
+        claim_id=f"claim:production:{_hash({'source_id': source_id, 'text': normalized})[:24]}",
+        source_id=source_id,
+        source_type=result.source_type,
+        verbatim_text=text,
+        normalized_claim=normalized,
+        claim_topic=result.research_topic,
+        content_hash=digest,
+        locator=result.locator,
+        published_at=result.published_at,
+        relevance_score=int(result.relevance or 0),
+        credibility_tier=result.credibility,
+        stance=stance,
+        fixture_backed=False,
+        idea_evidence=result.source_type in {SourceCategory.NEWS, SourceCategory.WEB, SourceCategory.YOUTUBE, SourceCategory.COMMUNITY, SourceCategory.SOCIAL},
+        validation_evidence=result.source_type in {SourceCategory.ACADEMIC, SourceCategory.OFFICIAL_MARKET, SourceCategory.CORPORATE, SourceCategory.REGULATORY, SourceCategory.PROFESSIONAL_RESEARCH},
+    )
 
 
 def _external_research_observability(
@@ -1851,6 +2152,22 @@ def _production_loop_summary(
         "order_executed": False,
         "safety": "pass",
     }
+
+
+def _project_partner_promotion_status(
+    *,
+    legacy_status: str,
+    partner_status: str,
+    partner_approval_required: bool,
+    production_blockers: list[str],
+) -> str:
+    if _has_fixture_blocker(production_blockers):
+        return "blocked_fixture"
+    if partner_approval_required and partner_status == "ready_for_human_approval":
+        return "requires_human_approval"
+    if partner_status in {"needs_more_evidence", "insufficient_sample", "blocked"}:
+        return "needs_more_evidence"
+    return legacy_status
 
 
 def _production_blockers(

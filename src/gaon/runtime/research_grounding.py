@@ -382,8 +382,17 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
     quality = output.get("quality_status", "unknown")
     rows = metadata.get("rows") or dataset.get("rows") or "unknown"
     trade_count = metrics.get("trade_count", "unknown")
-    promotion_status = str(output.get("promotion_status", "unknown"))
+    partner = _as_dict(learning.get("autonomous_quant_partner"))
+    promotion_status = str(learning.get("autonomous_quant_partner_promotion_status") or output.get("promotion_status", "unknown"))
     human_gate_status = str(output.get("human_gate_status", "unknown"))
+    partner_readiness = _as_dict(partner.get("promotion_readiness_report"))
+    partner_acquisition = _as_dict(partner.get("source_acquisition"))
+    partner_counter = _as_dict(partner.get("counter_evidence"))
+    partner_validation = _as_dict(partner.get("validation_coverage"))
+    partner_tournament = _as_dict(partner.get("strategy_tournament"))
+    partner_candidates = _as_list(partner.get("candidate_generation"))
+    partner_iterations = _as_list(partner.get("research_iterations"))
+    partner_blockers = _list_text(partner_readiness.get("remaining_risks")) + _list_text(_as_dict(partner.get("research_gap_report")).get("blockers"))
     lines = [
         "영하님, 요청을 Autonomous Learning V2 연구 경로로 처리했습니다.",
         "",
@@ -401,6 +410,21 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
         f"- hypothesis_status={learning.get('hypothesis_status', 'unknown')}",
         f"- validation_status={learning.get('validation_status', 'unknown')}",
         f"- ranking_status={learning.get('ranking_status', 'unknown')}",
+        "",
+        "[Autonomous Quant Partner]",
+        f"- orchestration={learning.get('selected_execution_orchestration', 'autonomous_quant_partner')}",
+        f"- partner_status={partner_readiness.get('status', learning.get('autonomous_quant_partner_status', 'unknown'))}",
+        f"- stop_reason={partner.get('stop_reason', learning.get('autonomous_quant_partner_stop_reason', 'unknown'))}",
+        f"- investigated_source_categories={', '.join(_list_text(partner_acquisition.get('source_categories_acquired'))) or 'none'}",
+        f"- sources_acquired={partner_acquisition.get('sources_acquired', 0)}",
+        f"- source_ids={', '.join(_partner_source_ids(partner)) or 'none'}",
+        f"- counter_evidence_attempted={str(partner_counter.get('attempted', False)).lower()}",
+        f"- counter_evidence_status={partner_counter.get('status', 'unknown')}",
+        f"- generated_candidates={len(partner_candidates)}",
+        f"- validation_coverage={partner_validation.get('status', 'unknown')} trades={partner_validation.get('trade_count', 'unknown')}/{partner_validation.get('min_trades', 'unknown')} symbols={partner_validation.get('number_of_symbols', 'unknown')}",
+        f"- research_iterations={len(partner_iterations)}",
+        f"- tournament_candidates={partner_tournament.get('candidate_count', 0)} best={partner_tournament.get('best_candidate', 'unknown')}",
+        f"- remaining_blockers={', '.join(partner_blockers) if partner_blockers else 'none'}",
         "",
         "[승인 경계]",
         f"- promotion_status={promotion_status}",
@@ -584,6 +608,17 @@ def _list_text(value: object) -> list[str]:
     if value is None or value == "":
         return []
     return [str(value)]
+
+
+def _partner_source_ids(partner: dict[str, object]) -> list[str]:
+    research = _as_dict(partner.get("multi_source_research"))
+    source_ids: list[str] = []
+    for report in (_as_dict(item) for item in _as_list(research.get("provider_reports"))):
+        for source in (_as_dict(item) for item in _as_list(report.get("acquired"))):
+            source_id = str(source.get("source_id") or "")
+            if source_id and source_id not in source_ids:
+                source_ids.append(source_id)
+    return source_ids[:5]
 
 
 def _bullet_or_unavailable(items: list[str]) -> list[str]:

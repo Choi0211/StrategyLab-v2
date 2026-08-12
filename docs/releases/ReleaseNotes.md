@@ -3,6 +3,28 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 240.1 Real Production Autonomous Research Wiring
+
+Telegram Autonomous Learning now renders the Sprint 199-240 Autonomous Quant
+Research Partner state in production-facing responses. Academic content
+exhaustion no longer hides later diversification work: real KRX/Yahoo baseline
+evidence is wired as an official-market source, unconfigured providers are
+reported honestly, and the final Telegram report includes source categories,
+source IDs, counter-evidence status, generated candidates, validation coverage,
+iteration count, tournament status, remaining blockers, and promotion readiness.
+
+Release-check fixtures are no longer the default partner fallback. They remain
+available only when release checks explicitly opt in with
+`allow_release_fixture=True`.
+
+New command:
+
+```bash
+python -m gaon.runtime.cli gaon-production-autonomous-research-wiring-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Sprint 199-240 Autonomous Quant Research Partner
 
 Gaon now models the remaining Autonomous Research path as a bounded production
