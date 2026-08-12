@@ -52,6 +52,16 @@ from .promotion_gate import PromotionCandidateGate, PromotionGateStatus
 from .robustness_ranking import StrategyRobustnessRanker
 from .strategy_experiment import StrategyExperimentStatus, StrategyResearchExperiment
 from .validation_loop_v2 import AuthoritativeValidationEvidence, AutonomousValidationLoopV2
+from .multi_source_research import (
+    AcquisitionState,
+    DeterministicMultiSourceAdapter,
+    MultiSourceResearchOrchestrator,
+    MultiSourceResearchPlan,
+    MultiSourceResearchPolicy,
+    ProviderState,
+    SourceCategory,
+    validation_sample_diagnostics,
+)
 
 
 TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION = 2
@@ -102,6 +112,13 @@ def telegram_autonomous_learning_payload(
         symbol=symbol,
         storage_root=storage_root,
     )
+    external = dict(external)
+    external["multi_source_research"] = _run_production_multi_source_research(
+        request_text,
+        symbol=symbol,
+        baseline=baseline,
+        academic_external=external,
+    )
     return production_autonomous_learning_payload_from_baseline(
         request_text,
         symbol=symbol,
@@ -136,6 +153,10 @@ def production_autonomous_learning_payload_from_baseline(
     candidate_strategy = _as_dict(candidate.get("strategy"))
     external = dict(external_research or _empty_external_research(symbol))
     grounded_evidence = _grounded_evidence_records(external)
+    multi_source_research = _as_dict(external.get("multi_source_research"))
+    multi_source_grounded_evidence = _multi_source_grounded_evidence_records(multi_source_research)
+    if not grounded_evidence and multi_source_grounded_evidence:
+        grounded_evidence = multi_source_grounded_evidence
     hypotheses = _evidence_backed_hypotheses(
         grounded_evidence,
         baseline_strategy=baseline_strategy,
@@ -157,6 +178,8 @@ def production_autonomous_learning_payload_from_baseline(
         ExternalResearchTerminalState.EVIDENCE_SUFFICIENT.value,
         ExternalResearchTerminalState.UNRESOLVED_CONFLICT.value,
     }
+    if not external_ready and multi_source_grounded_evidence:
+        external_ready = multi_source_research.get("state") in {"success", "partial_success"}
 
     experiment = _build_candidate_experiment(
         symbol=symbol,
@@ -232,10 +255,12 @@ def production_autonomous_learning_payload_from_baseline(
         "real_data_required": True,
         "blockers": production_blockers,
         "external_research": external,
+        "multi_source_research": multi_source_research,
         "grounded_evidence": grounded_evidence,
         "hypotheses": hypotheses,
         "candidate_experiments": candidate_experiments,
         "authoritative_candidate_validation": authoritative_validation,
+        "validation_sample_diagnostics": validation_sample_diagnostics(baseline),
         "validation": validation.to_json(),
         "ranking": ranking.to_json(),
         "promotion_candidate": promotion.to_json(),
@@ -1198,6 +1223,62 @@ def _run_production_external_research(
     return payload
 
 
+def _run_production_multi_source_research(
+    request_text: str,
+    *,
+    symbol: str,
+    baseline: Mapping[str, object],
+    academic_external: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Run the production multi-source contract without release-check fixtures.
+
+    Sprint 193-198 intentionally separates provider contracts from concrete
+    network integrations. Unconfigured production adapters report
+    `not_configured`; they do not synthesize claims or promotion evidence.
+    """
+
+    academic_state = str(academic_external.get("state") or ExternalResearchTerminalState.CONTENT_UNAVAILABLE.value)
+    academic_provider_state = ProviderState.CONTENT_UNAVAILABLE
+    academic_claim_texts = tuple(
+        str(item.get("verbatim_excerpt") or item.get("claim_text") or "")
+        for item in _grounded_evidence_records(academic_external)
+        if str(item.get("verbatim_excerpt") or item.get("claim_text") or "").strip()
+    )
+    if academic_claim_texts and academic_state in {
+        ExternalResearchTerminalState.EVIDENCE_SUFFICIENT.value,
+        ExternalResearchTerminalState.UNRESOLVED_CONFLICT.value,
+    }:
+        academic_provider_state = ProviderState.SUCCESS
+    adapters = (
+        DeterministicMultiSourceAdapter(
+            SourceCategory.ACADEMIC,
+            state=academic_provider_state,
+            claim_texts=academic_claim_texts,
+            provider="production:academic_external_research",
+            fixture_backed=False,
+        ),
+        DeterministicMultiSourceAdapter(SourceCategory.OFFICIAL_MARKET, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        DeterministicMultiSourceAdapter(SourceCategory.CORPORATE, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        DeterministicMultiSourceAdapter(SourceCategory.REGULATORY, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        DeterministicMultiSourceAdapter(SourceCategory.NEWS, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        DeterministicMultiSourceAdapter(SourceCategory.PROFESSIONAL_RESEARCH, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        DeterministicMultiSourceAdapter(SourceCategory.WEB, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        DeterministicMultiSourceAdapter(SourceCategory.YOUTUBE, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        DeterministicMultiSourceAdapter(SourceCategory.COMMUNITY, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+        DeterministicMultiSourceAdapter(SourceCategory.SOCIAL, state=ProviderState.NOT_CONFIGURED, fixture_backed=False),
+    )
+    plan = MultiSourceResearchPlan(
+        plan_id=f"multi-source-plan:{_hash({'symbol': symbol, 'request_text': request_text})[:16]}",
+        symbol=symbol,
+        research_topic="breakout strategy robustness and improvement evidence",
+        strategy_family="breakout",
+        providers=tuple(adapter.category for adapter in adapters),
+        queries={adapter.category.value: (request_text,) for adapter in adapters},
+        policy=MultiSourceResearchPolicy(),
+    )
+    return MultiSourceResearchOrchestrator(adapters).run(plan, validation_payload=baseline)
+
+
 def _external_research_observability(
     payload: Mapping[str, object],
     *,
@@ -1522,6 +1603,60 @@ def _grounded_evidence_records(external_research: Mapping[str, object]) -> list[
                 "verbatim_excerpt": claim_text,
                 "source_span": {"type": "normalized_claim_sentence", "ordinal": index},
                 "extraction_method": "safe_content_normalized_claim_bridge",
+                "metadata_only": False,
+                "fixture_backed": False,
+                "grounded": True,
+                "knowledge_validated": False,
+                "production_approved": False,
+                "strategy_mutated": False,
+                "order_executed": False,
+            }
+        )
+    return records
+
+
+def _multi_source_grounded_evidence_records(multi_source_research: Mapping[str, object]) -> list[dict[str, object]]:
+    bundle = _as_dict(multi_source_research.get("evidence_bundle"))
+    acquired_rows = [
+        _as_dict(source)
+        for report in (_as_dict(item) for item in _as_list(multi_source_research.get("provider_reports")))
+        for source in _as_list(report.get("acquired"))
+    ]
+    source_lookup = {
+        str(item.get("source_id")): item
+        for item in acquired_rows
+        if item.get("source_id")
+    }
+    records: list[dict[str, object]] = []
+    claims = _as_list(bundle.get("supporting_claims")) + _as_list(bundle.get("contradicting_claims"))
+    for index, row in enumerate(claims, start=1):
+        claim = _as_dict(row)
+        source_id = str(claim.get("source_id") or "")
+        source = source_lookup.get(source_id, {})
+        if claim.get("metadata_only") is True or claim.get("fixture_backed") is True:
+            continue
+        if source.get("acquisition_state") not in {AcquisitionState.CONTENT_ACQUIRED.value, AcquisitionState.TRANSCRIPT_ACQUIRED.value}:
+            continue
+        content_hash = str(claim.get("content_hash") or source.get("content_hash") or "")
+        claim_text = str(claim.get("verbatim_text") or claim.get("normalized_claim") or "").strip()
+        if len(content_hash) != 64 or not claim_text:
+            continue
+        records.append(
+            {
+                "evidence_id": f"grounded-evidence:multi-source:{_hash({'claim_id': claim.get('claim_id'), 'source_id': source_id, 'hash': content_hash})}",
+                "claim_id": claim.get("claim_id"),
+                "source_id": source_id,
+                "source_locator": source.get("final_url"),
+                "content_url": source.get("final_url"),
+                "final_url": source.get("final_url"),
+                "content_type": source.get("content_type"),
+                "content_sha256": content_hash,
+                "retrieval_timestamp": source.get("acquired_at"),
+                "verbatim_excerpt": claim_text,
+                "source_span": {"type": "multi_source_claim", "ordinal": index},
+                "extraction_method": "multi_source_evidence_bundle",
+                "source_category": claim.get("source_category"),
+                "credibility_tier": claim.get("credibility_tier"),
                 "metadata_only": False,
                 "fixture_backed": False,
                 "grounded": True,

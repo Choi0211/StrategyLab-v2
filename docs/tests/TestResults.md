@@ -2,6 +2,31 @@
 
 Status: Passed
 
+## Sprint 193-198 Multi-Source Autonomous Research
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\multi_source_research.py src\gaon\knowledge\telegram_autonomous_learning.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_multi_source_research -q`: PASS, 3 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_sprint193_198_multi_source_autonomous_research_release_checks_pass -q`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-production-multi-source-research-contract-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-web-news-research-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-youtube-research-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-community-idea-research-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-evidence-fusion-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-source-independence-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-cross-source-conflict-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-multi-source-experiment-loop-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-prompt-injection-safety-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-validation-sample-diagnostic-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 826 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 197 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no unrestricted crawling/paywall bypass, no fabricated metrics/evidence.
+
 ## Hotfix 192.3 Resilient Academic Source Fallback
 
 - Targeted local verification:

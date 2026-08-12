@@ -3,6 +3,41 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 193-198 Multi-Source Autonomous Research
+
+Autonomous Learning V2 now has a unified multi-source research contract that
+models academic, official market, corporate, regulatory, news, professional
+research, web, YouTube, community, and social sources without broadening
+production network permissions.
+
+The new evidence fusion layer records credibility tiers, normalized-claim
+deduplication, source independence, cross-source contradiction state, acquired
+content hashes, and validation sample diagnostics. Metadata-only records and
+unconfigured providers remain fail-closed and cannot create promotion evidence.
+
+Production Telegram attaches multi-source research as structured context while
+preserving the existing real KRX/Yahoo baseline, authoritative validation, and
+human-only promotion gate.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-production-multi-source-research-contract-release-check
+python -m gaon.runtime.cli gaon-production-web-news-research-release-check
+python -m gaon.runtime.cli gaon-production-youtube-research-release-check
+python -m gaon.runtime.cli gaon-production-community-idea-research-release-check
+python -m gaon.runtime.cli gaon-production-evidence-fusion-release-check
+python -m gaon.runtime.cli gaon-production-source-independence-release-check
+python -m gaon.runtime.cli gaon-production-cross-source-conflict-release-check
+python -m gaon.runtime.cli gaon-production-multi-source-experiment-loop-release-check
+python -m gaon.runtime.cli gaon-production-research-prompt-injection-safety-release-check
+python -m gaon.runtime.cli gaon-production-validation-sample-diagnostic-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged: no live trading, no
+KIS/Broker order, no automatic Champion promotion, no approval bypass, no
+strategy mutation, and no fabricated evidence or metrics.
+
 ## Hotfix 192.3 Resilient Academic Source Fallback
 
 Production Telegram Autonomous Learning V2 now attempts multiple relevant

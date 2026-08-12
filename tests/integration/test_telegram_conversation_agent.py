@@ -1629,6 +1629,23 @@ class TelegramConversationAgentTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(cli_main([command]), 0)
 
+    def test_sprint193_198_multi_source_autonomous_research_release_checks_pass(self) -> None:
+        commands = (
+            "gaon-production-multi-source-research-contract-release-check",
+            "gaon-production-web-news-research-release-check",
+            "gaon-production-youtube-research-release-check",
+            "gaon-production-community-idea-research-release-check",
+            "gaon-production-evidence-fusion-release-check",
+            "gaon-production-source-independence-release-check",
+            "gaon-production-cross-source-conflict-release-check",
+            "gaon-production-multi-source-experiment-loop-release-check",
+            "gaon-production-research-prompt-injection-safety-release-check",
+            "gaon-production-validation-sample-diagnostic-release-check",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(cli_main([command]), 0)
+
     def test_sprint153_conversational_reasoning_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-conversational-reasoning-release-check", "--db", ":memory:"]), 0)
 

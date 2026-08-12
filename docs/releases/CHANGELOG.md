@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 193-198 - Multi-Source Autonomous Research
+
+- Added `gaon.knowledge.multi_source_research` with unified discovery, acquired-source, claim, EvidenceBundle, credibility, independence, conflict, and sample diagnostic contracts.
+- Modeled academic, official market, corporate, regulatory, news, professional research, web, YouTube, community, and social source categories with deterministic release-check adapters and fail-closed unconfigured production states.
+- Connected production Telegram Autonomous Learning V2 to structured multi-source context without calling release-check fixtures or fabricating content/evidence.
+- Blocked metadata-only and fixture-backed records from claims, validation evidence, ranking, promotion, human approval, strategy mutation, and orders.
+- Added CLI release checks for multi-source contracts, web/news, YouTube, community ideas, evidence fusion, source independence, cross-source conflict, experiment loop, prompt-injection safety, and validation sample diagnostics.
+- Preserved schema v36, real/fixture provenance, no unrestricted crawling, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated evidence/metrics.
+
 ## Hotfix 192.3 - Resilient Academic Source Fallback
 
 - Split Autonomous Learning V2 external research source budgets into relevant candidates, resolution attempts, acquisition attempts, acquired sources, and grounded evidence sources.
