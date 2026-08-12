@@ -2,6 +2,33 @@
 
 Status: Passed
 
+## Sprint 199-240 Autonomous Quant Research Partner
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\autonomous_quant_partner.py src\gaon\knowledge\telegram_autonomous_learning.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner -q`: PASS, 4 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_sprint199_240_autonomous_quant_partner_release_checks_pass -q`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-production-provider-registry-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-authoritative-source-acquisition-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-source-diversification-planner-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-counter-evidence-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-validation-sufficiency-v2-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-iterative-research-loop-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-robust-strategy-validation-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-strategy-tournament-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-learning-memory-closed-loop-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-promotion-readiness-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-observability-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-autonomous-quant-partner-acceptance-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 830 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 198 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fixture/metadata-only promotion evidence, no fabricated metrics/evidence.
+
 ## Sprint 193-198 Multi-Source Autonomous Research
 
 - Targeted local verification:

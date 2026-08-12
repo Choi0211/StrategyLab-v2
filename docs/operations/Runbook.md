@@ -71,6 +71,18 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-multi-source-experiment-loop-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-research-prompt-injection-safety-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-validation-sample-diagnostic-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-provider-registry-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-authoritative-source-acquisition-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-source-diversification-planner-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-counter-evidence-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-validation-sufficiency-v2-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-iterative-research-loop-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-robust-strategy-validation-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-strategy-tournament-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-learning-memory-closed-loop-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-promotion-readiness-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-research-observability-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-quant-partner-acceptance-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -79,9 +91,12 @@ resolution, resilient fallback after an unavailable relevant source, bounded
 source-attempt budgets, content-grounded evidence, evidence-backed hypotheses,
 candidate experiment lineage, authoritative real candidate validation, robust
 state semantics, multi-source provider contracts, source independence,
-cross-source conflict detection, validation sample diagnostics, robustness
-ranking, and the human-only promotion gate without mutating strategy
-configuration or placing orders.
+cross-source conflict detection, validation sample diagnostics, autonomous
+source diversification, counter-evidence search, bounded iterative research,
+robust strategy validation, candidate tournament ranking, learning-memory
+closed-loop recording, promotion readiness, production observability, and the
+human-only promotion gate without mutating strategy configuration or placing
+orders.
 
 ## Phase A Diagnostics
 

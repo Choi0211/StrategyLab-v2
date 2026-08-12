@@ -298,6 +298,18 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-multi-source-experiment-loop-release-check")
     sub.add_parser("gaon-production-research-prompt-injection-safety-release-check")
     sub.add_parser("gaon-production-validation-sample-diagnostic-release-check")
+    sub.add_parser("gaon-production-provider-registry-release-check")
+    sub.add_parser("gaon-production-authoritative-source-acquisition-release-check")
+    sub.add_parser("gaon-production-source-diversification-planner-release-check")
+    sub.add_parser("gaon-production-counter-evidence-release-check")
+    sub.add_parser("gaon-production-validation-sufficiency-v2-release-check")
+    sub.add_parser("gaon-production-iterative-research-loop-release-check")
+    sub.add_parser("gaon-production-robust-strategy-validation-release-check")
+    sub.add_parser("gaon-production-strategy-tournament-release-check")
+    sub.add_parser("gaon-production-learning-memory-closed-loop-release-check")
+    sub.add_parser("gaon-production-promotion-readiness-release-check")
+    sub.add_parser("gaon-production-research-observability-release-check")
+    sub.add_parser("gaon-production-autonomous-quant-partner-acceptance-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2412,6 +2424,61 @@ def _run(args: argparse.Namespace) -> int:
             f"candidate_experiments={payload['candidate_experiments']} "
             f"sufficiency_status={payload['sufficiency_status']} "
             f"promotion_status={payload['promotion_status']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command in {
+        "gaon-production-provider-registry-release-check",
+        "gaon-production-authoritative-source-acquisition-release-check",
+        "gaon-production-source-diversification-planner-release-check",
+        "gaon-production-counter-evidence-release-check",
+        "gaon-production-validation-sufficiency-v2-release-check",
+        "gaon-production-iterative-research-loop-release-check",
+        "gaon-production-robust-strategy-validation-release-check",
+        "gaon-production-strategy-tournament-release-check",
+        "gaon-production-learning-memory-closed-loop-release-check",
+        "gaon-production-promotion-readiness-release-check",
+        "gaon-production-research-observability-release-check",
+        "gaon-production-autonomous-quant-partner-acceptance-release-check",
+    }:
+        from gaon.knowledge.autonomous_quant_partner import (
+            production_authoritative_source_acquisition_release_check,
+            production_autonomous_quant_partner_acceptance_release_check,
+            production_counter_evidence_release_check,
+            production_iterative_research_loop_release_check,
+            production_learning_memory_closed_loop_release_check,
+            production_promotion_readiness_release_check,
+            production_provider_registry_release_check,
+            production_research_observability_release_check,
+            production_robust_strategy_validation_release_check,
+            production_source_diversification_planner_release_check,
+            production_strategy_tournament_release_check,
+            production_validation_sufficiency_v2_release_check,
+        )
+
+        handlers = {
+            "gaon-production-provider-registry-release-check": production_provider_registry_release_check,
+            "gaon-production-authoritative-source-acquisition-release-check": production_authoritative_source_acquisition_release_check,
+            "gaon-production-source-diversification-planner-release-check": production_source_diversification_planner_release_check,
+            "gaon-production-counter-evidence-release-check": production_counter_evidence_release_check,
+            "gaon-production-validation-sufficiency-v2-release-check": production_validation_sufficiency_v2_release_check,
+            "gaon-production-iterative-research-loop-release-check": production_iterative_research_loop_release_check,
+            "gaon-production-robust-strategy-validation-release-check": production_robust_strategy_validation_release_check,
+            "gaon-production-strategy-tournament-release-check": production_strategy_tournament_release_check,
+            "gaon-production-learning-memory-closed-loop-release-check": production_learning_memory_closed_loop_release_check,
+            "gaon-production-promotion-readiness-release-check": production_promotion_readiness_release_check,
+            "gaon-production-research-observability-release-check": production_research_observability_release_check,
+            "gaon-production-autonomous-quant-partner-acceptance-release-check": production_autonomous_quant_partner_acceptance_release_check,
+        }
+        payload = handlers[args.command]()
+        print(
+            f"{args.command}: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} "
+            f"stop_reason={payload['stop_reason']} "
+            f"approval_required={str(payload['approval_required']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"

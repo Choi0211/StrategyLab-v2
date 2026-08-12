@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 199-240 - Autonomous Quant Research Partner
+
+- Added `gaon.knowledge.autonomous_quant_partner` with ResearchBudget, ResearchGapReport, NextResearchAction, RobustnessReport, CandidateRanking, and PromotionReadinessReport contracts.
+- Added production provider-registry, authoritative source-acquisition, source-diversification, counter-evidence, validation sufficiency V2, iterative loop, robust validation, tournament, learning-memory closed-loop, promotion-readiness, observability, and final acceptance release checks.
+- Connected the partner payload into Telegram Autonomous Learning V2 under `autonomous_learning_v2.autonomous_quant_partner` without breaking existing response contracts.
+- Modeled bounded iteration stop reasons: sufficient evidence, budget exhausted, no safe next action, blocked provider, and human approval required.
+- Preserved metadata-only and fixture evidence blocking, source provenance, no fabricated metrics, no auto Champion promotion, no strategy mutation, no KIS/Broker orders, and no live trading.
+- Preserved schema v36.
+
 ## Sprint 193-198 - Multi-Source Autonomous Research
 
 - Added `gaon.knowledge.multi_source_research` with unified discovery, acquired-source, claim, EvidenceBundle, credibility, independence, conflict, and sample diagnostic contracts.
