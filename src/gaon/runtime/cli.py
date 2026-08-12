@@ -285,6 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-relevant-academic-discovery-release-check")
     sub.add_parser("gaon-production-safe-doi-redirect-release-check")
     sub.add_parser("gaon-production-relevant-academic-content-loop-release-check")
+    sub.add_parser("gaon-production-academic-source-fallback-release-check")
+    sub.add_parser("gaon-production-academic-source-budget-release-check")
+    sub.add_parser("gaon-production-autonomous-learning-state-semantics-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2299,6 +2302,52 @@ def _run(args: argparse.Namespace) -> int:
             f"promotion_status={payload['promotion_status']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-academic-source-fallback-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_academic_source_fallback_release_check
+
+        payload = production_academic_source_fallback_release_check()
+        print(
+            "gaon-production-academic-source-fallback-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"state={payload['state']} "
+            f"relevant={payload['relevant_result_count']} "
+            f"resolution_attempts={payload['resolution_attempt_count']} "
+            f"acquisition_attempts={payload['acquisition_attempt_count']} "
+            f"grounded_sources={payload['grounded_source_count']} "
+            f"promotion_status={payload['promotion_status']} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-academic-source-budget-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_academic_source_budget_release_check
+
+        payload = production_academic_source_budget_release_check()
+        print(
+            "gaon-production-academic-source-budget-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"state={payload['state']} "
+            f"resolution_attempts={payload['resolution_attempt_count']} "
+            f"acquisition_attempts={payload['acquisition_attempt_count']} "
+            f"acquired_sources={payload['acquired_source_count']} "
+            f"grounded_sources={payload['grounded_source_count']} "
+            f"duplicate_skipped={str(payload['duplicate_skipped']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-autonomous-learning-state-semantics-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_autonomous_learning_state_semantics_release_check
+
+        payload = production_autonomous_learning_state_semantics_release_check()
+        print(
+            "gaon-production-autonomous-learning-state-semantics-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"real_missing_promotion_status={payload['real_missing_promotion_status']} "
+            f"real_missing_hypothesis_status={payload['real_missing_hypothesis_status']} "
+            f"fixture_promotion_status={payload['fixture_promotion_status']} "
+            f"real_ready_hypothesis_status={payload['real_ready_hypothesis_status']} "
             "safety=pass"
         )
 

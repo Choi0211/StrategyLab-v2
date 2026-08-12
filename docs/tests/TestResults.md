@@ -2,6 +2,24 @@
 
 Status: Passed
 
+## Hotfix 192.3 Resilient Academic Source Fallback
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_external_research_execution tests.unit.test_autonomous_learning_e2e -q`: PASS, 50 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_sprint187_192_production_autonomous_learning_loop_release_checks_pass -q`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-production-relevant-academic-content-loop-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-academic-source-fallback-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-academic-source-budget-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-autonomous-learning-state-semantics-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 823 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 196 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS with Windows line-ending warnings only
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no 403/paywall bypass, no fabricated metrics/evidence.
+
 ## Sprint 187-192 Integrated Autonomous Learning Production Loop
 
 - Targeted local verification:

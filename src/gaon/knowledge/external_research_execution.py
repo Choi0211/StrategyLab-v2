@@ -47,6 +47,7 @@ class ExternalResearchTerminalState(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     PROVIDER_FAILURE = "provider_failure"
     CONTENT_UNAVAILABLE = "content_unavailable"
+    ACADEMIC_CONTENT_EXHAUSTED = "academic_content_exhausted"
     NO_RELEVANT_RESEARCH_PATH = "no_relevant_research_path"
     DATA_FAILURE = "data_failure"
 
@@ -56,6 +57,11 @@ class ExternalResearchExecutionPolicy:
     max_iterations: int = 1
     max_provider_calls: int = 2
     max_sources: int = 2
+    max_relevant_candidates: int | None = None
+    max_resolution_attempts: int | None = None
+    max_content_acquisition_attempts: int | None = None
+    max_acquired_sources: int | None = None
+    max_grounded_sources: int | None = None
     max_total_download_bytes: int = 64_000
     content_network_enabled: bool = False
     allowed_content_hosts: tuple[str, ...] = ()
@@ -67,8 +73,38 @@ class ExternalResearchExecutionPolicy:
             raise ValueError("max_provider_calls must be positive")
         if self.max_sources <= 0:
             raise ValueError("max_sources must be positive")
+        for name in (
+            "max_relevant_candidates",
+            "max_resolution_attempts",
+            "max_content_acquisition_attempts",
+            "max_acquired_sources",
+            "max_grounded_sources",
+        ):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive")
         if self.max_total_download_bytes <= 0:
             raise ValueError("max_total_download_bytes must be positive")
+
+    @property
+    def relevant_candidate_limit(self) -> int:
+        return self.max_relevant_candidates or self.max_sources
+
+    @property
+    def resolution_attempt_limit(self) -> int:
+        return self.max_resolution_attempts or self.max_sources
+
+    @property
+    def content_acquisition_attempt_limit(self) -> int:
+        return self.max_content_acquisition_attempts or self.max_sources
+
+    @property
+    def acquired_source_limit(self) -> int:
+        return self.max_acquired_sources or self.max_sources
+
+    @property
+    def grounded_source_limit(self) -> int:
+        return self.max_grounded_sources or self.max_sources
 
 
 class ContentResolver(Protocol):
@@ -570,6 +606,49 @@ def _doi_from_locator(locator: str) -> str | None:
     return None
 
 
+def _source_attempt_key(result: object) -> str:
+    doi = str(getattr(result, "doi", "") or "").strip().lower()
+    if doi:
+        return f"doi:{doi.removeprefix('doi:')}"
+    locator = str(getattr(result, "locator", "") or "").strip().lower()
+    parsed = urlparse(locator)
+    if parsed.scheme == "https" and parsed.hostname and parsed.hostname.lower() == "doi.org":
+        return f"doi:{parsed.path.lstrip('/').lower()}"
+    return f"locator:{locator}"
+
+
+def _grounded_source_target(question: ResearchQuestion, policy: ExternalResearchExecutionPolicy) -> int:
+    required = [
+        item.minimum_independent_sources
+        for item in question.required_evidence
+        if item.minimum_independent_sources > 0
+    ]
+    minimum = max(required) if required else 1
+    return min(policy.grounded_source_limit, minimum)
+
+
+def _grounded_source_count(candidates: list[KnowledgeCandidate]) -> int:
+    return len({candidate.source_id for candidate in candidates if candidate.source_id})
+
+
+def _attempted_all_relevant_sources(
+    selected_results: list[object],
+    resolution_records: list[ContentResolutionRecord],
+    acquisition_records: list[ContentAcquisitionRecord],
+) -> bool:
+    attempted_ids = {
+        record.discovery_result_id
+        for record in resolution_records
+    } | {
+        record.discovery_result_id
+        for record in acquisition_records
+    }
+    return bool(selected_results) and all(
+        str(getattr(result, "result_id", "")) in attempted_ids
+        for result in selected_results
+    )
+
+
 def _locator_kind(locator: str, *, doi: str | None) -> str:
     value = locator.strip()
     if doi and value.startswith("10."):
@@ -650,8 +729,8 @@ class AutonomousExternalResearchExecutor:
         self.planner = planner or SourceDiscoveryPlanner(
             budget=DiscoveryBudget(
                 max_queries=self.policy.max_provider_calls,
-                max_results_per_query=self.policy.max_sources,
-                max_total_results=self.policy.max_sources,
+                max_results_per_query=self.policy.relevant_candidate_limit,
+                max_total_results=self.policy.relevant_candidate_limit,
             )
         )
         self.discovery_executor = discovery_executor or BoundedSourceDiscoveryExecutor()
@@ -685,6 +764,9 @@ class AutonomousExternalResearchExecutor:
         downloaded_bytes = 0
         acquired = 0
         seen_results: set[str] = set()
+        seen_source_keys: set[str] = set()
+        resolution_attempts = 0
+        acquisition_attempts = 0
 
         plan = self.planner.build(question)
         execution = self.discovery_executor.execute(plan)
@@ -714,6 +796,11 @@ class AutonomousExternalResearchExecutor:
             if relevance.relevance_status is not AcademicRelevanceStatus.RELEVANT:
                 blockers.append(f"{relevance.relevance_status.value}:{result.result_id}")
                 continue
+            source_key = _source_attempt_key(result)
+            if source_key in seen_source_keys:
+                blockers.append(f"duplicate_source_candidate:{result.result_id}")
+                continue
+            seen_source_keys.add(source_key)
             selected_results.append(result)
 
         selected_results = sorted(
@@ -724,12 +811,22 @@ class AutonomousExternalResearchExecutor:
                 if record.discovery_result_id == str(getattr(item, "result_id", ""))
             ),
             reverse=True,
-        )[: self.policy.max_sources]
+        )[: self.policy.relevant_candidate_limit]
 
         for result in selected_results:
+            if _grounded_source_count(candidates) >= _grounded_source_target(question, self.policy):
+                blockers.append(f"evidence_sufficiency_reached:{result.result_id}")
+                break
+            if acquired >= self.policy.acquired_source_limit:
+                blockers.append(f"acquired_source_budget_exhausted:{result.result_id}")
+                break
             if not self.policy.content_network_enabled:
                 blockers.append(f"content_unavailable:{result.result_id}")
                 continue
+            if resolution_attempts >= self.policy.resolution_attempt_limit:
+                blockers.append(f"resolution_budget_exhausted:{result.result_id}")
+                break
+            resolution_attempts += 1
             resolution = self._resolve_content(result)
             resolution_records.append(resolution)
             content_url = resolution.resolved_content_url
@@ -740,6 +837,10 @@ class AutonomousExternalResearchExecutor:
             }:
                 blockers.append(f"{resolution.status.value}:{result.result_id}")
                 continue
+            if acquisition_attempts >= self.policy.content_acquisition_attempt_limit:
+                blockers.append(f"acquisition_budget_exhausted:{result.result_id}")
+                break
+            acquisition_attempts += 1
             target = ContentAcquisitionTarget.from_discovery(result, content_url=content_url)
             acquisition = self.acquirer.acquire(target)
             acquisition_records.append(acquisition)
@@ -768,10 +869,17 @@ class AutonomousExternalResearchExecutor:
                 blockers.append(f"claim_bridge_failed:{result.result_id}:{bridge.status.value}")
                 continue
             candidates.extend(bridge.candidates)
+            if _grounded_source_count(candidates) >= _grounded_source_target(question, self.policy):
+                continue
 
         if blockers and not candidates:
             if relevance_records and not any(item.selected_for_content_acquisition for item in relevance_records):
                 state = ExternalResearchTerminalState.NO_RELEVANT_RESEARCH_PATH
+            elif _attempted_all_relevant_sources(selected_results, resolution_records, acquisition_records) and any(
+                record.status is not ContentResolutionStatus.CONTENT_UNAVAILABLE
+                for record in resolution_records
+            ):
+                state = ExternalResearchTerminalState.ACADEMIC_CONTENT_EXHAUSTED
             else:
                 state = ExternalResearchTerminalState.CONTENT_UNAVAILABLE
             return self._result(state, question, execution, tuple(acquisition_records), tuple(normalized), (), None, blockers, acquired, downloaded_bytes, tuple(resolution_records), tuple(relevance_records))
