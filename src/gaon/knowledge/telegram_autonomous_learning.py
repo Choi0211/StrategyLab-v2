@@ -72,6 +72,8 @@ PRODUCTION_EXTERNAL_ALLOWED_CONTENT_TYPES = (
     "application/json",
     "application/pdf",
 )
+PRODUCTION_AUTONOMOUS_LEARNING_MAX_HYPOTHESES = 3
+PRODUCTION_AUTONOMOUS_LEARNING_MAX_EXPERIMENTS = 3
 
 
 def telegram_autonomous_learning_payload(
@@ -125,6 +127,13 @@ def production_autonomous_learning_payload_from_baseline(
     candidate_backtest = _as_dict(candidate.get("backtest_result"))
     candidate_strategy = _as_dict(candidate.get("strategy"))
     external = dict(external_research or _empty_external_research(symbol))
+    grounded_evidence = _grounded_evidence_records(external)
+    hypotheses = _evidence_backed_hypotheses(
+        grounded_evidence,
+        baseline_strategy=baseline_strategy,
+        candidate=candidate,
+        symbol=symbol,
+    )
 
     baseline_fixture = bool(
         metadata.get("fixture_backed")
@@ -136,7 +145,10 @@ def production_autonomous_learning_payload_from_baseline(
         or not candidate_backtest
         or _as_dict(candidate_backtest.get("strategy")).get("fingerprint") != candidate_strategy.get("fingerprint")
     )
-    external_ready = external.get("state") == ExternalResearchTerminalState.EVIDENCE_SUFFICIENT.value
+    external_ready = bool(grounded_evidence) and external.get("state") in {
+        ExternalResearchTerminalState.EVIDENCE_SUFFICIENT.value,
+        ExternalResearchTerminalState.UNRESOLVED_CONFLICT.value,
+    }
 
     experiment = _build_candidate_experiment(
         symbol=symbol,
@@ -162,6 +174,30 @@ def production_autonomous_learning_payload_from_baseline(
         evidence=evidence,
         promotion_status=promotion.status.value,
     )
+    candidate_experiments = _candidate_experiment_records(
+        hypotheses,
+        experiment=experiment,
+        candidate=candidate,
+        candidate_backtest=candidate_backtest,
+        metadata=metadata,
+    )
+    authoritative_validation = _authoritative_candidate_validation(
+        experiment=experiment,
+        evidence=evidence,
+        validation=validation.to_json(),
+        candidate=candidate,
+        candidate_backtest=candidate_backtest,
+    )
+    production_blockers.extend(
+        _production_loop_blockers(
+            grounded_evidence=grounded_evidence,
+            hypotheses=hypotheses,
+            candidate_experiments=candidate_experiments,
+            authoritative_validation=authoritative_validation,
+            ranking=ranking.to_json(),
+        )
+    )
+    production_blockers = list(dict.fromkeys(production_blockers))
     promotion_status = promotion.status.value
     human_gate_status = "awaiting_human_approval" if promotion.status is PromotionGateStatus.REQUIRES_HUMAN_APPROVAL else "not_requested"
     if production_blockers:
@@ -187,9 +223,23 @@ def production_autonomous_learning_payload_from_baseline(
         "real_data_required": True,
         "blockers": production_blockers,
         "external_research": external,
+        "grounded_evidence": grounded_evidence,
+        "hypotheses": hypotheses,
+        "candidate_experiments": candidate_experiments,
+        "authoritative_candidate_validation": authoritative_validation,
         "validation": validation.to_json(),
         "ranking": ranking.to_json(),
         "promotion_candidate": promotion.to_json(),
+        "production_loop": _production_loop_summary(
+            grounded_evidence=grounded_evidence,
+            hypotheses=hypotheses,
+            candidate_experiments=candidate_experiments,
+            authoritative_validation=authoritative_validation,
+            ranking=ranking.to_json(),
+            promotion_status=promotion_status,
+            human_gate_status=human_gate_status,
+            blockers=production_blockers,
+        ),
         "promotion_candidate_context": _promotion_candidate_context(
             symbol=symbol,
             baseline=baseline,
@@ -200,6 +250,10 @@ def production_autonomous_learning_payload_from_baseline(
             ranking=ranking.to_json(),
             promotion=promotion.to_json(),
             external_research=external,
+            grounded_evidence=grounded_evidence,
+            hypotheses=hypotheses,
+            candidate_experiments=candidate_experiments,
+            authoritative_candidate_validation=authoritative_validation,
             promotion_status=promotion_status,
             human_gate_status=human_gate_status,
             blockers=production_blockers,
@@ -452,10 +506,16 @@ def production_safe_content_acquisition_release_check() -> Mapping[str, object]:
         baseline=_release_baseline_payload(source="real"),
         external_research=external,
     )
+    fixture_payload = production_autonomous_learning_payload_from_baseline(
+        "fixture evidence remains blocked",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="fixture"),
+        external_research=external,
+    )
     observability = _as_dict(external.get("observability"))
     content_sources = [_as_dict(item) for item in _as_list(observability.get("content_sources"))]
     first_source = content_sources[0] if content_sources else {}
-    learning = _as_dict(payload.get("autonomous_learning_v2"))
     checks = {
         "allowed_content_acquired": external.get("state") in {
             ExternalResearchTerminalState.EVIDENCE_SUFFICIENT.value,
@@ -476,8 +536,9 @@ def production_safe_content_acquisition_release_check() -> Mapping[str, object]:
         == "content_blocked",
         "timeout_fail_closed": _blocked_content_state("https://content.example.org/timeout.html", failure=TimeoutError("timeout"))
         == "fetch_failure",
-        "fixture_promotion_blocked": payload.get("fixture_promotion_blocked") is True
-        and learning.get("promotion_status") == "needs_real_validation",
+        "fixture_promotion_blocked": fixture_payload.get("fixture_promotion_blocked") is True
+        and fixture_payload.get("promotion_status") == "blocked_fixture"
+        and fixture_payload.get("approval_required") is False,
         "no_mutation": not payload.get("strategy_mutated")
         and not payload.get("order_executed")
         and not payload.get("broker_order_called")
@@ -499,6 +560,128 @@ def production_safe_content_acquisition_release_check() -> Mapping[str, object]:
         "checks": checks,
         "safety": "pass",
     }
+
+
+def production_grounded_evidence_release_check() -> Mapping[str, object]:
+    payload = _release_production_learning_payload_with_content()
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    evidence = [_as_dict(item) for item in _as_list(learning.get("grounded_evidence"))]
+    checks = {
+        "content_acquired_evidence_present": bool(evidence),
+        "metadata_only_rejected": all(item.get("metadata_only") is False for item in evidence),
+        "content_hash_preserved": all(len(str(item.get("content_sha256") or "")) == 64 for item in evidence),
+        "source_lineage_present": bool(_as_list(_as_dict(learning.get("promotion_candidate_context")).get("source_lineage"))),
+        "no_fixture_evidence": all(item.get("fixture_backed") is False for item in evidence),
+    }
+    _raise_if_failed("production grounded evidence", checks)
+    return _release_stage_payload(payload, "grounded_evidence", checks)
+
+
+def production_evidence_backed_hypothesis_release_check() -> Mapping[str, object]:
+    payload = _release_production_learning_payload_with_content()
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    hypotheses = [_as_dict(item) for item in _as_list(learning.get("hypotheses"))]
+    checks = {
+        "hypothesis_present": bool(hypotheses),
+        "all_hypotheses_have_evidence": all(_as_list(item.get("evidence_ids")) for item in hypotheses),
+        "metadata_only_not_used": all(item.get("metadata_only") is False for item in hypotheses),
+        "fixture_not_used": all(item.get("fixture_backed") is False for item in hypotheses),
+        "strategy_delta_present": all(_as_list(item.get("changed_rules")) for item in hypotheses),
+    }
+    _raise_if_failed("production evidence-backed hypothesis", checks)
+    return _release_stage_payload(payload, "evidence_backed_hypothesis", checks)
+
+
+def production_strategy_experiment_release_check() -> Mapping[str, object]:
+    payload = _release_production_learning_payload_with_content()
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    experiments = [_as_dict(item) for item in _as_list(learning.get("candidate_experiments"))]
+    checks = {
+        "experiment_present": bool(experiments),
+        "candidate_backtest_executed": all(item.get("status") == "executed" for item in experiments),
+        "strategy_fingerprint_matched": all(item.get("strategy_fingerprint_matched") is True for item in experiments),
+        "real_dataset_used": all(str(item.get("dataset_source", "")).startswith("real:") for item in experiments),
+        "no_fixture_experiment": all(item.get("fixture_backed") is False for item in experiments),
+    }
+    _raise_if_failed("production strategy experiment", checks)
+    return _release_stage_payload(payload, "strategy_experiment", checks)
+
+
+def production_authoritative_candidate_validation_release_check() -> Mapping[str, object]:
+    payload = _release_production_learning_payload_with_content()
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    validation = _as_dict(learning.get("authoritative_candidate_validation"))
+    checks = {
+        "validation_status": validation.get("status") == "validated",
+        "authoritative_backtest_present": _as_dict(validation.get("checks")).get("authoritative_backtest_present") is True,
+        "backtest_source_real": _as_dict(validation.get("checks")).get("backtest_source_real") is True,
+        "fingerprint_matched": _as_dict(validation.get("checks")).get("candidate_strategy_fingerprint_matched") is True,
+        "metrics_present": _as_dict(validation.get("checks")).get("metrics_present") is True,
+    }
+    _raise_if_failed("production authoritative candidate validation", checks)
+    return _release_stage_payload(payload, "authoritative_candidate_validation", checks)
+
+
+def production_robustness_ranking_release_check() -> Mapping[str, object]:
+    payload = _release_production_learning_payload_with_content()
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    ranking = _as_dict(learning.get("ranking"))
+    ranked = [_as_dict(item) for item in _as_list(ranking.get("ranked"))]
+    checks = {
+        "ranking_status": ranking.get("status") == "ranked",
+        "ranked_candidate_present": bool(ranked),
+        "ranked_source_real": bool(ranked) and ranked[0].get("fixture_backed") is False,
+        "ranked_metrics_present": bool(ranked) and int(ranked[0].get("trade_count") or 0) > 0,
+        "ranking_not_mutating": payload.get("strategy_mutated") is False and payload.get("order_executed") is False,
+    }
+    _raise_if_failed("production robustness ranking", checks)
+    return _release_stage_payload(payload, "robustness_ranking", checks)
+
+
+def production_human_promotion_gate_release_check() -> Mapping[str, object]:
+    payload = _release_production_learning_payload_with_content()
+    fixture_payload = production_autonomous_learning_payload_from_baseline(
+        "fixture promotion must remain blocked",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="fixture"),
+        external_research=_release_content_external(),
+    )
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    checks = {
+        "human_gate_requested_for_real_review": payload.get("promotion_status") == "requires_human_approval"
+        and payload.get("human_gate_status") == "awaiting_human_approval",
+        "fixture_promotion_blocked": fixture_payload.get("promotion_status") == "blocked_fixture"
+        and fixture_payload.get("approval_required") is False,
+        "no_auto_promotion": payload.get("automatic_champion_promotion") is False,
+        "no_strategy_mutation": payload.get("strategy_mutated") is False and payload.get("automatic_config_apply") is False,
+        "no_orders": payload.get("broker_order_called") is False and payload.get("kis_order_called") is False,
+        "promotion_context_present": bool(learning.get("promotion_candidate_context")),
+    }
+    _raise_if_failed("production human promotion gate", checks)
+    return _release_stage_payload(payload, "human_promotion_gate", checks)
+
+
+def production_autonomous_learning_loop_release_check() -> Mapping[str, object]:
+    payload = _release_production_learning_payload_with_content()
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    loop = _as_dict(learning.get("production_loop"))
+    stages = _as_dict(loop.get("stages"))
+    checks = {
+        "grounded_evidence": stages.get("grounded_evidence") == "pass",
+        "evidence_backed_hypothesis": stages.get("evidence_backed_hypothesis") == "pass",
+        "strategy_experiment": stages.get("strategy_experiment") == "pass",
+        "authoritative_candidate_validation": stages.get("authoritative_candidate_validation") == "validated",
+        "robustness_ranking": stages.get("robustness_ranking") == "ranked",
+        "human_promotion_gate": stages.get("human_promotion_gate") == "awaiting_human_approval",
+        "no_fixture_or_metadata_promotion": payload.get("fixture_backed") is False
+        and payload.get("fixture_promotion_blocked") is False,
+        "safety": payload.get("safety") == "pass"
+        and payload.get("strategy_mutated") is False
+        and payload.get("order_executed") is False,
+    }
+    _raise_if_failed("production autonomous learning loop", checks)
+    return _release_stage_payload(payload, "production_autonomous_learning_loop", checks)
 
 
 def _run_production_external_research(
@@ -752,6 +935,252 @@ def _candidate_evidence(
     )
 
 
+def _grounded_evidence_records(external_research: Mapping[str, object]) -> list[dict[str, object]]:
+    provided = [
+        _as_dict(item)
+        for item in _as_list(external_research.get("grounded_evidence"))
+        if _as_dict(item).get("grounded") is True
+    ]
+    if provided:
+        return provided
+
+    acquisitions = {
+        str(item.get("source_id")): item
+        for item in (_as_dict(row) for row in _as_list(external_research.get("acquisition_records")))
+        if item.get("status") == "acquired" and item.get("source_id") and item.get("content_sha256")
+    }
+    normalized = {
+        str(item.get("source_id")): item
+        for item in (_as_dict(row) for row in _as_list(external_research.get("normalized_records")))
+        if item.get("status") == "normalized" and item.get("source_id") and item.get("raw_content_sha256")
+    }
+    discovery = _as_dict(external_research.get("discovery_run"))
+    discovery_results = {
+        str(item.get("result_id")): item
+        for item in (_as_dict(row) for row in _as_list(discovery.get("results")))
+        if item.get("result_id")
+    }
+    records: list[dict[str, object]] = []
+    for index, row in enumerate(_as_list(external_research.get("candidates")), start=1):
+        candidate = _as_dict(row)
+        source_id = str(candidate.get("source_id") or "")
+        acquisition = acquisitions.get(source_id)
+        normalized_record = normalized.get(source_id)
+        claim_text = str(candidate.get("claim_text") or "").strip()
+        claim_id = str(candidate.get("claim_id") or candidate.get("candidate_id") or "")
+        if not acquisition or not normalized_record or not claim_text or not claim_id:
+            continue
+        if acquisition.get("content_sha256") != normalized_record.get("raw_content_sha256"):
+            continue
+        discovery_result_id = str(acquisition.get("discovery_result_id") or normalized_record.get("discovery_result_id") or "")
+        discovery_result = discovery_results.get(discovery_result_id, {})
+        records.append(
+            {
+                "evidence_id": f"grounded-evidence:{_hash({'claim_id': claim_id, 'source_id': source_id, 'hash': acquisition.get('content_sha256')})}",
+                "claim_id": claim_id,
+                "claim_candidate_id": candidate.get("candidate_id"),
+                "source_id": source_id,
+                "discovery_result_id": discovery_result_id,
+                "title": discovery_result.get("title"),
+                "doi": discovery_result.get("doi"),
+                "source_locator": acquisition.get("source_locator") or discovery_result.get("locator"),
+                "content_url": acquisition.get("content_url"),
+                "final_url": acquisition.get("final_url"),
+                "content_type": acquisition.get("content_type"),
+                "content_sha256": acquisition.get("content_sha256"),
+                "normalized_source_id": normalized_record.get("source_id"),
+                "normalized_text_sha256": normalized_record.get("normalized_text_sha256"),
+                "retrieval_timestamp": acquisition.get("retrieved_at") or acquisition.get("created_at"),
+                "verbatim_excerpt": claim_text,
+                "source_span": {"type": "normalized_claim_sentence", "ordinal": index},
+                "extraction_method": "safe_content_normalized_claim_bridge",
+                "metadata_only": False,
+                "fixture_backed": False,
+                "grounded": True,
+                "knowledge_validated": False,
+                "production_approved": False,
+                "strategy_mutated": False,
+                "order_executed": False,
+            }
+        )
+    return records
+
+
+def _evidence_backed_hypotheses(
+    grounded_evidence: list[dict[str, object]],
+    *,
+    baseline_strategy: Mapping[str, object],
+    candidate: Mapping[str, object],
+    symbol: str,
+) -> list[dict[str, object]]:
+    if not grounded_evidence or not candidate:
+        return []
+    candidate_strategy = _as_dict(candidate.get("strategy"))
+    changed_rules = tuple(str(item) for item in _as_list(candidate.get("changed_fields")) if str(item))
+    if not changed_rules:
+        return []
+    hypotheses: list[dict[str, object]] = []
+    for evidence in grounded_evidence[:PRODUCTION_AUTONOMOUS_LEARNING_MAX_HYPOTHESES]:
+        claim_text = str(evidence.get("verbatim_excerpt") or "")
+        if not claim_text:
+            continue
+        hypotheses.append(
+            {
+                "hypothesis_id": f"strategy-hypothesis:{_hash({'symbol': symbol, 'claim_id': evidence.get('claim_id'), 'candidate': candidate_strategy.get('fingerprint'), 'changed_rules': changed_rules})}",
+                "status": "evidence_backed",
+                "symbol": symbol,
+                "topic_key": "strategy.breakout.robustness",
+                "baseline_strategy_id": baseline_strategy.get("spec_id"),
+                "baseline_strategy_fingerprint": baseline_strategy.get("fingerprint"),
+                "candidate_strategy_fingerprint": candidate_strategy.get("fingerprint"),
+                "changed_rules": list(changed_rules),
+                "evidence_ids": [evidence.get("evidence_id")],
+                "claim_ids": [evidence.get("claim_id")],
+                "source_ids": [evidence.get("source_id")],
+                "rationale": claim_text,
+                "metadata_only": False,
+                "fixture_backed": False,
+                "strategy_mutated": False,
+                "order_executed": False,
+            }
+        )
+    return hypotheses
+
+
+def _candidate_experiment_records(
+    hypotheses: list[dict[str, object]],
+    *,
+    experiment: StrategyResearchExperiment,
+    candidate: Mapping[str, object],
+    candidate_backtest: Mapping[str, object],
+    metadata: Mapping[str, object],
+) -> list[dict[str, object]]:
+    candidate_strategy = _as_dict(candidate.get("strategy"))
+    backtest_strategy = _as_dict(candidate_backtest.get("strategy"))
+    records: list[dict[str, object]] = []
+    for hypothesis in hypotheses[:PRODUCTION_AUTONOMOUS_LEARNING_MAX_EXPERIMENTS]:
+        records.append(
+            {
+                "experiment_id": experiment.experiment_id,
+                "hypothesis_id": hypothesis.get("hypothesis_id"),
+                "status": "executed" if candidate_backtest else "needs_implementation",
+                "symbol": tuple(experiment.universe_symbols),
+                "start": experiment.start,
+                "end": experiment.end,
+                "changed_rules": list(experiment.changed_rules),
+                "baseline_strategy_fingerprint": experiment.baseline_strategy_fingerprint,
+                "candidate_strategy_fingerprint": candidate_strategy.get("fingerprint"),
+                "backtest_strategy_fingerprint": backtest_strategy.get("fingerprint"),
+                "candidate_backtest_result_id": candidate_backtest.get("result_id"),
+                "strategy_fingerprint_matched": bool(
+                    candidate_strategy.get("fingerprint")
+                    and candidate_strategy.get("fingerprint") == backtest_strategy.get("fingerprint")
+                ),
+                "dataset_source": metadata.get("source"),
+                "fixture_backed": bool(metadata.get("fixture_backed") or candidate_backtest.get("source") != "real"),
+                "evidence_ids": list(_as_list(hypothesis.get("evidence_ids"))),
+                "strategy_mutated": False,
+                "order_executed": False,
+            }
+        )
+    return records
+
+
+def _authoritative_candidate_validation(
+    *,
+    experiment: StrategyResearchExperiment,
+    evidence: AuthoritativeValidationEvidence | None,
+    validation: Mapping[str, object],
+    candidate: Mapping[str, object],
+    candidate_backtest: Mapping[str, object],
+) -> dict[str, object]:
+    candidate_strategy = _as_dict(candidate.get("strategy"))
+    backtest_strategy = _as_dict(candidate_backtest.get("strategy"))
+    metrics = _as_dict(candidate_backtest.get("metrics"))
+    checks = {
+        "authoritative_backtest_present": evidence is not None and bool(candidate_backtest),
+        "backtest_source_real": candidate_backtest.get("source") == "real",
+        "fixture_backed_false": bool(evidence and not evidence.fixture_backed),
+        "candidate_strategy_fingerprint_matched": bool(
+            candidate_strategy.get("fingerprint")
+            and candidate_strategy.get("fingerprint") == backtest_strategy.get("fingerprint")
+        ),
+        "experiment_evidence_matched": bool(evidence and evidence.experiment_id == experiment.experiment_id),
+        "metrics_present": bool(metrics),
+        "validation_accepted": validation.get("status") == "accepted_for_review",
+    }
+    blockers = [name for name, ok in checks.items() if not ok]
+    return {
+        "status": "validated" if not blockers else "blocked",
+        "experiment_id": experiment.experiment_id,
+        "backtest_result_id": candidate_backtest.get("result_id"),
+        "evidence_id": evidence.evidence_id if evidence else None,
+        "source": evidence.source if evidence else candidate_backtest.get("source"),
+        "fixture_backed": bool(evidence.fixture_backed) if evidence else True,
+        "quality_status": evidence.quality_status if evidence else "missing",
+        "blocking_findings": list(evidence.blocking_findings) if evidence else ["missing_authoritative_candidate_backtest"],
+        "metrics": metrics,
+        "checks": checks,
+        "blockers": blockers,
+        "strategy_mutated": False,
+        "order_executed": False,
+    }
+
+
+def _production_loop_blockers(
+    *,
+    grounded_evidence: list[dict[str, object]],
+    hypotheses: list[dict[str, object]],
+    candidate_experiments: list[dict[str, object]],
+    authoritative_validation: Mapping[str, object],
+    ranking: Mapping[str, object],
+) -> list[str]:
+    blockers: list[str] = []
+    if not grounded_evidence:
+        blockers.append("grounded_evidence_unavailable")
+    if not hypotheses:
+        blockers.append("evidence_backed_hypothesis_unavailable")
+    if not candidate_experiments:
+        blockers.append("candidate_experiment_unavailable")
+    if authoritative_validation.get("status") != "validated":
+        blockers.append("authoritative_candidate_validation_unavailable")
+    if ranking.get("status") != "ranked":
+        blockers.append("robustness_ranking_unavailable")
+    return blockers
+
+
+def _production_loop_summary(
+    *,
+    grounded_evidence: list[dict[str, object]],
+    hypotheses: list[dict[str, object]],
+    candidate_experiments: list[dict[str, object]],
+    authoritative_validation: Mapping[str, object],
+    ranking: Mapping[str, object],
+    promotion_status: str,
+    human_gate_status: str,
+    blockers: list[str],
+) -> dict[str, object]:
+    return {
+        "stages": {
+            "grounded_evidence": "pass" if grounded_evidence else "blocked",
+            "evidence_backed_hypothesis": "pass" if hypotheses else "blocked",
+            "strategy_experiment": "pass" if candidate_experiments else "blocked",
+            "authoritative_candidate_validation": authoritative_validation.get("status", "blocked"),
+            "robustness_ranking": ranking.get("status", "blocked"),
+            "human_promotion_gate": human_gate_status,
+        },
+        "grounded_evidence_count": len(grounded_evidence),
+        "hypothesis_count": len(hypotheses),
+        "candidate_experiment_count": len(candidate_experiments),
+        "promotion_status": promotion_status,
+        "human_gate_status": human_gate_status,
+        "blockers": list(blockers),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "safety": "pass",
+    }
+
+
 def _production_blockers(
     *,
     baseline_fixture: bool,
@@ -791,6 +1220,10 @@ def _promotion_candidate_context(
     ranking: Mapping[str, object],
     promotion: Mapping[str, object],
     external_research: Mapping[str, object],
+    grounded_evidence: list[dict[str, object]],
+    hypotheses: list[dict[str, object]],
+    candidate_experiments: list[dict[str, object]],
+    authoritative_candidate_validation: Mapping[str, object],
     promotion_status: str,
     human_gate_status: str,
     blockers: list[str],
@@ -818,12 +1251,16 @@ def _promotion_candidate_context(
         "claim_ids": _claim_ids(external_research),
         "source_ids": _source_ids(external_research),
         "source_lineage": source_lineage,
+        "grounded_evidence": grounded_evidence,
+        "hypotheses": hypotheses,
+        "candidate_experiments": candidate_experiments,
         "experiment": experiment.to_json(),
         "experiment_id": experiment.experiment_id,
         "experiment_fingerprint": _hash(experiment.to_json()),
         "assumptions_fingerprint": experiment.assumptions_fingerprint,
         "authoritative_validation_evidence": evidence.to_json() if evidence else None,
         "authoritative_backtest_result_id": evidence.backtest_result_id if evidence else None,
+        "authoritative_candidate_validation": dict(authoritative_candidate_validation),
         "validation": dict(validation),
         "ranking": dict(ranking),
         "ranking_components": _ranking_components(ranking),
@@ -843,20 +1280,37 @@ def _promotion_candidate_context(
 def _source_lineage(external_research: Mapping[str, object]) -> list[dict[str, object]]:
     discovery = _as_dict(external_research.get("discovery_run"))
     results = _as_list(discovery.get("results"))
+    acquisitions_by_result = {
+        str(item.get("discovery_result_id")): item
+        for item in (_as_dict(row) for row in _as_list(external_research.get("acquisition_records")))
+        if item.get("discovery_result_id")
+    }
+    claims_by_source: dict[str, list[str]] = {}
+    for candidate in (_as_dict(row) for row in _as_list(external_research.get("candidates"))):
+        source_id = str(candidate.get("source_id") or "")
+        claim_id = str(candidate.get("claim_id") or candidate.get("candidate_id") or "")
+        if source_id and claim_id:
+            claims_by_source.setdefault(source_id, []).append(claim_id)
     lineage: list[dict[str, object]] = []
     for result in results:
         row = _as_dict(result)
         if not row:
             continue
+        acquisition = acquisitions_by_result.get(str(row.get("result_id"))) or {}
+        source_id = str(acquisition.get("source_id") or "")
+        content_acquired = acquisition.get("status") == "acquired"
         lineage.append(
             {
                 "title": row.get("title"),
                 "source_type": row.get("source_type"),
                 "locator": row.get("locator"),
-                "source_ids": (),
-                "claim_ids": (),
-                "metadata_only": True,
-                "content_acquired": False,
+                "source_ids": (source_id,) if source_id else (),
+                "claim_ids": tuple(claims_by_source.get(source_id, ())),
+                "metadata_only": not content_acquired,
+                "content_acquired": content_acquired,
+                "content_type": acquisition.get("content_type"),
+                "content_sha256": acquisition.get("content_sha256"),
+                "acquisition_state": acquisition.get("status") or "metadata_only",
             }
         )
     return lineage
@@ -1147,9 +1601,71 @@ def _release_external_ready() -> dict[str, object]:
         },
         "normalized_records": [],
         "candidates": [{"candidate_id": "claim:release-1854", "source_id": "source:release-1854"}],
+        "grounded_evidence": [
+            {
+                "evidence_id": "grounded-evidence:release-1854",
+                "claim_id": "claim:release-1854",
+                "source_id": "source:release-1854",
+                "source_locator": "https://doi.org/10.0000/strategylab-release-1854",
+                "content_type": "text/html",
+                "content_sha256": "0" * 64,
+                "verbatim_excerpt": "Breakout filters can reduce false signals.",
+                "metadata_only": False,
+                "fixture_backed": False,
+                "grounded": True,
+            }
+        ],
         "blockers": [],
         "network_executed": False,
     }
+
+
+def _release_content_external() -> dict[str, object]:
+    with tempfile.TemporaryDirectory(prefix="gaon-production-loop-release-") as tmp:
+        return dict(
+            _run_production_external_research(
+                "Samsung breakout strategy external evidence safe content acquisition",
+                symbol="005930",
+                transport=_ReleaseMetadataTransport(mode="direct_content"),
+                content_transport=_ReleaseContentTransport(),
+                allowed_content_hosts=("content.example.org",),
+                storage_root=tmp,
+            )
+        )
+
+
+def _release_production_learning_payload_with_content() -> Mapping[str, object]:
+    return production_autonomous_learning_payload_from_baseline(
+        "Samsung breakout strategy external evidence backed autonomous learning loop",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="real"),
+        external_research=_release_content_external(),
+    )
+
+
+def _release_stage_payload(payload: Mapping[str, object], stage: str, checks: Mapping[str, bool]) -> dict[str, object]:
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    loop = _as_dict(learning.get("production_loop"))
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "stage": stage,
+        "promotion_status": payload.get("promotion_status"),
+        "human_gate_status": payload.get("human_gate_status"),
+        "grounded_evidence_count": loop.get("grounded_evidence_count"),
+        "hypothesis_count": loop.get("hypothesis_count"),
+        "candidate_experiment_count": loop.get("candidate_experiment_count"),
+        "strategy_mutated": payload.get("strategy_mutated") is True,
+        "order_executed": payload.get("order_executed") is True,
+        "checks": dict(checks),
+        "safety": payload.get("safety"),
+    }
+
+
+def _raise_if_failed(label: str, checks: Mapping[str, bool]) -> None:
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"{label} release check failed: {failed}")
 
 
 def _as_dict(value: object) -> dict[str, object]:

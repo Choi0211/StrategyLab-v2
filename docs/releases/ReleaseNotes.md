@@ -3,6 +3,31 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 187-192 Integrated Autonomous Learning Production Loop
+
+Autonomous Learning V2 now exposes the full production research loop from safe
+content acquisition through human-gated promotion review. Acquired content must
+produce hash-backed grounded evidence before hypotheses, experiments,
+authoritative candidate validation, robustness ranking, or promotion review can
+proceed.
+
+Metadata-only discovery cannot become validated knowledge or promotion
+evidence. Fixture-backed evidence remains blocked from production promotion, and
+candidate strategy fingerprints must match the authoritative real candidate
+backtest.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-production-grounded-evidence-release-check
+python -m gaon.runtime.cli gaon-production-evidence-backed-hypothesis-release-check
+python -m gaon.runtime.cli gaon-production-strategy-experiment-release-check
+python -m gaon.runtime.cli gaon-production-authoritative-candidate-validation-release-check
+python -m gaon.runtime.cli gaon-production-robustness-ranking-release-check
+python -m gaon.runtime.cli gaon-production-human-promotion-gate-release-check
+python -m gaon.runtime.cli gaon-production-autonomous-learning-loop-release-check
+```
+
 ## Sprint 186 Production Safe Content Acquisition
 
 Telegram Autonomous Learning V2 production external research now attempts safe

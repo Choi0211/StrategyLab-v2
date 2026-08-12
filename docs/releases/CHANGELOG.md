@@ -1,5 +1,14 @@
 # Changelog
 
+## Sprint 187-192 - Integrated Autonomous Learning Production Loop
+
+- Added explicit production loop stages for grounded evidence, evidence-backed hypotheses, candidate strategy experiments, authoritative candidate validation, robustness ranking, and human promotion gating.
+- Promoted only acquired, normalized, content-hash-backed claims into production grounded evidence; metadata-only discovery remains blocked from claims and promotion evidence.
+- Added candidate experiment lineage that preserves hypothesis IDs, evidence IDs, strategy fingerprints, dataset provenance, and authoritative backtest IDs.
+- Added structured authoritative candidate validation checks for real source, fixture exclusion, fingerprint matching, experiment/evidence matching, and metrics presence.
+- Added release checks from `gaon-production-grounded-evidence-release-check` through `gaon-production-autonomous-learning-loop-release-check`.
+- Preserved schema v36, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Sprint 186 - Production Safe Content Acquisition
 
 - Enabled bounded production content acquisition after Crossref/DataCite metadata discovery for Telegram Autonomous Learning V2.
