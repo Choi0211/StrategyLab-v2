@@ -58,8 +58,12 @@ TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION = 2
 PRODUCTION_EXTERNAL_DISCOVERY_TIMEOUT_SECONDS = 10.0
 PRODUCTION_EXTERNAL_DISCOVERY_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 PRODUCTION_EXTERNAL_DISCOVERY_MAX_PROVIDER_CALLS = 1
-PRODUCTION_EXTERNAL_DISCOVERY_MAX_SOURCES = 1
 PRODUCTION_EXTERNAL_DISCOVERY_MAX_CANDIDATE_RESULTS = 5
+PRODUCTION_EXTERNAL_RELEVANT_CANDIDATES = 5
+PRODUCTION_EXTERNAL_RESOLUTION_ATTEMPTS = 3
+PRODUCTION_EXTERNAL_CONTENT_ACQUISITION_ATTEMPTS = 3
+PRODUCTION_EXTERNAL_MAX_ACQUIRED_SOURCES = 2
+PRODUCTION_EXTERNAL_MAX_GROUNDED_SOURCES = 2
 PRODUCTION_EXTERNAL_CONTENT_TIMEOUT_SECONDS = 12.0
 PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES = 256 * 1024
 PRODUCTION_EXTERNAL_CONTENT_ALLOWED_HOSTS = (
@@ -205,13 +209,14 @@ def production_autonomous_learning_payload_from_baseline(
     promotion_status = promotion.status.value
     human_gate_status = "awaiting_human_approval" if promotion.status is PromotionGateStatus.REQUIRES_HUMAN_APPROVAL else "not_requested"
     if production_blockers:
-        promotion_status = "blocked_fixture" if any("fixture" in item for item in production_blockers) else "needs_real_validation"
+        promotion_status = "blocked_fixture" if _has_fixture_blocker(production_blockers) else "needs_real_validation"
         human_gate_status = "not_requested"
+    hypothesis_status = "proposed" if hypotheses else "needs_evidence" if not grounded_evidence else "not_generated"
 
     learning = {
         "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
         "external_research_state": external.get("state", "unknown"),
-        "hypothesis_status": "proposed" if candidate else "blocked",
+        "hypothesis_status": hypothesis_status,
         "validation_status": validation.status.value,
         "ranking_status": ranking.status.value,
         "promotion_status": promotion_status,
@@ -933,6 +938,170 @@ def production_relevant_academic_content_loop_release_check() -> Mapping[str, ob
     }
 
 
+def production_academic_source_fallback_release_check() -> Mapping[str, object]:
+    doi_transport = _ReleaseDoiResolutionTransport(
+        failures_by_doi={
+            "10.1142/9789813225107_0009": HTTPError(
+                "https://doi.org/10.1142/9789813225107_0009",
+                403,
+                "Forbidden",
+                {},
+                None,
+            )
+        },
+        final_urls_by_doi={
+            "10.1007/978-3-031-90907-8_3": "https://content.example.org/trend-following-anatomy.html",
+            "10.1007/978-3-031-90907-8_14": "https://content.example.org/trading-frequency.html",
+        },
+    )
+    with tempfile.TemporaryDirectory(prefix="gaon-production-academic-fallback-") as tmp:
+        external = _run_production_external_research(
+            "Samsung breakout strategy resilient academic source fallback",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="fallback_after_403"),
+            content_transport=_ReleaseContentTransport(),
+            doi_resolution_transport=doi_transport,
+            allowed_content_hosts=("content.example.org", "doi.org"),
+            storage_root=tmp,
+        )
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung breakout strategy resilient academic source fallback",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="real"),
+        external_research=external,
+    )
+    observability = _as_dict(external.get("observability"))
+    attempts = [_as_dict(item) for item in _as_list(observability.get("source_attempts"))]
+    resolutions = [_as_dict(item) for item in _as_list(observability.get("content_resolution"))]
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    checks = {
+        "first_source_attempted": len(resolutions) >= 1
+        and resolutions[0].get("doi") == "10.1142/9789813225107_0009",
+        "first_failure_recorded": len(resolutions) >= 1
+        and resolutions[0].get("resolution_status") == "resolution_failure",
+        "second_source_attempted": len(resolutions) >= 2
+        and resolutions[1].get("doi") == "10.1007/978-3-031-90907-8_3",
+        "second_content_acquired": observability.get("content_acquisition_state") == "content_acquired"
+        and int(external.get("acquired_sources") or 0) == 1,
+        "grounded_evidence_created": len(_as_list(learning.get("grounded_evidence"))) >= 1,
+        "failed_source_observable": any(item.get("failure_kind") == "resolution_failure" for item in attempts),
+        "third_not_overfetched": len(resolutions) == 2,
+        "no_mutation_or_order": payload.get("strategy_mutated") is False
+        and payload.get("order_executed") is False
+        and payload.get("broker_order_called") is False
+        and payload.get("kis_order_called") is False,
+    }
+    _raise_if_failed("production academic source fallback", checks)
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "state": external.get("state"),
+        "relevant_result_count": observability.get("relevant_result_count"),
+        "resolution_attempt_count": observability.get("resolution_attempt_count"),
+        "acquisition_attempt_count": observability.get("acquisition_attempt_count"),
+        "acquired_source_count": observability.get("acquired_source_count"),
+        "grounded_source_count": observability.get("grounded_source_count"),
+        "source_attempts": attempts,
+        "promotion_status": payload.get("promotion_status"),
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
+def production_academic_source_budget_release_check() -> Mapping[str, object]:
+    doi_transport = _ReleaseDoiResolutionTransport(
+        failures_by_doi={
+            "10.1234/duplicate-breakout": HTTPError("https://doi.org/10.1234/duplicate-breakout", 403, "Forbidden", {}, None),
+            "10.1234/unique-breakout": HTTPError("https://doi.org/10.1234/unique-breakout", 403, "Forbidden", {}, None),
+        }
+    )
+    with tempfile.TemporaryDirectory(prefix="gaon-production-academic-budget-") as tmp:
+        external = _run_production_external_research(
+            "Samsung breakout strategy academic source budget",
+            symbol="005930",
+            transport=_ReleaseMetadataTransport(mode="duplicate_relevant_doi"),
+            content_transport=_ReleaseContentTransport(),
+            doi_resolution_transport=doi_transport,
+            allowed_content_hosts=("content.example.org", "doi.org"),
+            storage_root=tmp,
+        )
+    observability = _as_dict(external.get("observability"))
+    blockers = [str(item) for item in _as_list(external.get("blockers"))]
+    checks = {
+        "resolution_attempt_budget_respected": int(observability.get("resolution_attempt_count") or 0) <= PRODUCTION_EXTERNAL_RESOLUTION_ATTEMPTS,
+        "acquisition_attempt_budget_respected": int(observability.get("acquisition_attempt_count") or 0) <= PRODUCTION_EXTERNAL_CONTENT_ACQUISITION_ATTEMPTS,
+        "acquired_source_budget_respected": int(observability.get("acquired_source_count") or 0) <= PRODUCTION_EXTERNAL_MAX_ACQUIRED_SOURCES,
+        "grounded_source_budget_respected": int(observability.get("grounded_source_count") or 0) <= PRODUCTION_EXTERNAL_MAX_GROUNDED_SOURCES,
+        "duplicate_doi_not_retried": int(external.get("duplicate_results") or 0) >= 1
+        and doi_transport.calls == 2,
+        "no_unbounded_retry": doi_transport.calls <= PRODUCTION_EXTERNAL_RESOLUTION_ATTEMPTS,
+    }
+    _raise_if_failed("production academic source budget", checks)
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "state": external.get("state"),
+        "resolution_attempt_count": observability.get("resolution_attempt_count"),
+        "acquisition_attempt_count": observability.get("acquisition_attempt_count"),
+        "acquired_source_count": observability.get("acquired_source_count"),
+        "grounded_source_count": observability.get("grounded_source_count"),
+        "duplicate_skipped": int(external.get("duplicate_results") or 0) >= 1,
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
+def production_autonomous_learning_state_semantics_release_check() -> Mapping[str, object]:
+    real_missing = production_autonomous_learning_payload_from_baseline(
+        "Samsung breakout strategy missing external evidence",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="real"),
+        external_research=_empty_external_research("005930"),
+    )
+    fixture_payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung breakout strategy fixture evidence",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="fixture"),
+        external_research=_release_external_ready(),
+    )
+    real_ready = production_autonomous_learning_payload_from_baseline(
+        "Samsung breakout strategy ready external evidence",
+        symbol="005930",
+        mode="research",
+        baseline=_release_baseline_payload(source="real"),
+        external_research=_release_external_ready(),
+    )
+    missing_learning = _as_dict(real_missing.get("autonomous_learning_v2"))
+    ready_learning = _as_dict(real_ready.get("autonomous_learning_v2"))
+    checks = {
+        "real_missing_not_blocked_fixture": real_missing.get("promotion_status") == "needs_real_validation",
+        "zero_hypotheses_not_proposed": missing_learning.get("hypothesis_status") != "proposed"
+        and len(_as_list(missing_learning.get("hypotheses"))) == 0,
+        "fixture_blocking_unchanged": fixture_payload.get("promotion_status") == "blocked_fixture"
+        and fixture_payload.get("approval_required") is False,
+        "grounded_real_existing_state_preserved": ready_learning.get("hypothesis_status") == "proposed"
+        and real_ready.get("promotion_status") in {"requires_human_approval", "needs_real_validation"},
+        "no_mutation_or_order": all(
+            payload.get("strategy_mutated") is False
+            and payload.get("order_executed") is False
+            and payload.get("broker_order_called") is False
+            and payload.get("kis_order_called") is False
+            for payload in (real_missing, fixture_payload, real_ready)
+        ),
+    }
+    _raise_if_failed("production autonomous learning state semantics", checks)
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "real_missing_promotion_status": real_missing.get("promotion_status"),
+        "real_missing_hypothesis_status": missing_learning.get("hypothesis_status"),
+        "fixture_promotion_status": fixture_payload.get("promotion_status"),
+        "real_ready_hypothesis_status": ready_learning.get("hypothesis_status"),
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
 def _run_production_external_research(
     request_text: str,
     *,
@@ -1005,7 +1174,12 @@ def _run_production_external_research(
         policy=ExternalResearchExecutionPolicy(
             max_iterations=1,
             max_provider_calls=PRODUCTION_EXTERNAL_DISCOVERY_MAX_PROVIDER_CALLS,
-            max_sources=PRODUCTION_EXTERNAL_DISCOVERY_MAX_SOURCES,
+            max_sources=PRODUCTION_EXTERNAL_MAX_ACQUIRED_SOURCES,
+            max_relevant_candidates=PRODUCTION_EXTERNAL_RELEVANT_CANDIDATES,
+            max_resolution_attempts=PRODUCTION_EXTERNAL_RESOLUTION_ATTEMPTS,
+            max_content_acquisition_attempts=PRODUCTION_EXTERNAL_CONTENT_ACQUISITION_ATTEMPTS,
+            max_acquired_sources=PRODUCTION_EXTERNAL_MAX_ACQUIRED_SOURCES,
+            max_grounded_sources=PRODUCTION_EXTERNAL_MAX_GROUNDED_SOURCES,
             max_total_download_bytes=PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES,
             content_network_enabled=content_network_enabled,
             allowed_content_hosts=configured_content_hosts,
@@ -1039,7 +1213,16 @@ def _external_research_observability(
     content_blockers = [
         item
         for item in blockers
-        if item.startswith(("content_unavailable", "content_blocked", "unsupported_content_type", "fetch_failure"))
+        if item.startswith((
+            "content_unavailable",
+            "content_blocked",
+            "unsupported_content_type",
+            "fetch_failure",
+            "resolution_failure",
+            "resolution_budget_exhausted",
+            "acquisition_budget_exhausted",
+            "acquired_source_budget_exhausted",
+        ))
     ]
     relevance_blockers = [
         item
@@ -1052,6 +1235,14 @@ def _external_research_observability(
     normalized_records = [_as_dict(item) for item in _as_list(payload.get("normalized_records"))]
     acquired = [item for item in acquisitions if item.get("status") == "acquired"]
     failed = [item for item in acquisitions if item.get("status") != "acquired"]
+    source_attempts = _source_attempts(relevance, resolutions, acquisitions)
+    grounded_source_count = len(
+        {
+            str(item.get("source_id"))
+            for item in _as_list(payload.get("candidates"))
+            if _as_dict(item).get("source_id")
+        }
+    )
     if acquired and payload.get("candidates"):
         content_state = "content_acquired"
     elif acquired:
@@ -1062,6 +1253,8 @@ def _external_research_observability(
         content_state = "content_blocked"
     elif any(item.startswith("fetch_failure") for item in content_blockers):
         content_state = "fetch_failure"
+    elif any(item.startswith("resolution_failure") for item in content_blockers):
+        content_state = "resolution_failure"
     elif content_blockers:
         content_state = "metadata_only"
     elif relevance_blockers and not any(item.get("selected_for_content_acquisition") for item in relevance):
@@ -1089,6 +1282,11 @@ def _external_research_observability(
         "allowed_content_hosts": list(allowed_content_hosts),
         "content_timeout_seconds": PRODUCTION_EXTERNAL_CONTENT_TIMEOUT_SECONDS,
         "max_content_bytes": PRODUCTION_EXTERNAL_CONTENT_MAX_BYTES,
+        "max_relevant_candidates": PRODUCTION_EXTERNAL_RELEVANT_CANDIDATES,
+        "max_resolution_attempts": PRODUCTION_EXTERNAL_RESOLUTION_ATTEMPTS,
+        "max_content_acquisition_attempts": PRODUCTION_EXTERNAL_CONTENT_ACQUISITION_ATTEMPTS,
+        "max_acquired_sources": PRODUCTION_EXTERNAL_MAX_ACQUIRED_SOURCES,
+        "max_grounded_sources": PRODUCTION_EXTERNAL_MAX_GROUNDED_SOURCES,
         "query_records": [
             {
                 "query": item.get("query"),
@@ -1160,6 +1358,17 @@ def _external_research_observability(
             for item in resolutions
         ],
         "resolution_statuses": [item.get("resolution_status") for item in resolutions if item.get("resolution_status")],
+        "discovered_result_count": len(results),
+        "relevant_result_count": sum(1 for item in relevance if item.get("relevance_status") == "relevant"),
+        "resolution_attempt_count": len(resolutions),
+        "acquisition_attempt_count": len(acquisitions),
+        "acquired_source_count": len(acquired),
+        "grounded_source_count": grounded_source_count,
+        "exhausted_source_candidates": any(
+            str(item).startswith(("resolution_budget_exhausted", "acquisition_budget_exhausted", "acquired_source_budget_exhausted"))
+            for item in blockers
+        ),
+        "source_attempts": source_attempts,
         "acquired_content_hashes": [item.get("content_sha256") for item in acquired if item.get("content_sha256")],
         "normalized_source_ids": [item.get("source_id") for item in normalized_records if item.get("source_id")],
         "blocked_reasons": content_blockers
@@ -1635,6 +1844,59 @@ def _source_lineage(external_research: Mapping[str, object]) -> list[dict[str, o
     return lineage
 
 
+def _has_fixture_blocker(blockers: list[str]) -> bool:
+    return any(
+        item in {"baseline_fixture_backed", "candidate_fixture_or_fingerprint_mismatch"}
+        or item.startswith("fixture_")
+        for item in blockers
+    )
+
+
+def _source_attempts(
+    relevance: list[dict[str, object]],
+    resolutions: list[dict[str, object]],
+    acquisitions: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    resolution_by_result = {
+        str(item.get("discovery_result_id")): item
+        for item in resolutions
+        if item.get("discovery_result_id")
+    }
+    acquisition_by_result = {
+        str(item.get("discovery_result_id")): item
+        for item in acquisitions
+        if item.get("discovery_result_id")
+    }
+    attempts: list[dict[str, object]] = []
+    relevant_rank = 0
+    for item in relevance:
+        if item.get("relevance_status") == "relevant":
+            relevant_rank += 1
+        result_id = str(item.get("discovery_result_id") or "")
+        resolution = resolution_by_result.get(result_id, {})
+        acquisition = acquisition_by_result.get(result_id, {})
+        failure_kind = (
+            acquisition.get("failure_kind")
+            or resolution.get("failure_kind")
+            or item.get("rejected_reason")
+        )
+        evidence_count = 1 if acquisition.get("status") == "acquired" else 0
+        attempts.append(
+            {
+                "rank": relevant_rank if item.get("relevance_status") == "relevant" else None,
+                "title": item.get("title"),
+                "doi": item.get("doi"),
+                "relevance_score": item.get("relevance_score"),
+                "relevance_status": item.get("relevance_status"),
+                "resolution_status": resolution.get("resolution_status"),
+                "acquisition_status": acquisition.get("status"),
+                "failure_kind": failure_kind,
+                "evidence_count": evidence_count,
+            }
+        )
+    return attempts
+
+
 def _claim_ids(external_research: Mapping[str, object]) -> list[str]:
     return [
         str(item.get("candidate_id"))
@@ -1735,6 +1997,70 @@ class _ReleaseMetadataTransport:
                     ]
                 }
             }
+        if self.mode == "fallback_after_403":
+            return {
+                "message": {
+                    "items": [
+                        {
+                            "DOI": "10.1142/9789813225107_0009",
+                            "title": ["Building a Breakout Trend-Following Trading System using Regression Methods"],
+                            "type": "book-chapter",
+                            "abstract": (
+                                "Financial markets breakout trend following trading system "
+                                "with moving average and volume confirmation robustness evidence "
+                                "for securities investment portfolio returns and price momentum."
+                            ),
+                            "URL": "https://doi.org/10.1142/9789813225107_0009",
+                        },
+                        {
+                            "DOI": "10.1007/978-3-031-90907-8_3",
+                            "title": ["Trend-Following Trading Rules and Their Anatomy"],
+                            "type": "book-chapter",
+                            "abstract": (
+                                "Equity market trend following technical trading rules, "
+                                "moving average filters, stop-loss controls, and out-of-sample robustness."
+                            ),
+                            "URL": "https://doi.org/10.1007/978-3-031-90907-8_3",
+                        },
+                        {
+                            "DOI": "10.1007/978-3-031-90907-8_14",
+                            "title": ["Optimal Trading Frequency for Trend-Following Strategies"],
+                            "type": "book-chapter",
+                            "abstract": (
+                                "Financial markets trading frequency for trend following strategies "
+                                "with transaction cost and robustness evidence."
+                            ),
+                            "URL": "https://doi.org/10.1007/978-3-031-90907-8_14",
+                        },
+                        {
+                            "DOI": "10.1007/978-3-322-93860-2_11",
+                            "title": ["The Location and Replication Independent Tuple Recovery Strategy"],
+                            "type": "book-chapter",
+                            "abstract": "Distributed systems tuple recovery and data replication strategy.",
+                            "URL": "https://doi.org/10.1007/978-3-322-93860-2_11",
+                        },
+                        {
+                            "DOI": "10.9999/unrelated",
+                            "title": ["A non-financial strategy note"],
+                            "type": "journal-article",
+                            "abstract": "General software architecture strategy.",
+                            "URL": "https://doi.org/10.9999/unrelated",
+                        },
+                    ]
+                }
+            }
+        if self.mode == "duplicate_relevant_doi":
+            item = {
+                "DOI": "10.1234/duplicate-breakout",
+                "title": ["Financial market breakout trading rules duplicate"],
+                "type": "journal-article",
+                "abstract": (
+                    "Equity market breakout trend following moving average trading rules "
+                    "and out-of-sample robustness."
+                ),
+                "URL": "https://doi.org/10.1234/duplicate-breakout",
+            }
+            return {"message": {"items": [item, dict(item), {**item, "DOI": "10.1234/unique-breakout", "URL": "https://doi.org/10.1234/unique-breakout"}]}}
         if self.mode == "direct_content":
             return {
                 "message": {
@@ -1827,20 +2153,34 @@ class _ReleaseDoiResolutionTransport:
         final_url: str = "https://content.example.org/research.html",
         redirect_chain: tuple[str, ...] | None = None,
         failure: BaseException | None = None,
+        failures_by_doi: Mapping[str, BaseException] | None = None,
+        final_urls_by_doi: Mapping[str, str] | None = None,
     ) -> None:
         self.final_url = final_url
         self.redirect_chain = redirect_chain
         self.failure = failure
+        self.failures_by_doi = dict(failures_by_doi or {})
+        self.final_urls_by_doi = dict(final_urls_by_doi or {})
         self.calls = 0
+        self.urls: list[str] = []
 
     def resolve(self, url: str, *, policy: ContentAcquisitionPolicy):  # type: ignore[no-untyped-def]
         from gaon.knowledge.external_research_execution import ContentResolutionPayload
 
         self.calls += 1
+        self.urls.append(url)
         if self.failure is not None:
             raise self.failure
-        chain = self.redirect_chain or (url, self.final_url)
-        return ContentResolutionPayload(final_url=self.final_url, redirect_chain=chain)
+        for doi, failure in self.failures_by_doi.items():
+            if doi in url:
+                raise failure
+        final_url = self.final_url
+        for doi, configured_url in self.final_urls_by_doi.items():
+            if doi in url:
+                final_url = configured_url
+                break
+        chain = self.redirect_chain or (url, final_url)
+        return ContentResolutionPayload(final_url=final_url, redirect_chain=chain)
 
 
 def _metadata_only_payload_is_blocked() -> bool:

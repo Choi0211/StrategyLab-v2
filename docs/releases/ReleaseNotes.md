@@ -3,6 +3,31 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 192.3 Resilient Academic Source Fallback
+
+Production Telegram Autonomous Learning V2 now attempts multiple relevant
+academic sources in deterministic relevance order. A first-source DOI 403 or
+blocked/unavailable source is recorded and skipped safely; it no longer stops
+the whole research loop while bounded source-attempt budget remains.
+
+New source budgets separate discovery results, relevant candidates, resolution
+attempts, content acquisition attempts, acquired sources, and grounded evidence
+sources. Observability now includes compact source-attempt summaries and attempt
+counts for production diagnosis.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-production-academic-source-fallback-release-check
+python -m gaon.runtime.cli gaon-production-academic-source-budget-release-check
+python -m gaon.runtime.cli gaon-production-autonomous-learning-state-semantics-release-check
+```
+
+Real-data runs with missing external evidence now report
+`needs_real_validation` / `needs_evidence`; `blocked_fixture` is reserved for
+actual fixture-backed evidence. HTTP 403 remains fail-closed and is not
+bypassed.
+
 ## Hotfix 192.2 Relevant Academic Discovery and Safe DOI Redirect Resolution
 
 Production Telegram Autonomous Learning V2 now filters academic discovery

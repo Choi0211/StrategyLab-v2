@@ -1,5 +1,14 @@
 # Changelog
 
+## Hotfix 192.3 - Resilient Academic Source Fallback
+
+- Split Autonomous Learning V2 external research source budgets into relevant candidates, resolution attempts, acquisition attempts, acquired sources, and grounded evidence sources.
+- Changed production Telegram external research to try the next relevant academic source after a DOI/content resolution failure while preserving every failed attempt as observability.
+- Added source-attempt observability fields for discovered/relevant counts, resolution/acquisition attempts, acquired/grounded source counts, exhausted candidate state, DOI, title, statuses, failure kind, and evidence count.
+- Corrected real-data missing-evidence semantics so unavailable external evidence becomes `needs_real_validation` / `needs_evidence`, while actual fixture-backed evidence still maps to `blocked_fixture`.
+- Added `gaon-production-academic-source-fallback-release-check`, `gaon-production-academic-source-budget-release-check`, and `gaon-production-autonomous-learning-state-semantics-release-check`.
+- Preserved schema v36, HTTPS/content safety, no paywall bypass, no KIS/Broker orders, no live trading, no automatic Champion promotion, no strategy mutation, no approval bypass, and no fabricated metrics/evidence.
+
 ## Hotfix 192.2 - Relevant Academic Discovery and Safe DOI Redirect Resolution
 
 - Replaced overly generic breakout-strategy academic discovery wording with deterministic financial-market, trend-following, moving-average, volume-confirmation, and robustness query terms.

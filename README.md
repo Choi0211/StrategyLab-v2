@@ -87,6 +87,8 @@ Included foundations:
 - Sprint 186 Production Safe Content Acquisition with allowlisted inert content fetch, MIME/timeout/byte/redirect controls, provenance/hash observability, metadata-only promotion blocking, and `gaon-production-safe-content-acquisition-release-check`
 - Sprint 187-192 Integrated Autonomous Learning Production Loop with content-grounded evidence, evidence-backed hypotheses, candidate experiment lineage, authoritative real candidate validation, robustness ranking, and human promotion gate release checks
 - Hotfix 192.1 real academic content resolution with DOI/metadata-resource resolution, resolution lineage observability, fail-closed host/MIME/timeout/size blocking, and `gaon-production-real-academic-content-resolution-release-check`
+- Hotfix 192.2 relevant academic discovery and safe DOI redirect handling with deterministic financial/trading relevance screening, irrelevant academic result rejection, controlled DOI redirect resolution, and production content-loop release checks
+- Hotfix 192.3 resilient academic source fallback with separate discovery/resolution/acquisition/success budgets, deterministic fallback to the next relevant source after DOI 403 or content failure, source-attempt observability, and corrected missing-evidence state semantics
 - Gaon Research Brain package boundary
 - Research Goal, Plan, Session, Interview, and Journal contracts
 - Learning Memory, Evidence, Knowledge, Experience, Policy, and Confidence contracts

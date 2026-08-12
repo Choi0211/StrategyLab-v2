@@ -19,8 +19,11 @@ from gaon.knowledge.telegram_autonomous_learning import (
     _run_production_external_research,
     autonomous_learning_safe_failure_payload,
     production_authoritative_candidate_validation_release_check,
+    production_academic_source_budget_release_check,
+    production_academic_source_fallback_release_check,
     production_autonomous_learning_execution_release_check,
     production_autonomous_learning_loop_release_check,
+    production_autonomous_learning_state_semantics_release_check,
     production_evidence_backed_hypothesis_release_check,
     production_external_research_network_release_check,
     production_grounded_evidence_release_check,
@@ -656,6 +659,28 @@ class AutonomousLearningE2EReleaseCheckTests(unittest.TestCase):
         self.assertEqual("pass", production_relevant_academic_discovery_release_check()["safety"])
         self.assertEqual("pass", production_safe_doi_redirect_release_check()["safety"])
         self.assertEqual("pass", production_relevant_academic_content_loop_release_check()["safety"])
+
+    def test_hotfix1923_source_fallback_release_check_passes(self) -> None:
+        payload = production_academic_source_fallback_release_check()
+
+        self.assertEqual("pass", payload["safety"])
+        self.assertEqual(2, payload["resolution_attempt_count"])
+        self.assertEqual(1, payload["acquired_source_count"])
+        attempts = payload["source_attempts"]
+        self.assertEqual("resolution_failure", attempts[0]["failure_kind"])
+        self.assertEqual("acquired", attempts[1]["acquisition_status"])
+
+    def test_hotfix1923_budget_and_state_semantics_release_checks_pass(self) -> None:
+        budget = production_academic_source_budget_release_check()
+        semantics = production_autonomous_learning_state_semantics_release_check()
+
+        self.assertEqual("pass", budget["safety"])
+        self.assertTrue(budget["duplicate_skipped"])
+        self.assertLessEqual(budget["resolution_attempt_count"], 3)
+        self.assertEqual("pass", semantics["safety"])
+        self.assertEqual("needs_real_validation", semantics["real_missing_promotion_status"])
+        self.assertNotEqual("proposed", semantics["real_missing_hypothesis_status"])
+        self.assertEqual("blocked_fixture", semantics["fixture_promotion_status"])
 
     def test_hotfix1922_safe_doi_redirect_blocks_unsafe_final_targets(self) -> None:
         resolver = AcademicContentResolver(
