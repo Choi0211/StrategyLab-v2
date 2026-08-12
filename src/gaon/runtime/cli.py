@@ -310,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-promotion-readiness-release-check")
     sub.add_parser("gaon-production-research-observability-release-check")
     sub.add_parser("gaon-production-autonomous-quant-partner-acceptance-release-check")
+    sub.add_parser("gaon-production-autonomous-research-wiring-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2442,6 +2443,7 @@ def _run(args: argparse.Namespace) -> int:
         "gaon-production-promotion-readiness-release-check",
         "gaon-production-research-observability-release-check",
         "gaon-production-autonomous-quant-partner-acceptance-release-check",
+        "gaon-production-autonomous-research-wiring-release-check",
     }:
         from gaon.knowledge.autonomous_quant_partner import (
             production_authoritative_source_acquisition_release_check,
@@ -2457,6 +2459,7 @@ def _run(args: argparse.Namespace) -> int:
             production_strategy_tournament_release_check,
             production_validation_sufficiency_v2_release_check,
         )
+        from gaon.knowledge.telegram_autonomous_learning import production_autonomous_research_wiring_release_check
 
         handlers = {
             "gaon-production-provider-registry-release-check": production_provider_registry_release_check,
@@ -2471,6 +2474,7 @@ def _run(args: argparse.Namespace) -> int:
             "gaon-production-promotion-readiness-release-check": production_promotion_readiness_release_check,
             "gaon-production-research-observability-release-check": production_research_observability_release_check,
             "gaon-production-autonomous-quant-partner-acceptance-release-check": production_autonomous_quant_partner_acceptance_release_check,
+            "gaon-production-autonomous-research-wiring-release-check": production_autonomous_research_wiring_release_check,
         }
         payload = handlers[args.command]()
         print(

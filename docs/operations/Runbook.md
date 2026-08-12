@@ -83,6 +83,7 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-promotion-readiness-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-research-observability-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-quant-partner-acceptance-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-research-wiring-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -94,9 +95,9 @@ state semantics, multi-source provider contracts, source independence,
 cross-source conflict detection, validation sample diagnostics, autonomous
 source diversification, counter-evidence search, bounded iterative research,
 robust strategy validation, candidate tournament ranking, learning-memory
-closed-loop recording, promotion readiness, production observability, and the
-human-only promotion gate without mutating strategy configuration or placing
-orders.
+closed-loop recording, promotion readiness, production observability,
+production Telegram wiring after academic content exhaustion, and the human-only
+promotion gate without mutating strategy configuration or placing orders.
 
 ## Phase A Diagnostics
 

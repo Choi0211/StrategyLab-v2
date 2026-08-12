@@ -216,9 +216,13 @@ def autonomous_quant_partner_payload(
     baseline: Mapping[str, object],
     multi_source_research: Mapping[str, object] | None = None,
     budget: ResearchBudget | None = None,
+    allow_release_fixture: bool = False,
 ) -> dict[str, object]:
     selected_budget = budget or ResearchBudget()
-    research = dict(multi_source_research or _release_multi_source_result(baseline))
+    research = dict(
+        multi_source_research
+        or (_release_multi_source_result(baseline) if allow_release_fixture else _empty_multi_source_result(request_text, symbol, baseline))
+    )
     diagnostics = validation_sample_diagnostics(baseline)
     sufficiency = _validation_sufficiency_v2(research, diagnostics, baseline=baseline)
     gap_report = _gap_report(symbol, research, sufficiency)
@@ -226,6 +230,8 @@ def autonomous_quant_partner_payload(
     iterations = _research_iterations(selected_budget, actions, sufficiency)
     robustness = _robustness_report(symbol, sufficiency)
     tournament = _strategy_tournament(research, robustness, sufficiency)
+    candidate_generation = _candidate_generation(research, tournament)
+    counter_evidence = _counter_evidence_report(research, actions)
     memory = _learning_memory_closed_loop(symbol, research, tournament)
     readiness = _promotion_readiness(symbol, research, tournament, robustness, sufficiency)
     stop_reason = _stop_reason(readiness, sufficiency, selected_budget)
@@ -251,6 +257,9 @@ def autonomous_quant_partner_payload(
         "research_budget": selected_budget.to_json(),
         "research_iterations": iterations,
         "stop_reason": stop_reason.value,
+        "counter_evidence": counter_evidence,
+        "candidate_generation": candidate_generation,
+        "validation_coverage": _validation_coverage(sufficiency),
         "robustness_report": robustness.to_json(),
         "strategy_tournament": tournament,
         "learning_memory_closed_loop": memory,
@@ -309,14 +318,89 @@ def _source_acquisition_summary(research: Mapping[str, object]) -> dict[str, obj
     reports = [_as_dict(item) for item in _as_list(research.get("provider_reports"))]
     acquired = [_as_dict(source) for report in reports for source in _as_list(report.get("acquired"))]
     claims = [_as_dict(claim) for claim in _claims(research)]
+    provider_states = _as_dict(research.get("provider_states"))
+    acquired_categories = sorted(
+        {
+            str(source.get("source_type"))
+            for source in acquired
+            if source.get("source_type") and source.get("fixture_backed") is not True
+        }
+    )
     return {
         "sources_acquired": len(acquired),
+        "source_categories_acquired": acquired_categories,
+        "source_categories_attempted": list(provider_states),
+        "provider_states": provider_states,
         "metadata_only_sources": sum(1 for report in reports if "metadata_only" in _as_list(report.get("blockers"))),
         "content_hashes": [item.get("content_hash") for item in acquired if item.get("content_hash")],
         "full_content_claims": len([claim for claim in claims if claim.get("content_hash")]),
         "metadata_only_claims": 0,
         "fixture_claims": len([claim for claim in claims if claim.get("fixture_backed") is True]),
         "promotion_evidence_from_metadata_only": False,
+    }
+
+
+def _counter_evidence_report(research: Mapping[str, object], actions: tuple[NextResearchAction, ...]) -> dict[str, object]:
+    bundle = _as_dict(research.get("evidence_bundle"))
+    supporting = _as_list(bundle.get("supporting_claims"))
+    contradicting = _as_list(bundle.get("contradicting_claims"))
+    attempted = any(action.kind is NextActionKind.SEARCH_COUNTER_EVIDENCE for action in actions)
+    return {
+        "attempted": attempted,
+        "supporting_claim_count": len(supporting),
+        "contradicting_claim_count": len(contradicting),
+        "conflict_status": bundle.get("conflict_status", "insufficient"),
+        "status": "mixed" if contradicting and supporting else "no_counter_evidence_found" if attempted else "not_attempted",
+        "claim_ids": [item.get("claim_id") for item in contradicting if isinstance(item, Mapping) and item.get("claim_id")],
+        "placeholder_used": False,
+        "strategy_mutated": False,
+        "order_executed": False,
+    }
+
+
+def _candidate_generation(research: Mapping[str, object], tournament: Mapping[str, object]) -> list[dict[str, object]]:
+    hypotheses = [_as_dict(item) for item in _as_list(research.get("hypotheses"))]
+    generated: list[dict[str, object]] = []
+    for index, ranking in enumerate(_as_list(tournament.get("rankings")), start=1):
+        row = _as_dict(ranking)
+        candidate_id = str(row.get("candidate_id") or "")
+        if candidate_id == "baseline" or not candidate_id:
+            continue
+        changed_rules = (
+            ["volume confirmation robustness"]
+            if "volume" in candidate_id
+            else ["regime filter before breakout entries"]
+            if "regime" in candidate_id
+            else ["candidate rule pending implementation"]
+        )
+        generated.append(
+            {
+                "candidate_id": candidate_id,
+                "candidate_fingerprint": f"candidate-fingerprint:{_hash({'candidate_id': candidate_id, 'changed_rules': changed_rules})[:24]}",
+                "rank": index,
+                "changed_rules": changed_rules,
+                "hypothesis_ids": [item.get("hypothesis_id") for item in hypotheses if item.get("hypothesis_id")],
+                "fixture_backed": bool(row.get("fixture_backed")),
+                "strategy_mutated": False,
+                "order_executed": False,
+            }
+        )
+    return generated
+
+
+def _validation_coverage(sufficiency: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "status": sufficiency.get("status"),
+        "trade_count": sufficiency.get("trade_count"),
+        "min_trades": sufficiency.get("min_trades"),
+        "number_of_symbols": sufficiency.get("number_of_symbols"),
+        "walk_forward": sufficiency.get("walk_forward"),
+        "out_of_sample": sufficiency.get("out_of_sample"),
+        "robustness": sufficiency.get("robustness"),
+        "monte_carlo": sufficiency.get("monte_carlo"),
+        "parameter_sensitivity": sufficiency.get("parameter_sensitivity"),
+        "missing_validation": list(_as_list(sufficiency.get("missing_validation"))),
+        "fabricated_metrics": False,
     }
 
 
@@ -582,6 +666,65 @@ def _release_multi_source_result(baseline: Mapping[str, object] | None = None, *
     return result
 
 
+def _empty_multi_source_result(request_text: str, symbol: str, baseline: Mapping[str, object]) -> dict[str, object]:
+    plan = MultiSourceResearchPlanner().build(request_text, symbol=symbol)
+    diagnostics = validation_sample_diagnostics(baseline)
+    provider_states = {category.value: ProviderState.NOT_CONFIGURED.value for category in plan.providers}
+    return {
+        "schema_version": 1,
+        "state": "needs_evidence",
+        "research_plan": plan.to_json(),
+        "provider_states": provider_states,
+        "providers_attempted": [category.value for category in plan.providers],
+        "provider_reports": [
+            {
+                "schema_version": 1,
+                "provider": f"production:{category.value}:not_configured",
+                "category": category.value,
+                "state": ProviderState.NOT_CONFIGURED.value,
+                "queries": list(plan.queries.get(category.value, ())),
+                "discovered": [],
+                "acquired": [],
+                "claims": [],
+                "blockers": ["provider_not_configured"],
+                "fixture_backed": False,
+            }
+            for category in plan.providers
+        ],
+        "sources_discovered": 0,
+        "sources_acquired": 0,
+        "claims_extracted": 0,
+        "claims_deduplicated": 0,
+        "evidence_bundle": {
+            "schema_version": 1,
+            "bundle_id": f"evidence-bundle:{_hash({'symbol': symbol, 'empty': True})[:24]}",
+            "research_topic": plan.research_topic,
+            "supporting_claims": [],
+            "contradicting_claims": [],
+            "source_types": [],
+            "independent_source_count": 0,
+            "credibility_distribution": {},
+            "recency": "none",
+            "conflict_status": ClaimStance.INSUFFICIENT.value,
+            "evidence_strength": EvidenceStrength.INSUFFICIENT.value,
+            "claims_deduplicated": 0,
+            "strategy_mutated": False,
+            "order_executed": False,
+        },
+        "hypotheses": [],
+        "candidate_experiments": [],
+        "validation_diagnostics": diagnostics,
+        "ranking": {"status": "blocked", "reason": diagnostics.get("sufficiency_status")},
+        "promotion_status": "needs_real_validation",
+        "human_gate_status": "not_requested",
+        "strategy_mutated": False,
+        "order_executed": False,
+        "broker_order_called": False,
+        "kis_order_called": False,
+        "safety": "pass",
+    }
+
+
 def _release_partial_multi_source_result(baseline: Mapping[str, object] | None = None) -> dict[str, object]:
     from .multi_source_research import DeterministicMultiSourceAdapter
 
@@ -656,7 +799,7 @@ def _release_payload(name: str, checks: Mapping[str, bool], payload: Mapping[str
 
 
 def production_provider_registry_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("provider registry", symbol="005930", baseline=_release_baseline())
+    payload = autonomous_quant_partner_payload("provider registry", symbol="005930", baseline=_release_baseline(), allow_release_fixture=True)
     registry = _as_dict(payload.get("provider_registry"))
     providers = _as_dict(registry.get("providers"))
     checks = {
@@ -669,7 +812,7 @@ def production_provider_registry_release_check() -> Mapping[str, object]:
 
 
 def production_authoritative_source_acquisition_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("source acquisition", symbol="005930", baseline=_release_baseline())
+    payload = autonomous_quant_partner_payload("source acquisition", symbol="005930", baseline=_release_baseline(), allow_release_fixture=True)
     acquisition = _as_dict(payload.get("source_acquisition"))
     checks = {
         "content_hash_preserved": len(_as_list(acquisition.get("content_hashes"))) >= 5,
@@ -698,7 +841,7 @@ def production_source_diversification_planner_release_check() -> Mapping[str, ob
 
 
 def production_counter_evidence_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("counter evidence", symbol="005930", baseline=_release_baseline())
+    payload = autonomous_quant_partner_payload("counter evidence", symbol="005930", baseline=_release_baseline(), allow_release_fixture=True)
     bundle = _as_dict(_as_dict(payload.get("multi_source_research")).get("evidence_bundle"))
     checks = {
         "contradicting_present": bool(_as_list(bundle.get("contradicting_claims"))),
@@ -709,7 +852,7 @@ def production_counter_evidence_release_check() -> Mapping[str, object]:
 
 
 def production_validation_sufficiency_v2_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("sufficiency", symbol="005930", baseline=_release_baseline(trades=7, symbols=1))
+    payload = autonomous_quant_partner_payload("sufficiency", symbol="005930", baseline=_release_baseline(trades=7, symbols=1), allow_release_fixture=True)
     sufficiency = _as_dict(payload.get("validation_sufficiency_v2"))
     checks = {
         "trade_count_checked": sufficiency.get("trade_count") == 7,
@@ -721,7 +864,7 @@ def production_validation_sufficiency_v2_release_check() -> Mapping[str, object]
 
 
 def production_iterative_research_loop_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("iterative loop", symbol="005930", baseline=_release_baseline(trades=7), budget=ResearchBudget(max_iterations=3))
+    payload = autonomous_quant_partner_payload("iterative loop", symbol="005930", baseline=_release_baseline(trades=7), budget=ResearchBudget(max_iterations=3), allow_release_fixture=True)
     checks = {
         "iterations_bounded": len(_as_list(payload.get("research_iterations"))) == 3,
         "stop_reason_budget": payload.get("stop_reason") == StopReason.RESEARCH_BUDGET_EXHAUSTED.value,
@@ -732,7 +875,7 @@ def production_iterative_research_loop_release_check() -> Mapping[str, object]:
 
 
 def production_robust_strategy_validation_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("robust validation", symbol="005930", baseline=_release_baseline())
+    payload = autonomous_quant_partner_payload("robust validation", symbol="005930", baseline=_release_baseline(), allow_release_fixture=True)
     robustness = _as_dict(payload.get("robustness_report"))
     checks = {
         "walk_forward_modeled": robustness.get("walk_forward") is not None,
@@ -744,7 +887,7 @@ def production_robust_strategy_validation_release_check() -> Mapping[str, object
 
 
 def production_strategy_tournament_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("tournament", symbol="005930", baseline=_release_baseline())
+    payload = autonomous_quant_partner_payload("tournament", symbol="005930", baseline=_release_baseline(), allow_release_fixture=True)
     tournament = _as_dict(payload.get("strategy_tournament"))
     checks = {
         "baseline_included": tournament.get("baseline_included") is True,
@@ -756,7 +899,7 @@ def production_strategy_tournament_release_check() -> Mapping[str, object]:
 
 
 def production_learning_memory_closed_loop_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("memory loop", symbol="005930", baseline=_release_baseline())
+    payload = autonomous_quant_partner_payload("memory loop", symbol="005930", baseline=_release_baseline(), allow_release_fixture=True)
     memory = _as_dict(payload.get("learning_memory_closed_loop"))
     checks = {
         "failed_hypotheses_recorded": bool(_as_list(memory.get("failed_hypotheses"))),
@@ -768,7 +911,7 @@ def production_learning_memory_closed_loop_release_check() -> Mapping[str, objec
 
 
 def production_promotion_readiness_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("promotion readiness", symbol="005930", baseline=_release_baseline(trades=45, symbols=5), budget=ResearchBudget(max_iterations=5))
+    payload = autonomous_quant_partner_payload("promotion readiness", symbol="005930", baseline=_release_baseline(trades=45, symbols=5), budget=ResearchBudget(max_iterations=5), allow_release_fixture=True)
     readiness = _as_dict(payload.get("promotion_readiness_report"))
     checks = {
         "explains_research": bool(_as_list(readiness.get("studied"))),
@@ -780,7 +923,7 @@ def production_promotion_readiness_release_check() -> Mapping[str, object]:
 
 
 def production_research_observability_release_check() -> Mapping[str, object]:
-    payload = autonomous_quant_partner_payload("observability", symbol="005930", baseline=_release_baseline())
+    payload = autonomous_quant_partner_payload("observability", symbol="005930", baseline=_release_baseline(), allow_release_fixture=True)
     observability = _as_dict(payload.get("observability"))
     checks = {
         "session_audit": bool(observability.get("research_session_id")),
@@ -798,7 +941,7 @@ def production_autonomous_quant_partner_acceptance_release_check() -> Mapping[st
         "실제 시장 데이터와 지금까지 배운 내용을 사용해서 문제점을 찾고 개선 전략 후보를 만든 뒤 검증해줘. "
         "좋은 후보가 생기면 승격 승인 요청 전까지 진행해줘."
     )
-    payload = autonomous_quant_partner_payload(request, symbol="005930", baseline=_release_baseline(trades=45, symbols=5), budget=ResearchBudget(max_iterations=5))
+    payload = autonomous_quant_partner_payload(request, symbol="005930", baseline=_release_baseline(trades=45, symbols=5), budget=ResearchBudget(max_iterations=5), allow_release_fixture=True)
     readiness = _as_dict(payload.get("promotion_readiness_report"))
     checks = {
         "real_baseline_contract": _as_dict(payload.get("validation_sufficiency_v2")).get("trade_count") == 45,

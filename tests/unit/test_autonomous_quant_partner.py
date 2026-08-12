@@ -1,5 +1,8 @@
 import unittest
+from unittest.mock import patch
+import sqlite3
 
+from gaon.runtime.research_grounding import format_grounded_tool_response
 from gaon.knowledge.autonomous_quant_partner import (
     autonomous_quant_partner_payload,
     production_authoritative_source_acquisition_release_check,
@@ -15,7 +18,11 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_strategy_tournament_release_check,
     production_validation_sufficiency_v2_release_check,
 )
-from gaon.knowledge.telegram_autonomous_learning import production_autonomous_learning_payload_from_baseline
+from gaon.knowledge.telegram_autonomous_learning import (
+    production_autonomous_learning_payload_from_baseline,
+    production_autonomous_research_wiring_release_check,
+    telegram_autonomous_learning_payload,
+)
 
 
 class AutonomousQuantPartnerTests(unittest.TestCase):
@@ -46,6 +53,7 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             "삼성전자 전략을 더 연구해줘",
             symbol="005930",
             baseline=_baseline(trades=7, symbols=1),
+            allow_release_fixture=True,
         )
         self.assertEqual(payload["validation_sufficiency_v2"]["status"], "insufficient_sample")
         self.assertFalse(payload["approval_required"])
@@ -56,6 +64,7 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             "승격 승인 전까지 연구해줘",
             symbol="005930",
             baseline=_baseline(trades=45, symbols=5),
+            allow_release_fixture=True,
         )
         self.assertEqual(payload["stop_reason"], "human_approval_required")
         self.assertTrue(payload["approval_required"])
@@ -74,6 +83,85 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         self.assertEqual(partner["tool"], "autonomous_quant_research_partner")
         self.assertFalse(partner["strategy_mutated"])
         self.assertFalse(partner["order_executed"])
+
+    def test_hotfix2401_production_wiring_uses_partner_status(self) -> None:
+        payload = production_autonomous_research_wiring_release_check()
+
+        self.assertEqual("needs_more_evidence", payload["status"])
+        self.assertEqual("needs_more_evidence", payload["promotion_status"])
+        self.assertIn("official_market", payload["source_categories_acquired"])
+        self.assertTrue(payload["counter_evidence_attempted"])
+        self.assertGreater(int(payload["research_iterations"]), 0)
+        self.assertGreaterEqual(int(payload["candidate_count"]), 2)
+
+    def test_hotfix2401_telegram_payload_does_not_stop_at_academic_exhaustion(self) -> None:
+        baseline = _baseline(trades=1, symbols=1)
+        external = {
+            "schema_version": 1,
+            "state": "academic_content_exhausted",
+            "question_id": "research-question:test-2401",
+            "discovery_run": {"results": []},
+            "normalized_records": [],
+            "candidates": [],
+            "blockers": ["academic_content_exhausted"],
+            "network_executed": True,
+        }
+        with sqlite3.connect(":memory:") as connection:
+            with patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=baseline), patch(
+                "gaon.knowledge.telegram_autonomous_learning._run_production_external_research",
+                return_value=external,
+            ):
+                payload = telegram_autonomous_learning_payload(
+                    connection,
+                    "Samsung autonomous production research",
+                    symbol="005930",
+                )
+
+        learning = payload["autonomous_learning_v2"]
+        partner = learning["autonomous_quant_partner"]
+        acquisition = partner["source_acquisition"]
+        self.assertEqual("autonomous_quant_partner", learning["selected_execution_orchestration"])
+        self.assertEqual("academic_content_exhausted", learning["external_research_state"])
+        self.assertIn("official_market", acquisition["source_categories_acquired"])
+        self.assertEqual("needs_more_evidence", learning["autonomous_quant_partner_promotion_status"])
+        self.assertEqual("needs_more_evidence", learning["autonomous_quant_partner_status"])
+        self.assertTrue(partner["counter_evidence"]["attempted"])
+        self.assertGreater(len(partner["research_iterations"]), 0)
+        self.assertGreaterEqual(partner["strategy_tournament"]["candidate_count"], 2)
+        self.assertNotIn("deterministic:", str(partner))
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+
+    def test_hotfix2401_renderer_shows_partner_orchestration(self) -> None:
+        baseline = _baseline(trades=1, symbols=1)
+        external = {
+            "schema_version": 1,
+            "state": "academic_content_exhausted",
+            "question_id": "research-question:test-render-2401",
+            "discovery_run": {"results": []},
+            "normalized_records": [],
+            "candidates": [],
+            "blockers": ["academic_content_exhausted"],
+            "network_executed": True,
+        }
+        with sqlite3.connect(":memory:") as connection:
+            with patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=baseline), patch(
+                "gaon.knowledge.telegram_autonomous_learning._run_production_external_research",
+                return_value=external,
+            ):
+                payload = telegram_autonomous_learning_payload(connection, "Samsung production wiring", symbol="005930")
+
+        rendered = format_grounded_tool_response("autonomous_learning_research", dict(payload), "Samsung production wiring")
+
+        self.assertIsNotNone(rendered)
+        assert rendered is not None
+        self.assertIn("Autonomous Quant Partner", rendered)
+        self.assertIn("partner_status=needs_more_evidence", rendered)
+        self.assertIn("investigated_source_categories=official_market", rendered)
+        self.assertIn("counter_evidence_attempted=true", rendered)
+        self.assertIn("generated_candidates=2", rendered)
+        self.assertIn("research_iterations=", rendered)
+        self.assertIn("promotion_status=needs_more_evidence", rendered)
 
 
 def _baseline(*, trades: int, symbols: int) -> dict[str, object]:
