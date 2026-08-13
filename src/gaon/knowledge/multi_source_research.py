@@ -529,19 +529,54 @@ class EvidenceFusionEngine:
 def validation_sample_diagnostics(payload: Mapping[str, object], *, minimum_required_trades: int = 30, warmup_bars: int = 60) -> dict[str, object]:
     dataset = _as_dict(_as_dict(payload.get("dataset")).get("metadata"))
     metrics = _as_dict(_as_dict(payload.get("backtest")).get("metrics"))
+    supplied = _as_dict(payload.get("validation_coverage"))
+    signal_diagnostics = _as_dict(supplied.get("signal_diagnostics") or payload.get("signal_diagnostics"))
+    horizon = _as_dict(supplied.get("horizon_policy"))
     bars = int(dataset.get("rows") or 0)
     trades = int(metrics.get("trade_count") or 0)
-    usable_bars = max(0, bars - warmup_bars)
-    signals = int(metrics.get("signals") or max(trades, min(usable_bars, trades * 2)))
+    warmup = int(supplied.get("warmup_bars") or signal_diagnostics.get("warmup_bars") or warmup_bars)
+    usable_bars = int(supplied.get("usable_bars") or max(0, bars - warmup))
+    entry_signals = int(supplied.get("entry_signal_count") or signal_diagnostics.get("combined_entry_signals") or metrics.get("signals") or max(trades, min(usable_bars, trades * 2)))
+    exit_signals = int(supplied.get("exit_signal_count") or signal_diagnostics.get("exit_signals") or trades)
+    status = str(supplied.get("sample_sufficiency_status") or ("sufficient" if trades >= minimum_required_trades else "insufficient_trades"))
+    reasons = list(_as_list(supplied.get("sample_sufficiency_reasons")))
+    if not reasons:
+        if bars <= warmup:
+            reasons.append("insufficient_bars")
+        if entry_signals == 0:
+            reasons.append("insufficient_signals")
+        if trades < minimum_required_trades:
+            reasons.append("insufficient_trades")
     return {
+        "symbol": payload.get("symbol") or _as_dict(_as_dict(payload.get("backtest")).get("strategy")).get("symbol"),
+        "data_source": dataset.get("source") or _as_dict(payload.get("backtest")).get("source"),
+        "fixture_backed": bool(dataset.get("fixture_backed") or payload.get("fixture_backed")),
+        "requested_start": supplied.get("requested_start") or dataset.get("requested_start") or dataset.get("start_date", "unknown"),
+        "requested_end": supplied.get("requested_end") or dataset.get("requested_end") or dataset.get("end_date", "unknown"),
+        "actual_start": supplied.get("actual_start") or dataset.get("start_date", "unknown"),
+        "actual_end": supplied.get("actual_end") or dataset.get("end_date", "unknown"),
+        "raw_bars": int(supplied.get("raw_bars") or bars),
+        "usable_bars": usable_bars,
+        "warmup_bars": warmup,
+        "dropped_bars": int(supplied.get("dropped_bars") or max(0, bars - usable_bars - warmup)),
+        "entry_signal_count": entry_signals,
+        "exit_signal_count": exit_signals,
+        "completed_trade_count": trades,
+        "open_trade_count": int(supplied.get("open_trade_count") or 0),
+        "minimum_required_trades": int(supplied.get("minimum_required_trades") or minimum_required_trades),
+        "validation_horizon_days": int(supplied.get("validation_horizon_days") or horizon.get("validation_horizon_days") or 0),
+        "validation_horizon_bars": int(supplied.get("validation_horizon_bars") or bars),
+        "sample_sufficiency_status": status,
+        "sample_sufficiency_reasons": reasons,
+        "horizon_reason": supplied.get("horizon_reason") or horizon.get("horizon_reason") or "baseline_payload",
+        "horizon_extension_attempts": int(supplied.get("horizon_extension_attempts") or horizon.get("extension_attempts") or 0),
+        "window_fingerprint": supplied.get("window_fingerprint"),
+        "signal_diagnostics": signal_diagnostics,
         "requested_period": f"{dataset.get('start_date', 'unknown')}~{dataset.get('end_date', 'unknown')}",
         "actual_bars": bars,
-        "usable_bars": usable_bars,
-        "warmup_bars": warmup_bars,
         "entry_opportunities": usable_bars,
-        "signals_generated": signals,
+        "signals_generated": entry_signals,
         "trades_generated": trades,
-        "minimum_required_trades": minimum_required_trades,
         "validation_window": f"{dataset.get('start_date', 'unknown')}~{dataset.get('end_date', 'unknown')}",
         "data_start": dataset.get("start_date", "unknown"),
         "data_end": dataset.get("end_date", "unknown"),
@@ -658,6 +693,10 @@ def _normalize_claim(value: str) -> str:
 
 def _as_dict(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _as_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, (list, tuple)) else []
 
 
 def _hash(payload: object) -> str:

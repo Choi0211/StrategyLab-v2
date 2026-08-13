@@ -21,6 +21,12 @@ from gaon.knowledge.autonomous_quant_partner import (
 from gaon.knowledge.telegram_autonomous_learning import (
     production_autonomous_learning_payload_from_baseline,
     production_autonomous_research_wiring_release_check,
+    production_autonomous_validation_coverage_release_check,
+    production_backtest_signal_diagnostic_release_check,
+    production_research_horizon_release_check,
+    production_sample_sufficiency_release_check,
+    production_validation_coverage_release_check,
+    production_validation_window_integrity_release_check,
     telegram_autonomous_learning_payload,
 )
 
@@ -158,6 +164,63 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         self.assertIn("Autonomous Quant Partner", rendered)
         self.assertIn("partner_status=needs_more_evidence", rendered)
         self.assertIn("investigated_source_categories=official_market", rendered)
+
+    def test_hotfix2402_release_checks_expose_validation_coverage(self) -> None:
+        checks = (
+            production_validation_coverage_release_check,
+            production_research_horizon_release_check,
+            production_sample_sufficiency_release_check,
+            production_backtest_signal_diagnostic_release_check,
+            production_validation_window_integrity_release_check,
+            production_autonomous_validation_coverage_release_check,
+        )
+        for check in checks:
+            with self.subTest(check=check.__name__):
+                payload = check()
+                self.assertEqual("pass", payload["safety"])
+                self.assertNotEqual("unknown", payload["raw_bars"])
+                self.assertIn(payload["sample_sufficiency_status"], {"sufficient", "insufficient_trades"})
+                self.assertFalse(payload["strategy_mutated"])
+                self.assertFalse(payload["order_executed"])
+
+    def test_hotfix2402_renderer_uses_partner_bar_and_signal_diagnostics(self) -> None:
+        baseline = _baseline(trades=1, symbols=1)
+        baseline["validation_coverage"] = {
+            "raw_bars": 730,
+            "usable_bars": 670,
+            "warmup_bars": 60,
+            "entry_signal_count": 5,
+            "exit_signal_count": 1,
+            "completed_trade_count": 1,
+            "minimum_required_trades": 30,
+            "sample_sufficiency_status": "insufficient_trades",
+            "sample_sufficiency_reasons": ["insufficient_trades"],
+            "requested_start": "2023-07-25",
+            "requested_end": "2026-07-24",
+            "actual_start": "2023-07-25",
+            "actual_end": "2026-07-24",
+            "horizon_reason": "extended_for_sample_sufficiency",
+            "horizon_extension_attempts": 2,
+            "signal_diagnostics": {"breakout_condition_hits": 7, "trend_filter_hits": 6, "volume_filter_hits": 5, "combined_entry_signals": 5},
+            "comparison_window_compatible": True,
+            "window_fingerprint": "window:test",
+        }
+        payload = production_autonomous_learning_payload_from_baseline(
+            "Samsung validation coverage render",
+            symbol="005930",
+            mode="research",
+            baseline=baseline,
+            external_research={"state": "content_unavailable"},
+        )
+        rendered = format_grounded_tool_response("autonomous_learning_research", dict(payload), "Samsung validation coverage render")
+
+        self.assertIsNotNone(rendered)
+        assert rendered is not None
+        self.assertIn("bars=730", rendered)
+        self.assertIn("usable_bars=670", rendered)
+        self.assertIn("entry_signals=5", rendered)
+        self.assertIn("sample_status=insufficient_trades", rendered)
+        self.assertIn("horizon_extension_attempts=2", rendered)
         self.assertIn("counter_evidence_attempted=true", rendered)
         self.assertIn("generated_candidates=2", rendered)
         self.assertIn("research_iterations=", rendered)

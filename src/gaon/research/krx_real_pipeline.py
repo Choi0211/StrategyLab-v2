@@ -16,7 +16,7 @@ import json
 import os
 import re
 import sqlite3
-from typing import Callable, Protocol
+from typing import Callable, Mapping, Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
@@ -43,6 +43,7 @@ YAHOO_CHART_ENDPOINT = "https://query1.finance.yahoo.com/v8/finance/chart/{symbo
 HttpOpener = Callable[[Request, float], object]
 ALLOWED_RELEASE_WARNING_CODES = frozenset({"provider_gap", "provider_ohlc_anomaly", "provider_zero_volume_anomaly"})
 KRX_WON_FLOAT_DRIFT_TOLERANCE = 0.01
+DEFAULT_MINIMUM_REQUIRED_TRADES = 30
 
 
 class FieldProvenance(str, Enum):
@@ -58,6 +59,61 @@ class MarketDataAvailability(str, Enum):
     REAL = "real"
     FIXTURE = "fixture"
     REAL_DATA_UNAVAILABLE = "real_data_unavailable"
+
+
+@dataclass(frozen=True)
+class ProductionValidationHorizonPolicy:
+    """Bounded validation horizon policy for production research diagnostics."""
+
+    horizon_years: tuple[int, ...] = (1, 3, 5)
+    minimum_required_trades: int = DEFAULT_MINIMUM_REQUIRED_TRADES
+    max_market_data_requests: int = 3
+
+    def windows(self, end_date: str) -> tuple[tuple[str, str, str], ...]:
+        _validate_date(end_date)
+        end = datetime.fromisoformat(end_date).date()
+        windows = []
+        for years in self.horizon_years[: self.max_market_data_requests]:
+            start = end.replace(year=end.year - years)
+            windows.append((f"{years}y", start.isoformat(), end.isoformat()))
+        return tuple(windows)
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "horizon_years": list(self.horizon_years),
+            "minimum_required_trades": self.minimum_required_trades,
+            "max_market_data_requests": self.max_market_data_requests,
+        }
+
+
+@dataclass(frozen=True)
+class HorizonAttempt:
+    label: str
+    requested_start: str
+    requested_end: str
+    actual_start: str
+    actual_end: str
+    raw_bars: int
+    usable_bars: int
+    completed_trade_count: int
+    sample_sufficiency_status: str
+    sample_sufficiency_reasons: tuple[str, ...]
+    quality_status: str
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "label": self.label,
+            "requested_start": self.requested_start,
+            "requested_end": self.requested_end,
+            "actual_start": self.actual_start,
+            "actual_end": self.actual_end,
+            "raw_bars": self.raw_bars,
+            "usable_bars": self.usable_bars,
+            "completed_trade_count": self.completed_trade_count,
+            "sample_sufficiency_status": self.sample_sufficiency_status,
+            "sample_sufficiency_reasons": list(self.sample_sufficiency_reasons),
+            "quality_status": self.quality_status,
+        }
 
 
 @dataclass(frozen=True)
@@ -281,8 +337,15 @@ class RealAutonomousResearchReport:
     memory_id: str | None
     korean_report: str
     generated_at: str
+    horizon_attempts: tuple[HorizonAttempt, ...] = ()
 
     def to_json(self) -> dict[str, object]:
+        validation_coverage = _validation_coverage_diagnostic(
+            self.strategy,
+            self.dataset,
+            self.backtest,
+            self.assumptions,
+        )
         return {
             "schema_version": KRX_REAL_PIPELINE_SCHEMA_VERSION,
             "report_id": self.report_id,
@@ -294,9 +357,16 @@ class RealAutonomousResearchReport:
             "assumptions": self.assumptions.to_json(),
             "backtest": self.backtest.to_json(),
             "validation": self.validation.to_json(),
+            "validation_coverage": validation_coverage,
             "critic_findings": [finding.to_json() for finding in self.critic_findings],
             "candidates": [candidate.to_json() for candidate in self.candidates],
+            "candidate_validation_coverage": [
+                _validation_coverage_diagnostic(candidate.strategy, self.dataset, candidate.backtest_result, self.assumptions, baseline_window=validation_coverage)
+                for candidate in self.candidates
+                if candidate.backtest_result is not None
+            ],
             "comparison": self.comparison.to_json(),
+            "horizon_attempts": [attempt.to_json() for attempt in self.horizon_attempts],
             "memory_id": self.memory_id,
             "korean_report": self.korean_report,
             "generated_at": self.generated_at,
@@ -844,14 +914,40 @@ class RealAutonomousResearchPipeline:
         self._connection = connection
         self._provider = provider or KRXFixtureMarketDataProvider()
 
-    def run(self, request_text: str, *, run_id: str | None = None, symbol: str = "005930", start_date: str = "2026-01-01", end_date: str = "2026-07-10", generated_at: str | None = None) -> RealAutonomousResearchReport:
+    def run(self, request_text: str, *, run_id: str | None = None, symbol: str = "005930", start_date: str | None = None, end_date: str | None = None, generated_at: str | None = None) -> RealAutonomousResearchReport:
         at = generated_at or utc_now()
         rid = run_id or f"krx-real-research:{uuid4().hex}"
-        dataset, quality, _inserted = KRXDatasetBuilder(self._connection, self._provider).build(symbol, start_date=start_date, end_date=end_date)
         strategy = UserStrategyParser().parse(request_text, symbol=symbol, created_at=at)
         assumptions = default_execution_assumptions()
         engine = RuleBasedBacktestEngine()
-        backtest = engine.run(f"{rid}:original", strategy, dataset, assumptions, generated_at=at) if quality.status is not DataQualityStatus.FAIL else _empty_result(f"{rid}:original", strategy, dataset, assumptions, "rejected", ("data quality failed",), at)
+        builder = KRXDatasetBuilder(self._connection, self._provider)
+        explicit_window = start_date is not None or end_date is not None
+        policy = ProductionValidationHorizonPolicy()
+        final_end = end_date or _date_from_timestamp(at)
+        windows = ((("explicit", start_date or _start_for_years(final_end, 1), final_end),) if explicit_window else policy.windows(final_end))
+        attempts: list[HorizonAttempt] = []
+        dataset: MarketDataset | None = None
+        quality: DataQualityReport | None = None
+        backtest: RealBacktestResult | None = None
+        for attempt_index, (label, window_start, window_end) in enumerate(windows, start=1):
+            dataset, quality, _inserted = builder.build(symbol, start_date=window_start, end_date=window_end)
+            backtest = engine.run(f"{rid}:original:{label}", strategy, dataset, assumptions, generated_at=at) if quality.status is not DataQualityStatus.FAIL else _empty_result(f"{rid}:original:{label}", strategy, dataset, assumptions, "rejected", ("data quality failed",), at)
+            coverage = _validation_coverage_diagnostic(
+                strategy,
+                dataset,
+                backtest,
+                assumptions,
+                requested_start=window_start,
+                requested_end=window_end,
+                horizon_label=label,
+                horizon_reason="explicit_user_period" if explicit_window else ("default_research_policy" if attempt_index == 1 else "extended_for_sample_sufficiency"),
+                horizon_extension_attempts=max(0, attempt_index - 1),
+                minimum_required_trades=policy.minimum_required_trades,
+            )
+            attempts.append(_horizon_attempt(label, window_start, window_end, dataset, quality, coverage))
+            if explicit_window or quality.status is DataQualityStatus.FAIL or backtest.metrics.trade_count >= policy.minimum_required_trades:
+                break
+        assert dataset is not None and quality is not None and backtest is not None
         validation = WalkForwardValidator().validate(strategy, dataset, assumptions, run_id=rid, generated_at=at)
         findings = EvidenceBasedStrategyCritic().critique(strategy, backtest, validation)
         raw_candidates = ImprovementCandidateGenerator().generate(strategy, findings, run_id=rid, created_at=at)
@@ -862,7 +958,7 @@ class RealAutonomousResearchPipeline:
         comparison = _compare_candidates(backtest, tuple(tested_candidates))
         memory_id = self._persist(rid, request_text, strategy, dataset, backtest, findings, tuple(tested_candidates), comparison, at)
         korean_report = _build_korean_report(request_text, dataset, quality, strategy, assumptions, backtest, validation, findings, tuple(tested_candidates), comparison)
-        report = RealAutonomousResearchReport(f"krx-real-research-report:{rid}", rid, request_text, dataset, quality, strategy, assumptions, backtest, validation, findings, tuple(tested_candidates), comparison, memory_id, korean_report, at)
+        report = RealAutonomousResearchReport(f"krx-real-research-report:{rid}", rid, request_text, dataset, quality, strategy, assumptions, backtest, validation, findings, tuple(tested_candidates), comparison, memory_id, korean_report, at, tuple(attempts))
         if self._connection is not None:
             with self._connection:
                 self._connection.execute(
@@ -924,6 +1020,19 @@ def build_market_data_provider_from_env(env: dict[str, str]) -> KRXHistoricalDat
     if provider in {"yahoo", "yahoo-chart", "yahoo_krx"}:
         return YahooKRXHistoricalDataProvider(timeout_seconds=timeout)
     raise RealMarketDataUnavailable(f"real_data_unavailable: unsupported provider {provider}")
+
+
+def _date_from_timestamp(value: str) -> str:
+    raw = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(raw).date().isoformat()
+    except ValueError:
+        return datetime.now(UTC).date().isoformat()
+
+
+def _start_for_years(end_date: str, years: int) -> str:
+    end = datetime.fromisoformat(end_date).date()
+    return end.replace(year=end.year - years).isoformat()
 
 
 def yahoo_krx_bar_debug(symbol: str, day: str, *, opener: HttpOpener | None = None, timeout_seconds: float = 20.0) -> dict[str, object]:
@@ -1361,6 +1470,185 @@ def krx_trading_calendar_release_check(connection: sqlite3.Connection) -> dict[s
         "source": "real:test-calendar",
         "inserted": inserted,
     }
+
+
+def _validation_coverage_diagnostic(
+    strategy: CanonicalStrategySpec,
+    dataset: MarketDataset,
+    backtest: RealBacktestResult | None,
+    assumptions: BacktestExecutionAssumptionSet,
+    *,
+    requested_start: str | None = None,
+    requested_end: str | None = None,
+    horizon_label: str | None = None,
+    horizon_reason: str = "default_research_policy",
+    horizon_extension_attempts: int = 0,
+    minimum_required_trades: int = DEFAULT_MINIMUM_REQUIRED_TRADES,
+    baseline_window: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    bars = tuple(sorted(dataset.bars, key=lambda bar: bar.timestamp))
+    raw_bars = len(bars)
+    max_lookback = _max_required_lookback(strategy)
+    signal_diagnostics = _signal_diagnostics(strategy, bars, trade_count=backtest.metrics.trade_count if backtest else 0)
+    usable_bars = max(0, raw_bars - max_lookback)
+    trade_count = backtest.metrics.trade_count if backtest else 0
+    actual_start = bars[0].timestamp if bars else dataset.metadata.start_date
+    actual_end = bars[-1].timestamp if bars else dataset.metadata.end_date
+    reasons: list[str] = []
+    if raw_bars <= max_lookback:
+        reasons.append("insufficient_bars")
+    if signal_diagnostics["combined_entry_signals"] == 0:
+        reasons.append("insufficient_signals")
+    if trade_count < minimum_required_trades:
+        reasons.append("insufficient_trades")
+    if not reasons:
+        status = "sufficient"
+    elif raw_bars <= max_lookback:
+        status = "insufficient_bars"
+    elif signal_diagnostics["combined_entry_signals"] == 0:
+        status = "insufficient_signals"
+    else:
+        status = "insufficient_trades"
+    requested_start = requested_start or dataset.metadata.start_date
+    requested_end = requested_end or dataset.metadata.end_date
+    validation_horizon_days = max(0, (datetime.fromisoformat(requested_end) - datetime.fromisoformat(requested_start)).days)
+    cost_assumptions = {
+        "commission": assumptions.commission.value,
+        "tax": assumptions.tax.value,
+        "slippage": assumptions.slippage.value,
+        "execution_timing": assumptions.execution_timing.value,
+        "position_sizing": assumptions.position_sizing.value,
+        "initial_capital": assumptions.initial_capital.value,
+    }
+    window_payload = {
+        "symbol": strategy.symbol,
+        "source": dataset.metadata.source,
+        "fixture_backed": dataset.metadata.fixture_backed,
+        "actual_start": actual_start,
+        "actual_end": actual_end,
+        "assumptions": cost_assumptions,
+    }
+    window_fingerprint = _sha(window_payload)
+    baseline_fingerprint = str((baseline_window or {}).get("window_fingerprint") or window_fingerprint)
+    return {
+        "schema_version": 1,
+        "symbol": strategy.symbol,
+        "data_source": dataset.metadata.source,
+        "fixture_backed": dataset.metadata.fixture_backed,
+        "requested_start": requested_start,
+        "requested_end": requested_end,
+        "actual_start": actual_start,
+        "actual_end": actual_end,
+        "raw_bars": raw_bars,
+        "usable_bars": usable_bars,
+        "warmup_bars": max_lookback,
+        "dropped_bars": max_lookback,
+        "max_required_lookback": max_lookback,
+        "bars_after_warmup": usable_bars,
+        "entry_signal_count": signal_diagnostics["combined_entry_signals"],
+        "exit_signal_count": signal_diagnostics["exit_signals"],
+        "completed_trade_count": trade_count,
+        "open_trade_count": 0,
+        "minimum_required_trades": minimum_required_trades,
+        "validation_horizon_days": validation_horizon_days,
+        "validation_horizon_bars": raw_bars,
+        "sample_sufficiency_status": status,
+        "sample_sufficiency_reasons": reasons,
+        "horizon_label": horizon_label or "current",
+        "horizon_reason": horizon_reason,
+        "horizon_extension_attempts": horizon_extension_attempts,
+        "horizon_policy": {
+            "primary": "1y",
+            "extensions": ["3y", "5y"],
+            "max_market_data_requests": 3,
+            "horizon_reason": horizon_reason,
+            "extension_attempts": horizon_extension_attempts,
+            "validation_horizon_days": validation_horizon_days,
+        },
+        "signal_diagnostics": signal_diagnostics,
+        "cost_assumptions": cost_assumptions,
+        "window_fingerprint": window_fingerprint,
+        "comparison_window_fingerprint": baseline_fingerprint,
+        "comparison_window_compatible": baseline_fingerprint == window_fingerprint,
+        "multi_symbol_status": "single_symbol_only",
+        "validation_peers": [],
+        "development_period": {"start": requested_start, "end": actual_end, "status": "available"},
+        "validation_period": {"start": actual_start, "end": actual_end, "status": "available"},
+        "out_of_sample_period": {"status": "out_of_sample_not_run"},
+        "walk_forward_status": "not_run",
+        "fabricated_metrics": False,
+    }
+
+
+def _signal_diagnostics(strategy: CanonicalStrategySpec, bars: tuple[MarketBar, ...], *, trade_count: int) -> dict[str, int]:
+    breakout_n = int(strategy.entry["breakout_lookback"].value)
+    exit_n = int(strategy.exit.get("channel_exit_lookback", ProvenancedValue(10, FieldProvenance.DEFAULT)).value)
+    warmup = _max_required_lookback(strategy)
+    breakout_hits = 0
+    trend_hits = 0
+    volume_hits = 0
+    combined = 0
+    blocked_by_breakout = 0
+    blocked_by_ma = 0
+    blocked_by_volume = 0
+    for index, bar in enumerate(bars):
+        if index < warmup:
+            continue
+        prior = bars[:index]
+        prior_high = max(item.high for item in prior[-breakout_n:])
+        ma20 = sum(item.close for item in prior[-20:]) / 20
+        ma60 = sum(item.close for item in prior[-60:]) / 60
+        volume_ma20 = sum(item.volume for item in prior[-20:]) / 20
+        breakout_ok = bar.close > prior_high
+        trend_ok = (not strategy.entry.get("close_gt_ma20") or bar.close > ma20) and (not strategy.entry.get("ma20_gt_ma60") or ma20 > ma60)
+        volume_ok = not strategy.filters.get("volume_gte_ma20") or bar.volume >= volume_ma20
+        breakout_hits += int(breakout_ok)
+        trend_hits += int(trend_ok)
+        volume_hits += int(volume_ok)
+        if breakout_ok and trend_ok and volume_ok:
+            combined += 1
+        else:
+            blocked_by_breakout += int(not breakout_ok)
+            blocked_by_ma += int(breakout_ok and not trend_ok)
+            blocked_by_volume += int(breakout_ok and trend_ok and not volume_ok)
+    return {
+        "breakout_condition_hits": breakout_hits,
+        "trend_filter_hits": trend_hits,
+        "volume_filter_hits": volume_hits,
+        "combined_entry_signals": combined,
+        "exit_signals": trade_count,
+        "completed_trades": trade_count,
+        "blocked_by_breakout": blocked_by_breakout,
+        "blocked_by_ma_filter": blocked_by_ma,
+        "blocked_by_volume_filter": blocked_by_volume,
+        "warmup_bars": warmup,
+        "exit_lookback": exit_n,
+    }
+
+
+def _max_required_lookback(strategy: CanonicalStrategySpec) -> int:
+    return max(
+        60,
+        int(strategy.entry.get("breakout_lookback", ProvenancedValue(20, FieldProvenance.DEFAULT)).value),
+        int(strategy.exit.get("channel_exit_lookback", ProvenancedValue(10, FieldProvenance.DEFAULT)).value),
+        20 if strategy.filters.get("volume_gte_ma20") else 0,
+    )
+
+
+def _horizon_attempt(label: str, requested_start: str, requested_end: str, dataset: MarketDataset, quality: DataQualityReport, coverage: Mapping[str, object]) -> HorizonAttempt:
+    return HorizonAttempt(
+        label,
+        requested_start,
+        requested_end,
+        str(coverage.get("actual_start") or dataset.metadata.start_date),
+        str(coverage.get("actual_end") or dataset.metadata.end_date),
+        int(coverage.get("raw_bars") or len(dataset.bars)),
+        int(coverage.get("usable_bars") or 0),
+        int(coverage.get("completed_trade_count") or 0),
+        str(coverage.get("sample_sufficiency_status") or "unknown"),
+        tuple(str(item) for item in coverage.get("sample_sufficiency_reasons", ()) if item),
+        quality.status.value,
+    )
 
 
 def _compare_candidates(original: RealBacktestResult, candidates: tuple[ImprovementCandidate, ...]) -> CandidateComparison:

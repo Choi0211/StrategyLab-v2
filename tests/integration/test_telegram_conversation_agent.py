@@ -1661,6 +1661,12 @@ class TelegramConversationAgentTests(unittest.TestCase):
             "gaon-production-research-observability-release-check",
             "gaon-production-autonomous-quant-partner-acceptance-release-check",
             "gaon-production-autonomous-research-wiring-release-check",
+            "gaon-production-validation-coverage-release-check",
+            "gaon-production-research-horizon-release-check",
+            "gaon-production-sample-sufficiency-release-check",
+            "gaon-production-backtest-signal-diagnostic-release-check",
+            "gaon-production-validation-window-integrity-release-check",
+            "gaon-production-autonomous-validation-coverage-release-check",
         )
         for command in commands:
             with self.subTest(command=command):

@@ -84,6 +84,12 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-research-observability-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-quant-partner-acceptance-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-research-wiring-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-validation-coverage-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-research-horizon-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-sample-sufficiency-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-backtest-signal-diagnostic-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-validation-window-integrity-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-validation-coverage-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -97,7 +103,25 @@ source diversification, counter-evidence search, bounded iterative research,
 robust strategy validation, candidate tournament ranking, learning-memory
 closed-loop recording, promotion readiness, production observability,
 production Telegram wiring after academic content exhaustion, and the human-only
-promotion gate without mutating strategy configuration or placing orders.
+promotion gate without mutating strategy configuration or placing orders. The
+Hotfix 240.2 validation coverage checks additionally verify bounded research
+horizon extension, real-data bar count propagation, warmup accounting, signal
+diagnostics, sample sufficiency, and baseline/candidate validation-window
+integrity.
+
+Production live validation diagnostic prompt:
+
+```text
+삼성전자 전략을 처음부터 다시 연구해줘.
+외부 연구 자료도 찾아보고,
+지금까지 배운 내용과 실제 시장 데이터를 사용해서
+문제점을 찾고 개선 전략 후보를 만든 뒤 검증해줘.
+좋은 전략 후보가 생기면 승격 승인을 요청하기 전까지 진행해줘.
+```
+
+Expected Telegram diagnostics must include non-unknown `bars`, `usable_bars`,
+`warmup_bars`, `entry_signals`, `completed_trades`, `minimum_required_trades`,
+`sample_status`, and `horizon_extension_attempts`.
 
 ## Phase A Diagnostics
 

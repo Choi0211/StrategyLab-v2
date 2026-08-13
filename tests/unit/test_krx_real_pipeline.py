@@ -432,6 +432,22 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM krx_real_research_memories").fetchone()[0], 1)
         self.assertGreaterEqual(SCHEMA_VERSION, 33)
 
+    def test_hotfix2402_pipeline_exposes_validation_horizon_and_signal_diagnostics(self) -> None:
+        report = RealAutonomousResearchPipeline(None).run(STRATEGY_TEXT, run_id="unit-validation-coverage", generated_at="2026-07-25T00:00:00Z")
+        payload = report.to_json()
+        coverage = payload["validation_coverage"]
+
+        self.assertGreaterEqual(coverage["raw_bars"], 365)
+        self.assertNotEqual("unknown", coverage["actual_start"])
+        self.assertEqual(60, coverage["warmup_bars"])
+        self.assertIn("entry_signal_count", coverage)
+        self.assertIn("combined_entry_signals", coverage["signal_diagnostics"])
+        self.assertEqual(30, coverage["minimum_required_trades"])
+        self.assertIn(coverage["sample_sufficiency_status"], {"sufficient", "insufficient_trades", "insufficient_signals"})
+        self.assertTrue(coverage["window_fingerprint"])
+        self.assertTrue(coverage["comparison_window_compatible"])
+        self.assertIn("horizon_attempts", payload)
+
     def test_real_pipeline_report_discloses_provider_gap(self) -> None:
         report = RealAutonomousResearchPipeline(None, _StaticProvider(_large_yahoo_gap_dataset())).run(STRATEGY_TEXT, run_id="unit-provider-gap", generated_at="2026-07-25T00:00:00Z")
         self.assertEqual(report.quality.status, DataQualityStatus.PASS_WITH_WARNINGS)

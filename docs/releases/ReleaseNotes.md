@@ -3,6 +3,33 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 240.2 Production Validation Coverage & Research Horizon
+
+Production Telegram validation now preserves the authoritative bar and signal
+coverage behind Autonomous Quant Partner results. Date-less production research
+uses a bounded validation horizon policy (`1y -> 3y -> 5y`) instead of the old
+implicit short window. The system can now explain how many bars were requested,
+received, and usable after warmup, how many entry/exit signals appeared, how
+many trades completed, why sample sufficiency failed, and whether horizon
+extension improved coverage.
+
+Telegram now shows compact `[검증 범위]` and `[Signal Diagnostics]` sections.
+If the sample remains below 30 completed trades, promotion readiness remains
+blocked or needs more evidence; strategy rules are not relaxed automatically.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-production-validation-coverage-release-check
+python -m gaon.runtime.cli gaon-production-research-horizon-release-check
+python -m gaon.runtime.cli gaon-production-sample-sufficiency-release-check
+python -m gaon.runtime.cli gaon-production-backtest-signal-diagnostic-release-check
+python -m gaon.runtime.cli gaon-production-validation-window-integrity-release-check
+python -m gaon.runtime.cli gaon-production-autonomous-validation-coverage-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Hotfix 240.1 Real Production Autonomous Research Wiring
 
 Telegram Autonomous Learning now renders the Sprint 199-240 Autonomous Quant

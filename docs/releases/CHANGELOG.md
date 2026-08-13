@@ -1,5 +1,22 @@
 # Changelog
 
+## Hotfix 240.2 - Production Validation Coverage & Research Horizon
+
+- Replaced the implicit short production real-research default window with a
+  bounded validation horizon policy (`1y -> 3y -> 5y`) for date-less Telegram
+  autonomous research requests.
+- Added authoritative validation coverage diagnostics for requested/actual
+  period, raw/usable/warmup/dropped bars, signal counts, completed/open trades,
+  sample sufficiency status/reasons, horizon provenance, cost assumptions, and
+  comparison window fingerprints.
+- Preserved baseline/candidate window integrity and added tournament ranking
+  gates so insufficient trade samples cannot outrank better-supported evidence.
+- Updated Telegram rendering to eliminate `bars=unknown` when authoritative bar
+  coverage exists and to show compact validation/signal diagnostics.
+- Added six production validation coverage release checks.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Hotfix 240.1 - Real Production Autonomous Research Wiring
 
 - Added production-only multi-source adapters for acquired academic evidence,
