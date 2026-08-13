@@ -90,6 +90,15 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-backtest-signal-diagnostic-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-validation-window-integrity-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-validation-coverage-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-no-fabricated-validation-metrics-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-multi-symbol-validation-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-oos-validation-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-walk-forward-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-regime-validation-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-parameter-sensitivity-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-transaction-cost-stress-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-monte-carlo-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-robustness-execution-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -108,6 +117,10 @@ Hotfix 240.2 validation coverage checks additionally verify bounded research
 horizon extension, real-data bar count propagation, warmup accounting, signal
 diagnostics, sample sufficiency, and baseline/candidate validation-window
 integrity.
+Hotfix 248.1 robustness checks additionally verify that production-grade
+robustness sections do not fabricate metrics when execution evidence is absent,
+and that approval readiness requires actual multi-symbol, OOS, walk-forward,
+regime, parameter, transaction-cost, and Monte Carlo execution lineage.
 
 Production live validation diagnostic prompt:
 

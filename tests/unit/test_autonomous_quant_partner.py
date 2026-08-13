@@ -8,15 +8,37 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_authoritative_source_acquisition_release_check,
     production_autonomous_quant_partner_acceptance_release_check,
     production_counter_evidence_release_check,
+    production_full_autonomous_quant_research_release_check,
+    production_independent_evidence_release_check,
     production_iterative_research_loop_release_check,
     production_learning_memory_closed_loop_release_check,
+    production_monte_carlo_robustness_release_check,
+    production_multi_symbol_validation_release_check,
+    production_no_fabricated_validation_metrics_release_check,
+    production_out_of_sample_release_check,
+    production_parameter_sensitivity_release_check,
     production_promotion_readiness_release_check,
     production_provider_registry_release_check,
+    production_real_monte_carlo_release_check,
+    production_real_multi_symbol_validation_release_check,
+    production_real_oos_validation_release_check,
+    production_real_parameter_sensitivity_release_check,
+    production_real_regime_validation_release_check,
+    production_real_robustness_execution_release_check,
+    production_real_transaction_cost_stress_release_check,
+    production_real_walk_forward_release_check,
+    production_real_web_news_provider_release_check,
+    production_real_youtube_provider_release_check,
+    production_regime_validation_release_check,
     production_research_observability_release_check,
     production_robust_strategy_validation_release_check,
+    production_signal_integrity_release_check,
     production_source_diversification_planner_release_check,
     production_strategy_tournament_release_check,
+    production_transaction_cost_stress_release_check,
+    production_unified_promotion_readiness_release_check,
     production_validation_sufficiency_v2_release_check,
+    production_walk_forward_release_check,
 )
 from gaon.knowledge.telegram_autonomous_learning import (
     production_autonomous_learning_payload_from_baseline,
@@ -225,6 +247,75 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         self.assertIn("generated_candidates=2", rendered)
         self.assertIn("research_iterations=", rendered)
         self.assertIn("promotion_status=needs_more_evidence", rendered)
+
+    def test_sprint241_248_production_grade_release_checks_pass(self) -> None:
+        checks = (
+            production_signal_integrity_release_check,
+            production_multi_symbol_validation_release_check,
+            production_real_web_news_provider_release_check,
+            production_real_youtube_provider_release_check,
+            production_independent_evidence_release_check,
+            production_out_of_sample_release_check,
+            production_walk_forward_release_check,
+            production_regime_validation_release_check,
+            production_parameter_sensitivity_release_check,
+            production_transaction_cost_stress_release_check,
+            production_monte_carlo_robustness_release_check,
+            production_unified_promotion_readiness_release_check,
+            production_full_autonomous_quant_research_release_check,
+            production_no_fabricated_validation_metrics_release_check,
+            production_real_multi_symbol_validation_release_check,
+            production_real_oos_validation_release_check,
+            production_real_walk_forward_release_check,
+            production_real_regime_validation_release_check,
+            production_real_parameter_sensitivity_release_check,
+            production_real_transaction_cost_stress_release_check,
+            production_real_monte_carlo_release_check,
+            production_real_robustness_execution_release_check,
+        )
+        for check in checks:
+            with self.subTest(check=check.__name__):
+                payload = check()
+                self.assertEqual("pass", payload["safety"])
+                self.assertFalse(payload["strategy_mutated"])
+                self.assertFalse(payload["order_executed"])
+
+    def test_sprint241_248_renderer_shows_production_grade_validation(self) -> None:
+        payload = production_autonomous_learning_payload_from_baseline(
+            "Samsung production grade autonomous quant research",
+            symbol="005930",
+            mode="research",
+            baseline=_baseline(trades=42, symbols=5),
+            external_research={"state": "content_unavailable"},
+        )
+        rendered = format_grounded_tool_response("autonomous_learning_research", dict(payload), "Samsung production grade")
+
+        self.assertIsNotNone(rendered)
+        assert rendered is not None
+        self.assertIn("Production-Grade Validation", rendered)
+        self.assertIn("cross_symbol_status=", rendered)
+        self.assertIn("out_of_sample=", rendered)
+        self.assertIn("walk_forward=", rendered)
+        self.assertIn("monte_carlo=", rendered)
+
+    def test_hotfix2481_missing_robustness_execution_does_not_fabricate_metrics(self) -> None:
+        payload = autonomous_quant_partner_payload(
+            "Samsung production grade autonomous quant research",
+            symbol="005930",
+            baseline=_baseline(trades=42, symbols=5),
+        )
+        grade = payload["production_grade_validation"]
+        self.assertFalse(grade["multi_symbol_validation"]["executed"])
+        self.assertEqual([], grade["multi_symbol_validation"]["symbols"])
+        self.assertEqual("not_run_missing_oos_backtest", grade["out_of_sample"]["status"])
+        self.assertEqual([], grade["walk_forward"]["folds"])
+        self.assertEqual({}, grade["regime_validation"]["regimes"])
+        self.assertEqual([], grade["parameter_sensitivity"]["variants"])
+        self.assertEqual([], grade["transaction_cost_stress"]["scenarios"])
+        self.assertIsNone(grade["monte_carlo"]["median_outcome"])
+        readiness = grade["unified_promotion_readiness"]
+        self.assertFalse(readiness["approval_required"])
+        self.assertIn("multi_symbol_not_executed", readiness["blockers"])
 
 
 def _baseline(*, trades: int, symbols: int) -> dict[str, object]:
