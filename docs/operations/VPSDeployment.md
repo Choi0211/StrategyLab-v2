@@ -56,6 +56,10 @@ git pull origin main
 .venv/bin/pip install -e .
 .venv/bin/python -m gaon.runtime.cli deployment-import-path-check \
   --expected-source /opt/strategylab-v2/src/gaon
+.venv/bin/python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check \
+  --db /var/lib/strategylab/gaon-runtime.sqlite
+.venv/bin/python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check \
+  --db /var/lib/strategylab/gaon-runtime.sqlite
 sudo systemctl restart strategylab-gaon
 sudo systemctl status strategylab-gaon
 ```
