@@ -132,6 +132,7 @@ def telegram_autonomous_learning_payload(
         mode=mode,
         baseline=baseline,
         external_research=external,
+        connection=connection,
     )
 
 
@@ -142,6 +143,7 @@ def production_autonomous_learning_payload_from_baseline(
     mode: str,
     baseline: Mapping[str, object],
     external_research: Mapping[str, object] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> Mapping[str, object]:
     """Build a production payload from authoritative real-research output.
 
@@ -247,6 +249,7 @@ def production_autonomous_learning_payload_from_baseline(
         symbol=symbol,
         baseline=baseline,
         multi_source_research=multi_source_research or None,
+        connection=connection,
     )
     partner_readiness = _as_dict(autonomous_quant_partner.get("promotion_readiness_report"))
     partner_status = str(partner_readiness.get("status") or "needs_more_evidence")

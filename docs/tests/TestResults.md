@@ -2,6 +2,62 @@
 
 Status: Passed
 
+## Hotfix 256.1 Validation Semantics & Leakage Integrity
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\autonomous_quant_partner.py src\gaon\runtime\cli.py tests\unit\test_autonomous_quant_partner.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner -v`: PASS, 18 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_sprint199_240_autonomous_quant_partner_release_checks_pass -v`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-production-oos-evaluation-boundary-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-walk-forward-evaluation-boundary-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-oos-performance-comparison-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-walk-forward-performance-comparison-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-real-regime-classification-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-cost-stress-performance-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-peer-selection-policy-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-validation-execution-vs-result-status-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-candidate-freeze-integrity-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-no-evaluation-window-contamination-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-hotfix2561-release-check`: PASS
+- `pytest` is unavailable in the bundled local Python runtime (`No module named pytest`), so local automated verification uses the repository's documented `unittest` commands.
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 845 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 198 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated validation metrics.
+
+## Sprint 249-256 Real Autonomous Research Execution
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\autonomous_quant_partner.py src\gaon\knowledge\telegram_autonomous_learning.py src\gaon\runtime\cli.py tests\unit\test_autonomous_quant_partner.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner -q`: PASS, 14 tests
+  - `python -m gaon.runtime.cli gaon-production-real-multi-symbol-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-real-oos-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-real-walk-forward-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-real-regime-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-real-parameter-variant-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-real-cost-stress-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-real-trade-return-series-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-real-monte-carlo-execution-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-multi-source-provider-state-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-evidence-provenance-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-autonomous-research-action-loop-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-budget-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-final-promotion-readiness-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-no-fabricated-research-results-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-sprint249-256-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 841 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 198 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated execution metrics.
+
 ## Hotfix 248.1 Real Robustness Execution
 
 - Targeted local verification:
