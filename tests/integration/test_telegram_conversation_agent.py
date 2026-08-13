@@ -1680,6 +1680,15 @@ class TelegramConversationAgentTests(unittest.TestCase):
             "gaon-production-monte-carlo-robustness-release-check",
             "gaon-production-unified-promotion-readiness-release-check",
             "gaon-production-full-autonomous-quant-research-release-check",
+            "gaon-production-no-fabricated-validation-metrics-release-check",
+            "gaon-production-real-multi-symbol-validation-release-check",
+            "gaon-production-real-oos-validation-release-check",
+            "gaon-production-real-walk-forward-release-check",
+            "gaon-production-real-regime-validation-release-check",
+            "gaon-production-real-parameter-sensitivity-release-check",
+            "gaon-production-real-transaction-cost-stress-release-check",
+            "gaon-production-real-monte-carlo-release-check",
+            "gaon-production-real-robustness-execution-release-check",
         )
         for command in commands:
             with self.subTest(command=command):

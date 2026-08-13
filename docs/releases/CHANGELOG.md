@@ -1,5 +1,18 @@
 # Changelog
 
+## Hotfix 248.1 - Real Robustness Execution
+
+- Removed production-side synthetic robustness metrics from Autonomous Quant
+  Partner validation.
+- Changed multi-symbol, OOS, walk-forward, regime, parameter sensitivity,
+  transaction-cost stress, and Monte Carlo sections to require actual execution
+  lineage or report explicit non-execution states.
+- Updated unified promotion readiness so missing robustness execution blocks
+  human approval readiness.
+- Added no-fabrication and real-robustness release checks.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Sprint 241-248 - Production-Grade Autonomous Quant Research Completion
 
 - Added `production_grade_validation` to the Autonomous Quant Partner payload,
