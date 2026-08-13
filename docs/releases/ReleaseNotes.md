@@ -3,6 +3,29 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix Final Telegram Autonomous Research Routing
+
+Telegram production routing now gives explicit compound Autonomous Learning V2
+requests precedence over generic stock-analysis fallback and legacy retest
+cycles. Requests that combine external research, learning-memory context, real
+market data, robustness validation, candidate generation, and promotion-review
+language route to `autonomous_learning_research` as a read-only authoritative
+tool call.
+
+Simple retest and continuation requests continue to use the legacy retest/cycle
+routes when no explicit V2 intent is present, and multi-symbol research remains
+first-class for explicit universe requests. The generic stock/backtest persona no
+longer claims that real market data or backtest execution are unavailable.
+
+New release checks:
+
+```bash
+python -m gaon.runtime.cli gaon-production-telegram-autonomous-research-routing-release-check
+python -m gaon.runtime.cli gaon-production-v2-live-acceptance-readiness-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Gaon v2 Production Completion
 
 Gaon v2 now has a final deterministic production-completion contract that ties

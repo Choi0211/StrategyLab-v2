@@ -374,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-final-safety-boundary-release-check")
     sub.add_parser("gaon-production-gaon-v2-completion-release-check")
     sub.add_parser("gaon-production-v2-final-closeout-release-check")
+    sub.add_parser("gaon-production-telegram-autonomous-research-routing-release-check")
+    sub.add_parser("gaon-production-v2-live-acceptance-readiness-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2743,6 +2745,90 @@ def _run(args: argparse.Namespace) -> int:
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"
         )
+
+    elif args.command in {
+        "gaon-production-telegram-autonomous-research-routing-release-check",
+        "gaon-production-v2-live-acceptance-readiness-release-check",
+    }:
+        from gaon.runtime.llm_tool_routing import route_read_only_tool
+
+        store = RuntimeStateStore(":memory:")
+        try:
+            incident_text = (
+                "\uc0bc\uc131\uc804\uc790 \uc804\ub7b5\uc744 \ucc98\uc74c\ubd80\ud130 \ub2e4\uc2dc \uc5f0\uad6c\ud574\uc918.\n"
+                "\uc678\ubd80 \uc790\ub8cc\ub3c4 \ucc3e\uc544\ubcf4\uace0, \uc9c0\uae08\uae4c\uc9c0\uc758 \uc5f0\uad6c \uae30\uc5b5\uacfc "
+                "\uc2e4\uc81c \uc2dc\uc7a5 \ub370\uc774\ud130\ub97c \ubc18\uc601\ud574\uc11c\n"
+                "OOS, walk-forward, \uc2dc\uc7a5\uad6d\uba74, \ud30c\ub77c\ubbf8\ud130 \ubbfc\uac10\ub3c4, "
+                "\uac70\ub798\ube44\uc6a9\uae4c\uc9c0 \uac80\uc99d\ud574\uc918.\n"
+                "\ubb38\uc81c\uc810\uc744 \ucc3e\uace0 \uac1c\uc120 \uc804\ub7b5 \ud6c4\ubcf4\ub97c \ub9cc\ub4e0 \ub4a4 "
+                "\uac00\uc7a5 \uc88b\uc740 \ud6c4\ubcf4\ub294 \uc2b9\uaca9 \uc2b9\uc778 \uc9c1\uc804\uae4c\uc9c0\ub9cc \uc9c4\ud589\ud574\uc918."
+            )
+            simple_retest_text = "\uc0bc\uc131\uc804\uc790 \uc804\ub7b5\uc744 \ub354 \uac80\uc99d\ud574\ubd10"
+            if route_read_only_tool(incident_text) != "autonomous_learning_research":
+                raise ConfigurationError("production Telegram autonomous research incident text did not route to autonomous_learning_research")
+            if route_read_only_tool(simple_retest_text) != "research_retest":
+                raise ConfigurationError("simple legacy retest request no longer routes to research_retest")
+            debug = telegram_routing_debug_payload(incident_text)
+            if debug.get("selected_tool") != "autonomous_learning_research":
+                raise ConfigurationError("routing debug selected the wrong tool for the incident request")
+            if debug.get("selected_route") != "tool_read_only_authoritative":
+                raise ConfigurationError("routing debug did not select the authoritative tool route")
+            if debug.get("fallback_reason") is not None or debug.get("provider_allowed") is not False:
+                raise ConfigurationError("routing debug still allows fallback/provider path for the incident request")
+            learning_evidence = dict(debug.get("autonomous_learning_evidence", {}))
+            if not learning_evidence.get("explicit_v2") or learning_evidence.get("request_mode") not in {"research", "approval_review", "external_research"}:
+                raise ConfigurationError("routing debug missed explicit V2 autonomous learning evidence")
+
+            config = GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=("100",),
+                approval_signing_secret="synthetic-approval-secret",
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            client = _ReleaseCheckTelegramClient()
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(config, store._connection, tool_executor=_telegram_autonomous_research_release_tool_executor(store)),
+                allowed_chat_ids=("100",),
+            )
+            result = process_update(
+                parse_update_result(_telegram_update_with_text("final-routing", "incident", incident_text, chat_id="100"), received_at=_utc_now()),
+                runtime,
+                client,
+            )
+            if result.status != "sent":
+                raise ConfigurationError(f"production Telegram autonomous research routing release check did not send: {result.status}")
+            v2_audits = store.tool_audit.list(tool_name="autonomous_learning_research")
+            if len(v2_audits) != 1:
+                raise ConfigurationError("production Telegram autonomous research routing did not execute exactly one V2 tool call")
+            if store.tool_audit.list(tool_name="research_retest") or store.tool_audit.list(tool_name="autonomous_research_cycle"):
+                raise ConfigurationError("production Telegram autonomous research routing leaked into legacy retest/cycle tools")
+            output = dict(v2_audits[0].result.get("output", {}))
+            if output.get("selected_orchestration") != "autonomous_learning_v2":
+                raise ConfigurationError("production Telegram autonomous research did not use V2 orchestration")
+            final = client.sent[-1][1]
+            stale_fragments = ("\uc2e4\uc81c \uc2dc\uc138", "\uc5f0\uacb0\ub418\uc5b4 \uc788\uc9c0 \uc54a", "\uc0ac\uc6a9 \uac00\ub2a5\ud55c \uae30\ub2a5")
+            if "Autonomous Learning V2" not in final or any(fragment in final for fragment in stale_fragments):
+                raise ConfigurationError("production Telegram autonomous research response fell back to the generic stock persona")
+            readiness_status = "pass" if args.command == "gaon-production-v2-live-acceptance-readiness-release-check" else "routing"
+            print(
+                f"{args.command}: PASS "
+                f"schema_version={store.status().schema_version} "
+                f"status={readiness_status} "
+                "selected_tool=autonomous_learning_research "
+                "selected_route=tool_read_only_authoritative "
+                "fallback=false "
+                "provider_allowed=false "
+                "legacy_retest=false "
+                "strategy_mutated=false "
+                "order_executed=false "
+                "safety=pass"
+            )
+        finally:
+            store.close()
 
     elif args.command in {
         "gaon-production-grounded-evidence-release-check",

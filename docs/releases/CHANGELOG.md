@@ -1,5 +1,23 @@
 # Changelog
 
+## Hotfix Final Telegram Autonomous Research Routing
+
+- Added an explicit production Telegram routing gate for compound Autonomous
+  Learning V2 research requests that mention external sources, learning memory,
+  real market data, robustness validation, candidate generation, and promotion
+  review.
+- Preserved explicit multi-symbol routing ahead of V2 unless V2-specific
+  signals are present, and preserved simple legacy retest/continuation routing.
+- Added Telegram routing diagnostics for autonomous-learning evidence,
+  capability visibility, selected tool, selected route, fallback reason, and
+  provider allowance.
+- Updated generic stock/backtest persona fallback text so it no longer reports
+  obsolete "real data/backtest not connected" capability statements.
+- Added production routing/readiness release checks for final Telegram
+  autonomous research acceptance.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Gaon v2 Production Completion
 
 - Added final production-completion release checks for Autonomous Quant Partner

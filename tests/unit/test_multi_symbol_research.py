@@ -146,6 +146,28 @@ class MultiSymbolResearchTests(unittest.TestCase):
         self.assertIsNone(route_read_only_tool("계속 연구해줘"))
         self.assertNotEqual(route_read_only_tool("삼성전자 전략을 더 검증해봐"), "autonomous_learning_research")
 
+    def test_final_production_autonomous_learning_incident_routes_to_v2(self) -> None:
+        request = (
+            "\uc0bc\uc131\uc804\uc790 \uc804\ub7b5\uc744 \ucc98\uc74c\ubd80\ud130 \ub2e4\uc2dc \uc5f0\uad6c\ud574\uc918. "
+            "\uc678\ubd80 \uc790\ub8cc\ub3c4 \ucc3e\uc544\ubcf4\uace0, \uc9c0\uae08\uae4c\uc9c0\uc758 \uc5f0\uad6c \uae30\uc5b5\uacfc "
+            "\uc2e4\uc81c \uc2dc\uc7a5 \ub370\uc774\ud130\ub97c \ubc18\uc601\ud574\uc11c OOS, walk-forward, "
+            "\uc2dc\uc7a5\uad6d\uba74, \ud30c\ub77c\ubbf8\ud130 \ubbfc\uac10\ub3c4, \uac70\ub798\ube44\uc6a9\uae4c\uc9c0 \uac80\uc99d\ud574\uc918. "
+            "\ubb38\uc81c\uc810\uc744 \ucc3e\uace0 \uac1c\uc120 \uc804\ub7b5 \ud6c4\ubcf4\ub97c \ub9cc\ub4e0 \ub4a4 "
+            "\uac00\uc7a5 \uc88b\uc740 \ud6c4\ubcf4\ub294 \uc2b9\uaca9 \uc2b9\uc778 \uc9c1\uc804\uae4c\uc9c0\ub9cc \uc9c4\ud589\ud574\uc918."
+        )
+        payload = telegram_routing_debug_payload(request)
+
+        self.assertEqual(route_read_only_tool(request), "autonomous_learning_research")
+        self.assertEqual(payload["selected_tool"], "autonomous_learning_research")
+        self.assertEqual(payload["selected_route"], "tool_read_only_authoritative")
+        self.assertIsNone(payload["fallback_reason"])
+        self.assertFalse(payload["provider_allowed"])
+        self.assertTrue(payload["autonomous_learning_evidence"]["explicit_v2"])
+
+    def test_simple_single_symbol_retest_stays_legacy_retest(self) -> None:
+        self.assertEqual(route_read_only_tool("\uc0bc\uc131\uc804\uc790 \uc804\ub7b5\uc744 \ub354 \uac80\uc99d\ud574\ubd10"), "research_retest")
+        self.assertIsNone(route_read_only_tool("\uacc4\uc18d \uc5f0\uad6c\ud574\uc918"))
+
     def test_release_check_contract(self) -> None:
         result = multi_symbol_research_release_check(self.connection)
 

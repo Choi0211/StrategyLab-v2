@@ -2,6 +2,26 @@
 
 Status: Passed
 
+## Hotfix Final Telegram Autonomous Research Routing
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\runtime\llm_tool_routing.py src\gaon\runtime\llm_conversation.py src\gaon\runtime\routing_debug.py src\gaon\runtime\persona.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_multi_symbol_research -q`: PASS, 15 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_final_production_autonomous_learning_incident_uses_v2_telegram_route tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_final_production_autonomous_research_release_checks_pass -q`: PASS, 2 tests
+  - `python -m gaon.runtime.cli gaon-production-telegram-autonomous-research-routing-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-v2-live-acceptance-readiness-release-check`: PASS
+- `pytest` is unavailable in the bundled local Python runtime (`No module named pytest`), so local automated verification uses the repository's `unittest` tests.
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 850 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 200 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated metrics.
+
 ## Gaon v2 Production Completion
 
 - Targeted local verification:

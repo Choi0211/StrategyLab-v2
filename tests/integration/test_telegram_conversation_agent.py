@@ -1450,6 +1450,46 @@ class TelegramConversationAgentTests(unittest.TestCase):
         finally:
             store.close()
 
+    def test_final_production_autonomous_learning_incident_uses_v2_telegram_route(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            text = (
+                "\uc0bc\uc131\uc804\uc790 \uc804\ub7b5\uc744 \ucc98\uc74c\ubd80\ud130 \ub2e4\uc2dc \uc5f0\uad6c\ud574\uc918.\n"
+                "\uc678\ubd80 \uc790\ub8cc\ub3c4 \ucc3e\uc544\ubcf4\uace0, \uc9c0\uae08\uae4c\uc9c0\uc758 \uc5f0\uad6c \uae30\uc5b5\uacfc "
+                "\uc2e4\uc81c \uc2dc\uc7a5 \ub370\uc774\ud130\ub97c \ubc18\uc601\ud574\uc11c\n"
+                "OOS, walk-forward, \uc2dc\uc7a5\uad6d\uba74, \ud30c\ub77c\ubbf8\ud130 \ubbfc\uac10\ub3c4, "
+                "\uac70\ub798\ube44\uc6a9\uae4c\uc9c0 \uac80\uc99d\ud574\uc918.\n"
+                "\ubb38\uc81c\uc810\uc744 \ucc3e\uace0 \uac1c\uc120 \uc804\ub7b5 \ud6c4\ubcf4\ub97c \ub9cc\ub4e0 \ub4a4 "
+                "\uac00\uc7a5 \uc88b\uc740 \ud6c4\ubcf4\ub294 \uc2b9\uaca9 \uc2b9\uc778 \uc9c1\uc804\uae4c\uc9c0\ub9cc \uc9c4\ud589\ud574\uc918."
+            )
+            process_update(parse_update_result(_update(889, 889, text), received_at="2026-08-08T00:00:00Z"), runtime, client)
+
+            audits = store.tool_audit.list(tool_name="autonomous_learning_research")
+            self.assertEqual(len(audits), 1)
+            self.assertEqual(audits[0].request["arguments"]["symbol"], "005930")
+            self.assertIn(audits[0].request["arguments"]["mode"], {"research", "approval_review", "external_research"})
+            self.assertEqual(audits[0].result["output"]["selected_orchestration"], "autonomous_learning_v2")
+            self.assertEqual(len(store.tool_audit.list(tool_name="research_retest")), 0)
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
+            final = client.sent[-1][1]
+            self.assertIn("Autonomous Learning V2", final)
+            self.assertNotIn("adequacy_status", final)
+            self.assertNotIn("planner_steps", final)
+            self.assertNotIn("\uc5f0\uacb0\ub418\uc5b4 \uc788\uc9c0 \uc54a", final)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].tool_calls, ("autonomous_learning_research",))
+        finally:
+            store.close()
+
+    def test_final_production_autonomous_research_release_checks_pass(self) -> None:
+        self.assertEqual(cli_main(["gaon-production-telegram-autonomous-research-routing-release-check"]), 0)
+        self.assertEqual(cli_main(["gaon-production-v2-live-acceptance-readiness-release-check"]), 0)
+
     def test_hotfix1851_telegram_autonomous_learning_routing_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-telegram-autonomous-learning-routing-release-check", "--db", ":memory:"]), 0)
 
