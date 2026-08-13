@@ -393,6 +393,8 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
     partner_candidates = _as_list(partner.get("candidate_generation"))
     partner_iterations = _as_list(partner.get("research_iterations"))
     partner_blockers = _list_text(partner_readiness.get("remaining_risks")) + _list_text(_as_dict(partner.get("research_gap_report")).get("blockers"))
+    rows = rows if rows != "unknown" else partner_validation.get("raw_bars", "unknown")
+    trade_count = trade_count if trade_count != "unknown" else partner_validation.get("completed_trade_count", partner_validation.get("trade_count", "unknown"))
     lines = [
         "영하님, 요청을 Autonomous Learning V2 연구 경로로 처리했습니다.",
         "",
@@ -422,8 +424,33 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
         f"- counter_evidence_status={partner_counter.get('status', 'unknown')}",
         f"- generated_candidates={len(partner_candidates)}",
         f"- validation_coverage={partner_validation.get('status', 'unknown')} trades={partner_validation.get('trade_count', 'unknown')}/{partner_validation.get('min_trades', 'unknown')} symbols={partner_validation.get('number_of_symbols', 'unknown')}",
+        "",
+        "[검증 범위]",
+        f"- period={partner_validation.get('actual_start', 'unknown')} ~ {partner_validation.get('actual_end', 'unknown')}",
+        f"- requested_period={partner_validation.get('requested_start', 'unknown')} ~ {partner_validation.get('requested_end', 'unknown')}",
+        f"- bars={partner_validation.get('raw_bars', rows)}",
+        f"- usable_bars={partner_validation.get('usable_bars', 'unknown')}",
+        f"- warmup_bars={partner_validation.get('warmup_bars', 'unknown')}",
+        f"- entry_signals={partner_validation.get('entry_signal_count', 'unknown')}",
+        f"- exit_signals={partner_validation.get('exit_signal_count', 'unknown')}",
+        f"- completed_trades={partner_validation.get('completed_trade_count', partner_validation.get('trade_count', 'unknown'))}",
+        f"- minimum_required_trades={partner_validation.get('minimum_required_trades', partner_validation.get('min_trades', 'unknown'))}",
+        f"- sample_status={partner_validation.get('sample_sufficiency_status', partner_validation.get('status', 'unknown'))}",
+        f"- sample_reasons={', '.join(_list_text(partner_validation.get('sample_sufficiency_reasons'))) or 'none'}",
+        f"- horizon_reason={partner_validation.get('horizon_reason', 'unknown')}",
+        f"- horizon_extension_attempts={partner_validation.get('horizon_extension_attempts', 'unknown')}",
+        f"- multi_symbol_status={partner_validation.get('multi_symbol_status', 'unknown')}",
+        f"- out_of_sample={partner_validation.get('out_of_sample_status', 'unknown')}",
+        f"- walk_forward={partner_validation.get('walk_forward_status', 'unknown')}",
+        "",
+        "[Signal Diagnostics]",
+        f"- breakout_hits={_as_dict(partner_validation.get('signal_diagnostics')).get('breakout_condition_hits', 'unknown')}",
+        f"- trend_filter_hits={_as_dict(partner_validation.get('signal_diagnostics')).get('trend_filter_hits', 'unknown')}",
+        f"- volume_filter_hits={_as_dict(partner_validation.get('signal_diagnostics')).get('volume_filter_hits', 'unknown')}",
+        f"- combined_entry_signals={_as_dict(partner_validation.get('signal_diagnostics')).get('combined_entry_signals', 'unknown')}",
         f"- research_iterations={len(partner_iterations)}",
         f"- tournament_candidates={partner_tournament.get('candidate_count', 0)} best={partner_tournament.get('best_candidate', 'unknown')}",
+        f"- ranking_gate={partner_tournament.get('ranking_gate', 'unknown')}",
         f"- remaining_blockers={', '.join(partner_blockers) if partner_blockers else 'none'}",
         "",
         "[승인 경계]",

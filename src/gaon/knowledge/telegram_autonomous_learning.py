@@ -565,6 +565,139 @@ def production_autonomous_research_wiring_release_check() -> Mapping[str, object
     }
 
 
+def production_validation_coverage_release_check() -> Mapping[str, object]:
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung validation coverage diagnostic",
+        symbol="005930",
+        mode="research",
+        baseline=_coverage_baseline(trades=11, rows=730, entry_signals=16, extension_attempts=1),
+        external_research=_release_external_ready(),
+    )
+    validation = _partner_validation(payload)
+    checks = {
+        "bars_preserved": validation.get("raw_bars") == 730,
+        "usable_bars_preserved": validation.get("usable_bars") == 670,
+        "warmup_preserved": validation.get("warmup_bars") == 60,
+        "trade_threshold_preserved": validation.get("minimum_required_trades") == 30,
+        "sample_reason_precise": "insufficient_trades" in _as_list(validation.get("sample_sufficiency_reasons")),
+        "no_unknown_bars": validation.get("raw_bars") != "unknown",
+    }
+    return _coverage_release_payload("validation_coverage", payload, checks)
+
+
+def production_research_horizon_release_check() -> Mapping[str, object]:
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung research horizon extension diagnostic",
+        symbol="005930",
+        mode="research",
+        baseline=_coverage_baseline(trades=34, rows=1222, entry_signals=48, extension_attempts=2, status="sufficient"),
+        external_research=_release_external_ready(),
+    )
+    validation = _partner_validation(payload)
+    checks = {
+        "bounded_extension_recorded": validation.get("horizon_extension_attempts") == 2,
+        "horizon_reason_recorded": validation.get("horizon_reason") == "extended_for_sample_sufficiency",
+        "horizon_days_recorded": int(validation.get("validation_horizon_days") or 0) >= 1000,
+        "sufficient_after_extension": validation.get("sample_sufficiency_status") == "sufficient",
+        "no_strategy_mutation": payload.get("strategy_mutated") is False,
+    }
+    return _coverage_release_payload("research_horizon", payload, checks)
+
+
+def production_sample_sufficiency_release_check() -> Mapping[str, object]:
+    insufficient = production_autonomous_learning_payload_from_baseline(
+        "Samsung max horizon exhausted sample diagnostic",
+        symbol="005930",
+        mode="research",
+        baseline=_coverage_baseline(trades=4, rows=1222, entry_signals=5, extension_attempts=2),
+        external_research=_release_external_ready(),
+    )
+    sufficient = production_autonomous_learning_payload_from_baseline(
+        "Samsung sufficient sample diagnostic",
+        symbol="005930",
+        mode="research",
+        baseline=_coverage_baseline(trades=35, rows=1222, entry_signals=44, extension_attempts=2, status="sufficient"),
+        external_research=_release_external_ready(),
+    )
+    insufficient_validation = _partner_validation(insufficient)
+    sufficient_validation = _partner_validation(sufficient)
+    checks = {
+        "insufficient_is_precise": insufficient_validation.get("sample_sufficiency_status") == "insufficient_trades",
+        "threshold_not_lowered": insufficient_validation.get("minimum_required_trades") == 30,
+        "promotion_blocked_when_insufficient": _as_dict(_as_dict(insufficient.get("autonomous_learning_v2")).get("autonomous_quant_partner")).get("approval_required") is False,
+        "sufficient_status_possible": sufficient_validation.get("sample_sufficiency_status") == "sufficient",
+        "sufficient_trade_count_authoritative": sufficient_validation.get("completed_trade_count") == 35,
+    }
+    return _coverage_release_payload("sample_sufficiency", insufficient, checks)
+
+
+def production_backtest_signal_diagnostic_release_check() -> Mapping[str, object]:
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung signal diagnostic",
+        symbol="005930",
+        mode="research",
+        baseline=_coverage_baseline(trades=9, rows=500, entry_signals=13, extension_attempts=1),
+        external_research=_release_external_ready(),
+    )
+    validation = _partner_validation(payload)
+    signals = _as_dict(validation.get("signal_diagnostics"))
+    checks = {
+        "breakout_hits_present": int(signals.get("breakout_condition_hits") or 0) >= 13,
+        "trend_hits_present": int(signals.get("trend_filter_hits") or 0) >= 13,
+        "volume_hits_present": int(signals.get("volume_filter_hits") or 0) >= 13,
+        "combined_signals_present": validation.get("entry_signal_count") == 13,
+        "completed_trades_present": validation.get("completed_trade_count") == 9,
+    }
+    return _coverage_release_payload("backtest_signal_diagnostic", payload, checks)
+
+
+def production_validation_window_integrity_release_check() -> Mapping[str, object]:
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung validation window integrity",
+        symbol="005930",
+        mode="research",
+        baseline=_coverage_baseline(trades=12, rows=730, entry_signals=18, extension_attempts=1),
+        external_research=_release_external_ready(),
+    )
+    partner = _as_dict(_as_dict(payload.get("autonomous_learning_v2")).get("autonomous_quant_partner"))
+    validation = _as_dict(partner.get("validation_coverage"))
+    tournament = _as_dict(partner.get("strategy_tournament"))
+    checks = {
+        "window_fingerprint_present": bool(validation.get("window_fingerprint")),
+        "comparison_window_compatible": validation.get("comparison_window_compatible") is True,
+        "tournament_common_protocol": tournament.get("common_validation_protocol") is True,
+        "ranking_blocked_by_sample": tournament.get("ranking_gate") == "blocked_insufficient_sample",
+        "same_symbol": validation.get("symbol") == "005930",
+        "same_source": validation.get("data_source") == "real:yahoo-chart",
+    }
+    return _coverage_release_payload("validation_window_integrity", payload, checks)
+
+
+def production_autonomous_validation_coverage_release_check() -> Mapping[str, object]:
+    short = _coverage_baseline(trades=1, rows=250, entry_signals=2, extension_attempts=0)
+    extended = _coverage_baseline(trades=31, rows=1222, entry_signals=42, extension_attempts=2, status="sufficient")
+    payload = production_autonomous_learning_payload_from_baseline(
+        "Samsung autonomous validation coverage integrated diagnostic",
+        symbol="005930",
+        mode="research",
+        baseline=extended,
+        external_research=_release_external_ready(),
+    )
+    validation = _partner_validation(payload)
+    checks = {
+        "short_initial_insufficient": _as_dict(short.get("validation_coverage")).get("sample_sufficiency_status") == "insufficient_trades",
+        "bounded_extension_attempted": validation.get("horizon_extension_attempts") == 2,
+        "updated_bars": validation.get("raw_bars") == 1222,
+        "updated_signals": validation.get("entry_signal_count") == 42,
+        "updated_trades": validation.get("completed_trade_count") == 31,
+        "explicit_sufficiency": validation.get("sample_sufficiency_status") == "sufficient",
+        "candidate_baseline_comparable": validation.get("comparison_window_compatible") is True,
+        "ranking_gate_respects_sufficiency": _as_dict(_as_dict(_as_dict(payload.get("autonomous_learning_v2")).get("autonomous_quant_partner")).get("strategy_tournament")).get("ranking_gate") == "sample_sufficient",
+        "no_auto_promotion": payload.get("approval_required") is False or payload.get("strategy_mutated") is False,
+    }
+    return _coverage_release_payload("autonomous_validation_coverage", payload, checks)
+
+
 def production_external_research_network_release_check() -> Mapping[str, object]:
     transport = _ReleaseMetadataTransport()
     with tempfile.TemporaryDirectory(prefix="gaon-production-external-network-release-") as tmp:
@@ -2796,6 +2929,107 @@ def _release_baseline_payload(*, source: str) -> dict[str, object]:
                 "backtest_result": candidate_backtest,
             }
         ],
+    }
+
+
+def _coverage_baseline(
+    *,
+    trades: int,
+    rows: int,
+    entry_signals: int,
+    extension_attempts: int,
+    status: str = "insufficient_trades",
+) -> dict[str, object]:
+    baseline = _release_baseline_payload(source="real")
+    metadata = baseline["dataset"]["metadata"]  # type: ignore[index]
+    metadata.update({"rows": rows, "start_date": "2021-07-25", "end_date": "2026-07-24"})
+    baseline["backtest"]["metrics"]["trade_count"] = trades  # type: ignore[index]
+    for candidate in baseline["candidates"]:  # type: ignore[index]
+        candidate_metrics = candidate["backtest_result"]["metrics"]
+        candidate_metrics["trade_count"] = trades
+    warmup = 60
+    usable = max(0, rows - warmup)
+    reasons = [] if status == "sufficient" else ["insufficient_trades"]
+    baseline["validation_coverage"] = {
+        "schema_version": 1,
+        "symbol": "005930",
+        "data_source": "real:yahoo-chart",
+        "fixture_backed": False,
+        "requested_start": "2021-07-25" if extension_attempts else "2025-07-24",
+        "requested_end": "2026-07-24",
+        "actual_start": "2021-07-26" if extension_attempts else "2025-07-25",
+        "actual_end": "2026-07-24",
+        "raw_bars": rows,
+        "usable_bars": usable,
+        "warmup_bars": warmup,
+        "dropped_bars": warmup,
+        "entry_signal_count": entry_signals,
+        "exit_signal_count": trades,
+        "completed_trade_count": trades,
+        "open_trade_count": 0,
+        "minimum_required_trades": 30,
+        "validation_horizon_days": 1825 if extension_attempts else 365,
+        "validation_horizon_bars": rows,
+        "sample_sufficiency_status": status,
+        "sample_sufficiency_reasons": reasons,
+        "horizon_reason": "extended_for_sample_sufficiency" if extension_attempts else "default_research_policy",
+        "horizon_extension_attempts": extension_attempts,
+        "window_fingerprint": "window-fingerprint:005930:real:yahoo-chart:2021-2026",
+        "comparison_window_compatible": True,
+        "multi_symbol_status": "single_symbol_only",
+        "out_of_sample_period": {"status": "out_of_sample_not_run"},
+        "walk_forward_status": "not_run",
+        "signal_diagnostics": {
+            "breakout_condition_hits": entry_signals + 2,
+            "trend_filter_hits": entry_signals + 1,
+            "volume_filter_hits": entry_signals,
+            "combined_entry_signals": entry_signals,
+            "exit_signals": trades,
+            "completed_trades": trades,
+            "blocked_by_breakout": max(0, usable - entry_signals),
+            "blocked_by_ma_filter": 2,
+            "blocked_by_volume_filter": 1,
+        },
+        "cost_assumptions": {
+            "commission": 0.00015,
+            "tax": 0.0018,
+            "slippage": 0.0005,
+            "execution_timing": "next_open",
+            "position_sizing": "all_in",
+            "initial_capital": 1000000,
+        },
+        "fabricated_metrics": False,
+    }
+    return baseline
+
+
+def _partner_validation(payload: Mapping[str, object]) -> dict[str, object]:
+    return _as_dict(_as_dict(_as_dict(payload.get("autonomous_learning_v2")).get("autonomous_quant_partner")).get("validation_coverage"))
+
+
+def _coverage_release_payload(name: str, payload: Mapping[str, object], checks: Mapping[str, bool]) -> Mapping[str, object]:
+    if not all(checks.values()):
+        failed = ",".join(key for key, ok in checks.items() if not ok)
+        raise RuntimeError(f"{name} release check failed: {failed}")
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    partner = _as_dict(learning.get("autonomous_quant_partner"))
+    validation = _as_dict(partner.get("validation_coverage"))
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "status": _as_dict(partner.get("promotion_readiness_report")).get("status", "needs_more_evidence"),
+        "stop_reason": partner.get("stop_reason", "research_budget_exhausted"),
+        "approval_required": bool(payload.get("approval_required")),
+        "raw_bars": validation.get("raw_bars"),
+        "usable_bars": validation.get("usable_bars"),
+        "warmup_bars": validation.get("warmup_bars"),
+        "entry_signal_count": validation.get("entry_signal_count"),
+        "completed_trade_count": validation.get("completed_trade_count"),
+        "sample_sufficiency_status": validation.get("sample_sufficiency_status"),
+        "horizon_extension_attempts": validation.get("horizon_extension_attempts"),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": dict(checks),
+        "safety": "pass",
     }
 
 

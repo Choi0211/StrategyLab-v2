@@ -2,6 +2,28 @@
 
 Status: Passed
 
+## Hotfix 240.2 Production Validation Coverage & Research Horizon
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\research\krx_real_pipeline.py src\gaon\knowledge\multi_source_research.py src\gaon\knowledge\autonomous_quant_partner.py src\gaon\knowledge\telegram_autonomous_learning.py src\gaon\runtime\research_grounding.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner tests.unit.test_krx_real_pipeline -q`: PASS, 43 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_sprint199_240_autonomous_quant_partner_release_checks_pass -q`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-production-validation-coverage-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-horizon-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-sample-sufficiency-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-backtest-signal-diagnostic-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-validation-window-integrity-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-autonomous-validation-coverage-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-autonomous-research-wiring-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 836 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 198 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated metrics, and no validation threshold relaxation.
+
 ## Hotfix 240.1 Real Production Autonomous Research Wiring
 
 - Targeted local verification:

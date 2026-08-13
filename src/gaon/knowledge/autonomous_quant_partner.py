@@ -391,8 +391,37 @@ def _candidate_generation(research: Mapping[str, object], tournament: Mapping[st
 def _validation_coverage(sufficiency: Mapping[str, object]) -> dict[str, object]:
     return {
         "status": sufficiency.get("status"),
+        "symbol": sufficiency.get("symbol"),
+        "data_source": sufficiency.get("data_source"),
+        "fixture_backed": sufficiency.get("fixture_backed"),
         "trade_count": sufficiency.get("trade_count"),
         "min_trades": sufficiency.get("min_trades"),
+        "sample_sufficiency_status": sufficiency.get("sample_sufficiency_status"),
+        "sample_sufficiency_reasons": list(_as_list(sufficiency.get("sample_sufficiency_reasons"))),
+        "requested_start": sufficiency.get("requested_start"),
+        "requested_end": sufficiency.get("requested_end"),
+        "actual_start": sufficiency.get("actual_start"),
+        "actual_end": sufficiency.get("actual_end"),
+        "raw_bars": sufficiency.get("raw_bars"),
+        "usable_bars": sufficiency.get("usable_bars"),
+        "warmup_bars": sufficiency.get("warmup_bars"),
+        "dropped_bars": sufficiency.get("dropped_bars"),
+        "entry_signal_count": sufficiency.get("entry_signal_count"),
+        "exit_signal_count": sufficiency.get("exit_signal_count"),
+        "completed_trade_count": sufficiency.get("completed_trade_count"),
+        "open_trade_count": sufficiency.get("open_trade_count"),
+        "minimum_required_trades": sufficiency.get("minimum_required_trades"),
+        "validation_horizon_days": sufficiency.get("validation_horizon_days"),
+        "validation_horizon_bars": sufficiency.get("validation_horizon_bars"),
+        "horizon_reason": sufficiency.get("horizon_reason"),
+        "horizon_extension_attempts": sufficiency.get("horizon_extension_attempts"),
+        "window_fingerprint": sufficiency.get("window_fingerprint"),
+        "comparison_window_compatible": sufficiency.get("comparison_window_compatible"),
+        "multi_symbol_status": sufficiency.get("multi_symbol_status"),
+        "out_of_sample_status": _as_dict(sufficiency.get("out_of_sample_period")).get("status") or sufficiency.get("out_of_sample"),
+        "walk_forward_status": sufficiency.get("walk_forward_status") or sufficiency.get("walk_forward"),
+        "signal_diagnostics": _as_dict(sufficiency.get("signal_diagnostics")),
+        "cost_assumptions": _as_dict(sufficiency.get("cost_assumptions")),
         "number_of_symbols": sufficiency.get("number_of_symbols"),
         "walk_forward": sufficiency.get("walk_forward"),
         "out_of_sample": sufficiency.get("out_of_sample"),
@@ -423,8 +452,37 @@ def _validation_sufficiency_v2(research: Mapping[str, object], diagnostics: Mapp
         status = SufficiencyStatus.INSUFFICIENT_SAMPLE.value
     return {
         "status": status,
+        "symbol": diagnostics.get("symbol") or _as_dict(_as_dict(baseline or {}).get("backtest")).get("symbol"),
+        "data_source": diagnostics.get("data_source"),
+        "fixture_backed": diagnostics.get("fixture_backed"),
         "trade_count": trades,
         "min_trades": 30,
+        "sample_sufficiency_status": diagnostics.get("sample_sufficiency_status") or ("sufficient" if trades >= 30 else "insufficient_trades"),
+        "sample_sufficiency_reasons": list(_as_list(diagnostics.get("sample_sufficiency_reasons"))),
+        "requested_start": diagnostics.get("requested_start"),
+        "requested_end": diagnostics.get("requested_end"),
+        "actual_start": diagnostics.get("actual_start"),
+        "actual_end": diagnostics.get("actual_end"),
+        "raw_bars": diagnostics.get("raw_bars") or diagnostics.get("actual_bars"),
+        "usable_bars": diagnostics.get("usable_bars"),
+        "warmup_bars": diagnostics.get("warmup_bars"),
+        "dropped_bars": diagnostics.get("dropped_bars"),
+        "entry_signal_count": diagnostics.get("entry_signal_count") or diagnostics.get("signals_generated"),
+        "exit_signal_count": diagnostics.get("exit_signal_count"),
+        "completed_trade_count": diagnostics.get("completed_trade_count") or trades,
+        "open_trade_count": diagnostics.get("open_trade_count"),
+        "minimum_required_trades": diagnostics.get("minimum_required_trades") or 30,
+        "validation_horizon_days": diagnostics.get("validation_horizon_days"),
+        "validation_horizon_bars": diagnostics.get("validation_horizon_bars") or diagnostics.get("actual_bars"),
+        "horizon_reason": diagnostics.get("horizon_reason"),
+        "horizon_extension_attempts": diagnostics.get("horizon_extension_attempts"),
+        "window_fingerprint": diagnostics.get("window_fingerprint"),
+        "comparison_window_compatible": diagnostics.get("comparison_window_compatible", True),
+        "multi_symbol_status": diagnostics.get("multi_symbol_status") or ("multi_symbol_sufficient" if symbol_count >= 3 else "single_symbol_only"),
+        "out_of_sample_period": _as_dict(diagnostics.get("out_of_sample_period")) or {"status": "out_of_sample_not_run"},
+        "walk_forward_status": diagnostics.get("walk_forward_status") or "not_run",
+        "signal_diagnostics": _as_dict(diagnostics.get("signal_diagnostics")),
+        "cost_assumptions": _as_dict(diagnostics.get("cost_assumptions")),
         "sample_duration": _as_dict(diagnostics).get("sample_duration"),
         "number_of_symbols": symbol_count,
         "market_regimes": {"bull": "pending", "bear": "pending", "sideways": "pending", "high_volatility": "pending"},
@@ -533,19 +591,30 @@ def _robustness_report(symbol: str, sufficiency: Mapping[str, object]) -> Robust
 
 def _strategy_tournament(research: Mapping[str, object], robustness: RobustnessReport, sufficiency: Mapping[str, object]) -> dict[str, object]:
     bundle = _as_dict(research.get("evidence_bundle"))
+    coverage = _validation_coverage(sufficiency)
+    sample_ok = sufficiency.get("sample_sufficiency_status") == "sufficient" or int(sufficiency.get("trade_count") or 0) >= int(sufficiency.get("min_trades") or 30)
     candidates = [
         CandidateRanking("baseline", 1, 0.51, EvidenceStrength(str(bundle.get("evidence_strength") or EvidenceStrength.INSUFFICIENT.value)), "known_baseline_risk", 0.0, 0.0, 0.5),
         CandidateRanking("candidate:volume-confirmed-breakout", 2, 0.49, EvidenceStrength(str(bundle.get("evidence_strength") or EvidenceStrength.INSUFFICIENT.value)), "needs_more_validation", 0.05, 0.1, 0.45),
         CandidateRanking("candidate:regime-filtered-breakout", 3, 0.47, EvidenceStrength.EXPLORATORY, "unimplemented_or_pending", 0.1, 0.15, 0.4),
     ]
-    if sufficiency.get("status") == SufficiencyStatus.SUFFICIENT.value:
+    if sample_ok:
         candidates = tuple(sorted(candidates, key=lambda item: item.score, reverse=True))  # type: ignore[assignment]
+    rankings = []
+    for item in candidates:
+        row = item.to_json()
+        row["validation_coverage"] = coverage
+        row["ranking_blocked_by_sample"] = not sample_ok
+        rankings.append(row)
     return {
         "tournament_id": f"strategy-tournament:{_hash({'bundle': bundle.get('bundle_id'), 'robustness': robustness.report_id})[:16]}",
         "common_validation_protocol": True,
+        "comparison_window_fingerprint": sufficiency.get("window_fingerprint"),
+        "comparison_window_compatible": sufficiency.get("comparison_window_compatible", True),
+        "ranking_gate": "sample_sufficient" if sample_ok else "blocked_insufficient_sample",
         "baseline_included": True,
         "candidate_count": len(candidates),
-        "rankings": [item.to_json() for item in candidates],
+        "rankings": rankings,
         "best_candidate": candidates[0].candidate_id,
         "champion_auto_promotion": False,
         "strategy_mutated": False,
