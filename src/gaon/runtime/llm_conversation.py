@@ -1881,13 +1881,16 @@ def _autonomous_learning_request_mode(text: str) -> str | None:
         return None
     if any(token in normalized for token in ("품질점수", "연구품질점수", "퀄리티", "quality", "score", "점수")):
         return None
-    if any(token in normalized for token in ("비슷한", "유사", "지난연구", "이전연구", "연구했", "기억", "메모리", "저장된", "memory")):
+    explicit_v2 = _has_explicit_autonomous_learning_v2_intent(text)
+    memory_only = any(token in normalized for token in ("비슷한", "유사", "지난연구", "이전연구", "연구했", "기억", "메모리", "저장된", "memory"))
+    if memory_only and not explicit_v2:
         return None
     approval = ("승인요청", "승격승인", "좋은전략후보", "가장좋은후보", "좋으면알아서적용", "좋으면적용", "알아서적용", "bestcandidate", "promotioncandidate")
     continuation = ("계속연구", "더연구", "추가연구", "자료를더", "근거를더", "continueresearch", "continuelearning")
     external = ("자료를찾아", "자료찾아", "연구자료", "연구자료를찾아", "외부연구자료", "외부자료", "근거자료", "evidence", "externalresearch", "findevidence")
     improvement = ("문제점을찾", "약점을찾", "후보를만", "다시연구", "처음부터다시연구", "처음부터다시연구해")
     learning = ("지금까지배운", "배운내용", "학습내용", "learningmemory")
+    robustness = ("oos", "outofsample", "워크포워드", "walkforward", "walk-forward", "시장국면", "레짐", "regime", "파라미터민감도", "거래비용", "transactioncost", "몬테카를로", "montecarlo", "monte-carlo", "robustness")
     plain_start = ("전략연구", "전략을연구", "전략연구해", "autonomousresearch", "autonomouslearning")
     subject = ("삼성전자", "005930", "전략", "연구", "검증", "백테스트", "실제", "시장데이터", "strategy", "research", "validate")
     if any(token in normalized for token in approval):
@@ -1899,6 +1902,8 @@ def _autonomous_learning_request_mode(text: str) -> str | None:
     if any(token in normalized for token in continuation):
         return "continue"
     if any(token in normalized for token in improvement) and any(token in normalized for token in subject):
+        return "research"
+    if any(token in normalized for token in robustness) and any(token in normalized for token in subject):
         return "research"
     if any(token in normalized for token in plain_start) and not any(token in normalized for token in ("백테스트", "실제데이터", "실제시장데이터", "다중종목", "여러종목", "재검증", "검증해봐")):
         return "research"
@@ -1917,6 +1922,8 @@ def _has_explicit_autonomous_learning_v2_intent(text: str) -> bool:
         "자료를찾아",
         "자료를찾아서연구",
         "연구자료를찾아",
+        "지금까지의연구기억",
+        "연구기억",
         "지금까지배운내용",
         "지금까지배운",
         "배운내용",
@@ -1929,6 +1936,23 @@ def _has_explicit_autonomous_learning_v2_intent(text: str) -> bool:
         "승인요청",
         "전략을만들어서검증",
         "전략을만들어검증",
+        "후보를만들고",
+        "후보를만들어",
+        "승인직전",
+        "oos",
+        "outofsample",
+        "워크포워드",
+        "walkforward",
+        "walk-forward",
+        "시장국면",
+        "레짐",
+        "regime",
+        "파라미터민감도",
+        "거래비용",
+        "transactioncost",
+        "몬테카를로",
+        "montecarlo",
+        "monte-carlo",
         "autonomouslearning",
         "externalresearch",
         "promotioncandidate",

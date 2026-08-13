@@ -7,14 +7,26 @@ import re
 
 def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
-    if not normalized or _blocked(normalized):
+    if not normalized:
         return None
+    if _multi_symbol_research_utf8(normalized) and not _autonomous_learning_multi_symbol_override(normalized):
+        return "multi_symbol_research"
+    if _autonomous_retest_execution_ascii(normalized) and not _autonomous_learning_retest_override(normalized):
+        return "research_retest"
+    if _autonomous_learning_research_explicit(normalized) and not _blocked_autonomous_learning_request(normalized):
+        return "autonomous_learning_research"
+    if _blocked(normalized):
+        return None
+    if _autonomous_learning_research_explicit(normalized):
+        return "autonomous_learning_research"
     if _multi_symbol_research_execution(normalized):
         return "multi_symbol_research"
     if _explicit_multi_symbol_history_query(normalized):
         return "multi_symbol_research_history"
     if _explicit_multi_symbol_status_query(normalized):
         return "multi_symbol_research_status"
+    if _multi_symbol_research_utf8(normalized):
+        return "multi_symbol_research"
     if _multi_symbol_research_ascii(normalized):
         return "multi_symbol_research"
     if _autonomous_learning_research_ascii(normalized):
@@ -389,11 +401,180 @@ def _contains_any(value: str, tokens: tuple[str, ...]) -> bool:
     return any(token in value for token in tokens)
 
 
+def _blocked_autonomous_learning_request(value: str) -> bool:
+    return _contains_any(value, ("매수", "매도", "주문", "broker", "kis", "shell", "cmd", "powershell", "sql", "secret", "apikey"))
+
+
+def _multi_symbol_research_utf8(value: str) -> bool:
+    explicit_universe = (
+        "다중종목",
+        "여러종목",
+        "복수종목",
+        "모든종목",
+        "대상종목",
+        "5개종목",
+        "각종목별",
+        "종목별",
+        "crosssymbol",
+        "cross-symbol",
+        "multisymbol",
+        "multi-symbol",
+    )
+    execution = ("연구해줘", "검증해줘", "백테스트", "비교", "분석", "기록해줘", "판단해줘", "run", "execute", "validate", "compare")
+    real_research = ("실제", "krx", "시장데이터", "백테스트", "전략", "연구", "candidate", "robustness")
+    return _contains_any(value, explicit_universe) and _contains_any(value, execution) and _contains_any(value, real_research)
+
+
+def _autonomous_learning_multi_symbol_override(value: str) -> bool:
+    non_approval = (
+        "외부자료",
+        "외부연구",
+        "외부연구자료",
+        "자료를찾아",
+        "자료를찾아서연구",
+        "지금까지배운",
+        "지금까지의연구기억",
+        "연구기억",
+        "처음부터다시연구",
+        "다시연구",
+        "autonomouslearning",
+        "externalresearch",
+        "promotioncandidate",
+    )
+    approval = ("승격승인", "승인요청", "승인직전")
+    safety_negation = ("자동승격승인없는", "champion자동승격", "승인없는config", "승인없는")
+    return _contains_any(value, non_approval) or (
+        _contains_any(value, approval) and not _contains_any(value, safety_negation)
+    )
+
+
+def _autonomous_learning_retest_override(value: str) -> bool:
+    return _contains_any(
+        value,
+        (
+            "외부자료",
+            "외부연구",
+            "외부연구자료",
+            "자료를찾아",
+            "자료를찾아서연구",
+            "지금까지배운",
+            "지금까지의연구기억",
+            "연구기억",
+            "승격승인",
+            "승인요청",
+            "승인직전",
+            "처음부터다시연구",
+            "autonomouslearning",
+            "externalresearch",
+            "promotioncandidate",
+        ),
+    )
+
+
+def _autonomous_learning_research_explicit(value: str) -> bool:
+    if _strategy_quality(value):
+        return False
+    approval = (
+        "승격승인",
+        "승인요청",
+        "승인요청하기전",
+        "승인요청하기전까지",
+        "승인직전",
+        "좋은전략후보",
+        "가장좋은후보",
+        "promotioncandidate",
+        "humanapproval",
+    )
+    external = (
+        "외부자료",
+        "외부연구",
+        "외부연구자료",
+        "자료를찾아",
+        "자료찾아",
+        "자료를찾아서연구",
+        "연구자료",
+        "근거자료",
+        "externalresearch",
+        "findevidence",
+    )
+    learning = (
+        "지금까지배운",
+        "지금까지배운내용",
+        "배운내용",
+        "학습내용",
+        "지금까지의연구기억",
+        "연구기억",
+        "learningmemory",
+    )
+    improvement = (
+        "처음부터다시연구",
+        "다시연구",
+        "문제점을찾",
+        "약점을찾",
+        "개선전략후보",
+        "전략후보",
+        "후보전략",
+        "후보를만",
+        "전략을만들어서검증",
+        "전략을만들어검증",
+        "strategycandidate",
+    )
+    robustness = (
+        "oos",
+        "outofsample",
+        "워크포워드",
+        "walkforward",
+        "walk-forward",
+        "시장국면",
+        "레짐",
+        "regime",
+        "파라미터민감도",
+        "거래비용",
+        "transactioncost",
+        "몬테카를로",
+        "montecarlo",
+        "monte-carlo",
+        "robustness",
+    )
+    subject = (
+        "삼성전자",
+        "005930",
+        "전략",
+        "연구",
+        "검증",
+        "백테스트",
+        "실제",
+        "시장데이터",
+        "krx",
+        "strategy",
+        "research",
+        "validate",
+        "backtest",
+    )
+    multi_symbol = _contains_any(value, ("다중종목", "여러종목", "복수종목", "모든종목", "5개종목", "crosssymbol", "cross-symbol", "multisymbol", "multi-symbol"))
+    if multi_symbol and not _contains_any(value, external + learning + approval + ("처음부터다시연구", "다시연구", "자료를찾아서연구")):
+        return False
+    simple_memory_only = (
+        _contains_any(value, ("비슷한", "유사", "지난연구", "이전연구", "저장된", "memory"))
+        and not _contains_any(value, external + improvement + robustness + approval)
+    )
+    if simple_memory_only:
+        return False
+    v2_signals = external + learning + improvement + robustness + approval
+    if _contains_any(value, v2_signals) and _contains_any(value, subject):
+        return True
+    if multi_symbol:
+        return False
+    return "개선" in value and "후보" in value and "검증" in value and "연구" in value
+
+
 def _autonomous_retest_ascii(value: str) -> bool:
     retest = (
         "\uc7ac\uac80\uc99d",
         "\ub2e4\uc2dc\uac80\uc99d",
         "\uc790\ub3d9\uc7ac\uac80\uc99d",
+        "\ub354\uac80\uc99d",
+        "\uc804\ub7b5\uc744\ub354\uac80\uc99d",
         "\ud45c\ubcf8\uc774\ubd80\uc871",
         "\ucda9\ubd84\ud55c\ud45c\ubcf8",
         "\uae30\uac04\uc744\ud655\uc7a5",

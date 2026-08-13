@@ -8,6 +8,20 @@ RULE_BASED_ROUTE = "rule_based"
 
 
 def persona_text(intent: Intent) -> str:
+    if intent is Intent.STOCK_ANALYSIS:
+        return (
+            "영하님, 종목 분석 요청으로 이해했습니다. Gaon은 명시적인 연구/검증 요청에서 실제 KRX/Yahoo 데이터, "
+            "백테스트, 다중 출처 연구, 자율 연구 경로를 read-only 안전 도구로 실행할 수 있습니다. "
+            "다만 아직 이 답변은 일반 종목 대화 경로이므로 성과 수치나 투자 결론을 임의로 만들지 않겠습니다. "
+            "“실제 데이터로 백테스트해줘” 또는 “외부 자료와 지금까지 배운 내용까지 사용해 다시 연구해줘”처럼 요청하면 "
+            "해당 authoritative 연구 경로로 처리하겠습니다."
+        )
+    if intent is Intent.BACKTEST:
+        return (
+            "영하님, 백테스트 요청으로 이해했습니다. Gaon의 실제 연구/백테스트 실행은 read-only safe tool 경로에서만 수행되며, "
+            "데이터 출처와 fixture_backed 여부를 구조화해 검증합니다. 아직 이 fallback 응답에서는 실행 결과를 만들지 않으며, 조건, 종목, 기간을 명시해 주시면 가능한 경우 "
+            "authoritative 연구 경로로 실행하고, 불충분하거나 위험한 요청은 fail-closed로 안내하겠습니다."
+        )
     mapping = {
         Intent.GREETING: "안녕하세요, 영하님. 가온입니다. 무엇을 함께 살펴볼까요?",
         Intent.CALL_GAON: "네, 영하님. 무엇을 도와드릴까요?",

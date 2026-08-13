@@ -6,8 +6,15 @@ from hashlib import sha256
 import unicodedata
 
 from gaon.runtime.intents import Intent, parse_intent
-from gaon.runtime.llm_conversation import _extract_date_range, _extract_krx_symbols
+from gaon.runtime.llm_conversation import (
+    _autonomous_learning_request_mode,
+    _extract_date_range,
+    _extract_krx_symbols,
+    _has_explicit_autonomous_learning_v2_intent,
+)
 from gaon.runtime.llm_tool_routing import (
+    _autonomous_learning_research_ascii,
+    _autonomous_learning_research_explicit,
     _autonomous_retest,
     _autonomous_retest_ascii,
     _blocked,
@@ -17,6 +24,7 @@ from gaon.runtime.llm_tool_routing import (
     _multi_symbol_history,
     _multi_symbol_research_execution,
     _multi_symbol_research_ascii,
+    _multi_symbol_research_utf8,
     _multi_symbol_status,
     _normalize,
     route_read_only_tool,
@@ -55,6 +63,8 @@ def telegram_routing_debug_payload(text: str) -> dict[str, object]:
         provider_allowed = True
     start_date, end_date = _extract_date_range(raw)
     symbols = _extract_krx_symbols(raw)
+    learning_mode = _autonomous_learning_request_mode(raw)
+    explicit_v2 = _has_explicit_autonomous_learning_v2_intent(raw)
     return {
         "raw_length": len(raw),
         "normalized_length": len(normalized),
@@ -70,6 +80,7 @@ def telegram_routing_debug_payload(text: str) -> dict[str, object]:
             "history": _multi_symbol_history(normalized),
             "status": _multi_symbol_status(normalized),
             "research": _multi_symbol_research_ascii(normalized),
+            "research_utf8": _multi_symbol_research_utf8(normalized),
             "execution_intent": _multi_symbol_research_execution(normalized),
             "history_intent": _explicit_multi_symbol_history_query(normalized),
             "status_intent": _explicit_multi_symbol_status_query(normalized),
@@ -79,7 +90,23 @@ def telegram_routing_debug_payload(text: str) -> dict[str, object]:
             "ascii": _autonomous_retest_ascii(normalized),
             "legacy": _autonomous_retest(normalized),
         },
+        "autonomous_learning_evidence": {
+            "explicit_v2": explicit_v2,
+            "request_mode": learning_mode,
+            "tool_explicit": _autonomous_learning_research_explicit(normalized),
+            "tool_legacy": _autonomous_learning_research_ascii(normalized),
+        },
         "real_research_evidence": {"research": _krx_real_research(normalized)},
+        "capabilities_seen_by_router": {
+            "real_market_data": "available_when_configured",
+            "backtest_engine": "available",
+            "autonomous_learning_v2": "available",
+            "autonomous_quant_partner": "available",
+            "external_research": "bounded_provider_registry",
+            "fixture_release_adapters_allowed_in_production": False,
+        },
+        "research_intent_detected": bool(authoritative or learning_mode or explicit_v2),
+        "autonomous_research_eligible": bool(selected_tool == "autonomous_learning_research" or learning_mode or explicit_v2),
         "blocked": _blocked(normalized),
         "safety_warning": safety,
         "generic_stock_analysis": generic_stock,
