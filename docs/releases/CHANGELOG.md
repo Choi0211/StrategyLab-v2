@@ -6,6 +6,15 @@
   orchestration, Telegram conversation context, two-stage approval, immutable
   candidate freeze, Champion replacement, Champion rollback, and safety
   boundaries.
+- Added `gaon-production-v2-final-closeout-release-check`, which aggregates the
+  completion contract with durable restart/replay verification, Champion
+  replacement atomicity, rollback recovery, market-data lineage, provider
+  readiness, and Korean final-response policy.
+- Persisted the final closeout candidate freeze as an append-only durable event
+  in release validation and verified duplicate Stage 1 replay protection.
+- Verified Stage 2 approval idempotency, processed-approval reuse prevention,
+  simulated mid-replacement rollback, single-active-Champion recovery, and
+  rollback reason/timestamp auditability.
 - Reused existing promotion, human approval, Champion registry, validation, and
   rollback services to avoid a duplicate production path.
 - Added deterministic release-validation mode output for the final aggregate

@@ -75,6 +75,7 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_unified_promotion_readiness_release_check,
     production_validation_execution_vs_result_status_release_check,
     production_validation_sufficiency_v2_release_check,
+    production_v2_final_closeout_release_check,
     production_walk_forward_evaluation_boundary_release_check,
     production_walk_forward_performance_comparison_release_check,
     production_walk_forward_release_check,
@@ -345,6 +346,7 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             production_champion_rollback_release_check,
             production_final_safety_boundary_release_check,
             production_gaon_v2_completion_release_check,
+            production_v2_final_closeout_release_check,
         )
         for check in checks:
             with self.subTest(check=check.__name__):
@@ -358,6 +360,7 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
                     "production_final_safety_boundary_release_check",
                     "production_final_conversation_release_check",
                     "production_final_autonomous_research_release_check",
+                    "production_v2_final_closeout_release_check",
                 }):
                     self.assertEqual("deterministic_release_validation", payload["check_mode"])
                 self.assertFalse(payload["strategy_mutated"])
@@ -372,11 +375,29 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         self.assertTrue(two_stage["approval_required"])
         self.assertTrue(freeze["checks"]["material_change_invalidates"])
         self.assertTrue(replacement["checks"]["second_approval_required"])
+        self.assertTrue(replacement["checks"]["replacement_atomic_on_failure"])
         self.assertTrue(rollback["checks"]["restored_previous_version"])
+        self.assertTrue(rollback["checks"]["rollback_survives_restart"])
         for payload in (two_stage, freeze, replacement, rollback):
             self.assertEqual("pass", payload["safety"])
             self.assertFalse(payload["strategy_mutated"])
             self.assertFalse(payload["order_executed"])
+
+    def test_final_closeout_release_check_covers_persistence_replay_and_lineage(self) -> None:
+        payload = production_v2_final_closeout_release_check()
+
+        self.assertEqual("pass", payload["safety"])
+        self.assertEqual("deterministic_release_validation", payload["check_mode"])
+        self.assertTrue(payload["checks"]["two_stage_approval_durable"])
+        self.assertTrue(payload["checks"]["approval_replay_and_stale_guard"])
+        self.assertTrue(payload["checks"]["champion_replacement_atomic"])
+        self.assertTrue(payload["checks"]["rollback_recovery_durable"])
+        self.assertTrue(payload["checks"]["market_data_lineage_complete"])
+        self.assertTrue(payload["checks"]["provider_readiness_matrix_complete"])
+        self.assertTrue(payload["checks"]["conversation_final_korean_and_debug_separated"])
+        self.assertTrue(payload["checks"]["machine_checkable_safety_invariants"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
 
     def test_final_completion_blocks_insufficient_evidence_without_mutation(self) -> None:
         payload = production_final_autonomous_research_release_check()

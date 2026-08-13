@@ -1,6 +1,6 @@
 # Gaon v2 Production Completion
 
-Status: IN PROGRESS  
+Status: COMPLETE
 Branch: `feature/gaon-v2-production-completion`  
 Schema: v36 unchanged
 
@@ -22,13 +22,12 @@ operating loop and that promotion remains human-gated.
   records, candidate experiment lineage, real validation execution, tournament
   ranking, promotion candidate gate, human approval tokens, Champion registry,
   Champion version history, rollback, Telegram authoritative rendering.
-- `partially_complete`: final cross-component completion proof and operator
-  runbook that ties the separate release checks together.
+- `partially_complete`: provider categories that are wired but honestly report
+  unavailable/not configured in production when no endpoint is configured.
 - `wired_but_not_live`: provider categories that honestly report
   `provider_not_configured` or `content_unavailable` in production.
-- `missing`: final aggregate closeout release checks for the full v2 loop,
-  two-stage approval proof, candidate freeze proof, Champion replacement proof,
-  rollback proof, and final safety boundary proof.
+- `missing`: none for the deterministic production-completion contract. Live
+  Telegram/VPS acceptance remains an operational verification step.
 
 ## Completion Design
 
@@ -57,6 +56,12 @@ evidence as production promotion evidence.
 - `gaon-production-champion-rollback-release-check`
 - `gaon-production-final-safety-boundary-release-check`
 - `gaon-production-gaon-v2-completion-release-check`
+- `gaon-production-v2-final-closeout-release-check`
+
+The final closeout command extends the component aggregate with durable
+restart/replay checks for Stage 1 candidate freeze, Stage 2 Champion approval,
+Champion replacement atomicity, rollback recovery, market-data lineage,
+provider readiness, and Korean final-response policy.
 
 ## Invariants
 
@@ -76,6 +81,7 @@ Local deterministic closeout:
 
 ```bash
 python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check
+python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check
 ```
 
 VPS deployment verification:
@@ -87,6 +93,7 @@ git pull origin main
 systemctl restart strategylab-gaon
 .venv/bin/python -m gaon.runtime.cli deployment-import-path-check --expected-source /opt/strategylab-v2/src/gaon
 .venv/bin/python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+.venv/bin/python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
 ```
 
 Telegram production acceptance should use the real user-facing prompt and verify

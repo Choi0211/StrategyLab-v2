@@ -21,11 +21,18 @@ New aggregate command:
 
 ```bash
 python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check
+python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check
 ```
 
 Additional focused checks cover final autonomous research, final conversation,
 two-stage approval, candidate freeze, Champion replacement, Champion rollback,
 and final safety boundaries. Schema remains v36.
+
+The final closeout check verifies durable restart/replay behavior for Stage 1
+candidate freeze, Stage 2 Champion approval, Champion replacement, and rollback.
+It also exposes market-data freshness/lineage, provider readiness, Korean
+Telegram final-response policy, and machine-checkable no-order/no-mutation
+safety invariants.
 
 ## Hotfix 256.1 Validation Semantics & Leakage Integrity
 

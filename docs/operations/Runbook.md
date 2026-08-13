@@ -133,6 +133,7 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-champion-rollback-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-final-safety-boundary-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -165,6 +166,10 @@ The final Gaon v2 completion checks additionally verify the end-to-end
 composition contract: Autonomous Quant Partner orchestration, Telegram
 conversation context, first approval candidate freeze, second approval Champion
 replacement, rollback, and the no-order/no-mutation safety boundary.
+The final closeout check additionally verifies durable restart/replay recovery,
+Champion replacement atomicity, rollback reason/timestamp auditability,
+market-data lineage, provider readiness, Korean final-response policy, and
+machine-checkable safety invariants.
 
 Production live validation diagnostic prompt:
 

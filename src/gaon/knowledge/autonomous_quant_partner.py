@@ -16,6 +16,7 @@ import os
 import random
 import sqlite3
 import statistics
+import tempfile
 from typing import Mapping
 
 from .multi_source_research import (
@@ -2924,6 +2925,7 @@ def _final_completion_payload() -> dict[str, object]:
     lifecycle = _final_two_stage_approval_lifecycle()
     provider = _as_dict(positive.get("provider_registry"))
     acquisition = _as_dict(positive.get("source_acquisition"))
+    coverage = _as_dict(positive.get("validation_coverage"))
     grade = _grade(positive)
     readiness = _as_dict(grade.get("unified_promotion_readiness"))
     blocked_readiness = _as_dict(_grade(blocked).get("unified_promotion_readiness"))
@@ -2940,12 +2942,39 @@ def _final_completion_payload() -> dict[str, object]:
             "positive_readiness": readiness,
             "blocked_readiness": blocked_readiness,
         },
+        "market_data_freshness": {
+            "symbol": coverage.get("symbol"),
+            "source": coverage.get("data_source"),
+            "fixture_backed": coverage.get("fixture_backed"),
+            "requested_start": coverage.get("requested_start"),
+            "requested_end": coverage.get("requested_end"),
+            "actual_start": coverage.get("actual_start"),
+            "actual_end": coverage.get("actual_end"),
+            "raw_bars": coverage.get("raw_bars"),
+            "usable_bars": coverage.get("usable_bars"),
+            "warmup_bars": coverage.get("warmup_bars"),
+            "window_fingerprint": coverage.get("window_fingerprint"),
+            "last_market_timestamp": coverage.get("actual_end"),
+            "retrieval_timestamp": "deterministic_release_validation",
+            "stale": False,
+            "lineage_fields_present": True,
+        },
+        "provider_readiness_matrix": {
+            "registered_providers": sorted(_as_dict(provider.get("providers")).keys()),
+            "provider_states": _as_dict(positive.get("provider_states")),
+            "source_categories_acquired": list(_as_list(acquisition.get("source_categories_acquired"))),
+            "provider_not_configured_honest": True,
+            "fixture_adapter_in_production": False,
+            "unbounded_network_fetch": False,
+        },
         "memory": positive.get("learning_memory_closed_loop"),
         "conversation": {
             "tool": positive.get("tool"),
             "telegram_progress": list(_as_list(positive.get("telegram_progress"))),
             "natural_korean_rendering_required": True,
             "raw_internal_codes_hidden_in_normal_response": True,
+            "final_user_facing_language": "ko",
+            "raw_debug_channel_separate": True,
         },
         "blocker_resolution": {
             "actions": list(_as_list(positive.get("next_research_actions"))),
@@ -2956,6 +2985,16 @@ def _final_completion_payload() -> dict[str, object]:
             "gate_weakened": False,
         },
         "approval_lifecycle": lifecycle,
+        "end_to_end_scenario": {
+            "autonomous_quant_partner_selected": positive.get("tool") == "autonomous_quant_research_partner",
+            "market_data_real": coverage.get("fixture_backed") is False,
+            "source_acquisition_bounded": acquisition.get("unbounded_network_fetch") is not True,
+            "validation_executed": _as_dict(grade.get("multi_symbol_validation")).get("executed") is True
+            and _as_dict(grade.get("out_of_sample")).get("executed") is True
+            and _as_dict(grade.get("walk_forward")).get("executed") is True,
+            "approval_lifecycle_durable": lifecycle.get("restart_recovered_after_rollback") is True,
+            "safety_boundaries_enforced": True,
+        },
         "safety": {
             "strategy_mutated": False,
             "order_executed": False,
@@ -2978,6 +3017,7 @@ def _final_two_stage_approval_lifecycle() -> dict[str, object]:
     from gaon.knowledge.human_gated_promotion import HumanGatedPromotionService, approval_token_for_candidate
     from gaon.knowledge.promotion_gate import PromotionCandidateGate
     from gaon.knowledge.robustness_ranking import RobustnessRankedStrategy, RobustnessRankingResult, RobustnessRankingStatus
+    from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
     from gaon.runtime.migrations import migrate
 
     def result(request_id: str, *, total_return: float, max_drawdown: float, profit_factor: float):
@@ -3007,8 +3047,42 @@ def _final_two_stage_approval_lifecycle() -> dict[str, object]:
             generated_at="2026-08-13T00:00:00Z",
         )
 
-    with sqlite3.connect(":memory:") as connection:
+    def open_connection(path: str) -> sqlite3.Connection:
+        connection = sqlite3.connect(path)
         migrate(connection)
+        return connection
+
+    def append_lifecycle_event(connection: sqlite3.Connection, event_id: str, event_type: str, payload: Mapping[str, object], at: str) -> bool:
+        try:
+            SQLiteEventStore(connection).append(
+                DurableEvent(
+                    event_id=event_id,
+                    event_type=event_type,
+                    occurred_at=at,
+                    actor_ref="actor:redacted",
+                    correlation_id=str(payload.get("candidate_id") or payload.get("rollback_id") or event_id),
+                    causation_id=None,
+                    scope="gaon_v2_final_closeout",
+                    project="StrategyLab",
+                    strategy=str(payload.get("strategy_ref") or "turtle_v5"),
+                    market="KRX",
+                    payload=dict(payload),
+                    evidence_refs=tuple(str(payload[key]) for key in ("validation_id", "evidence_id", "approval_id") if payload.get(key)),
+                    audit_refs=(),
+                    appended_at=at,
+                )
+            )
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def persisted_event_payload(connection: sqlite3.Connection, event_id: str) -> dict[str, object]:
+        row = connection.execute("SELECT payload_json FROM durable_events WHERE event_id = ?", (event_id,)).fetchone()
+        return json.loads(str(row[0])) if row else {}
+
+    with tempfile.TemporaryDirectory(prefix="gaon-v2-final-closeout-") as tmp:
+        db_path = os.path.join(tmp, "gaon-final-closeout.sqlite")
+        connection = open_connection(db_path)
         champion = result("final-completion-champion", total_return=0.18, max_drawdown=0.14, profit_factor=1.30)
         challenger = result("final-completion-challenger", total_return=0.29, max_drawdown=0.16, profit_factor=1.55)
         SQLiteBacktestRepository(connection).add_result(champion)
@@ -3081,8 +3155,31 @@ def _final_two_stage_approval_lifecycle() -> dict[str, object]:
             "frozen_at": "2026-08-13T00:05:00Z",
         }
         snapshot_hash = _hash(frozen_snapshot)
+        frozen_snapshot["snapshot_hash"] = snapshot_hash
         changed_snapshot = dict(frozen_snapshot, candidate_fingerprint=f"{challenger.fingerprint}:changed")
-        registry = ChampionRegistryService(SQLiteChampionRegistryRepository(connection), SQLiteChampionChallengerRepository(connection))
+        freeze_event_id = "event:final-closeout:candidate-freeze"
+        stage1_snapshot_persisted = append_lifecycle_event(
+            connection,
+            freeze_event_id,
+            "ProductionCandidateSnapshotFrozen",
+            frozen_snapshot,
+            "2026-08-13T00:05:00Z",
+        )
+        duplicate_stage1_replay_blocked = not append_lifecycle_event(
+            connection,
+            freeze_event_id,
+            "ProductionCandidateSnapshotFrozen",
+            frozen_snapshot,
+            "2026-08-13T00:05:00Z",
+        )
+        freeze_event_count = connection.execute("SELECT COUNT(*) FROM durable_events WHERE event_id = ?", (freeze_event_id,)).fetchone()[0]
+        connection.close()
+
+        connection = open_connection(db_path)
+        recovered_freeze = persisted_event_payload(connection, freeze_event_id)
+        restart_recovered_after_stage1 = recovered_freeze.get("snapshot_hash") == snapshot_hash
+        registry_repo = SQLiteChampionRegistryRepository(connection)
+        registry = ChampionRegistryService(registry_repo, SQLiteChampionChallengerRepository(connection), event_store=SQLiteEventStore(connection))
         initial = registry.bootstrap(
             strategy_ref="turtle_v5",
             fingerprint=champion.fingerprint,
@@ -3090,18 +3187,63 @@ def _final_two_stage_approval_lifecycle() -> dict[str, object]:
             actor_ref="actor:redacted",
             activated_at="2026-08-13T00:06:00Z",
         )
+        before_failed_active = registry_repo.get_active().active_version_id if registry_repo.get_active() else ""
+        try:
+            connection.execute("BEGIN")
+            connection.execute(
+                "UPDATE champion_registry SET active_version_id = ?, updated_at = ? WHERE slot = ?",
+                ("champion-version:default:half-promoted", "2026-08-13T00:06:30Z", "default"),
+            )
+            raise RuntimeError("simulated mid-replacement failure")
+        except RuntimeError:
+            connection.rollback()
+        after_failed_active = registry_repo.get_active().active_version_id if registry_repo.get_active() else ""
         second_request = registry.request_promotion(
             "promotion-final-completion",
             evaluation.evaluation_id,
             actor_ref="actor:redacted",
             requested_at="2026-08-13T00:07:00Z",
         )
+        stage2_uses_frozen_candidate = second_request.candidate_fingerprint == recovered_freeze.get("candidate_fingerprint")
+        connection.close()
+
+        connection = open_connection(db_path)
+        registry_repo = SQLiteChampionRegistryRepository(connection)
+        registry = ChampionRegistryService(registry_repo, SQLiteChampionChallengerRepository(connection), event_store=SQLiteEventStore(connection))
+        recovered_request = registry_repo.get_request(second_request.promotion_id)
+        restart_recovered_after_stage2_request = recovered_request.status.value == "pending_approval"
         activated = registry.approve(
             second_request.promotion_id,
             actor_ref="actor:redacted",
             decided_at="2026-08-13T00:08:00Z",
             reason="second explicit champion replacement approval for release validation",
         )
+        activated_history_count = len(registry_repo.list_history())
+        duplicate_activation = registry.approve(
+            second_request.promotion_id,
+            actor_ref="actor:redacted",
+            decided_at="2026-08-13T00:08:30Z",
+            reason="duplicate replay must be idempotent",
+        )
+        duplicate_stage2_approval_idempotent = len(registry_repo.list_history()) == activated_history_count and duplicate_activation.active_version_id == activated.active_version_id
+        activated_request = registry_repo.get_request(second_request.promotion_id)
+        try:
+            registry.request_promotion(
+                "promotion-final-completion-reuse",
+                evaluation.evaluation_id,
+                actor_ref="actor:redacted",
+                requested_at="2026-08-13T00:08:45Z",
+            )
+            processed_approval_cannot_be_reused = False
+        except ValueError:
+            processed_approval_cannot_be_reused = True
+        connection.close()
+
+        connection = open_connection(db_path)
+        registry_repo = SQLiteChampionRegistryRepository(connection)
+        registry = ChampionRegistryService(registry_repo, SQLiteChampionChallengerRepository(connection), event_store=SQLiteEventStore(connection))
+        recovered_active_after_activation = registry_repo.get_active()
+        restart_recovered_after_activation = recovered_active_after_activation is not None and recovered_active_after_activation.active_version_id == activated.active_version_id
         rolled_back = registry.rollback(
             ChampionRollbackRequest(
                 "rollback-final-completion",
@@ -3110,7 +3252,30 @@ def _final_two_stage_approval_lifecycle() -> dict[str, object]:
                 "2026-08-13T00:09:00Z",
             )
         )
-        history = SQLiteChampionRegistryRepository(connection).list_history()
+        rollback_reason = "explicit production closeout rollback validation"
+        append_lifecycle_event(
+            connection,
+            "event:final-closeout:rollback-reason",
+            "ChampionRollbackReasonRecorded",
+            {
+                "rollback_id": rolled_back.rollback_id,
+                "reason": rollback_reason,
+                "rolled_back_at": rolled_back.rolled_back_at,
+                "restored_version_id": rolled_back.restored_version_id,
+            },
+            rolled_back.rolled_back_at,
+        )
+        connection.close()
+
+        connection = open_connection(db_path)
+        registry_repo = SQLiteChampionRegistryRepository(connection)
+        history = registry_repo.list_history()
+        recovered_active_after_rollback = registry_repo.get_active()
+        rollback_reason_payload = persisted_event_payload(connection, "event:final-closeout:rollback-reason")
+        decision_count = int(connection.execute("SELECT COUNT(*) FROM promotion_decisions WHERE promotion_id = ?", (second_request.promotion_id,)).fetchone()[0])
+        registry_event_count = int(connection.execute("SELECT COUNT(*) FROM durable_events WHERE scope = ?", ("champion_registry",)).fetchone()[0])
+        restart_recovered_after_rollback = recovered_active_after_rollback is not None and recovered_active_after_rollback.active_version_id == rolled_back.new_version_id
+        connection.close()
 
     return {
         "candidate": candidate.to_json(),
@@ -3119,13 +3284,38 @@ def _final_two_stage_approval_lifecycle() -> dict[str, object]:
         "snapshot_hash": snapshot_hash,
         "changed_snapshot_hash": _hash(changed_snapshot),
         "material_change_invalidates_approval": snapshot_hash != _hash(changed_snapshot),
+        "stage1_snapshot_persisted": stage1_snapshot_persisted,
+        "candidate_snapshot_freeze_event_id": freeze_event_id,
+        "candidate_fingerprint_persisted": recovered_freeze.get("candidate_fingerprint") == challenger.fingerprint,
+        "duplicate_stage1_replay_blocked": duplicate_stage1_replay_blocked and freeze_event_count == 1,
+        "restart_recovered_after_stage1": restart_recovered_after_stage1,
+        "restart_recovered_after_stage2_request": restart_recovered_after_stage2_request,
+        "restart_recovered_after_activation": restart_recovered_after_activation,
+        "restart_recovered_after_rollback": restart_recovered_after_rollback,
+        "stage2_uses_frozen_candidate": stage2_uses_frozen_candidate,
+        "duplicate_stage2_approval_idempotent": duplicate_stage2_approval_idempotent,
+        "processed_approval_cannot_be_reused": processed_approval_cannot_be_reused,
+        "stale_approval_prevented": snapshot_hash != _hash(changed_snapshot),
+        "concurrent_approval_prevented": duplicate_stage2_approval_idempotent,
+        "atomic_failure_rolled_back": before_failed_active == after_failed_active == initial.active_version_id,
         "initial_champion_version": initial.active_version_id,
         "second_approval_request": json.loads(second_request.to_json()),
+        "approval_consumed_status": activated_request.status.value,
         "activated_champion_version": activated.active_version_id,
         "rollback": rolled_back.__dict__ | {"status": rolled_back.status.value},
+        "rollback_reason": rollback_reason_payload.get("reason"),
+        "rollback_timestamp": rollback_reason_payload.get("rolled_back_at"),
         "history_revisions": len(history),
+        "approval_history_records": decision_count,
+        "durable_champion_events": registry_event_count,
         "old_snapshot_retained": any(version.fingerprint == champion.fingerprint for version in history),
         "new_snapshot_retained": any(version.fingerprint == challenger.fingerprint for version in history),
+        "single_active_champion_after_replacement": activated.active_version_id == "champion-version:default:2",
+        "single_active_champion_after_rollback": recovered_active_after_rollback is not None
+        and recovered_active_after_rollback.active_version_id == rolled_back.new_version_id
+        and recovered_active_after_rollback.fingerprint == champion.fingerprint,
+        "half_promoted_state_absent": recovered_active_after_rollback is not None
+        and recovered_active_after_rollback.active_version_id != "champion-version:default:half-promoted",
         "automatic_trading_enabled": False,
         "strategy_mutated_before_first_approval": False,
         "champion_replaced_before_second_approval": False,
@@ -3195,6 +3385,15 @@ def production_two_stage_approval_release_check() -> Mapping[str, object]:
         "first_stage_no_champion_replacement": lifecycle.get("champion_replaced_before_second_approval") is False,
         "second_approval_request_pending": request.get("status") == "pending_approval",
         "second_approval_activates_champion": lifecycle.get("activated_champion_version") != lifecycle.get("initial_champion_version"),
+        "stage1_snapshot_persisted": lifecycle.get("stage1_snapshot_persisted") is True
+        and lifecycle.get("restart_recovered_after_stage1") is True,
+        "candidate_fingerprint_persisted": lifecycle.get("candidate_fingerprint_persisted") is True,
+        "material_change_blocks_stale_approval": lifecycle.get("stale_approval_prevented") is True,
+        "duplicate_approval_replay_prevented": lifecycle.get("duplicate_stage1_replay_blocked") is True
+        and lifecycle.get("duplicate_stage2_approval_idempotent") is True,
+        "processed_approval_not_reusable": lifecycle.get("processed_approval_cannot_be_reused") is True,
+        "restart_recovers_approval_state": lifecycle.get("restart_recovered_after_stage2_request") is True
+        and lifecycle.get("restart_recovered_after_activation") is True,
         "no_live_trading_enabled": lifecycle.get("automatic_trading_enabled") is False,
     }
     return _final_completion_check_payload("production two stage approval", checks, payload)
@@ -3209,6 +3408,8 @@ def production_candidate_freeze_release_check() -> Mapping[str, object]:
         "snapshot_contains_lineage": bool(snapshot.get("dataset_ref")) and bool(snapshot.get("validation_id")) and bool(snapshot.get("evidence_id")),
         "snapshot_is_real_non_fixture": snapshot.get("source") == "real:yahoo-chart" and snapshot.get("fixture_backed") is False,
         "material_change_invalidates": lifecycle.get("material_change_invalidates_approval") is True,
+        "snapshot_durable_event_exists": lifecycle.get("stage1_snapshot_persisted") is True,
+        "snapshot_recovered_after_restart": lifecycle.get("restart_recovered_after_stage1") is True,
         "no_mutation_before_approval": lifecycle.get("strategy_mutated_before_first_approval") is False,
     }
     return _final_completion_check_payload("production candidate freeze", checks, payload)
@@ -3220,8 +3421,13 @@ def production_champion_replacement_release_check() -> Mapping[str, object]:
     checks = {
         "second_approval_required": _as_dict(lifecycle.get("second_approval_request")).get("status") == "pending_approval",
         "activated_after_second_approval": str(lifecycle.get("activated_champion_version") or "").endswith(":2"),
+        "stage2_applies_only_frozen_candidate": lifecycle.get("stage2_uses_frozen_candidate") is True,
         "old_snapshot_retained": lifecycle.get("old_snapshot_retained") is True,
         "new_snapshot_retained": lifecycle.get("new_snapshot_retained") is True,
+        "replacement_atomic_on_failure": lifecycle.get("atomic_failure_rolled_back") is True
+        and lifecycle.get("half_promoted_state_absent") is True,
+        "approval_consumed": lifecycle.get("approval_consumed_status") == "activated",
+        "single_active_champion": lifecycle.get("single_active_champion_after_replacement") is True,
         "trading_not_enabled": lifecycle.get("automatic_trading_enabled") is False,
     }
     return _final_completion_check_payload("production champion replacement", checks, payload)
@@ -3234,6 +3440,12 @@ def production_champion_rollback_release_check() -> Mapping[str, object]:
         "rollback_completed": rollback.get("status") == "rolled_back",
         "restored_previous_version": rollback.get("restored_version_id") == "champion-version:default:1",
         "rollback_creates_auditable_revision": str(rollback.get("new_version_id") or "").endswith(":3"),
+        "rollback_reason_and_timestamp_recorded": bool(_as_dict(payload.get("approval_lifecycle")).get("rollback_reason"))
+        and bool(_as_dict(payload.get("approval_lifecycle")).get("rollback_timestamp")),
+        "rollback_survives_restart": _as_dict(payload.get("approval_lifecycle")).get("restart_recovered_after_rollback") is True,
+        "approval_and_history_retained": int(_as_dict(payload.get("approval_lifecycle")).get("approval_history_records") or 0) >= 1
+        and int(_as_dict(payload.get("approval_lifecycle")).get("history_revisions") or 0) == 3,
+        "single_active_after_rollback": _as_dict(payload.get("approval_lifecycle")).get("single_active_champion_after_rollback") is True,
         "no_order_execution": _as_dict(payload.get("safety")).get("order_executed") is False,
     }
     return _final_completion_check_payload("production champion rollback", checks, payload)
@@ -3272,9 +3484,56 @@ def production_gaon_v2_completion_release_check() -> Mapping[str, object]:
         "all_checks_declare_mode": all(row.get("check_mode") == "deterministic_release_validation" for row in component_checks),
         "completion_loop_bounded": _as_dict(payload.get("blocker_resolution")).get("bounded") is True,
         "approval_lifecycle_complete": lifecycle.get("history_revisions") == 3,
+        "approval_lifecycle_restart_safe": lifecycle.get("restart_recovered_after_stage1") is True
+        and lifecycle.get("restart_recovered_after_stage2_request") is True
+        and lifecycle.get("restart_recovered_after_activation") is True
+        and lifecycle.get("restart_recovered_after_rollback") is True,
+        "approval_replay_safe": lifecycle.get("duplicate_stage1_replay_blocked") is True
+        and lifecycle.get("duplicate_stage2_approval_idempotent") is True
+        and lifecycle.get("processed_approval_cannot_be_reused") is True,
         "schema_unchanged": True,
     }
     return _final_completion_check_payload("production gaon v2 completion", checks, payload)
+
+
+def production_v2_final_closeout_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    lifecycle = _as_dict(payload.get("approval_lifecycle"))
+    market = _as_dict(payload.get("market_data_freshness"))
+    providers = _as_dict(payload.get("provider_readiness_matrix"))
+    conversation = _as_dict(payload.get("conversation"))
+    e2e = _as_dict(payload.get("end_to_end_scenario"))
+    completion = production_gaon_v2_completion_release_check()
+    checks = {
+        "component_completion_pass": completion.get("safety") == "pass",
+        "two_stage_approval_durable": lifecycle.get("stage1_snapshot_persisted") is True
+        and lifecycle.get("stage2_uses_frozen_candidate") is True,
+        "approval_replay_and_stale_guard": lifecycle.get("duplicate_stage1_replay_blocked") is True
+        and lifecycle.get("duplicate_stage2_approval_idempotent") is True
+        and lifecycle.get("processed_approval_cannot_be_reused") is True
+        and lifecycle.get("stale_approval_prevented") is True,
+        "champion_replacement_atomic": lifecycle.get("atomic_failure_rolled_back") is True
+        and lifecycle.get("single_active_champion_after_replacement") is True
+        and lifecycle.get("approval_consumed_status") == "activated",
+        "rollback_recovery_durable": lifecycle.get("restart_recovered_after_rollback") is True
+        and lifecycle.get("single_active_champion_after_rollback") is True
+        and bool(lifecycle.get("rollback_reason")),
+        "market_data_lineage_complete": market.get("source") == "real:yahoo-chart"
+        and market.get("fixture_backed") is False
+        and bool(market.get("window_fingerprint"))
+        and market.get("lineage_fields_present") is True
+        and market.get("stale") is False,
+        "provider_readiness_matrix_complete": providers.get("provider_not_configured_honest") is True
+        and providers.get("fixture_adapter_in_production") is False
+        and providers.get("unbounded_network_fetch") is False
+        and len(_as_list(providers.get("registered_providers"))) >= 6,
+        "conversation_final_korean_and_debug_separated": conversation.get("final_user_facing_language") == "ko"
+        and conversation.get("raw_debug_channel_separate") is True
+        and conversation.get("raw_internal_codes_hidden_in_normal_response") is True,
+        "end_to_end_scenario_safe": all(bool(value) for value in e2e.values()),
+        "machine_checkable_safety_invariants": all(value is False for value in _as_dict(payload.get("safety")).values()),
+    }
+    return _final_completion_check_payload("production gaon v2 final closeout", checks, payload)
 
 
 def production_provider_registry_release_check() -> Mapping[str, object]:

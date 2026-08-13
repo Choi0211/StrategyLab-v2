@@ -5,8 +5,10 @@ Status: Passed
 ## Gaon v2 Production Completion
 
 - Targeted local verification:
-  - `python -m unittest tests.unit.test_autonomous_quant_partner -v`: PASS, 20 tests
+  - `python -m py_compile src\gaon\knowledge\autonomous_quant_partner.py src\gaon\runtime\cli.py tests\unit\test_autonomous_quant_partner.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner -v`: PASS, 21 tests
   - `python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check`: PASS
 - New focused release checks:
   - `gaon-production-final-autonomous-research-release-check`
   - `gaon-production-final-conversation-release-check`
@@ -16,12 +18,14 @@ Status: Passed
   - `gaon-production-champion-rollback-release-check`
   - `gaon-production-final-safety-boundary-release-check`
   - `gaon-production-gaon-v2-completion-release-check`
+  - `gaon-production-v2-final-closeout-release-check`
 - Full local verification:
   - `python -m py_compile src\gaon\knowledge\autonomous_quant_partner.py src\gaon\runtime\cli.py tests\unit\test_autonomous_quant_partner.py`: PASS
-  - `python -m unittest discover -s tests/unit -q`: PASS, 847 tests
+  - `python -m unittest discover -s tests/unit -q`: PASS, 848 tests
   - `python -m unittest discover -s tests/integration -q`: PASS, 198 tests
   - `python scripts/verify_release.py`: PASS
   - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - focused final closeout release checks through `gaon-production-v2-final-closeout-release-check`: PASS
   - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
 - Production Telegram verification: PENDING PRODUCTION VERIFICATION.
 - Schema: v36 unchanged.

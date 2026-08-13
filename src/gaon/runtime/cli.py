@@ -373,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-champion-rollback-release-check")
     sub.add_parser("gaon-production-final-safety-boundary-release-check")
     sub.add_parser("gaon-production-gaon-v2-completion-release-check")
+    sub.add_parser("gaon-production-v2-final-closeout-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2568,6 +2569,7 @@ def _run(args: argparse.Namespace) -> int:
         "gaon-production-champion-rollback-release-check",
         "gaon-production-final-safety-boundary-release-check",
         "gaon-production-gaon-v2-completion-release-check",
+        "gaon-production-v2-final-closeout-release-check",
     }:
         from gaon.knowledge.autonomous_quant_partner import (
             production_autonomous_research_action_loop_release_check,
@@ -2585,6 +2587,7 @@ def _run(args: argparse.Namespace) -> int:
             production_final_safety_boundary_release_check,
             production_final_promotion_readiness_release_check,
             production_gaon_v2_completion_release_check,
+            production_v2_final_closeout_release_check,
             production_hotfix2561_release_check,
             production_iterative_research_loop_release_check,
             production_learning_memory_closed_loop_release_check,
@@ -2725,6 +2728,7 @@ def _run(args: argparse.Namespace) -> int:
             "gaon-production-champion-rollback-release-check": production_champion_rollback_release_check,
             "gaon-production-final-safety-boundary-release-check": production_final_safety_boundary_release_check,
             "gaon-production-gaon-v2-completion-release-check": production_gaon_v2_completion_release_check,
+            "gaon-production-v2-final-closeout-release-check": production_v2_final_closeout_release_check,
         }
         payload = handlers[args.command]()
         check_mode = f"check_mode={payload['check_mode']} " if "check_mode" in payload else ""
