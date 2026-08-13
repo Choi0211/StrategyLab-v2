@@ -3,6 +3,27 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 256.1 Validation Semantics & Leakage Integrity
+
+Autonomous Quant Partner validation now treats execution and validation as
+separate states. OOS and walk-forward checks can use warmup bars for indicator
+state, but trades and performance metrics are rebuilt from evaluation-window
+activity only. Candidate strategy fingerprints are frozen before validation and
+must match the authoritative candidate evidence.
+
+Production release checks now cover OOS and walk-forward boundaries,
+performance comparison semantics, real price-derived regime classification,
+transaction-cost stress degradation, peer-selection policy, candidate freeze
+integrity, and no evaluation-window contamination.
+
+New aggregate command:
+
+```bash
+python -m gaon.runtime.cli gaon-production-hotfix2561-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Sprint 249-256 Real Autonomous Research Execution
 
 Autonomous Quant Partner now attempts real production robustness execution from

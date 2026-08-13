@@ -8,6 +8,7 @@ evidence; strategy changes, Champion promotion, and orders are never executed.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import Enum
 import hashlib
 import json
@@ -30,6 +31,16 @@ from .multi_source_research import (
 
 
 AUTONOMOUS_QUANT_PARTNER_SCHEMA_VERSION = 1
+EVALUATION_WARMUP_BARS = 60
+MIN_OOS_TRADES = 3
+MIN_WALK_FORWARD_FOLD_TRADES = 2
+MIN_PASSING_WALK_FORWARD_FOLDS = 2
+MIN_REGIME_TRADES = 2
+STRESS_SCENARIOS = (
+    {"name": "base", "commission": None, "slippage": None, "provenance": "configured_assumptions"},
+    {"name": "moderate", "commission": 0.0003, "slippage": 0.001, "provenance": "policy_default:moderate_transaction_cost_stress"},
+    {"name": "high", "commission": 0.0005, "slippage": 0.002, "provenance": "policy_default:high_transaction_cost_stress"},
+)
 
 
 class GapKind(str, Enum):
@@ -632,7 +643,7 @@ def _real_robustness_execution_from_baseline(
         "walk_forward": _execute_walk_forward(rid, dataset, strategy, candidate_strategy, assumptions, budget),
         "regime_validation": _execute_regimes(rid, dataset, strategy, candidate_strategy, assumptions),
         "parameter_sensitivity": _execute_parameter_sensitivity(rid, dataset, candidate_strategy, assumptions, budget),
-        "transaction_cost_stress": _execute_cost_stress(rid, dataset, candidate_strategy, assumptions),
+        "transaction_cost_stress": _execute_cost_stress(rid, dataset, strategy, candidate_strategy, assumptions),
     }
 
 
@@ -773,7 +784,8 @@ def _execute_peer_symbols(
     rows = [_symbol_execution_row(symbol, primary)]
     failures = []
     peer_datasets = _as_dict(baseline.get("peer_datasets"))
-    peer_symbols = [item for item in ("000660", "005380", "035420", "051910") if item != symbol.upper()][: max(0, budget.max_symbols - 1)]
+    peer_selection = _select_peer_symbols(symbol, baseline=baseline, budget=budget)
+    peer_symbols = [str(item) for item in _as_list(peer_selection.get("selected_peers"))]
     engine = _engine()
     for peer in peer_symbols:
         try:
@@ -791,6 +803,11 @@ def _execute_peer_symbols(
         "executed": bool(executed_peers),
         "lineage": "actual_backtest" if executed_peers else None,
         "cross_symbol_status": status,
+        "peer_selection_policy": peer_selection.get("peer_selection_policy"),
+        "candidate_universe_size": peer_selection.get("candidate_universe_size"),
+        "selected_peers": peer_symbols,
+        "selection_reasons": _as_dict(peer_selection.get("selection_reasons")),
+        "peer_selection_status": peer_selection.get("status"),
         "symbols_requested": 1 + len(peer_symbols),
         "symbols_executed": len(rows),
         "symbols_failed": len(failures),
@@ -799,6 +816,29 @@ def _execute_peer_symbols(
         "failures": failures,
         "blockers": [] if executed_peers else ["peer_datasets_not_available"],
         "fabricated_metrics": False,
+    }
+
+
+def _select_peer_symbols(symbol: str, *, baseline: Mapping[str, object], budget: ResearchBudget) -> dict[str, object]:
+    primary = symbol.upper()
+    peer_datasets = _as_dict(baseline.get("peer_datasets"))
+    available = [str(item).upper() for item in peer_datasets if str(item).upper() != primary]
+    if available:
+        selected = sorted(available)[: max(0, budget.max_symbols - 1)]
+        return {
+            "status": "baseline_peer_datasets",
+            "peer_selection_policy": "baseline_authoritative_peer_datasets_bounded_by_budget",
+            "candidate_universe_size": len(available),
+            "selected_peers": selected,
+            "selection_reasons": {peer: "authoritative_peer_dataset_present" for peer in selected},
+        }
+    curated = [item for item in ("000660", "005380", "035420", "051910") if item != primary][: max(0, budget.max_symbols - 1)]
+    return {
+        "status": "peer_selection_unavailable_curated_liquid_krx_fallback_declared",
+        "peer_selection_policy": "curated_liquid_krx_equity_fallback_when_dynamic_universe_unavailable",
+        "candidate_universe_size": len(curated),
+        "selected_peers": curated,
+        "selection_reasons": {peer: "curated_large_cap_krx_equity_not_etf_etn_spac_or_preferred" for peer in curated},
     }
 
 
@@ -839,29 +879,48 @@ def _symbol_execution_row(symbol: str, result: object) -> dict[str, object]:
 
 
 def _execute_oos(rid: str, dataset: object, baseline_strategy: object, candidate_strategy: object, assumptions: object) -> dict[str, object]:
-    train, test = _chronological_train_test(dataset)
+    train, test, evaluation_start = _chronological_train_test(dataset)
     if test is None:
         return _not_run("insufficient_oos_sample", "insufficient_oos_bars")
-    engine = _engine()
-    baseline = engine.run(f"{rid}:oos:baseline", baseline_strategy, test, assumptions)
-    candidate = engine.run(f"{rid}:oos:candidate", candidate_strategy, test, assumptions)
+    evaluation_end = test.metadata.end_date
+    baseline = _evaluation_backtest(f"{rid}:oos:baseline", baseline_strategy, test, assumptions, evaluation_start=evaluation_start, evaluation_end=evaluation_end)
+    candidate = _evaluation_backtest(f"{rid}:oos:candidate", candidate_strategy, test, assumptions, evaluation_start=evaluation_start, evaluation_end=evaluation_end)
+    comparison = _compare_validation_metrics(_as_dict(baseline.get("metrics_evaluation_only")), _as_dict(candidate.get("metrics_evaluation_only")), min_trades=MIN_OOS_TRADES)
+    fingerprint_match = candidate.get("strategy_fingerprint") == candidate_strategy.fingerprint
+    validation_status = comparison["comparison_status"] if fingerprint_match else "fingerprint_mismatch"
     return {
-        "status": "pass" if candidate.status == "completed" and candidate.metrics.trade_count > 0 else "insufficient_oos_sample",
+        "status": validation_status,
+        "validation_status": validation_status,
+        "execution_status": "completed" if baseline.get("execution_status") == "completed" and candidate.get("execution_status") == "completed" else "execution_failure",
         "executed": True,
         "lineage": "actual_backtest",
+        "metrics_lineage": "actual_backtest",
         "train_period": _dataset_period(train),
         "test_period": _dataset_period(test),
+        "warmup_start": test.metadata.start_date,
+        "evaluation_start": evaluation_start,
+        "evaluation_end": evaluation_end,
+        "warmup_bars": baseline.get("warmup_bars"),
+        "evaluation_bars": baseline.get("evaluation_bars"),
+        "trades_before_evaluation": candidate.get("trades_before_evaluation"),
+        "trades_in_evaluation": candidate.get("trades_in_evaluation"),
         "train_bars": len(train.bars),
         "test_bars": len(test.bars),
         "strategy_fingerprint": candidate_strategy.fingerprint,
+        "baseline_strategy_fingerprint": baseline_strategy.fingerprint,
+        "candidate_strategy_fingerprint": candidate_strategy.fingerprint,
         "dataset_fingerprint": test.fingerprint,
         "assumptions_fingerprint": _hash(assumptions.to_json()),
-        "baseline_test_metrics": baseline.metrics.to_json(),
-        "candidate_test_metrics": candidate.metrics.to_json(),
-        "completed_trades": candidate.metrics.trade_count,
-        "candidate_frozen_before_oos": True,
+        "baseline_result_id": baseline.get("result_id"),
+        "candidate_result_id": candidate.get("result_id"),
+        "baseline_test_metrics": baseline.get("metrics_evaluation_only"),
+        "candidate_test_metrics": candidate.get("metrics_evaluation_only"),
+        "comparison": comparison,
+        "completed_trades": _as_dict(candidate.get("metrics_evaluation_only")).get("trade_count"),
+        "candidate_frozen_before_oos": fingerprint_match,
         "optimized_on_oos": False,
         "candidate_rejected_if_oos_fails": True,
+        "warmup_used_for_indicators": True,
         "fabricated_metrics": False,
     }
 
@@ -872,7 +931,6 @@ def _execute_walk_forward(rid: str, dataset: object, baseline_strategy: object, 
     min_test = 90
     if len(bars) < 60 + fold_count * min_test:
         return _not_run("not_run_insufficient_walk_forward_sample", "insufficient_walk_forward_bars", {"fold_count": 0, "max_folds": budget.max_walk_forward_folds, "folds": []})
-    engine = _engine()
     folds = []
     start = 60
     step = (len(bars) - start) // fold_count
@@ -880,27 +938,58 @@ def _execute_walk_forward(rid: str, dataset: object, baseline_strategy: object, 
         test_start = start + index * step
         test_end = len(bars) if index == fold_count - 1 else start + (index + 1) * step
         train = _slice_dataset(dataset, 0, test_start, suffix=f"wf:{index + 1}:train")
-        test = _slice_dataset(dataset, max(0, test_start - 60), test_end, suffix=f"wf:{index + 1}:test")
-        baseline = engine.run(f"{rid}:wf:{index + 1}:baseline", baseline_strategy, test, assumptions)
-        candidate = engine.run(f"{rid}:wf:{index + 1}:candidate", candidate_strategy, test, assumptions)
+        test = _slice_dataset(dataset, max(0, test_start - EVALUATION_WARMUP_BARS), test_end, suffix=f"wf:{index + 1}:test")
+        evaluation_start = bars[test_start].timestamp
+        evaluation_end = bars[test_end - 1].timestamp
+        baseline = _evaluation_backtest(f"{rid}:wf:{index + 1}:baseline", baseline_strategy, test, assumptions, evaluation_start=evaluation_start, evaluation_end=evaluation_end)
+        candidate = _evaluation_backtest(f"{rid}:wf:{index + 1}:candidate", candidate_strategy, test, assumptions, evaluation_start=evaluation_start, evaluation_end=evaluation_end)
+        baseline_metrics = _as_dict(baseline.get("metrics_evaluation_only"))
+        candidate_metrics = _as_dict(candidate.get("metrics_evaluation_only"))
+        comparison = _compare_validation_metrics(baseline_metrics, candidate_metrics, min_trades=MIN_WALK_FORWARD_FOLD_TRADES)
+        fingerprint_match = candidate.get("strategy_fingerprint") == candidate_strategy.fingerprint
+        comparison_status = comparison["comparison_status"] if fingerprint_match else "fingerprint_mismatch"
         folds.append(
             {
                 "fold": index + 1,
                 "train_start": train.metadata.start_date,
                 "train_end": train.metadata.end_date,
-                "test_start": test.metadata.start_date,
-                "test_end": test.metadata.end_date,
+                "warmup_start": test.metadata.start_date,
+                "evaluation_start": evaluation_start,
+                "evaluation_end": evaluation_end,
+                "test_start": evaluation_start,
+                "test_end": evaluation_end,
                 "train_bars": len(train.bars),
                 "test_bars": len(test.bars),
+                "warmup_bars": baseline.get("warmup_bars"),
+                "evaluation_bars": baseline.get("evaluation_bars"),
                 "strategy_fingerprint": candidate_strategy.fingerprint,
-                "baseline_metrics": baseline.metrics.to_json(),
-                "candidate_metrics": candidate.metrics.to_json(),
-                "completed_trades": candidate.metrics.trade_count,
-                "execution_status": candidate.status,
+                "baseline_strategy_fingerprint": baseline_strategy.fingerprint,
+                "candidate_strategy_fingerprint": candidate_strategy.fingerprint,
+                "dataset_fingerprint": test.fingerprint,
+                "assumptions_fingerprint": _hash(assumptions.to_json()),
+                "baseline_result_id": baseline.get("result_id"),
+                "candidate_result_id": candidate.get("result_id"),
+                "baseline_return": baseline_metrics.get("total_return"),
+                "candidate_return": candidate_metrics.get("total_return"),
+                "baseline_mdd": baseline_metrics.get("mdd"),
+                "candidate_mdd": candidate_metrics.get("mdd"),
+                "baseline_trades": baseline_metrics.get("trade_count"),
+                "candidate_trades": candidate_metrics.get("trade_count"),
+                "baseline_metrics": baseline_metrics,
+                "candidate_metrics": candidate_metrics,
+                "completed_trades": candidate_metrics.get("trade_count"),
+                "trades_before_evaluation": candidate.get("trades_before_evaluation"),
+                "trades_in_evaluation": candidate.get("trades_in_evaluation"),
+                "comparison": comparison,
+                "comparison_status": comparison_status,
+                "execution_status": "completed" if baseline.get("execution_status") == "completed" and candidate.get("execution_status") == "completed" else "execution_failure",
+                "validation_status": comparison_status,
             }
         )
-    passed = sum(1 for fold in folds if int(fold["completed_trades"]) > 0)
-    return {"status": "pass" if passed == len(folds) else "partial", "executed": True, "lineage": "actual_backtest", "fold_count": len(folds), "max_folds": budget.max_walk_forward_folds, "folds_passed": passed, "folds_failed": len(folds) - passed, "parameter_optimization_per_fold": False, "folds": folds, "fabricated_metrics": False}
+    passed = sum(1 for fold in folds if fold["validation_status"] == "pass")
+    valid = sum(1 for fold in folds if fold["validation_status"] not in {"insufficient_oos_sample", "fingerprint_mismatch", "execution_failure"})
+    status = "pass" if passed >= MIN_PASSING_WALK_FORWARD_FOLDS and passed == valid and valid >= MIN_PASSING_WALK_FORWARD_FOLDS else "insufficient_fold_samples" if valid < MIN_PASSING_WALK_FORWARD_FOLDS else "partial" if passed else "fail"
+    return {"status": status, "validation_status": status, "execution_status": "completed", "executed": True, "lineage": "actual_backtest", "metrics_lineage": "actual_backtest", "fold_count": len(folds), "max_folds": budget.max_walk_forward_folds, "folds_passed": passed, "folds_failed": len(folds) - passed, "evaluation_windows_overlap": _windows_overlap(folds), "parameter_optimization_per_fold": False, "folds": folds, "fabricated_metrics": False}
 
 
 def _execute_regimes(rid: str, dataset: object, baseline_strategy: object, candidate_strategy: object, assumptions: object) -> dict[str, object]:
@@ -908,14 +997,31 @@ def _execute_regimes(rid: str, dataset: object, baseline_strategy: object, candi
     if len(bars) < 180:
         return _not_run("not_run_insufficient_regime_sample", "insufficient_regime_bars", {"regimes": {}})
     engine = _engine()
-    chunks = (("bull", 0, len(bars) // 3), ("sideways", len(bars) // 3, 2 * len(bars) // 3), ("bear", 2 * len(bars) // 3, len(bars)))
+    chunks = _price_derived_regime_windows(dataset)
     regimes = {}
-    for label, start, end in chunks:
+    for label, start, end, definition, thresholds in chunks:
         subset = _slice_dataset(dataset, start, end, suffix=f"regime:{label}")
         baseline = engine.run(f"{rid}:regime:{label}:baseline", baseline_strategy, subset, assumptions)
         candidate = engine.run(f"{rid}:regime:{label}:candidate", candidate_strategy, subset, assumptions)
-        regimes[label] = {"definition": f"deterministic_chronological_{label}_sample", "period": _dataset_period(subset), "bars": len(subset.bars), "completed_trades": candidate.metrics.trade_count, "baseline_metrics": baseline.metrics.to_json(), "candidate_metrics": candidate.metrics.to_json(), "execution_status": candidate.status}
-    return {"status": "pass" if any(int(row["completed_trades"]) > 0 for row in regimes.values()) else "insufficient_regime_trades", "executed": True, "lineage": "actual_backtest", "model": "deterministic_price_trend_and_volatility", "regimes": regimes, "macro_labels_fabricated": False, "fabricated_metrics": False}
+        comparison = _compare_validation_metrics(baseline.metrics.to_json(), candidate.metrics.to_json(), min_trades=MIN_REGIME_TRADES)
+        regimes[label] = {
+            "definition": definition,
+            "thresholds": thresholds,
+            "period": _dataset_period(subset),
+            "bars_classified": len(subset.bars),
+            "periods": [{"start": subset.metadata.start_date, "end": subset.metadata.end_date}],
+            "trade_count": candidate.metrics.trade_count,
+            "baseline_metrics": baseline.metrics.to_json(),
+            "candidate_metrics": candidate.metrics.to_json(),
+            "sample_status": "sufficient" if candidate.metrics.trade_count >= MIN_REGIME_TRADES else "insufficient_regime_sample",
+            "comparison_status": comparison["comparison_status"],
+            "execution_status": candidate.status,
+            "validation_status": comparison["comparison_status"],
+        }
+    sufficient = [row for row in regimes.values() if row["sample_status"] == "sufficient"]
+    passed = [row for row in sufficient if row["validation_status"] == "pass"]
+    status = "pass" if len(passed) >= 2 and len(passed) == len(sufficient) else "insufficient_regime_coverage" if len(sufficient) < 2 else "partial"
+    return {"status": status, "validation_status": status, "execution_status": "completed", "executed": True, "lineage": "actual_backtest", "metrics_lineage": "actual_backtest", "model": "deterministic_price_return_and_realized_volatility", "regimes": regimes, "macro_labels_fabricated": False, "chronological_thirds_used": False, "fabricated_metrics": False}
 
 
 def _execute_parameter_sensitivity(rid: str, dataset: object, strategy: object, assumptions: object, budget: ResearchBudget) -> dict[str, object]:
@@ -934,35 +1040,183 @@ def _execute_parameter_sensitivity(rid: str, dataset: object, strategy: object, 
             baseline_return = float(metrics.get("total_return") or 0.0)
         variants.append({"parameter": "breakout_lookback", "value": value, "status": "baseline" if value == current else "executed", "strategy_fingerprint": variant_strategy.fingerprint, "metrics": metrics, "execution_status": result.status})
     returns = [float(_as_dict(row.get("metrics")).get("total_return") or 0.0) for row in variants]
+    mdds = [float(_as_dict(row.get("metrics")).get("mdd") or 0.0) for row in variants]
+    trades = [int(_as_dict(row.get("metrics")).get("trade_count") or 0) for row in variants]
     degradation = max(returns) - min(returns) if returns else None
-    stable = degradation is not None and degradation <= max(0.1, abs(baseline_return or 0.0))
-    return {"status": "stable" if stable else "parameter_fragile", "executed": True, "lineage": "actual_backtest", "parameter": "breakout_lookback", "baseline_value": current, "tested_values": list(values), "variant_count": len(variants), "executed_variants": len(variants), "degradation": round(degradation, 6) if degradation is not None else None, "sensitivity_status": "stable" if stable else "parameter_fragile", "max_variants": budget.max_parameter_variants, "local_neighborhood_only": True, "variants": variants, "huge_grid_search": False, "fabricated_metrics": False}
+    baseline_mdd = float(_as_dict(next((row.get("metrics") for row in variants if row.get("value") == current), {})).get("mdd") or 0.0)
+    sign_consistent = all(value >= 0 for value in returns) or all(value <= 0 for value in returns)
+    enough_samples = all(value >= MIN_WALK_FORWARD_FOLD_TRADES for value in trades)
+    stable = degradation is not None and enough_samples and sign_consistent and max(mdds or [0.0]) <= max(0.05, baseline_mdd * 1.5)
+    status = "stable" if stable else "insufficient_sample" if not enough_samples else "parameter_fragile"
+    return {"status": status, "validation_status": status, "execution_status": "completed", "executed": True, "lineage": "actual_backtest", "metrics_lineage": "actual_backtest", "parameter": "breakout_lookback", "baseline_value": current, "tested_values": list(values), "variant_count": len(variants), "executed_variants": len(variants), "degradation": round(degradation, 6) if degradation is not None else None, "sign_consistent": sign_consistent, "minimum_variant_trades": MIN_WALK_FORWARD_FOLD_TRADES, "sensitivity_status": status, "max_variants": budget.max_parameter_variants, "local_neighborhood_only": True, "variants": variants, "huge_grid_search": False, "fabricated_metrics": False}
 
 
-def _execute_cost_stress(rid: str, dataset: object, strategy: object, assumptions: object) -> dict[str, object]:
+def _execute_cost_stress(rid: str, dataset: object, baseline_strategy: object, candidate_strategy: object, assumptions: object) -> dict[str, object]:
     from gaon.research.krx_real_pipeline import BacktestExecutionAssumptionSet, FieldProvenance, ProvenancedValue
 
-    scenarios = (("base", float(assumptions.commission.value), float(assumptions.slippage.value)), ("moderate", 0.0003, 0.001), ("high", 0.0005, 0.002))
     engine = _engine()
     rows = []
-    for name, commission, slippage in scenarios:
+    base_candidate = engine.run(f"{rid}:cost:base:candidate-reference", candidate_strategy, dataset, assumptions)
+    base_return = float(base_candidate.metrics.total_return)
+    for scenario in STRESS_SCENARIOS:
+        name = str(scenario["name"])
+        commission = float(assumptions.commission.value if scenario["commission"] is None else scenario["commission"])
+        slippage = float(assumptions.slippage.value if scenario["slippage"] is None else scenario["slippage"])
         scenario_assumptions = BacktestExecutionAssumptionSet(ProvenancedValue(commission, FieldProvenance.DEFAULT), assumptions.tax, ProvenancedValue(slippage, FieldProvenance.DEFAULT), assumptions.execution_timing, assumptions.position_sizing, assumptions.initial_capital)
-        result = engine.run(f"{rid}:cost:{name}", strategy, dataset, scenario_assumptions)
-        metrics = result.metrics.to_json()
-        rows.append({"name": name, "commission": commission, "slippage": slippage, "completed_trades": metrics.get("trade_count"), "net_return": metrics.get("total_return"), "drawdown": metrics.get("mdd"), "execution_status": result.status})
-    return {"status": "cost_stable" if all(str(row["execution_status"]) == "completed" for row in rows) else "cost_fragile", "executed": True, "lineage": "actual_backtest", "scenarios": rows, "unsupported_tax_models_fabricated": False, "fabricated_metrics": False}
+        baseline = engine.run(f"{rid}:cost:{name}:baseline", baseline_strategy, dataset, scenario_assumptions)
+        candidate = engine.run(f"{rid}:cost:{name}:candidate", candidate_strategy, dataset, scenario_assumptions)
+        baseline_metrics = baseline.metrics.to_json()
+        candidate_metrics = candidate.metrics.to_json()
+        comparison = _compare_validation_metrics(baseline_metrics, candidate_metrics, min_trades=MIN_OOS_TRADES)
+        degradation = base_return - float(candidate_metrics.get("total_return") or 0.0)
+        scenario_status = "cost_stable" if comparison["comparison_status"] == "pass" and degradation <= max(0.0, abs(base_return) * 0.5) else "cost_fragile"
+        rows.append({
+            "name": name,
+            "commission": commission,
+            "slippage": slippage,
+            "assumption_provenance": scenario["provenance"],
+            "baseline_metrics": baseline_metrics,
+            "candidate_metrics": candidate_metrics,
+            "candidate_net_return_degradation": round(degradation, 6),
+            "candidate_vs_baseline_advantage": comparison.get("return_delta"),
+            "mdd_degradation": comparison.get("mdd_delta"),
+            "completed_trades": candidate_metrics.get("trade_count"),
+            "net_return": candidate_metrics.get("total_return"),
+            "drawdown": candidate_metrics.get("mdd"),
+            "execution_status": "completed" if baseline.status == "completed" and candidate.status == "completed" else "execution_failure",
+            "validation_status": scenario_status,
+        })
+    status = "cost_stable" if rows and all(row["validation_status"] == "cost_stable" for row in rows) else "insufficient_sample" if any(int(row.get("completed_trades") or 0) < MIN_OOS_TRADES for row in rows) else "cost_fragile"
+    return {"status": status, "validation_status": status, "execution_status": "completed", "executed": True, "lineage": "actual_backtest", "metrics_lineage": "actual_backtest", "stress_policy": "policy_default_transaction_cost_stress_v1", "scenarios": rows, "unsupported_tax_models_fabricated": False, "fabricated_metrics": False}
 
 
 def _not_run(status: str, blocker: str, extra: Mapping[str, object] | None = None) -> dict[str, object]:
     return {"status": status, "executed": False, "execution_state": "not_run", "blockers": [blocker], "fabricated_metrics": False, **dict(extra or {})}
 
 
-def _chronological_train_test(dataset: object) -> tuple[object, object | None]:
+def _evaluation_backtest(run_id: str, strategy: object, dataset: object, assumptions: object, *, evaluation_start: str, evaluation_end: str) -> dict[str, object]:
+    from gaon.research.krx_real_pipeline import PerformanceMetricsCalculator
+
+    result = _engine().run(run_id, strategy, dataset, assumptions)
+    trades = tuple(getattr(result, "trades"))
+    evaluation_trades = tuple(
+        trade
+        for trade in trades
+        if str(getattr(trade, "entry_date")) >= evaluation_start and str(getattr(trade, "exit_date")) <= evaluation_end
+    )
+    trades_before = tuple(trade for trade in trades if str(getattr(trade, "entry_date")) < evaluation_start or str(getattr(trade, "exit_date")) < evaluation_start)
+    initial_capital = float(assumptions.initial_capital.value)
+    equity = initial_capital
+    curve: list[dict[str, float | str]] = [{"timestamp": evaluation_start, "equity": round(equity, 4)}]
+    invested_days = 0
+    for trade in sorted(evaluation_trades, key=lambda item: str(getattr(item, "exit_date"))):
+        equity += float(getattr(trade, "pnl"))
+        curve.append({"timestamp": str(getattr(trade, "exit_date")), "equity": round(equity, 4)})
+        try:
+            invested_days += max(1, (datetime.fromisoformat(str(getattr(trade, "exit_date"))) - datetime.fromisoformat(str(getattr(trade, "entry_date")))).days)
+        except ValueError:
+            invested_days += 1
+    if curve[-1]["timestamp"] != evaluation_end:
+        curve.append({"timestamp": evaluation_end, "equity": round(equity, 4)})
+    evaluation_bars = [bar for bar in dataset.bars if evaluation_start <= bar.timestamp <= evaluation_end]
+    metrics = PerformanceMetricsCalculator().calculate(
+        tuple(curve),
+        evaluation_trades,
+        initial_capital,
+        evaluation_start,
+        evaluation_end,
+        invested_days,
+        max(1, len(evaluation_bars)),
+    )
+    return {
+        "result_id": getattr(result, "result_id"),
+        "execution_status": getattr(result, "status"),
+        "strategy_fingerprint": getattr(result, "strategy").fingerprint,
+        "dataset_fingerprint": getattr(result, "dataset_fingerprint"),
+        "assumptions_fingerprint": _hash(assumptions.to_json()),
+        "warmup_start": dataset.metadata.start_date,
+        "evaluation_start": evaluation_start,
+        "evaluation_end": evaluation_end,
+        "warmup_bars": len([bar for bar in dataset.bars if bar.timestamp < evaluation_start]),
+        "evaluation_bars": len(evaluation_bars),
+        "trades_before_evaluation": len(trades_before),
+        "trades_in_evaluation": len(evaluation_trades),
+        "metrics_evaluation_only": metrics.to_json(),
+        "warmup_used_for_indicators": True,
+    }
+
+
+def _compare_validation_metrics(baseline: Mapping[str, object], candidate: Mapping[str, object], *, min_trades: int) -> dict[str, object]:
+    baseline_return = float(baseline.get("total_return") or 0.0)
+    candidate_return = float(candidate.get("total_return") or 0.0)
+    baseline_mdd = float(baseline.get("mdd") or 0.0)
+    candidate_mdd = float(candidate.get("mdd") or 0.0)
+    baseline_trades = int(baseline.get("trade_count") or 0)
+    candidate_trades = int(candidate.get("trade_count") or 0)
+    if candidate_trades < min_trades or baseline_trades < min(1, min_trades):
+        status = "insufficient_oos_sample"
+    elif candidate_return < baseline_return or candidate_mdd > baseline_mdd:
+        status = "fail_underperformed_baseline"
+    else:
+        status = "pass"
+    return {
+        "comparison_status": status,
+        "minimum_required_trades": min_trades,
+        "baseline_return": baseline_return,
+        "candidate_return": candidate_return,
+        "return_delta": round(candidate_return - baseline_return, 6),
+        "baseline_mdd": baseline_mdd,
+        "candidate_mdd": candidate_mdd,
+        "mdd_delta": round(candidate_mdd - baseline_mdd, 6),
+        "baseline_trades": baseline_trades,
+        "candidate_trades": candidate_trades,
+    }
+
+
+def _windows_overlap(folds: list[dict[str, object]]) -> bool:
+    windows = sorted((str(fold["evaluation_start"]), str(fold["evaluation_end"])) for fold in folds)
+    return any(windows[index][0] <= windows[index - 1][1] for index in range(1, len(windows)))
+
+
+def _price_derived_regime_windows(dataset: object) -> tuple[tuple[str, int, int, str, dict[str, object]], ...]:
+    bars = tuple(dataset.bars)
+    third = max(60, len(bars) // 3)
+    raw_windows = ((0, third), (third, min(len(bars), 2 * third)), (min(len(bars), 2 * third), len(bars)))
+    returns = []
+    vols = []
+    for start, end in raw_windows:
+        window = bars[start:end]
+        if len(window) < 2:
+            returns.append(0.0)
+            vols.append(0.0)
+            continue
+        returns.append((float(window[-1].close) / float(window[0].close)) - 1.0)
+        daily = [(float(window[i].close) / float(window[i - 1].close)) - 1.0 for i in range(1, len(window)) if float(window[i - 1].close) > 0]
+        vols.append(statistics.pstdev(daily) if len(daily) > 1 else 0.0)
+    median_vol = statistics.median(vols) if vols else 0.0
+    windows = []
+    for index, (start, end) in enumerate(raw_windows):
+        trend = "bull" if returns[index] >= 0.05 else "bear" if returns[index] <= -0.05 else "sideways"
+        vol = "high_volatility" if vols[index] > median_vol else "low_volatility"
+        label = f"{trend}_{vol}_{index + 1}"
+        windows.append(
+            (
+                label,
+                start,
+                end,
+                "price_derived:window_return_threshold_plus_realized_volatility_median",
+                {"bull_return_min": 0.05, "bear_return_max": -0.05, "volatility_split": "median_realized_volatility", "window_return": round(returns[index], 6), "realized_volatility": round(vols[index], 6), "median_volatility": round(median_vol, 6)},
+            )
+        )
+    return tuple(windows)
+
+
+def _chronological_train_test(dataset: object) -> tuple[object, object | None, str]:
     bars = tuple(dataset.bars)
     split = int(len(bars) * 0.7)
     if len(bars) - split < 90 or split < 90:
-        return dataset, None
-    return _slice_dataset(dataset, 0, split, suffix="oos:train"), _slice_dataset(dataset, max(0, split - 60), len(bars), suffix="oos:test")
+        return dataset, None, ""
+    return _slice_dataset(dataset, 0, split, suffix="oos:train"), _slice_dataset(dataset, max(0, split - EVALUATION_WARMUP_BARS), len(bars), suffix="oos:test"), bars[split].timestamp
 
 
 def _slice_dataset(dataset: object, start: int, end: int, *, suffix: str) -> object:
@@ -1773,11 +2027,46 @@ def _release_baseline_with_actual_robustness(*, trades: int = 42, symbols: int =
         },
         "regime_validation": {
             "status": "pass",
+            "validation_status": "pass",
+            "execution_status": "completed",
             "executed": True,
             "lineage": "deterministic_actual_backtest",
-            "model": "deterministic_price_trend_and_volatility",
-            "regimes": {"rising_trend": "covered", "falling_trend": "covered", "sideways": "covered", "high_volatility": "covered", "low_volatility": "covered"},
+            "metrics_lineage": "actual_backtest",
+            "model": "deterministic_price_return_and_realized_volatility",
+            "regimes": {
+                "bull_high_volatility": {
+                    "definition": "price_derived:window_return_threshold_plus_realized_volatility_median",
+                    "thresholds": {"bull_return_min": 0.05, "volatility_split": "median_realized_volatility"},
+                    "periods": [{"start": "2021-08-13", "end": "2023-04-13"}],
+                    "bars_classified": 380,
+                    "sample_status": "sufficient",
+                    "validation_status": "pass",
+                    "baseline_metrics": {"trade_count": 14, "total_return": 0.04, "mdd": 0.08},
+                    "candidate_metrics": {"trade_count": 14, "total_return": 0.06, "mdd": 0.07},
+                },
+                "sideways_low_volatility": {
+                    "definition": "price_derived:window_return_threshold_plus_realized_volatility_median",
+                    "thresholds": {"bull_return_min": 0.05, "bear_return_max": -0.05, "volatility_split": "median_realized_volatility"},
+                    "periods": [{"start": "2023-04-14", "end": "2024-12-13"}],
+                    "bars_classified": 380,
+                    "sample_status": "sufficient",
+                    "validation_status": "pass",
+                    "baseline_metrics": {"trade_count": 13, "total_return": 0.03, "mdd": 0.07},
+                    "candidate_metrics": {"trade_count": 13, "total_return": 0.05, "mdd": 0.06},
+                },
+                "bear_high_volatility": {
+                    "definition": "price_derived:window_return_threshold_plus_realized_volatility_median",
+                    "thresholds": {"bear_return_max": -0.05, "volatility_split": "median_realized_volatility"},
+                    "periods": [{"start": "2024-12-14", "end": "2026-08-13"}],
+                    "bars_classified": 380,
+                    "sample_status": "sufficient",
+                    "validation_status": "pass",
+                    "baseline_metrics": {"trade_count": 15, "total_return": 0.02, "mdd": 0.09},
+                    "candidate_metrics": {"trade_count": 15, "total_return": 0.03, "mdd": 0.08},
+                },
+            },
             "macro_labels_fabricated": False,
+            "chronological_thirds_used": False,
         },
         "parameter_sensitivity": {
             "status": "stable",
@@ -2106,9 +2395,10 @@ def production_regime_validation_release_check() -> Mapping[str, object]:
     regime = _as_dict(_grade(payload).get("regime_validation"))
     checks = {
         "regime_pass": regime.get("status") == "pass",
-        "deterministic_model": regime.get("model") == "deterministic_price_trend_and_volatility",
+        "deterministic_model": regime.get("model") == "deterministic_price_return_and_realized_volatility",
+        "not_chronological_fixed_labels": regime.get("chronological_thirds_used") is False,
         "macro_not_fabricated": regime.get("macro_labels_fabricated") is False,
-        "distinct_regimes": len(_as_dict(regime.get("regimes"))) >= 4,
+        "distinct_regimes": len(_as_dict(regime.get("regimes"))) >= 3,
     }
     return _grade_check_payload("production regime validation", checks, payload)
 
@@ -2438,6 +2728,193 @@ def production_sprint249_256_release_check() -> Mapping[str, object]:
         "no_mutation_or_order": payload.get("strategy_mutated") is False and payload.get("order_executed") is False,
     }
     return _grade_check_payload("production sprint249 256", checks, payload)
+
+
+def _hotfix2561_check_payload(name: str, checks: Mapping[str, bool], payload: Mapping[str, object]) -> dict[str, object]:
+    result = _grade_check_payload(name, checks, payload)
+    result["check_mode"] = "deterministic_release_validation"
+    return result
+
+
+def _hotfix2561_payload() -> dict[str, object]:
+    return _real_execution_payload()
+
+
+def production_oos_evaluation_boundary_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    report = _as_dict(_grade(payload).get("out_of_sample"))
+    metrics = _as_dict(report.get("candidate_test_metrics"))
+    checks = {
+        "executed": report.get("executed") is True,
+        "warmup_before_evaluation": str(report.get("warmup_start")) < str(report.get("evaluation_start")),
+        "evaluation_window_present": bool(report.get("evaluation_start")) and bool(report.get("evaluation_end")),
+        "metrics_evaluation_only": report.get("metrics_lineage") == "actual_backtest"
+        and int(metrics.get("trade_count") or -1) == int(report.get("trades_in_evaluation") or -2),
+        "warmup_used_for_indicators": report.get("warmup_used_for_indicators") is True,
+        "candidate_frozen": report.get("candidate_frozen_before_oos") is True,
+    }
+    return _hotfix2561_check_payload("production oos evaluation boundary", checks, payload)
+
+
+def production_walk_forward_evaluation_boundary_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    report = _as_dict(_grade(payload).get("walk_forward"))
+    folds = [_as_dict(row) for row in _as_list(report.get("folds"))]
+    checks = {
+        "executed": report.get("executed") is True,
+        "folds_present": len(folds) >= MIN_PASSING_WALK_FORWARD_FOLDS,
+        "warmup_before_each_evaluation": all(str(fold.get("warmup_start")) < str(fold.get("evaluation_start")) for fold in folds),
+        "non_overlapping_evaluation_windows": report.get("evaluation_windows_overlap") is False,
+        "metrics_evaluation_only": all(
+            int(_as_dict(fold.get("candidate_metrics")).get("trade_count") or -1) == int(fold.get("trades_in_evaluation") or -2)
+            for fold in folds
+        ),
+        "no_fold_reoptimization": report.get("parameter_optimization_per_fold") is False,
+    }
+    return _hotfix2561_check_payload("production walk forward evaluation boundary", checks, payload)
+
+
+def production_oos_performance_comparison_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    report = _as_dict(_grade(payload).get("out_of_sample"))
+    comparison = _as_dict(report.get("comparison"))
+    checks = {
+        "status_is_validation_result": report.get("status") == report.get("validation_status"),
+        "execution_status_separate": report.get("execution_status") == "completed",
+        "sample_sufficiency_applied": int(comparison.get("candidate_trades") or 0) >= MIN_OOS_TRADES,
+        "baseline_comparison_applied": comparison.get("comparison_status") == "pass",
+        "candidate_not_underperforming": float(comparison.get("return_delta") or 0.0) >= 0.0,
+    }
+    return _hotfix2561_check_payload("production oos performance comparison", checks, payload)
+
+
+def production_walk_forward_performance_comparison_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    report = _as_dict(_grade(payload).get("walk_forward"))
+    folds = [_as_dict(row) for row in _as_list(report.get("folds"))]
+    checks = {
+        "status_is_validation_result": report.get("status") == report.get("validation_status"),
+        "execution_status_separate": report.get("execution_status") == "completed",
+        "fold_comparisons_present": all(_as_dict(fold.get("comparison")).get("comparison_status") for fold in folds),
+        "enough_passing_folds": int(report.get("folds_passed") or 0) >= MIN_PASSING_WALK_FORWARD_FOLDS,
+        "same_candidate_each_fold": len({fold.get("candidate_strategy_fingerprint") for fold in folds}) == 1,
+    }
+    return _hotfix2561_check_payload("production walk forward performance comparison", checks, payload)
+
+
+def production_real_regime_classification_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    report = _as_dict(_grade(payload).get("regime_validation"))
+    regimes = _as_dict(report.get("regimes"))
+    checks = {
+        "price_derived_model": report.get("model") == "deterministic_price_return_and_realized_volatility",
+        "not_fixed_chronological_labels": report.get("chronological_thirds_used") is False,
+        "regime_periods_recorded": all(bool(_as_list(_as_dict(row).get("periods"))) for row in regimes.values()),
+        "thresholds_recorded": all(bool(_as_dict(_as_dict(row).get("thresholds"))) for row in regimes.values()),
+        "sample_status_recorded": all(_as_dict(row).get("sample_status") for row in regimes.values()),
+    }
+    return _hotfix2561_check_payload("production real regime classification", checks, payload)
+
+
+def production_cost_stress_performance_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    report = _as_dict(_grade(payload).get("transaction_cost_stress"))
+    scenarios = [_as_dict(row) for row in _as_list(report.get("scenarios"))]
+    checks = {
+        "execution_status_separate": report.get("execution_status") == "completed",
+        "validation_status_separate": report.get("validation_status") in {"cost_stable", "cost_fragile", "insufficient_sample", "not_supported"},
+        "bounded_scenarios": len(scenarios) == len(STRESS_SCENARIOS),
+        "assumption_provenance_recorded": all(row.get("assumption_provenance") for row in scenarios),
+        "performance_comparison_recorded": all("candidate_vs_baseline_advantage" in row and "mdd_degradation" in row for row in scenarios),
+    }
+    return _hotfix2561_check_payload("production cost stress performance", checks, payload)
+
+
+def production_peer_selection_policy_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    report = _as_dict(_grade(payload).get("multi_symbol_validation"))
+    selected = [str(item) for item in _as_list(report.get("selected_peers") or report.get("peer_symbols"))]
+    checks = {
+        "policy_recorded": bool(report.get("peer_selection_policy")),
+        "candidate_universe_size_recorded": int(report.get("candidate_universe_size") or 0) >= len(selected),
+        "primary_excluded": "005930" not in selected,
+        "selected_peers_present": len(selected) >= 2,
+        "selection_reasons_recorded": bool(_as_dict(report.get("selection_reasons"))),
+    }
+    return _hotfix2561_check_payload("production peer selection policy", checks, payload)
+
+
+def production_validation_execution_vs_result_status_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    grade = _grade(payload)
+    sections = (
+        _as_dict(grade.get("out_of_sample")),
+        _as_dict(grade.get("walk_forward")),
+        _as_dict(grade.get("regime_validation")),
+        _as_dict(grade.get("parameter_sensitivity")),
+        _as_dict(grade.get("transaction_cost_stress")),
+    )
+    checks = {
+        "execution_status_present": all(section.get("execution_status") == "completed" for section in sections),
+        "validation_status_present": all(bool(section.get("validation_status")) for section in sections),
+        "status_tracks_validation_not_execution": all(section.get("status") == section.get("validation_status") for section in sections),
+        "lineage_actual_backtest": all(section.get("metrics_lineage") == "actual_backtest" for section in sections),
+    }
+    return _hotfix2561_check_payload("production validation execution vs result status", checks, payload)
+
+
+def production_candidate_freeze_integrity_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    grade = _grade(payload)
+    oos = _as_dict(grade.get("out_of_sample"))
+    folds = [_as_dict(row) for row in _as_list(_as_dict(grade.get("walk_forward")).get("folds"))]
+    candidate_fp = oos.get("strategy_fingerprint")
+    checks = {
+        "oos_candidate_frozen": oos.get("candidate_frozen_before_oos") is True,
+        "oos_fingerprint_matches": oos.get("candidate_strategy_fingerprint") == candidate_fp,
+        "walk_forward_same_candidate": bool(candidate_fp) and all(fold.get("candidate_strategy_fingerprint") == candidate_fp for fold in folds),
+        "walk_forward_no_optimization": _as_dict(grade.get("walk_forward")).get("parameter_optimization_per_fold") is False,
+    }
+    return _hotfix2561_check_payload("production candidate freeze integrity", checks, payload)
+
+
+def production_no_evaluation_window_contamination_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    grade = _grade(payload)
+    oos = _as_dict(grade.get("out_of_sample"))
+    folds = [_as_dict(row) for row in _as_list(_as_dict(grade.get("walk_forward")).get("folds"))]
+    checks = {
+        "oos_counts_evaluation_trades_only": int(_as_dict(oos.get("candidate_test_metrics")).get("trade_count") or -1) == int(oos.get("trades_in_evaluation") or -2),
+        "oos_warmup_not_in_metrics": int(oos.get("warmup_bars") or 0) > 0 and int(oos.get("evaluation_bars") or 0) > 0,
+        "fold_counts_evaluation_trades_only": all(
+            int(_as_dict(fold.get("candidate_metrics")).get("trade_count") or -1) == int(fold.get("trades_in_evaluation") or -2)
+            for fold in folds
+        ),
+        "fold_windows_non_overlapping": _as_dict(grade.get("walk_forward")).get("evaluation_windows_overlap") is False,
+    }
+    return _hotfix2561_check_payload("production no evaluation window contamination", checks, payload)
+
+
+def production_hotfix2561_release_check() -> Mapping[str, object]:
+    payload = _hotfix2561_payload()
+    check_payloads = (
+        production_oos_evaluation_boundary_release_check(),
+        production_walk_forward_evaluation_boundary_release_check(),
+        production_oos_performance_comparison_release_check(),
+        production_walk_forward_performance_comparison_release_check(),
+        production_real_regime_classification_release_check(),
+        production_cost_stress_performance_release_check(),
+        production_peer_selection_policy_release_check(),
+        production_validation_execution_vs_result_status_release_check(),
+        production_candidate_freeze_integrity_release_check(),
+        production_no_evaluation_window_contamination_release_check(),
+    )
+    checks = {
+        "all_component_checks_pass": all(row.get("safety") == "pass" for row in check_payloads),
+        "check_mode_declared": all(row.get("check_mode") == "deterministic_release_validation" for row in check_payloads),
+        "no_mutation_or_order": payload.get("strategy_mutated") is False and payload.get("order_executed") is False,
+    }
+    return _hotfix2561_check_payload("production hotfix2561 validation semantics leakage integrity", checks, payload)
 
 
 def production_provider_registry_release_check() -> Mapping[str, object]:

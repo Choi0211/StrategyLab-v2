@@ -1,5 +1,24 @@
 # Changelog
 
+## Hotfix 256.1 - Validation Semantics & Leakage Integrity
+
+- Split robustness validation `execution_status` from `validation_status` so a
+  completed backtest no longer implies a passing OOS, walk-forward, regime,
+  parameter, or cost-stress validation result.
+- Rebuilt OOS and walk-forward metrics from evaluation-window trades only while
+  retaining warmup bars for indicator state.
+- Added candidate fingerprint freeze checks, baseline-relative performance
+  comparison, sample sufficiency gates, and actual metric lineage fields.
+- Replaced fixed chronological regime labels with deterministic price-return
+  and realized-volatility classification.
+- Added explicit cost assumption provenance and declared peer-selection policy
+  metadata.
+- Added eleven deterministic release checks for validation boundaries,
+  contamination, result semantics, peer policy, and aggregate Hotfix 256.1
+  integrity.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Sprint 249-256 - Real Autonomous Research Execution
 
 - Wired Autonomous Quant Partner robustness sections to existing real

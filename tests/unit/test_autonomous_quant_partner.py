@@ -6,15 +6,20 @@ import sqlite3
 from gaon.runtime.research_grounding import format_grounded_tool_response
 from gaon.runtime.migrations import migrate
 from gaon.knowledge.autonomous_quant_partner import (
+    _compare_validation_metrics,
     _release_baseline_with_real_execution_inputs,
+    _select_peer_symbols,
     autonomous_quant_partner_payload,
     production_authoritative_source_acquisition_release_check,
     production_autonomous_quant_partner_acceptance_release_check,
     production_counter_evidence_release_check,
     production_autonomous_research_action_loop_release_check,
+    production_candidate_freeze_integrity_release_check,
+    production_cost_stress_performance_release_check,
     production_evidence_provenance_release_check,
     production_final_promotion_readiness_release_check,
     production_full_autonomous_quant_research_release_check,
+    production_hotfix2561_release_check,
     production_independent_evidence_release_check,
     production_iterative_research_loop_release_check,
     production_learning_memory_closed_loop_release_check,
@@ -23,10 +28,15 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_multi_symbol_validation_release_check,
     production_no_fabricated_research_results_release_check,
     production_no_fabricated_validation_metrics_release_check,
+    production_no_evaluation_window_contamination_release_check,
+    production_oos_evaluation_boundary_release_check,
+    production_oos_performance_comparison_release_check,
     production_out_of_sample_release_check,
+    production_peer_selection_policy_release_check,
     production_parameter_sensitivity_release_check,
     production_promotion_readiness_release_check,
     production_provider_registry_release_check,
+    production_real_regime_classification_release_check,
     production_real_cost_stress_execution_release_check,
     production_real_monte_carlo_execution_release_check,
     production_real_monte_carlo_release_check,
@@ -55,7 +65,10 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_strategy_tournament_release_check,
     production_transaction_cost_stress_release_check,
     production_unified_promotion_readiness_release_check,
+    production_validation_execution_vs_result_status_release_check,
     production_validation_sufficiency_v2_release_check,
+    production_walk_forward_evaluation_boundary_release_check,
+    production_walk_forward_performance_comparison_release_check,
     production_walk_forward_release_check,
 )
 from gaon.knowledge.telegram_autonomous_learning import (
@@ -305,13 +318,60 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             production_final_promotion_readiness_release_check,
             production_no_fabricated_research_results_release_check,
             production_sprint249_256_release_check,
+            production_oos_evaluation_boundary_release_check,
+            production_walk_forward_evaluation_boundary_release_check,
+            production_oos_performance_comparison_release_check,
+            production_walk_forward_performance_comparison_release_check,
+            production_real_regime_classification_release_check,
+            production_cost_stress_performance_release_check,
+            production_peer_selection_policy_release_check,
+            production_validation_execution_vs_result_status_release_check,
+            production_candidate_freeze_integrity_release_check,
+            production_no_evaluation_window_contamination_release_check,
+            production_hotfix2561_release_check,
         )
         for check in checks:
             with self.subTest(check=check.__name__):
                 payload = check()
                 self.assertEqual("pass", payload["safety"])
+                if check.__name__.startswith("production_") and "2561" in check.__name__:
+                    self.assertEqual("deterministic_release_validation", payload["check_mode"])
                 self.assertFalse(payload["strategy_mutated"])
                 self.assertFalse(payload["order_executed"])
+
+    def test_hotfix2561_oos_requires_evaluation_sample_not_warmup_profit(self) -> None:
+        comparison = _compare_validation_metrics(
+            {"trade_count": 8, "total_return": 0.2, "mdd": 0.04},
+            {"trade_count": 1, "total_return": 0.5, "mdd": 0.02},
+            min_trades=3,
+        )
+
+        self.assertEqual("insufficient_oos_sample", comparison["comparison_status"])
+
+    def test_hotfix2561_oos_underperformance_fails_even_after_execution(self) -> None:
+        comparison = _compare_validation_metrics(
+            {"trade_count": 6, "total_return": 0.12, "mdd": 0.08},
+            {"trade_count": 6, "total_return": 0.05, "mdd": 0.07},
+            min_trades=3,
+        )
+
+        self.assertEqual("fail_underperformed_baseline", comparison["comparison_status"])
+
+    def test_hotfix2561_mdd_underperformance_fails(self) -> None:
+        comparison = _compare_validation_metrics(
+            {"trade_count": 6, "total_return": 0.12, "mdd": 0.08},
+            {"trade_count": 6, "total_return": 0.13, "mdd": 0.18},
+            min_trades=3,
+        )
+
+        self.assertEqual("fail_underperformed_baseline", comparison["comparison_status"])
+
+    def test_hotfix2561_peer_selection_excludes_primary_and_declares_fallback(self) -> None:
+        selection = _select_peer_symbols("005930", baseline={}, budget=type("Budget", (), {"max_symbols": 5})())
+
+        self.assertNotIn("005930", selection["selected_peers"])
+        self.assertEqual("peer_selection_unavailable_curated_liquid_krx_fallback_declared", selection["status"])
+        self.assertTrue(all("not_etf_etn_spac" in reason for reason in selection["selection_reasons"].values()))
 
     def test_sprint241_248_renderer_shows_production_grade_validation(self) -> None:
         payload = production_autonomous_learning_payload_from_baseline(
@@ -436,11 +496,3 @@ def _baseline(*, trades: int, symbols: int) -> dict[str, object]:
 
 if __name__ == "__main__":
     unittest.main()
-    production_real_cost_stress_execution_release_check,
-    production_real_monte_carlo_execution_release_check,
-    production_real_multi_symbol_execution_release_check,
-    production_real_oos_execution_release_check,
-    production_real_parameter_variant_execution_release_check,
-    production_real_regime_execution_release_check,
-    production_real_trade_return_series_release_check,
-    production_real_walk_forward_execution_release_check,

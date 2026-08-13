@@ -114,6 +114,17 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-final-promotion-readiness-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-no-fabricated-research-results-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-sprint249-256-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-oos-evaluation-boundary-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-walk-forward-evaluation-boundary-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-oos-performance-comparison-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-walk-forward-performance-comparison-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-regime-classification-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-cost-stress-performance-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-peer-selection-policy-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-validation-execution-vs-result-status-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-candidate-freeze-integrity-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-no-evaluation-window-contamination-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-hotfix2561-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
