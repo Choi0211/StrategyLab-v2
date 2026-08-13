@@ -3,6 +3,30 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Gaon v2 Production Completion
+
+Gaon v2 now has a final deterministic production-completion contract that ties
+the existing Autonomous Quant Partner, multi-source evidence, validation,
+learning memory, Telegram conversation, two-stage approval, Champion
+replacement, rollback, and safety boundaries into one closeout check.
+
+The implementation reuses existing services instead of adding a second
+promotion stack. The first human approval freezes the candidate snapshot and
+lineage. A separate second Champion approval is required before the active
+Champion registry changes. Rollback keeps the old and new Champion versions
+available for audit. No release check enables live trading, broker/KIS orders,
+automatic Champion promotion, or approval bypass.
+
+New aggregate command:
+
+```bash
+python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check
+```
+
+Additional focused checks cover final autonomous research, final conversation,
+two-stage approval, candidate freeze, Champion replacement, Champion rollback,
+and final safety boundaries. Schema remains v36.
+
 ## Hotfix 256.1 Validation Semantics & Leakage Integrity
 
 Autonomous Quant Partner validation now treats execution and validation as

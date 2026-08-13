@@ -125,6 +125,14 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-candidate-freeze-integrity-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-no-evaluation-window-contamination-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-hotfix2561-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-final-autonomous-research-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-final-conversation-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-two-stage-approval-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-candidate-freeze-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-champion-replacement-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-champion-rollback-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-final-safety-boundary-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -153,6 +161,10 @@ robustness validations through the existing backtest engine. For production
 peer-symbol execution, set `GAON_REAL_MARKET_DATA_ENABLED=true` and
 `GAON_MARKET_DATA_PROVIDER=yahoo-chart`; unavailable peer data remains an
 explicit non-execution blocker rather than fabricated evidence.
+The final Gaon v2 completion checks additionally verify the end-to-end
+composition contract: Autonomous Quant Partner orchestration, Telegram
+conversation context, first approval candidate freeze, second approval Champion
+replacement, rollback, and the no-order/no-mutation safety boundary.
 
 Production live validation diagnostic prompt:
 

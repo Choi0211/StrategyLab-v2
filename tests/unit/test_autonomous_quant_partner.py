@@ -15,9 +15,16 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_counter_evidence_release_check,
     production_autonomous_research_action_loop_release_check,
     production_candidate_freeze_integrity_release_check,
+    production_candidate_freeze_release_check,
+    production_champion_replacement_release_check,
+    production_champion_rollback_release_check,
     production_cost_stress_performance_release_check,
     production_evidence_provenance_release_check,
+    production_final_autonomous_research_release_check,
+    production_final_conversation_release_check,
     production_final_promotion_readiness_release_check,
+    production_final_safety_boundary_release_check,
+    production_gaon_v2_completion_release_check,
     production_full_autonomous_quant_research_release_check,
     production_hotfix2561_release_check,
     production_independent_evidence_release_check,
@@ -64,6 +71,7 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_sprint249_256_release_check,
     production_strategy_tournament_release_check,
     production_transaction_cost_stress_release_check,
+    production_two_stage_approval_release_check,
     production_unified_promotion_readiness_release_check,
     production_validation_execution_vs_result_status_release_check,
     production_validation_sufficiency_v2_release_check,
@@ -329,15 +337,54 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             production_candidate_freeze_integrity_release_check,
             production_no_evaluation_window_contamination_release_check,
             production_hotfix2561_release_check,
+            production_final_autonomous_research_release_check,
+            production_final_conversation_release_check,
+            production_two_stage_approval_release_check,
+            production_candidate_freeze_release_check,
+            production_champion_replacement_release_check,
+            production_champion_rollback_release_check,
+            production_final_safety_boundary_release_check,
+            production_gaon_v2_completion_release_check,
         )
         for check in checks:
             with self.subTest(check=check.__name__):
                 payload = check()
                 self.assertEqual("pass", payload["safety"])
-                if check.__name__.startswith("production_") and "2561" in check.__name__:
+                if check.__name__.startswith("production_") and ("2561" in check.__name__ or "completion" in check.__name__ or check.__name__ in {
+                    "production_two_stage_approval_release_check",
+                    "production_candidate_freeze_release_check",
+                    "production_champion_replacement_release_check",
+                    "production_champion_rollback_release_check",
+                    "production_final_safety_boundary_release_check",
+                    "production_final_conversation_release_check",
+                    "production_final_autonomous_research_release_check",
+                }):
                     self.assertEqual("deterministic_release_validation", payload["check_mode"])
                 self.assertFalse(payload["strategy_mutated"])
                 self.assertFalse(payload["order_executed"])
+
+    def test_final_completion_two_stage_approval_contract(self) -> None:
+        two_stage = production_two_stage_approval_release_check()
+        freeze = production_candidate_freeze_release_check()
+        replacement = production_champion_replacement_release_check()
+        rollback = production_champion_rollback_release_check()
+
+        self.assertTrue(two_stage["approval_required"])
+        self.assertTrue(freeze["checks"]["material_change_invalidates"])
+        self.assertTrue(replacement["checks"]["second_approval_required"])
+        self.assertTrue(rollback["checks"]["restored_previous_version"])
+        for payload in (two_stage, freeze, replacement, rollback):
+            self.assertEqual("pass", payload["safety"])
+            self.assertFalse(payload["strategy_mutated"])
+            self.assertFalse(payload["order_executed"])
+
+    def test_final_completion_blocks_insufficient_evidence_without_mutation(self) -> None:
+        payload = production_final_autonomous_research_release_check()
+
+        self.assertTrue(payload["checks"]["blocked_case_fail_closed"])
+        self.assertTrue(payload["checks"]["validation_gates_execute"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
 
     def test_hotfix2561_oos_requires_evaluation_sample_not_warmup_profit(self) -> None:
         comparison = _compare_validation_metrics(

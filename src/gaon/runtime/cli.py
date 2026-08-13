@@ -365,6 +365,14 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-candidate-freeze-integrity-release-check")
     sub.add_parser("gaon-production-no-evaluation-window-contamination-release-check")
     sub.add_parser("gaon-production-hotfix2561-release-check")
+    sub.add_parser("gaon-production-final-autonomous-research-release-check")
+    sub.add_parser("gaon-production-final-conversation-release-check")
+    sub.add_parser("gaon-production-two-stage-approval-release-check")
+    sub.add_parser("gaon-production-candidate-freeze-release-check")
+    sub.add_parser("gaon-production-champion-replacement-release-check")
+    sub.add_parser("gaon-production-champion-rollback-release-check")
+    sub.add_parser("gaon-production-final-safety-boundary-release-check")
+    sub.add_parser("gaon-production-gaon-v2-completion-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2552,16 +2560,31 @@ def _run(args: argparse.Namespace) -> int:
         "gaon-production-candidate-freeze-integrity-release-check",
         "gaon-production-no-evaluation-window-contamination-release-check",
         "gaon-production-hotfix2561-release-check",
+        "gaon-production-final-autonomous-research-release-check",
+        "gaon-production-final-conversation-release-check",
+        "gaon-production-two-stage-approval-release-check",
+        "gaon-production-candidate-freeze-release-check",
+        "gaon-production-champion-replacement-release-check",
+        "gaon-production-champion-rollback-release-check",
+        "gaon-production-final-safety-boundary-release-check",
+        "gaon-production-gaon-v2-completion-release-check",
     }:
         from gaon.knowledge.autonomous_quant_partner import (
             production_autonomous_research_action_loop_release_check,
             production_authoritative_source_acquisition_release_check,
             production_autonomous_quant_partner_acceptance_release_check,
+            production_candidate_freeze_release_check,
             production_candidate_freeze_integrity_release_check,
+            production_champion_replacement_release_check,
+            production_champion_rollback_release_check,
             production_counter_evidence_release_check,
             production_cost_stress_performance_release_check,
             production_evidence_provenance_release_check,
+            production_final_autonomous_research_release_check,
+            production_final_conversation_release_check,
+            production_final_safety_boundary_release_check,
             production_final_promotion_readiness_release_check,
+            production_gaon_v2_completion_release_check,
             production_hotfix2561_release_check,
             production_iterative_research_loop_release_check,
             production_learning_memory_closed_loop_release_check,
@@ -2608,6 +2631,7 @@ def _run(args: argparse.Namespace) -> int:
             production_sprint249_256_release_check,
             production_strategy_tournament_release_check,
             production_transaction_cost_stress_release_check,
+            production_two_stage_approval_release_check,
             production_unified_promotion_readiness_release_check,
             production_validation_execution_vs_result_status_release_check,
             production_validation_sufficiency_v2_release_check,
@@ -2693,6 +2717,14 @@ def _run(args: argparse.Namespace) -> int:
             "gaon-production-candidate-freeze-integrity-release-check": production_candidate_freeze_integrity_release_check,
             "gaon-production-no-evaluation-window-contamination-release-check": production_no_evaluation_window_contamination_release_check,
             "gaon-production-hotfix2561-release-check": production_hotfix2561_release_check,
+            "gaon-production-final-autonomous-research-release-check": production_final_autonomous_research_release_check,
+            "gaon-production-final-conversation-release-check": production_final_conversation_release_check,
+            "gaon-production-two-stage-approval-release-check": production_two_stage_approval_release_check,
+            "gaon-production-candidate-freeze-release-check": production_candidate_freeze_release_check,
+            "gaon-production-champion-replacement-release-check": production_champion_replacement_release_check,
+            "gaon-production-champion-rollback-release-check": production_champion_rollback_release_check,
+            "gaon-production-final-safety-boundary-release-check": production_final_safety_boundary_release_check,
+            "gaon-production-gaon-v2-completion-release-check": production_gaon_v2_completion_release_check,
         }
         payload = handlers[args.command]()
         check_mode = f"check_mode={payload['check_mode']} " if "check_mode" in payload else ""

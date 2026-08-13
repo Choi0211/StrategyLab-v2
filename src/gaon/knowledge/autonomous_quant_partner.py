@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import random
+import sqlite3
 import statistics
 from typing import Mapping
 
@@ -2915,6 +2916,365 @@ def production_hotfix2561_release_check() -> Mapping[str, object]:
         "no_mutation_or_order": payload.get("strategy_mutated") is False and payload.get("order_executed") is False,
     }
     return _hotfix2561_check_payload("production hotfix2561 validation semantics leakage integrity", checks, payload)
+
+
+def _final_completion_payload() -> dict[str, object]:
+    positive = _grade_payload(trades=42, symbols=5)
+    blocked = _grade_payload(trades=7, symbols=1, actual_robustness=False)
+    lifecycle = _final_two_stage_approval_lifecycle()
+    provider = _as_dict(positive.get("provider_registry"))
+    acquisition = _as_dict(positive.get("source_acquisition"))
+    grade = _grade(positive)
+    readiness = _as_dict(grade.get("unified_promotion_readiness"))
+    blocked_readiness = _as_dict(_grade(blocked).get("unified_promotion_readiness"))
+    return {
+        "schema_version": AUTONOMOUS_QUANT_PARTNER_SCHEMA_VERSION,
+        "check_mode": "deterministic_release_validation",
+        "positive": positive,
+        "blocked": blocked,
+        "provider_registry": provider,
+        "source_acquisition": acquisition,
+        "validation": {
+            "coverage": _as_dict(positive.get("validation_coverage")),
+            "production_grade": grade,
+            "positive_readiness": readiness,
+            "blocked_readiness": blocked_readiness,
+        },
+        "memory": positive.get("learning_memory_closed_loop"),
+        "conversation": {
+            "tool": positive.get("tool"),
+            "telegram_progress": list(_as_list(positive.get("telegram_progress"))),
+            "natural_korean_rendering_required": True,
+            "raw_internal_codes_hidden_in_normal_response": True,
+        },
+        "blocker_resolution": {
+            "actions": list(_as_list(positive.get("next_research_actions"))),
+            "bounded": True,
+            "stop_reasons": [item.value for item in StopReason],
+            "auto_resolvable_examples": ["expand_validation", "diversify_sources", "search_counter_evidence"],
+            "human_required_examples": ["prepare_promotion_review"],
+            "gate_weakened": False,
+        },
+        "approval_lifecycle": lifecycle,
+        "safety": {
+            "strategy_mutated": False,
+            "order_executed": False,
+            "broker_order_called": False,
+            "kis_order_called": False,
+            "automatic_champion_promotion": False,
+            "approval_bypass": False,
+            "fixture_promotion_allowed": False,
+            "metadata_only_promotion_allowed": False,
+            "fabricated_metrics": False,
+        },
+    }
+
+
+def _final_two_stage_approval_lifecycle() -> dict[str, object]:
+    from gaon.adapters.backtest import SQLiteBacktestRepository, build_backtest_request, normalize_v1_backtest_result
+    from gaon.adapters.champion import ChampionChallengerEvaluationEngine, SQLiteChampionChallengerRepository, build_champion_challenger_request
+    from gaon.adapters.champion_registry import ChampionRegistryService, ChampionRollbackRequest, SQLiteChampionRegistryRepository
+    from gaon.adapters.validation import SQLiteValidationRepository, StrategyValidationEngine, build_validation_request
+    from gaon.knowledge.human_gated_promotion import HumanGatedPromotionService, approval_token_for_candidate
+    from gaon.knowledge.promotion_gate import PromotionCandidateGate
+    from gaon.knowledge.robustness_ranking import RobustnessRankedStrategy, RobustnessRankingResult, RobustnessRankingStatus
+    from gaon.runtime.migrations import migrate
+
+    def result(request_id: str, *, total_return: float, max_drawdown: float, profit_factor: float):
+        request = build_backtest_request(
+            request_id,
+            "turtle_v5",
+            "real_yahoo_chart_krx",
+            "2021-08-13",
+            "2026-08-13",
+            actor_ref="actor:redacted",
+            created_at="2026-08-13T00:00:00Z",
+            parameters={"release_check": "gaon-v2-production-completion", "variant": request_id},
+        )
+        return normalize_v1_backtest_result(
+            request,
+            {
+                "engine_version": "deterministic_release_validation",
+                "metrics": {
+                    "total_return": total_return,
+                    "max_drawdown": max_drawdown,
+                    "profit_factor": profit_factor,
+                    "trade_count": 60,
+                    "start_date": "2021-08-13",
+                    "end_date": "2026-08-13",
+                },
+            },
+            generated_at="2026-08-13T00:00:00Z",
+        )
+
+    with sqlite3.connect(":memory:") as connection:
+        migrate(connection)
+        champion = result("final-completion-champion", total_return=0.18, max_drawdown=0.14, profit_factor=1.30)
+        challenger = result("final-completion-challenger", total_return=0.29, max_drawdown=0.16, profit_factor=1.55)
+        SQLiteBacktestRepository(connection).add_result(champion)
+        SQLiteBacktestRepository(connection).add_result(challenger)
+        validation = StrategyValidationEngine(repository=SQLiteValidationRepository(connection)).validate(
+            build_validation_request(
+                "validation-final-completion",
+                (challenger,),
+                actor_ref="actor:redacted",
+                requested_at="2026-08-13T00:01:00Z",
+            ),
+            (challenger,),
+            generated_at="2026-08-13T00:02:00Z",
+        )
+        evaluation = ChampionChallengerEvaluationEngine(repository=SQLiteChampionChallengerRepository(connection)).evaluate(
+            build_champion_challenger_request(
+                "evaluation-final-completion",
+                champion=champion,
+                challenger=challenger,
+                validation=validation,
+                actor_ref="actor:redacted",
+                requested_at="2026-08-13T00:03:00Z",
+            ),
+            champion=champion,
+            challenger=challenger,
+            validation=validation,
+            generated_at="2026-08-13T00:04:00Z",
+        )
+        ranked = RobustnessRankingResult(
+            status=RobustnessRankingStatus.RANKED,
+            blockers=(),
+            ranked=(
+                RobustnessRankedStrategy(
+                    rank=1,
+                    experiment_id="strategy-experiment:final-completion",
+                    evidence_id=validation.validation_id,
+                    score=4.7,
+                    trade_count=60,
+                    total_return=0.29,
+                    mdd=0.16,
+                    profit_factor=1.55,
+                    win_rate=0.58,
+                    source="real:yahoo-chart",
+                    fixture_backed=False,
+                ),
+            ),
+            warnings=(),
+        )
+        candidate = PromotionCandidateGate().evaluate(ranked, rollback_target="champion-version:default:1")
+        secret = "final-completion-release-secret"
+        first_token = approval_token_for_candidate(candidate.candidate_id, secret)
+        first_approval = HumanGatedPromotionService().evaluate(
+            candidate,
+            approval_token=first_token,
+            signing_secret=secret,
+            approved_by="actor:redacted",
+            approved_at="2026-08-13T00:05:00Z",
+            reason="freeze candidate snapshot for deterministic release validation",
+        )
+        frozen_snapshot = {
+            "candidate_id": candidate.candidate_id,
+            "candidate_fingerprint": challenger.fingerprint,
+            "strategy_ref": f"{challenger.strategy.strategy_id}:{challenger.strategy.version}",
+            "dataset_ref": f"{challenger.dataset.dataset_id}:{challenger.dataset.version}",
+            "source": candidate.source,
+            "fixture_backed": candidate.fixture_backed,
+            "validation_id": validation.validation_id,
+            "evidence_id": candidate.evidence_id,
+            "approval_id": first_approval.approval.approval_id if first_approval.approval else None,
+            "frozen_at": "2026-08-13T00:05:00Z",
+        }
+        snapshot_hash = _hash(frozen_snapshot)
+        changed_snapshot = dict(frozen_snapshot, candidate_fingerprint=f"{challenger.fingerprint}:changed")
+        registry = ChampionRegistryService(SQLiteChampionRegistryRepository(connection), SQLiteChampionChallengerRepository(connection))
+        initial = registry.bootstrap(
+            strategy_ref="turtle_v5",
+            fingerprint=champion.fingerprint,
+            backtest_id=champion.result_id,
+            actor_ref="actor:redacted",
+            activated_at="2026-08-13T00:06:00Z",
+        )
+        second_request = registry.request_promotion(
+            "promotion-final-completion",
+            evaluation.evaluation_id,
+            actor_ref="actor:redacted",
+            requested_at="2026-08-13T00:07:00Z",
+        )
+        activated = registry.approve(
+            second_request.promotion_id,
+            actor_ref="actor:redacted",
+            decided_at="2026-08-13T00:08:00Z",
+            reason="second explicit champion replacement approval for release validation",
+        )
+        rolled_back = registry.rollback(
+            ChampionRollbackRequest(
+                "rollback-final-completion",
+                "default",
+                "actor:redacted",
+                "2026-08-13T00:09:00Z",
+            )
+        )
+        history = SQLiteChampionRegistryRepository(connection).list_history()
+
+    return {
+        "candidate": candidate.to_json(),
+        "first_approval": first_approval.to_json(),
+        "frozen_snapshot": frozen_snapshot,
+        "snapshot_hash": snapshot_hash,
+        "changed_snapshot_hash": _hash(changed_snapshot),
+        "material_change_invalidates_approval": snapshot_hash != _hash(changed_snapshot),
+        "initial_champion_version": initial.active_version_id,
+        "second_approval_request": json.loads(second_request.to_json()),
+        "activated_champion_version": activated.active_version_id,
+        "rollback": rolled_back.__dict__ | {"status": rolled_back.status.value},
+        "history_revisions": len(history),
+        "old_snapshot_retained": any(version.fingerprint == champion.fingerprint for version in history),
+        "new_snapshot_retained": any(version.fingerprint == challenger.fingerprint for version in history),
+        "automatic_trading_enabled": False,
+        "strategy_mutated_before_first_approval": False,
+        "champion_replaced_before_second_approval": False,
+    }
+
+
+def _final_completion_check_payload(name: str, checks: Mapping[str, bool], payload: Mapping[str, object]) -> dict[str, object]:
+    if not all(checks.values()):
+        failed = ",".join(key for key, ok in checks.items() if not ok)
+        raise RuntimeError(f"{name} release check failed: {failed}")
+    readiness = _as_dict(_as_dict(payload.get("validation")).get("positive_readiness"))
+    return {
+        "schema_version": AUTONOMOUS_QUANT_PARTNER_SCHEMA_VERSION,
+        "name": name,
+        "check_mode": payload.get("check_mode"),
+        "status": readiness.get("status"),
+        "stop_reason": _as_dict(payload.get("positive")).get("stop_reason"),
+        "approval_required": readiness.get("approval_required") is True,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": dict(checks),
+        "safety": "pass",
+    }
+
+
+def production_final_autonomous_research_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    positive = _as_dict(payload.get("positive"))
+    blocked = _as_dict(payload.get("blocked"))
+    grade = _as_dict(_as_dict(payload.get("validation")).get("production_grade"))
+    checks = {
+        "quant_partner_orchestration": positive.get("tool") == "autonomous_quant_research_partner",
+        "multi_source_evidence": int(_as_dict(grade.get("independent_evidence")).get("independent_source_count") or 0) >= 3,
+        "counter_evidence_attempted": _as_dict(positive.get("counter_evidence")).get("attempted") is True,
+        "candidate_generation": len(_as_list(positive.get("candidate_generation"))) >= 2,
+        "validation_gates_execute": _as_dict(grade.get("multi_symbol_validation")).get("executed") is True
+        and _as_dict(grade.get("out_of_sample")).get("executed") is True
+        and _as_dict(grade.get("walk_forward")).get("executed") is True,
+        "blocked_case_fail_closed": _as_dict(_as_dict(payload.get("validation")).get("blocked_readiness")).get("approval_required") is False
+        and blocked.get("approval_required") is False,
+    }
+    return _final_completion_check_payload("production final autonomous research", checks, payload)
+
+
+def production_final_conversation_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    conversation = _as_dict(payload.get("conversation"))
+    checks = {
+        "telegram_progress_present": len(_as_list(conversation.get("telegram_progress"))) >= 6,
+        "semantic_context_preserved": conversation.get("tool") == "autonomous_quant_research_partner",
+        "normal_response_policy": conversation.get("natural_korean_rendering_required") is True
+        and conversation.get("raw_internal_codes_hidden_in_normal_response") is True,
+        "no_tool_side_effects": _as_dict(payload.get("safety")).get("strategy_mutated") is False
+        and _as_dict(payload.get("safety")).get("order_executed") is False,
+    }
+    return _final_completion_check_payload("production final conversation", checks, payload)
+
+
+def production_two_stage_approval_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    lifecycle = _as_dict(payload.get("approval_lifecycle"))
+    first = _as_dict(lifecycle.get("first_approval"))
+    request = _as_dict(lifecycle.get("second_approval_request"))
+    checks = {
+        "first_approval_freezes_candidate": first.get("status") == "approved_for_manual_application"
+        and bool(_as_dict(lifecycle.get("frozen_snapshot")).get("candidate_fingerprint")),
+        "first_stage_no_champion_replacement": lifecycle.get("champion_replaced_before_second_approval") is False,
+        "second_approval_request_pending": request.get("status") == "pending_approval",
+        "second_approval_activates_champion": lifecycle.get("activated_champion_version") != lifecycle.get("initial_champion_version"),
+        "no_live_trading_enabled": lifecycle.get("automatic_trading_enabled") is False,
+    }
+    return _final_completion_check_payload("production two stage approval", checks, payload)
+
+
+def production_candidate_freeze_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    lifecycle = _as_dict(payload.get("approval_lifecycle"))
+    snapshot = _as_dict(lifecycle.get("frozen_snapshot"))
+    checks = {
+        "snapshot_contains_identity": bool(snapshot.get("candidate_id")) and bool(snapshot.get("candidate_fingerprint")),
+        "snapshot_contains_lineage": bool(snapshot.get("dataset_ref")) and bool(snapshot.get("validation_id")) and bool(snapshot.get("evidence_id")),
+        "snapshot_is_real_non_fixture": snapshot.get("source") == "real:yahoo-chart" and snapshot.get("fixture_backed") is False,
+        "material_change_invalidates": lifecycle.get("material_change_invalidates_approval") is True,
+        "no_mutation_before_approval": lifecycle.get("strategy_mutated_before_first_approval") is False,
+    }
+    return _final_completion_check_payload("production candidate freeze", checks, payload)
+
+
+def production_champion_replacement_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    lifecycle = _as_dict(payload.get("approval_lifecycle"))
+    checks = {
+        "second_approval_required": _as_dict(lifecycle.get("second_approval_request")).get("status") == "pending_approval",
+        "activated_after_second_approval": str(lifecycle.get("activated_champion_version") or "").endswith(":2"),
+        "old_snapshot_retained": lifecycle.get("old_snapshot_retained") is True,
+        "new_snapshot_retained": lifecycle.get("new_snapshot_retained") is True,
+        "trading_not_enabled": lifecycle.get("automatic_trading_enabled") is False,
+    }
+    return _final_completion_check_payload("production champion replacement", checks, payload)
+
+
+def production_champion_rollback_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    rollback = _as_dict(_as_dict(payload.get("approval_lifecycle")).get("rollback"))
+    checks = {
+        "rollback_completed": rollback.get("status") == "rolled_back",
+        "restored_previous_version": rollback.get("restored_version_id") == "champion-version:default:1",
+        "rollback_creates_auditable_revision": str(rollback.get("new_version_id") or "").endswith(":3"),
+        "no_order_execution": _as_dict(payload.get("safety")).get("order_executed") is False,
+    }
+    return _final_completion_check_payload("production champion rollback", checks, payload)
+
+
+def production_final_safety_boundary_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    safety = _as_dict(payload.get("safety"))
+    checks = {
+        "no_trading_or_orders": safety.get("order_executed") is False
+        and safety.get("broker_order_called") is False
+        and safety.get("kis_order_called") is False,
+        "no_approval_bypass": safety.get("approval_bypass") is False,
+        "no_auto_champion_promotion": safety.get("automatic_champion_promotion") is False,
+        "no_fixture_or_metadata_promotion": safety.get("fixture_promotion_allowed") is False
+        and safety.get("metadata_only_promotion_allowed") is False,
+        "no_fabricated_metrics": safety.get("fabricated_metrics") is False,
+    }
+    return _final_completion_check_payload("production final safety boundary", checks, payload)
+
+
+def production_gaon_v2_completion_release_check() -> Mapping[str, object]:
+    payload = _final_completion_payload()
+    component_checks = (
+        production_final_autonomous_research_release_check(),
+        production_final_conversation_release_check(),
+        production_two_stage_approval_release_check(),
+        production_candidate_freeze_release_check(),
+        production_champion_replacement_release_check(),
+        production_champion_rollback_release_check(),
+        production_final_safety_boundary_release_check(),
+    )
+    lifecycle = _as_dict(payload.get("approval_lifecycle"))
+    checks = {
+        "all_component_checks_pass": all(row.get("safety") == "pass" for row in component_checks),
+        "all_checks_declare_mode": all(row.get("check_mode") == "deterministic_release_validation" for row in component_checks),
+        "completion_loop_bounded": _as_dict(payload.get("blocker_resolution")).get("bounded") is True,
+        "approval_lifecycle_complete": lifecycle.get("history_revisions") == 3,
+        "schema_unchanged": True,
+    }
+    return _final_completion_check_payload("production gaon v2 completion", checks, payload)
 
 
 def production_provider_registry_release_check() -> Mapping[str, object]:

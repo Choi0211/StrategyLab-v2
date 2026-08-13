@@ -1,5 +1,20 @@
 # Changelog
 
+## Gaon v2 Production Completion
+
+- Added final production-completion release checks for Autonomous Quant Partner
+  orchestration, Telegram conversation context, two-stage approval, immutable
+  candidate freeze, Champion replacement, Champion rollback, and safety
+  boundaries.
+- Reused existing promotion, human approval, Champion registry, validation, and
+  rollback services to avoid a duplicate production path.
+- Added deterministic release-validation mode output for the final aggregate
+  check so fixture-style CI evidence cannot be mistaken for live production
+  evidence.
+- Documented final VPS deployment and Telegram verification steps.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Hotfix 256.1 - Validation Semantics & Leakage Integrity
 
 - Split robustness validation `execution_status` from `validation_status` so a
