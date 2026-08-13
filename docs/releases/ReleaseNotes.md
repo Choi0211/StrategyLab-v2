@@ -3,6 +3,28 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 249-256 Real Autonomous Research Execution
+
+Autonomous Quant Partner now attempts real production robustness execution from
+the authoritative baseline payload instead of only reporting missing validation.
+The partner reconstructs the baseline dataset, strategy, and assumptions, then
+uses the existing real backtest engine for multi-symbol, OOS, walk-forward,
+regime, parameter-sensitivity, transaction-cost, and Monte Carlo checks.
+
+Telegram production passes its runtime DB connection into this path. If peer
+datasets are absent from the baseline and real KRX market data is configured,
+peer symbols are fetched through the existing provider/quality gate. If data,
+trade returns, or validation evidence are unavailable, the result remains
+fail-closed with explicit blockers.
+
+New aggregate command:
+
+```bash
+python -m gaon.runtime.cli gaon-production-sprint249-256-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Hotfix 248.1 Real Robustness Execution
 
 Autonomous Quant Partner no longer fabricates production robustness metrics

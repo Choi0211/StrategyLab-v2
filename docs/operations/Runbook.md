@@ -99,6 +99,21 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-real-transaction-cost-stress-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-real-monte-carlo-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-real-robustness-execution-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-multi-symbol-execution-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-oos-execution-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-walk-forward-execution-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-regime-execution-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-parameter-variant-execution-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-cost-stress-execution-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-trade-return-series-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-real-monte-carlo-execution-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-multi-source-provider-state-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-evidence-provenance-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-autonomous-research-action-loop-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-research-budget-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-final-promotion-readiness-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-no-fabricated-research-results-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-sprint249-256-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -121,6 +136,12 @@ Hotfix 248.1 robustness checks additionally verify that production-grade
 robustness sections do not fabricate metrics when execution evidence is absent,
 and that approval readiness requires actual multi-symbol, OOS, walk-forward,
 regime, parameter, transaction-cost, and Monte Carlo execution lineage.
+Sprint 249-256 real execution checks additionally verify that Autonomous Quant
+Partner reconstructs authoritative real-research inputs and executes available
+robustness validations through the existing backtest engine. For production
+peer-symbol execution, set `GAON_REAL_MARKET_DATA_ENABLED=true` and
+`GAON_MARKET_DATA_PROVIDER=yahoo-chart`; unavailable peer data remains an
+explicit non-execution blocker rather than fabricated evidence.
 
 Production live validation diagnostic prompt:
 
