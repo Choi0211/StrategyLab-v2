@@ -330,6 +330,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-monte-carlo-robustness-release-check")
     sub.add_parser("gaon-production-unified-promotion-readiness-release-check")
     sub.add_parser("gaon-production-full-autonomous-quant-research-release-check")
+    sub.add_parser("gaon-production-no-fabricated-validation-metrics-release-check")
+    sub.add_parser("gaon-production-real-multi-symbol-validation-release-check")
+    sub.add_parser("gaon-production-real-oos-validation-release-check")
+    sub.add_parser("gaon-production-real-walk-forward-release-check")
+    sub.add_parser("gaon-production-real-regime-validation-release-check")
+    sub.add_parser("gaon-production-real-parameter-sensitivity-release-check")
+    sub.add_parser("gaon-production-real-transaction-cost-stress-release-check")
+    sub.add_parser("gaon-production-real-monte-carlo-release-check")
+    sub.add_parser("gaon-production-real-robustness-execution-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2482,6 +2491,15 @@ def _run(args: argparse.Namespace) -> int:
         "gaon-production-monte-carlo-robustness-release-check",
         "gaon-production-unified-promotion-readiness-release-check",
         "gaon-production-full-autonomous-quant-research-release-check",
+        "gaon-production-no-fabricated-validation-metrics-release-check",
+        "gaon-production-real-multi-symbol-validation-release-check",
+        "gaon-production-real-oos-validation-release-check",
+        "gaon-production-real-walk-forward-release-check",
+        "gaon-production-real-regime-validation-release-check",
+        "gaon-production-real-parameter-sensitivity-release-check",
+        "gaon-production-real-transaction-cost-stress-release-check",
+        "gaon-production-real-monte-carlo-release-check",
+        "gaon-production-real-robustness-execution-release-check",
     }:
         from gaon.knowledge.autonomous_quant_partner import (
             production_authoritative_source_acquisition_release_check,
@@ -2493,8 +2511,17 @@ def _run(args: argparse.Namespace) -> int:
             production_independent_evidence_release_check,
             production_monte_carlo_robustness_release_check,
             production_multi_symbol_validation_release_check,
+            production_no_fabricated_validation_metrics_release_check,
             production_out_of_sample_release_check,
             production_parameter_sensitivity_release_check,
+            production_real_monte_carlo_release_check,
+            production_real_multi_symbol_validation_release_check,
+            production_real_oos_validation_release_check,
+            production_real_parameter_sensitivity_release_check,
+            production_real_regime_validation_release_check,
+            production_real_robustness_execution_release_check,
+            production_real_transaction_cost_stress_release_check,
+            production_real_walk_forward_release_check,
             production_promotion_readiness_release_check,
             production_provider_registry_release_check,
             production_real_web_news_provider_release_check,
@@ -2553,6 +2580,15 @@ def _run(args: argparse.Namespace) -> int:
             "gaon-production-monte-carlo-robustness-release-check": production_monte_carlo_robustness_release_check,
             "gaon-production-unified-promotion-readiness-release-check": production_unified_promotion_readiness_release_check,
             "gaon-production-full-autonomous-quant-research-release-check": production_full_autonomous_quant_research_release_check,
+            "gaon-production-no-fabricated-validation-metrics-release-check": production_no_fabricated_validation_metrics_release_check,
+            "gaon-production-real-multi-symbol-validation-release-check": production_real_multi_symbol_validation_release_check,
+            "gaon-production-real-oos-validation-release-check": production_real_oos_validation_release_check,
+            "gaon-production-real-walk-forward-release-check": production_real_walk_forward_release_check,
+            "gaon-production-real-regime-validation-release-check": production_real_regime_validation_release_check,
+            "gaon-production-real-parameter-sensitivity-release-check": production_real_parameter_sensitivity_release_check,
+            "gaon-production-real-transaction-cost-stress-release-check": production_real_transaction_cost_stress_release_check,
+            "gaon-production-real-monte-carlo-release-check": production_real_monte_carlo_release_check,
+            "gaon-production-real-robustness-execution-release-check": production_real_robustness_execution_release_check,
         }
         payload = handlers[args.command]()
         print(

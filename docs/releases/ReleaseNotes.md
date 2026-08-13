@@ -3,6 +3,22 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix 248.1 Real Robustness Execution
+
+Autonomous Quant Partner no longer fabricates production robustness metrics
+from sample size alone. Multi-symbol, OOS, walk-forward, regime, parameter
+sensitivity, transaction-cost stress, and Monte Carlo sections now require
+actual execution evidence. Missing evidence is reported as `not_run`,
+`not_supported`, or a specific missing-input state, and promotion readiness
+blocks until those gates are executed.
+
+New commands include `gaon-production-no-fabricated-validation-metrics-release-check`
+and `gaon-production-real-robustness-execution-release-check`, plus dedicated
+real execution checks for multi-symbol, OOS, walk-forward, regime, parameter,
+cost-stress, and Monte Carlo validation.
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Sprint 241-248 Production-Grade Autonomous Quant Research Completion
 
 Autonomous Quant Partner now carries a single production-grade validation
