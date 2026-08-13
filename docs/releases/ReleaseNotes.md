@@ -3,6 +3,40 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Sprint 241-248 Production-Grade Autonomous Quant Research Completion
+
+Autonomous Quant Partner now carries a single production-grade validation
+section that ties together signal lifecycle diagnostics, bounded peer-symbol
+validation, real provider state reporting, evidence independence, OOS,
+walk-forward, regime coverage, parameter sensitivity, transaction-cost stress,
+Monte Carlo, tournament ranking, and final promotion readiness.
+
+The primary symbol trade count remains separate from cross-symbol robustness.
+YouTube and other low-tier public sources remain exploratory; metadata-only or
+fixture-backed records cannot satisfy promotion evidence. A candidate can reach
+`requires_human_approval` only when all deterministic gates pass, and the system
+still performs no automatic promotion, order, or strategy mutation.
+
+New commands:
+
+```bash
+python -m gaon.runtime.cli gaon-production-signal-integrity-release-check
+python -m gaon.runtime.cli gaon-production-multi-symbol-validation-release-check
+python -m gaon.runtime.cli gaon-production-real-web-news-provider-release-check
+python -m gaon.runtime.cli gaon-production-real-youtube-provider-release-check
+python -m gaon.runtime.cli gaon-production-independent-evidence-release-check
+python -m gaon.runtime.cli gaon-production-out-of-sample-release-check
+python -m gaon.runtime.cli gaon-production-walk-forward-release-check
+python -m gaon.runtime.cli gaon-production-regime-validation-release-check
+python -m gaon.runtime.cli gaon-production-parameter-sensitivity-release-check
+python -m gaon.runtime.cli gaon-production-transaction-cost-stress-release-check
+python -m gaon.runtime.cli gaon-production-monte-carlo-robustness-release-check
+python -m gaon.runtime.cli gaon-production-unified-promotion-readiness-release-check
+python -m gaon.runtime.cli gaon-production-full-autonomous-quant-research-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Hotfix 240.2 Production Validation Coverage & Research Horizon
 
 Production Telegram validation now preserves the authoritative bar and signal

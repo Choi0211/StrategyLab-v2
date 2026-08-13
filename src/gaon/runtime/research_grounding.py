@@ -390,6 +390,16 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
     partner_counter = _as_dict(partner.get("counter_evidence"))
     partner_validation = _as_dict(partner.get("validation_coverage"))
     partner_tournament = _as_dict(partner.get("strategy_tournament"))
+    partner_grade = _as_dict(partner.get("production_grade_validation"))
+    grade_multi_symbol = _as_dict(partner_grade.get("multi_symbol_validation"))
+    grade_oos = _as_dict(partner_grade.get("out_of_sample"))
+    grade_walk_forward = _as_dict(partner_grade.get("walk_forward"))
+    grade_regime = _as_dict(partner_grade.get("regime_validation"))
+    grade_parameter = _as_dict(partner_grade.get("parameter_sensitivity"))
+    grade_cost = _as_dict(partner_grade.get("transaction_cost_stress"))
+    grade_monte_carlo = _as_dict(partner_grade.get("monte_carlo"))
+    grade_evidence = _as_dict(partner_grade.get("independent_evidence"))
+    grade_promotion = _as_dict(partner_grade.get("unified_promotion_readiness"))
     partner_candidates = _as_list(partner.get("candidate_generation"))
     partner_iterations = _as_list(partner.get("research_iterations"))
     partner_blockers = _list_text(partner_readiness.get("remaining_risks")) + _list_text(_as_dict(partner.get("research_gap_report")).get("blockers"))
@@ -452,6 +462,18 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
         f"- tournament_candidates={partner_tournament.get('candidate_count', 0)} best={partner_tournament.get('best_candidate', 'unknown')}",
         f"- ranking_gate={partner_tournament.get('ranking_gate', 'unknown')}",
         f"- remaining_blockers={', '.join(partner_blockers) if partner_blockers else 'none'}",
+        "",
+        "[Production-Grade Validation]",
+        f"- independent_sources={grade_evidence.get('independent_source_count', 'unknown')} status={grade_evidence.get('status', 'unknown')}",
+        f"- cross_symbol_status={grade_multi_symbol.get('cross_symbol_status', partner_validation.get('multi_symbol_status', 'unknown'))}",
+        f"- symbols_tested={grade_multi_symbol.get('symbols_tested', 'unknown')} improved={grade_multi_symbol.get('symbols_improved', 'unknown')} degraded={grade_multi_symbol.get('symbols_degraded', 'unknown')}",
+        f"- out_of_sample={grade_oos.get('status', partner_validation.get('out_of_sample_status', 'unknown'))}",
+        f"- walk_forward={grade_walk_forward.get('status', partner_validation.get('walk_forward_status', 'unknown'))} folds={grade_walk_forward.get('fold_count', 'unknown')}",
+        f"- regime={grade_regime.get('status', 'unknown')}",
+        f"- parameter_sensitivity={grade_parameter.get('status', partner_validation.get('parameter_sensitivity', 'unknown'))}",
+        f"- transaction_cost_stress={grade_cost.get('status', 'unknown')}",
+        f"- monte_carlo={grade_monte_carlo.get('status', partner_validation.get('monte_carlo', 'unknown'))}",
+        f"- unified_promotion_status={grade_promotion.get('status', promotion_status)}",
         "",
         "[승인 경계]",
         f"- promotion_status={promotion_status}",

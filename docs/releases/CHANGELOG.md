@@ -1,5 +1,24 @@
 # Changelog
 
+## Sprint 241-248 - Production-Grade Autonomous Quant Research Completion
+
+- Added `production_grade_validation` to the Autonomous Quant Partner payload,
+  covering signal integrity, multi-symbol validation, real provider wiring,
+  YouTube exploratory state, independent evidence, OOS, walk-forward, regime,
+  parameter sensitivity, transaction-cost stress, Monte Carlo, and unified
+  promotion readiness.
+- Split raw condition hits, all-entry-condition hits, position-open suppressed
+  signals, actual entries/exits, completed trades, and open trades so Telegram
+  no longer has to infer lifecycle semantics from a single signal count.
+- Added bounded KRX peer validation that keeps primary symbol sufficiency
+  separate from cross-symbol robustness.
+- Added promotion gates for OOS, walk-forward, regime coverage, parameter
+  stability, cost resilience, Monte Carlo risk, independent evidence, and
+  candidate-vs-baseline tournament outcome.
+- Added thirteen production-oriented release checks for Sprint 241-248.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Hotfix 240.2 - Production Validation Coverage & Research Horizon
 
 - Replaced the implicit short production real-research default window with a
