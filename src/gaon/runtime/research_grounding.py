@@ -533,8 +533,8 @@ def _format_autonomous_learning_research_detail(output: dict[str, object]) -> st
         f"- horizon_reason={partner_validation.get('horizon_reason', 'unknown')}",
         f"- horizon_extension_attempts={partner_validation.get('horizon_extension_attempts', 'unknown')}",
         f"- multi_symbol_status={partner_validation.get('multi_symbol_status', 'unknown')}",
-        f"- out_of_sample={partner_validation.get('out_of_sample_status', 'unknown')}",
-        f"- walk_forward={partner_validation.get('walk_forward_status', 'unknown')}",
+        f"- out_of_sample={_first_available(grade_oos.get('status'), partner_validation.get('out_of_sample_status'))}",
+        f"- walk_forward={_first_available(grade_walk_forward.get('status'), partner_validation.get('walk_forward_status'))}",
         "",
         "[Signal Diagnostics]",
         f"- breakout_hits={_as_dict(partner_validation.get('signal_diagnostics')).get('breakout_condition_hits', 'unknown')}",
@@ -713,14 +713,23 @@ def _adaptive_feedback_detail_lines(adaptive: dict[str, object]) -> list[str]:
     for item in _as_list(adaptive.get("iterations")):
         row = _as_dict(item)
         primary = _as_dict(row.get("primary_backtest"))
+        primary_metrics = _as_dict(row.get("primary_metrics") or primary.get("metrics"))
+        validation_metrics = _as_dict(row.get("validation_metrics"))
         lines.extend(
             [
                 f"- iteration={row.get('iteration', 'unknown')} failure={row.get('observed_failure', 'unknown')}",
                 f"  candidate_id={row.get('candidate_id', 'unknown')}",
                 f"  candidate_fingerprint={row.get('candidate_fingerprint', 'unknown')}",
                 f"  changed_rules={', '.join(_list_text(row.get('changed_rules'))) or 'none'}",
+                f"  research_dimensions={', '.join(_list_text(row.get('research_dimensions'))) or 'none'}",
                 f"  actual_execution={str(row.get('actual_execution', False)).lower()} duplicate_skipped={str(row.get('duplicate_candidate_skipped', False)).lower()}",
-                f"  primary_trade_count={primary.get('trade_count', 'unknown')}",
+                f"  primary_trade_count={_first_available(row.get('primary_trade_count'), primary_metrics.get('trade_count'), primary.get('completed_trades'))}",
+                f"  primary_total_return={_field(primary_metrics.get('total_return'))}",
+                f"  primary_mdd={_field(primary_metrics.get('mdd'))}",
+                f"  primary_cagr={_field(primary_metrics.get('cagr'))}",
+                f"  primary_profit_factor={_field(primary_metrics.get('profit_factor'))}",
+                f"  primary_sharpe={_field(primary_metrics.get('sharpe'))}",
+                f"  validation_metrics={validation_metrics if validation_metrics else '확인된 구조화 결과 없음'}",
                 f"  validation_result={row.get('validation_result', 'unknown')}",
                 f"  decision={row.get('decision', 'unknown')}",
                 f"  next_action={row.get('next_action', 'unknown')}",

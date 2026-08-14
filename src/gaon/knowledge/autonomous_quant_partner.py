@@ -2017,6 +2017,19 @@ def _adaptive_validation_feedback_execution(
                 "changed_rules": changed_rules,
                 "experiment_id": experiment_id,
                 "primary_backtest": _result_summary(primary),
+                "primary_metrics": _as_dict(_result_summary(primary).get("metrics")),
+                "primary_trade_count": _as_dict(_result_summary(primary).get("metrics")).get(
+                    "trade_count",
+                    _result_summary(primary).get("completed_trades"),
+                ),
+                "validation_metrics": _adaptive_validation_metrics_snapshot(
+                    observed_failure,
+                    validation,
+                ),
+                "research_dimensions": _adaptive_research_dimensions(
+                    observed_failure,
+                    changed_rules,
+                ),
                 "actual_execution": True,
                 "duplicate_candidate_skipped": False,
                 "validation_result": validation_status,
@@ -2073,48 +2086,190 @@ def _adaptive_candidate_for_failure(
     observed_failure: str,
     iteration: int,
 ) -> tuple[object, list[str]]:
+    # Deterministic failure-specific candidates using supported rules only.
+    from gaon.research.krx_real_pipeline import FieldProvenance, ProvenancedValue
+
     entry = dict(getattr(strategy, "entry"))
     exits = dict(getattr(strategy, "exit"))
     filters = dict(getattr(strategy, "filters"))
     changes: list[str] = []
 
-    def replace_numeric(section: dict[str, object], key: str, value: int | float) -> None:
+    def research_value(value: object) -> ProvenancedValue:
+        return ProvenancedValue(value, FieldProvenance.RESEARCH_CANDIDATE)
+
+    def set_numeric(
+        section: dict[str, object],
+        key: str,
+        value: int | float,
+    ) -> bool:
         current = section.get(key)
         if current is None:
-            return
+            section[key] = research_value(value)
+            changes.append(f"{key}:added->{value}")
+            return True
         old = getattr(current, "value", None)
-        section[key] = replace(current, value=value)
+        if old == value:
+            return False
+        section[key] = research_value(value)
         changes.append(f"{key}:{old}->{value}")
+        return True
 
-    breakout = entry.get("breakout_lookback")
-    breakout_value = int(getattr(breakout, "value", 20) or 20)
-    if observed_failure == "cost_fragile":
-        replace_numeric(entry, "breakout_lookback", min(60, breakout_value + 5))
+    breakout_rule = entry.get("breakout_lookback")
+    breakout = int(getattr(breakout_rule, "value", 20) or 20)
+
+    if observed_failure == "out_of_sample_fail":
+        if "close_gt_ma20" in entry and "ma20_gt_ma60" in entry:
+            entry.pop("close_gt_ma20")
+            changes.append(
+                "close_gt_ma20:removed_as_redundant_oos_confirmation"
+            )
+        elif "ma20_gt_ma60" not in entry:
+            entry["ma20_gt_ma60"] = research_value(True)
+            changes.append("ma20_gt_ma60:added_for_oos_generalization")
+        elif "volume_gte_ma20" not in filters:
+            filters["volume_gte_ma20"] = research_value(True)
+            changes.append("volume_gte_ma20:added_for_oos_confirmation")
+        else:
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 5))
+
     elif observed_failure == "walk_forward_fail":
         if "volume_gte_ma20" in filters:
             filters.pop("volume_gte_ma20")
-            changes.append("volume_gte_ma20:removed_for_parameter_simplification")
+            changes.append(
+                "volume_gte_ma20:removed_for_walk_forward_simplification"
+            )
+        elif "close_gt_ma20" in entry:
+            entry.pop("close_gt_ma20")
+            changes.append(
+                "close_gt_ma20:removed_for_walk_forward_simplification"
+            )
         elif "ma20_gt_ma60" in entry:
             entry.pop("ma20_gt_ma60")
-            changes.append("ma20_gt_ma60:removed_for_parameter_simplification")
+            changes.append(
+                "ma20_gt_ma60:removed_for_walk_forward_simplification"
+            )
         else:
-            replace_numeric(entry, "breakout_lookback", min(60, breakout_value + 3))
-    elif observed_failure == "out_of_sample_fail":
-        replace_numeric(entry, "breakout_lookback", min(60, breakout_value + 10))
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 3))
+
+    elif observed_failure == "cost_fragile":
+        set_numeric(entry, "breakout_lookback", min(80, breakout + 10))
+        exit_rule = exits.get("channel_exit_lookback")
+        exit_lookback = int(getattr(exit_rule, "value", 10) or 10)
+        set_numeric(
+            exits,
+            "channel_exit_lookback",
+            min(80, max(exit_lookback + 5, 15)),
+        )
+
+    elif observed_failure in {
+        "insufficient_trades",
+        "insufficient_sample",
+        "insufficient_primary_sample",
+    }:
+        set_numeric(entry, "breakout_lookback", max(5, breakout - 5))
+        changes.append("opportunity_frequency:increase_without_filter_removal")
+
     else:
-        replace_numeric(entry, "breakout_lookback", min(60, breakout_value + max(1, iteration)))
+        set_numeric(
+            entry,
+            "breakout_lookback",
+            min(80, breakout + max(1, iteration)),
+        )
 
     if not changes:
-        replace_numeric(entry, "breakout_lookback", min(60, breakout_value + max(1, iteration)))
+        set_numeric(
+            entry,
+            "breakout_lookback",
+            min(80, breakout + max(1, iteration)),
+        )
 
     candidate = replace(
         strategy,
-        spec_id=f"{getattr(strategy, 'spec_id')}:adaptive:{observed_failure}:{iteration}",
+        spec_id=(
+            f"{getattr(strategy, 'spec_id')}:adaptive:"
+            f"{observed_failure}:{iteration}"
+        ),
         entry=entry,
         exit=exits,
         filters=filters,
     )
     return candidate, changes
+
+
+def _adaptive_research_dimensions(
+    observed_failure: str,
+    changed_rules: list[str],
+) -> list[str]:
+    dimensions = {
+        "out_of_sample_fail": ["generalization", "entry_confirmation"],
+        "walk_forward_fail": ["parameter_simplification", "rule_complexity"],
+        "cost_fragile": ["turnover", "transaction_cost_resilience"],
+        "insufficient_trades": ["opportunity_frequency", "sample_sufficiency"],
+        "insufficient_sample": ["opportunity_frequency", "sample_sufficiency"],
+        "insufficient_primary_sample": ["opportunity_frequency", "sample_sufficiency"],
+    }.get(observed_failure, ["parameter_robustness"])
+
+    if any(
+        token in item
+        for item in changed_rules
+        for token in ("exit", "low_lookback", "trailing")
+    ):
+        dimensions = [*dimensions, "exit_structure"]
+
+    return list(dict.fromkeys(dimensions))
+
+
+def _adaptive_validation_metrics_snapshot(
+    observed_failure: str,
+    validation: Mapping[str, object],
+) -> dict[str, object]:
+    section = _as_dict(validation)
+
+    if observed_failure == "out_of_sample_fail":
+        metrics = _as_dict(section.get("candidate_test_metrics"))
+        return {
+            "lineage": section.get("metrics_lineage"),
+            "trade_count": metrics.get("trade_count"),
+            "total_return": metrics.get("total_return"),
+            "mdd": metrics.get("mdd"),
+            "cagr": metrics.get("cagr"),
+            "win_rate": metrics.get("win_rate"),
+            "profit_factor": metrics.get("profit_factor"),
+            "sharpe": metrics.get("sharpe"),
+            "comparison": _as_dict(section.get("comparison")),
+        }
+
+    if observed_failure == "walk_forward_fail":
+        folds = [_as_dict(item) for item in _as_list(section.get("folds"))]
+        return {
+            "lineage": section.get("metrics_lineage"),
+            "fold_count": section.get("fold_count"),
+            "folds_passed": section.get("folds_passed"),
+            "folds_failed": section.get("folds_failed"),
+            "candidate_trade_count": sum(
+                int(item.get("candidate_trades") or 0) for item in folds
+            ),
+            "candidate_returns": [item.get("candidate_return") for item in folds],
+            "candidate_mdds": [item.get("candidate_mdd") for item in folds],
+        }
+
+    if observed_failure == "cost_fragile":
+        scenarios = [_as_dict(item) for item in _as_list(section.get("scenarios"))]
+        return {
+            "lineage": section.get("metrics_lineage"),
+            "scenarios": [
+                {
+                    "name": item.get("name"),
+                    "completed_trades": item.get("completed_trades"),
+                    "net_return": item.get("net_return"),
+                    "drawdown": item.get("drawdown"),
+                    "validation_status": item.get("validation_status"),
+                }
+                for item in scenarios
+            ],
+        }
+
+    return {"lineage": section.get("metrics_lineage")}
 
 
 def _adaptive_validation_rerun(
