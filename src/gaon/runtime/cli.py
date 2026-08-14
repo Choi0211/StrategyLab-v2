@@ -395,6 +395,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-research-memory-continuity-release-check")
     sub.add_parser("gaon-production-legacy-path-isolation-release-check")
     sub.add_parser("gaon-production-v1-v2-final-integration-release-check")
+    sub.add_parser("gaon-production-natural-research-conversation-release-check")
+    sub.add_parser("gaon-production-research-followup-context-release-check")
+    sub.add_parser("gaon-production-no-unnecessary-research-rerun-release-check")
+    sub.add_parser("gaon-production-natural-promotion-approval-conversation-release-check")
+    sub.add_parser("gaon-production-conversation-grounding-integrity-release-check")
+    sub.add_parser("gaon-production-final-conversation-ux-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2103,7 +2109,7 @@ def _run(args: argparse.Namespace) -> int:
             if any(output.get("promotion_status") != "requires_human_approval" or output.get("human_gate_status") != "awaiting_human_approval" for output in outputs):
                 raise ConfigurationError("telegram autonomous learning routing did not stop at human approval boundary")
             combined = "\n".join(text for _chat_id, text in client.sent)
-            if "Autonomous Learning V2" not in combined or "요청을 정확히 이해하지 못했습니다" in combined or "사용 가능한 기능" in combined:
+            if "real:yahoo-chart" not in combined or "005930" not in combined or "partner_status=" in combined or "요청을 정확히 이해하지 못했습니다" in combined or "사용 가능한 기능" in combined:
                 raise ConfigurationError("telegram autonomous learning routing fell back instead of answering")
             if "종목" not in client.sent[-1][1]:
                 raise ConfigurationError("telegram autonomous learning routing did not ask for target when context was missing")
@@ -2186,7 +2192,7 @@ def _run(args: argparse.Namespace) -> int:
 
             combined_response = client.sent[1][1]
             forbidden_legacy = ("adequacy_status", "planner_steps", "historical_TESTED_candidates", "robust-breakout", "regime-filter")
-            if "Autonomous Learning V2" not in combined_response or "외부 연구 실행" not in combined_response:
+            if "real:yahoo-chart" not in combined_response or "005930" not in combined_response or "partner_status=" in combined_response or "외부 연구 실행" not in combined_response:
                 raise ConfigurationError("autonomous learning priority release check did not render the V2 stage summary")
             if any(token in combined_response for token in forbidden_legacy):
                 raise ConfigurationError("autonomous learning priority release check leaked legacy autonomous research response")
@@ -2816,6 +2822,55 @@ def _run(args: argparse.Namespace) -> int:
         )
 
     elif args.command in {
+        "gaon-production-natural-research-conversation-release-check",
+        "gaon-production-research-followup-context-release-check",
+        "gaon-production-no-unnecessary-research-rerun-release-check",
+        "gaon-production-natural-promotion-approval-conversation-release-check",
+        "gaon-production-conversation-grounding-integrity-release-check",
+        "gaon-production-final-conversation-ux-release-check",
+    }:
+        from gaon.runtime.research_grounding import (
+            production_conversation_grounding_integrity_release_check,
+            production_final_conversation_ux_release_check,
+            production_natural_promotion_approval_conversation_release_check,
+            production_natural_research_conversation_release_check,
+            production_no_unnecessary_research_rerun_release_check,
+            production_research_followup_context_release_check,
+        )
+
+        handlers = {
+            "gaon-production-natural-research-conversation-release-check": production_natural_research_conversation_release_check,
+            "gaon-production-research-followup-context-release-check": production_research_followup_context_release_check,
+            "gaon-production-no-unnecessary-research-rerun-release-check": production_no_unnecessary_research_rerun_release_check,
+            "gaon-production-natural-promotion-approval-conversation-release-check": production_natural_promotion_approval_conversation_release_check,
+            "gaon-production-conversation-grounding-integrity-release-check": production_conversation_grounding_integrity_release_check,
+            "gaon-production-final-conversation-ux-release-check": production_final_conversation_ux_release_check,
+        }
+        payload = handlers[args.command]()
+        checks = payload.get("checks", {})
+        aggregate = ""
+        if args.command == "gaon-production-final-conversation-ux-release-check":
+            aggregate = (
+                f"NATURAL_RESEARCH_RESPONSE={'pass' if bool(checks.get('NATURAL_RESEARCH_RESPONSE')) else 'fail'} "
+                f"FOLLOWUP_CONTEXT={'pass' if bool(checks.get('FOLLOWUP_CONTEXT')) else 'fail'} "
+                f"UNNECESSARY_RERUN_BLOCKED={'pass' if bool(checks.get('UNNECESSARY_RERUN_BLOCKED')) else 'fail'} "
+                f"AUTHORITATIVE_GROUNDING={'pass' if bool(checks.get('AUTHORITATIVE_GROUNDING')) else 'fail'} "
+                f"TWO_STAGE_APPROVAL_PRESERVED={'pass' if bool(checks.get('TWO_STAGE_APPROVAL_PRESERVED')) else 'fail'} "
+                f"RESEARCH_ENGINE_REUSED={'pass' if bool(checks.get('RESEARCH_ENGINE_REUSED')) else 'fail'} "
+                f"DUPLICATE_CONVERSATION_ENGINE={str(bool(checks.get('DUPLICATE_CONVERSATION_ENGINE'))).lower()} "
+            )
+        print(
+            f"{args.command}: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} "
+            f"{aggregate}"
+            f"approval_required={str(payload['approval_required']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command in {
         "gaon-production-telegram-autonomous-research-routing-release-check",
         "gaon-production-v2-live-acceptance-readiness-release-check",
     }:
@@ -2880,7 +2935,7 @@ def _run(args: argparse.Namespace) -> int:
                 raise ConfigurationError("production Telegram autonomous research did not use V2 orchestration")
             final = client.sent[-1][1]
             stale_fragments = ("\uc2e4\uc81c \uc2dc\uc138", "\uc5f0\uacb0\ub418\uc5b4 \uc788\uc9c0 \uc54a", "\uc0ac\uc6a9 \uac00\ub2a5\ud55c \uae30\ub2a5")
-            if "Autonomous Learning V2" not in final or any(fragment in final for fragment in stale_fragments):
+            if "real:yahoo-chart" not in final or "005930" not in final or "partner_status=" in final or any(fragment in final for fragment in stale_fragments):
                 raise ConfigurationError("production Telegram autonomous research response fell back to the generic stock persona")
             readiness_status = "pass" if args.command == "gaon-production-v2-live-acceptance-readiness-release-check" else "routing"
             print(

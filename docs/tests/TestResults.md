@@ -2,6 +2,29 @@
 
 Status: Passed
 
+## Gaon V2 Natural Conversation UX Closeout
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\runtime\cli.py src\gaon\runtime\llm_conversation.py src\gaon\runtime\research_grounding.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner -v`: PASS, 23 tests
+  - `python -m unittest tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1851_combined_autonomous_learning_request_routes_to_v2 tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1852_production_combined_request_prioritizes_v2_over_legacy_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_hotfix1852_v2_context_continuation_keeps_v2 tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_final_production_autonomous_learning_incident_uses_v2_telegram_route tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_final_conversation_ux_followup_explains_without_research_rerun tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_final_conversation_ux_detail_request_uses_existing_context tests.integration.test_telegram_conversation_agent.TelegramConversationAgentTests.test_final_conversation_ux_release_checks_pass -v`: PASS, 7 tests
+  - `python -m gaon.runtime.cli gaon-production-natural-research-conversation-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-followup-context-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-no-unnecessary-research-rerun-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-natural-promotion-approval-conversation-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-conversation-grounding-integrity-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-final-conversation-ux-release-check`: PASS
+- `pytest` is unavailable in the bundled local Python runtime (`No module named pytest`), so local automated verification uses the repository's `unittest` tests.
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 855 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 204 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated metrics, no fixture-backed promotion evidence.
+
 ## Gaon V1/V2 Asset Reuse Audit
 
 - Targeted local verification:

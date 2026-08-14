@@ -3,6 +3,33 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Gaon V2 Natural Conversation UX Closeout
+
+Telegram autonomous research answers now default to natural Korean research
+explanations instead of developer/audit status dumps. The existing authoritative
+research payload remains the single source of truth, while fields such as
+`partner_status=`, `validation_coverage=`, `source_ids=`, fingerprints, and raw
+blocker codes are reserved for explicit detail/raw requests.
+
+Follow-up questions about OOS, transaction costs, Monte Carlo, external
+research, or promotion readiness reuse the stored authoritative conversation
+context and do not rerun research tools. Approval language remains tied to the
+authoritative promotion status and preserves the two-stage human approval
+boundary.
+
+New release checks:
+
+```bash
+python -m gaon.runtime.cli gaon-production-natural-research-conversation-release-check
+python -m gaon.runtime.cli gaon-production-research-followup-context-release-check
+python -m gaon.runtime.cli gaon-production-no-unnecessary-research-rerun-release-check
+python -m gaon.runtime.cli gaon-production-natural-promotion-approval-conversation-release-check
+python -m gaon.runtime.cli gaon-production-conversation-grounding-integrity-release-check
+python -m gaon.runtime.cli gaon-production-final-conversation-ux-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Gaon V1/V2 Asset Reuse Audit
 
 Gaon V2 now includes a deterministic final V1 asset reuse audit. The audit
