@@ -3,6 +3,33 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Gaon V1/V2 Asset Reuse Audit
+
+Gaon V2 now includes a deterministic final V1 asset reuse audit. The audit
+classifies the public StrategyLab V1 market-data, backtest, strategy,
+validation, memory, evidence, promotion, Champion, Telegram, persistence, and
+safety assets as reused, extended, or intentionally excluded from the public V2
+production path.
+
+Final verdict:
+
+```text
+GAON V1/V2 INTEGRATION COMPLETE
+```
+
+New release checks:
+
+```bash
+python -m gaon.runtime.cli gaon-production-v1-asset-reuse-audit-release-check
+python -m gaon.runtime.cli gaon-production-v1-v2-authoritative-path-release-check
+python -m gaon.runtime.cli gaon-production-no-unintended-duplicate-engine-release-check
+python -m gaon.runtime.cli gaon-production-research-memory-continuity-release-check
+python -m gaon.runtime.cli gaon-production-legacy-path-isolation-release-check
+python -m gaon.runtime.cli gaon-production-v1-v2-final-integration-release-check
+```
+
+Schema remains v36. Safety boundaries remain unchanged.
+
 ## Hotfix Final Telegram Autonomous Research Routing
 
 Telegram production routing now gives explicit compound Autonomous Learning V2

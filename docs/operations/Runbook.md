@@ -134,6 +134,12 @@ For Autonomous Learning V2 production-loop verification, run:
 .venv/bin/python -m gaon.runtime.cli gaon-production-final-safety-boundary-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check
 .venv/bin/python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-v1-asset-reuse-audit-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-v1-v2-authoritative-path-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-no-unintended-duplicate-engine-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-research-memory-continuity-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-legacy-path-isolation-release-check
+.venv/bin/python -m gaon.runtime.cli gaon-production-v1-v2-final-integration-release-check
 ```
 
 These checks verify strategy-specific academic relevance screening, rejection
@@ -170,6 +176,11 @@ The final closeout check additionally verifies durable restart/replay recovery,
 Champion replacement atomicity, rollback reason/timestamp auditability,
 market-data lineage, provider readiness, Korean final-response policy, and
 machine-checkable safety invariants.
+The V1/V2 asset reuse audit checks additionally verify that public StrategyLab
+V1 market-data, backtest, strategy, validation, memory, evidence, approval,
+Champion, Telegram, persistence, and safety assets are either reused/extended
+or intentionally excluded from the V2 production path. The final expected
+verdict is `GAON V1/V2 INTEGRATION COMPLETE`.
 
 Production live validation diagnostic prompt:
 
