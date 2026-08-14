@@ -3,6 +3,35 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Final Production Acceptance Hotfix
+
+The live Telegram Autonomous Quant Partner path now exposes production-path
+provider truth instead of relying only on deterministic closeout fixtures. The
+payload records a provider audit for academic, official market, corporate,
+regulatory, professional research, news, web, YouTube, community, and social
+sources, including configured status, call attempts, results, acquisitions,
+grounded claims, and failure reasons.
+
+Academic exhaustion no longer hides the rest of the configured-source
+diversification state. Counter-evidence now preserves query execution lineage,
+adaptive iterations record observed validation failures and next actions, and
+insufficient samples report horizon extension or maximum-history behavior while
+keeping the 30-trade threshold.
+
+New release checks:
+
+```bash
+python -m gaon.runtime.cli gaon-production-live-provider-registry-release-check
+python -m gaon.runtime.cli gaon-production-live-source-diversification-readiness-release-check
+python -m gaon.runtime.cli gaon-production-live-adaptive-research-wiring-release-check
+python -m gaon.runtime.cli gaon-production-live-horizon-adaptation-release-check
+python -m gaon.runtime.cli gaon-production-live-counter-evidence-wiring-release-check
+```
+
+Schema remains v36. VPS live provider acquisition remains PENDING PRODUCTION
+VERIFICATION because actual provider availability depends on production network
+and runtime configuration.
+
 ## Gaon V2 Final Research Capability Closeout
 
 Gaon now has a final deterministic closeout contract for the production

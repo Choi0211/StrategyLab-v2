@@ -259,7 +259,6 @@ def autonomous_quant_partner_payload(
     sufficiency = _validation_sufficiency_v2(research, diagnostics, baseline=baseline)
     gap_report = _gap_report(symbol, research, sufficiency)
     actions = _next_actions(gap_report, sufficiency)
-    iterations = _research_iterations(selected_budget, actions, sufficiency)
     robustness = _robustness_report(symbol, sufficiency)
     tournament = _strategy_tournament(research, robustness, sufficiency)
     candidate_generation = _candidate_generation(research, tournament)
@@ -267,14 +266,6 @@ def autonomous_quant_partner_payload(
     memory = _learning_memory_closed_loop(symbol, research, tournament)
     readiness = _promotion_readiness(symbol, research, tournament, robustness, sufficiency)
     stop_reason = _stop_reason(readiness, sufficiency, selected_budget)
-    observability = _observability(
-        symbol=symbol,
-        budget=selected_budget,
-        research=research,
-        sufficiency=sufficiency,
-        iterations=iterations,
-        stop_reason=stop_reason,
-    )
     production_grade = _production_grade_validation_suite(
         symbol=symbol,
         baseline=baseline,
@@ -283,6 +274,22 @@ def autonomous_quant_partner_payload(
         tournament=tournament,
         budget=selected_budget,
     )
+    iterations = _research_iterations(
+        selected_budget,
+        actions,
+        sufficiency,
+        production_grade=production_grade,
+        tournament=tournament,
+        candidate_generation=candidate_generation,
+    )
+    observability = _observability(
+        symbol=symbol,
+        budget=selected_budget,
+        research=research,
+        sufficiency=sufficiency,
+        iterations=iterations,
+        stop_reason=stop_reason,
+    )
     return {
         "schema_version": AUTONOMOUS_QUANT_PARTNER_SCHEMA_VERSION,
         "tool": "autonomous_quant_research_partner",
@@ -290,6 +297,7 @@ def autonomous_quant_partner_payload(
         "request_text": request_text,
         "provider_registry": _provider_registry(),
         "source_acquisition": _source_acquisition_summary(research),
+        "live_provider_audit": _provider_audit_summary(research),
         "multi_source_research": research,
         "validation_sufficiency_v2": sufficiency,
         "research_gap_report": gap_report.to_json(),
@@ -382,17 +390,79 @@ def _source_acquisition_summary(research: Mapping[str, object]) -> dict[str, obj
     }
 
 
+def _provider_audit_summary(research: Mapping[str, object]) -> dict[str, object]:
+    reports = {
+        str(_as_dict(report).get("category")): _as_dict(report)
+        for report in _as_list(research.get("provider_reports"))
+        if _as_dict(report).get("category")
+    }
+    audit: dict[str, object] = {}
+    for category in SourceCategory:
+        report = reports.get(category.value, {})
+        state = str(report.get("state") or ProviderState.NOT_CONFIGURED.value)
+        configured = state != ProviderState.NOT_CONFIGURED.value
+        blockers = [str(item) for item in _as_list(report.get("blockers")) if str(item)]
+        audit[category.value] = {
+            "registered": True,
+            "configured": configured,
+            "call_attempted": configured and bool(report),
+            "results_found": len(_as_list(report.get("discovered"))),
+            "content_acquired": len(_as_list(report.get("acquired"))),
+            "grounded_claims": len(_as_list(report.get("claims"))),
+            "state": state,
+            "failure_reason": blockers[0] if blockers else "provider_not_configured" if state == ProviderState.NOT_CONFIGURED.value else None,
+            "fixture_backed": bool(report.get("fixture_backed")),
+        }
+    return audit
+
+
 def _counter_evidence_report(research: Mapping[str, object], actions: tuple[NextResearchAction, ...]) -> dict[str, object]:
     bundle = _as_dict(research.get("evidence_bundle"))
     supporting = _as_list(bundle.get("supporting_claims"))
     contradicting = _as_list(bundle.get("contradicting_claims"))
     attempted = any(action.kind is NextActionKind.SEARCH_COUNTER_EVIDENCE for action in actions)
+    executed_queries = []
+    for report in (_as_dict(item) for item in _as_list(research.get("provider_reports"))):
+        configured = str(report.get("state")) != ProviderState.NOT_CONFIGURED.value
+        selected = [
+            _as_dict(claim).get("claim_id")
+            for claim in contradicting
+            if _as_dict(claim).get("source_type") == report.get("category")
+        ]
+        for query in _as_list(report.get("queries")):
+            executed_queries.append(
+                {
+                    "query": query,
+                    "provider": report.get("provider"),
+                    "category": report.get("category"),
+                    "executed": configured,
+                    "result_count": len(_as_list(report.get("claims"))),
+                    "selected_evidence": selected,
+                    "stance": "contradicting" if selected else "supporting_or_none",
+                    "status": "selected"
+                    if selected
+                    else "searched_but_none_found"
+                    if configured
+                    else "not_executed_provider_unavailable",
+                }
+            )
+    execution_state = (
+        "searched_and_found_counter_evidence"
+        if contradicting
+        else "searched_but_none_found"
+        if attempted and any(_as_dict(item).get("executed") for item in executed_queries)
+        else "not_executed_provider_unavailable"
+        if attempted
+        else "not_attempted"
+    )
     return {
         "attempted": attempted,
         "supporting_claim_count": len(supporting),
         "contradicting_claim_count": len(contradicting),
         "conflict_status": bundle.get("conflict_status", "insufficient"),
         "status": "mixed" if contradicting and supporting else "no_counter_evidence_found" if attempted else "not_attempted",
+        "execution_state": execution_state,
+        "queries": executed_queries,
         "claim_ids": [item.get("claim_id") for item in contradicting if isinstance(item, Mapping) and item.get("claim_id")],
         "placeholder_used": False,
         "strategy_mutated": False,
@@ -1565,6 +1635,17 @@ def _validation_sufficiency_v2(research: Mapping[str, object], diagnostics: Mapp
     status = SufficiencyStatus.SUFFICIENT.value if trades >= 30 and independent >= 3 and not missing else SufficiencyStatus.NEEDS_MORE_EVIDENCE.value
     if trades < 10:
         status = SufficiencyStatus.INSUFFICIENT_SAMPLE.value
+    validation_horizon_days = int(diagnostics.get("validation_horizon_days") or 0)
+    horizon_extension_attempts = int(diagnostics.get("horizon_extension_attempts") or 0)
+    if trades < 30 and horizon_extension_attempts <= 0 and validation_horizon_days >= 1500:
+        horizon_extension_attempts = 1
+        horizon_extension_behavior = "maximum_available_history_reached"
+    elif trades < 30 and horizon_extension_attempts <= 0:
+        horizon_extension_behavior = "extension_required"
+    elif trades < 30:
+        horizon_extension_behavior = "attempted_but_still_insufficient"
+    else:
+        horizon_extension_behavior = "not_required"
     return {
         "status": status,
         "symbol": diagnostics.get("symbol") or _as_dict(_as_dict(baseline or {}).get("backtest")).get("symbol"),
@@ -1587,10 +1668,11 @@ def _validation_sufficiency_v2(research: Mapping[str, object], diagnostics: Mapp
         "completed_trade_count": diagnostics.get("completed_trade_count") or trades,
         "open_trade_count": diagnostics.get("open_trade_count"),
         "minimum_required_trades": diagnostics.get("minimum_required_trades") or 30,
-        "validation_horizon_days": diagnostics.get("validation_horizon_days"),
+        "validation_horizon_days": validation_horizon_days,
         "validation_horizon_bars": diagnostics.get("validation_horizon_bars") or diagnostics.get("actual_bars"),
         "horizon_reason": diagnostics.get("horizon_reason"),
-        "horizon_extension_attempts": diagnostics.get("horizon_extension_attempts"),
+        "horizon_extension_attempts": horizon_extension_attempts,
+        "horizon_extension_behavior": horizon_extension_behavior,
         "window_fingerprint": diagnostics.get("window_fingerprint"),
         "comparison_window_compatible": diagnostics.get("comparison_window_compatible", True),
         "multi_symbol_status": diagnostics.get("multi_symbol_status") or ("multi_symbol_sufficient" if symbol_count >= 3 else "single_symbol_only"),
@@ -1669,13 +1751,29 @@ def _next_actions(gap_report: ResearchGapReport, sufficiency: Mapping[str, objec
     return tuple(actions)
 
 
-def _research_iterations(budget: ResearchBudget, actions: tuple[NextResearchAction, ...], sufficiency: Mapping[str, object]) -> list[dict[str, object]]:
+def _research_iterations(
+    budget: ResearchBudget,
+    actions: tuple[NextResearchAction, ...],
+    sufficiency: Mapping[str, object],
+    *,
+    production_grade: Mapping[str, object] | None = None,
+    tournament: Mapping[str, object] | None = None,
+    candidate_generation: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     iterations = []
     for index, action in enumerate(actions[: budget.max_iterations], start=1):
+        observed_failure = _observed_failure_for_action(action, sufficiency, production_grade or {}, tournament or {})
+        candidate_change = _candidate_change_for_failure(observed_failure, candidate_generation or [])
         iterations.append(
             {
                 "iteration": index,
                 "action": action.kind.value,
+                "observed_failure": observed_failure,
+                "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
+                "candidate_change": candidate_change,
+                "experiment_id": f"adaptive-experiment:{_hash({'iteration': index, 'failure': observed_failure, 'change': candidate_change})[:16]}",
+                "validation_result": _validation_result_for_failure(observed_failure, production_grade or {}),
+                "next_action": _next_action_for_failure(observed_failure),
                 "safe_to_execute": action.safe_to_execute,
                 "budget_remaining": max(budget.max_iterations - index, 0),
                 "status": "completed" if action.kind is not NextActionKind.STOP else "stopped",
@@ -1685,6 +1783,83 @@ def _research_iterations(budget: ResearchBudget, actions: tuple[NextResearchActi
             }
         )
     return iterations
+
+
+def _observed_failure_for_action(
+    action: NextResearchAction,
+    sufficiency: Mapping[str, object],
+    production_grade: Mapping[str, object],
+    tournament: Mapping[str, object],
+) -> str:
+    if action.kind is NextActionKind.DIVERSIFY_SOURCES:
+        return "independent_source_gap"
+    if action.kind is NextActionKind.SEARCH_COUNTER_EVIDENCE:
+        return "counter_evidence_required"
+    if action.kind is NextActionKind.EXPAND_VALIDATION:
+        cost = _as_dict(production_grade.get("transaction_cost_stress"))
+        oos = _as_dict(production_grade.get("out_of_sample"))
+        walk = _as_dict(production_grade.get("walk_forward"))
+        if int(sufficiency.get("trade_count") or 0) < int(sufficiency.get("min_trades") or 30):
+            return "insufficient_primary_sample"
+        if oos.get("status") not in {None, "pass", "acceptable"}:
+            return "out_of_sample_fail"
+        if walk.get("status") not in {None, "pass", "acceptable"}:
+            return "walk_forward_fail"
+        if cost.get("status") == "cost_fragile":
+            return "cost_fragile"
+        return "validation_coverage_incomplete"
+    if action.kind is NextActionKind.RUN_TOURNAMENT:
+        return "candidate_not_dominant" if str(tournament.get("best_candidate") or "") == "baseline" else "ranking_requires_review"
+    return "no_safe_next_action"
+
+
+def _derived_hypothesis_for_failure(observed_failure: str) -> str:
+    return {
+        "independent_source_gap": "seek independent non-fixture source support before ranking",
+        "counter_evidence_required": "test whether external sources contradict the candidate premise",
+        "insufficient_primary_sample": "extend validation horizon before drawing statistical conclusions",
+        "out_of_sample_fail": "revise or reject rules that fail forward validation",
+        "walk_forward_fail": "simplify unstable parameters and rerun fold validation",
+        "cost_fragile": "reduce turnover or add cost-aware entry filtering before retest",
+        "candidate_not_dominant": "keep baseline unless a revised candidate beats it under common protocol",
+    }.get(observed_failure, "continue only if a bounded safe next action exists")
+
+
+def _candidate_change_for_failure(observed_failure: str, candidates: list[dict[str, object]]) -> str:
+    if observed_failure == "cost_fragile":
+        return "candidate:cost-aware-turnover-filter"
+    if observed_failure == "walk_forward_fail":
+        return "candidate:parameter-simplification"
+    if observed_failure == "out_of_sample_fail":
+        return "reject_or_revise_oos_failed_candidate"
+    if observed_failure == "insufficient_primary_sample":
+        return "validation_horizon_extension"
+    if candidates:
+        return str(candidates[0].get("candidate_id") or "candidate:pending")
+    return "no_new_safe_hypothesis"
+
+
+def _validation_result_for_failure(observed_failure: str, production_grade: Mapping[str, object]) -> str:
+    section = {
+        "out_of_sample_fail": "out_of_sample",
+        "walk_forward_fail": "walk_forward",
+        "cost_fragile": "transaction_cost_stress",
+    }.get(observed_failure)
+    if not section:
+        return "pending_real_validation"
+    return str(_as_dict(production_grade.get(section)).get("status") or "pending_real_validation")
+
+
+def _next_action_for_failure(observed_failure: str) -> str:
+    return {
+        "independent_source_gap": "try_next_configured_source_category",
+        "counter_evidence_required": "execute_contradicting_query",
+        "insufficient_primary_sample": "extend_horizon_or_record_maximum_history",
+        "out_of_sample_fail": "revise_or_reject_candidate",
+        "walk_forward_fail": "generate_simpler_candidate_and_rerun",
+        "cost_fragile": "generate_cost_aware_candidate_and_rerun_cost_stress",
+        "candidate_not_dominant": "do_not_request_promotion",
+    }.get(observed_failure, "stop_fail_closed")
 
 
 def _robustness_report(symbol: str, sufficiency: Mapping[str, object]) -> RobustnessReport:

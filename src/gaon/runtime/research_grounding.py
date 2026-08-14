@@ -702,7 +702,7 @@ def _natural_validation_sentence(
 
 def _natural_external_research_sentence(source_categories: list[str], source_count: object, counter: dict[str, object]) -> str:
     if source_categories:
-        categories = ", ".join(source_categories[:5])
+        categories = ", ".join(_source_category_to_korean(item) for item in source_categories[:5])
         counter_text = "반증 조사도 시도했습니다" if counter.get("attempted") is True else "반증 조사는 아직 충분히 수행되지 않았습니다"
         return f"외부 연구 실행: {categories} 범위에서 확인했습니다. 확보된 근거 수는 {source_count}건이며, {counter_text}."
     return "외부 연구 실행: 이번 연구에서는 신뢰할 수 있는 외부 근거를 충분히 확보하지 못했습니다. metadata-only 자료를 검증 근거로 사용하지 않았습니다."
@@ -718,12 +718,29 @@ def _natural_candidate_sentence(candidate_count: object, tournament: dict[str, o
             generated = 0
         if tournament.get("baseline_included", True) is True and tournament_count == generated + 1:
             if best:
-                return f"기존 전략과 새 후보 {generated}개, 총 {tournament_count}개를 비교했습니다. 현재 가장 앞선 후보는 {best}입니다."
+                best_text = "기존 전략" if best == "baseline" else str(best)
+                return f"기존 전략과 새 후보 {generated}개, 총 {tournament_count}개를 비교했습니다. 현재 가장 앞선 후보는 {best_text}입니다."
             return f"기존 전략과 새 후보 {generated}개, 총 {tournament_count}개를 비교했습니다."
         if best:
-            return f"개선 후보는 {candidate_count}개까지 비교했고, 현재 가장 앞선 후보는 {best}입니다."
+            best_text = "기존 전략" if best == "baseline" else str(best)
+            return f"개선 후보는 {candidate_count}개까지 비교했고, 현재 가장 앞선 후보는 {best_text}입니다."
         return f"개선 후보는 {candidate_count}개까지 비교했습니다."
     return "검증 가능한 개선 후보는 아직 충분히 만들어지지 않았습니다."
+
+
+def _source_category_to_korean(value: object) -> str:
+    return {
+        "academic": "학술 자료",
+        "official_market": "공식 시장 데이터",
+        "corporate": "기업 공시/IR",
+        "regulatory": "규제/공시 자료",
+        "professional_research": "전문 리서치",
+        "news": "뉴스",
+        "web": "웹 자료",
+        "youtube": "동영상 자료",
+        "community": "커뮤니티 자료",
+        "social": "소셜 자료",
+    }.get(str(value), str(value))
 
 
 def _natural_promotion_sentence(promotion_status: str, human_gate_status: str, blockers: list[str]) -> str:
@@ -755,6 +772,7 @@ def _status_to_korean(value: object) -> str:
         "stable": "비교적 안정",
         "acceptable": "허용 가능한 수준",
         "multi_symbol_sufficient": "여러 종목에서 충분히 확인됨",
+        "multi_symbol_partial": "일부 종목에서만 확인됨",
         "single_symbol_only": "단일 종목만 확인됨",
         "fail_underperformed_baseline": "기준 전략보다 부진",
     }

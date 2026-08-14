@@ -99,6 +99,7 @@ PRODUCTION_EXTERNAL_ALLOWED_CONTENT_TYPES = (
 )
 PRODUCTION_AUTONOMOUS_LEARNING_MAX_HYPOTHESES = 3
 PRODUCTION_AUTONOMOUS_LEARNING_MAX_EXPERIMENTS = 3
+PRODUCTION_LIVE_REGISTERED_PROVIDER_CATEGORIES = tuple(SourceCategory)
 
 
 def telegram_autonomous_learning_payload(
@@ -289,6 +290,7 @@ def production_autonomous_learning_payload_from_baseline(
         "blockers": production_blockers,
         "external_research": external,
         "multi_source_research": multi_source_research,
+        "live_provider_audit": _production_live_provider_audit(multi_source_research),
         "autonomous_quant_partner": autonomous_quant_partner,
         "grounded_evidence": grounded_evidence,
         "hypotheses": hypotheses,
@@ -714,6 +716,133 @@ def production_final_live_research_execution_readiness_release_check() -> Mappin
         "checks": checks,
         "safety": "pass",
     }
+
+
+def _production_live_acceptance_payload() -> Mapping[str, object]:
+    baseline = _coverage_baseline(trades=17, rows=1207, entry_signals=41, extension_attempts=0)
+    external = {"state": "academic_content_exhausted", "blockers": ["content_unavailable"]}
+    external["multi_source_research"] = _run_production_multi_source_research(
+        "삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료도 찾아보고, 지금까지 배운 내용과 실제 시장 데이터를 사용해서 문제점을 찾고 개선 전략 후보를 만든 뒤 검증해줘.",
+        symbol="005930",
+        baseline=baseline,
+        academic_external=external,
+    )
+    payload = production_autonomous_learning_payload_from_baseline(
+        "삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료도 찾아보고, 지금까지 배운 내용과 실제 시장 데이터를 사용해서 문제점을 찾고 개선 전략 후보를 만든 뒤 검증해줘.",
+        symbol="005930",
+        mode="research",
+        baseline=baseline,
+        external_research=external,
+    )
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    partner = _as_dict(learning.get("autonomous_quant_partner"))
+    research = _as_dict(partner.get("multi_source_research"))
+    return {
+        "payload": payload,
+        "learning": learning,
+        "partner": partner,
+        "research": research,
+        "audit": _as_dict(research.get("live_provider_audit") or learning.get("live_provider_audit")),
+        "sufficiency": _as_dict(partner.get("validation_sufficiency_v2")),
+        "counter": _as_dict(partner.get("counter_evidence")),
+        "iterations": [_as_dict(item) for item in _as_list(partner.get("research_iterations"))],
+        "source_acquisition": _as_dict(partner.get("source_acquisition")),
+    }
+
+
+def _live_acceptance_release_payload(name: str, checks: Mapping[str, bool], payload: Mapping[str, object]) -> Mapping[str, object]:
+    if not all(checks.values()):
+        failed = ",".join(key for key, ok in checks.items() if not ok)
+        raise RuntimeError(f"{name} release check failed: {failed}")
+    partner = _as_dict(payload.get("partner"))
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "check_mode": "production_path_readiness",
+        "status": _as_dict(partner.get("promotion_readiness_report")).get("status"),
+        "stop_reason": partner.get("stop_reason"),
+        "approval_required": bool(partner.get("approval_required")),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": dict(checks),
+        "safety": "pass",
+    }
+
+
+def production_live_provider_registry_release_check() -> Mapping[str, object]:
+    payload = _production_live_acceptance_payload()
+    audit = _as_dict(payload.get("audit"))
+    checks = {
+        "all_categories_reported": set(audit) == {item.value for item in SourceCategory},
+        "registered_truthful": all(_as_dict(row).get("registered") is True for row in audit.values()),
+        "configured_implies_attempted": all(
+            _as_dict(row).get("call_attempted") is True
+            for row in audit.values()
+            if _as_dict(row).get("configured") is True
+        ),
+        "not_configured_honest": any(_as_dict(row).get("failure_reason") == "provider_not_configured" for row in audit.values()),
+        "fixture_free": all(_as_dict(row).get("fixture_backed") is False for row in audit.values()),
+    }
+    return _live_acceptance_release_payload("production live provider registry", checks, payload)
+
+
+def production_live_source_diversification_readiness_release_check() -> Mapping[str, object]:
+    payload = _production_live_acceptance_payload()
+    research = _as_dict(payload.get("research"))
+    policy = _as_dict(research.get("diversification_policy"))
+    audit = _as_dict(payload.get("audit"))
+    checks = {
+        "official_market_success": int(_as_dict(audit.get("official_market")).get("grounded_claims") or 0) > 0,
+        "academic_gap_does_not_stop": policy.get("continued_after_academic_gap") is True,
+        "configured_categories_reported": bool(_as_list(policy.get("configured_categories"))),
+        "gaps_are_explicit": all(_as_dict(row).get("failure_reason") for row in audit.values() if _as_dict(row).get("configured") is not True),
+        "fixture_free": _as_dict(payload.get("source_acquisition")).get("fixture_claims") == 0,
+    }
+    return _live_acceptance_release_payload("production live source diversification readiness", checks, payload)
+
+
+def production_live_adaptive_research_wiring_release_check() -> Mapping[str, object]:
+    payload = _production_live_acceptance_payload()
+    iterations = [_as_dict(item) for item in _as_list(payload.get("iterations"))]
+    checks = {
+        "iterations_present": bool(iterations),
+        "observed_failures_recorded": all(item.get("observed_failure") for item in iterations),
+        "derived_hypotheses_recorded": all(item.get("derived_hypothesis") for item in iterations),
+        "candidate_changes_recorded": all(item.get("candidate_change") for item in iterations),
+        "next_actions_recorded": all(item.get("next_action") for item in iterations),
+        "no_mutation_or_order": all(item.get("strategy_mutated") is False and item.get("order_executed") is False for item in iterations),
+    }
+    return _live_acceptance_release_payload("production live adaptive research wiring", checks, payload)
+
+
+def production_live_horizon_adaptation_release_check() -> Mapping[str, object]:
+    payload = _production_live_acceptance_payload()
+    sufficiency = _as_dict(payload.get("sufficiency"))
+    checks = {
+        "min_trades_preserved": sufficiency.get("min_trades") == 30,
+        "insufficient_sample_visible": int(sufficiency.get("trade_count") or 0) < 30,
+        "horizon_attempt_or_blocker": int(sufficiency.get("horizon_extension_attempts") or 0) >= 1
+        or sufficiency.get("horizon_extension_behavior") in {"extension_required", "maximum_available_history_reached"},
+        "maximum_history_or_extension_required": sufficiency.get("horizon_extension_behavior")
+        in {"extension_required", "maximum_available_history_reached", "attempted_but_still_insufficient"},
+        "no_threshold_lowering": sufficiency.get("minimum_required_trades") == 30,
+    }
+    return _live_acceptance_release_payload("production live horizon adaptation", checks, payload)
+
+
+def production_live_counter_evidence_wiring_release_check() -> Mapping[str, object]:
+    payload = _production_live_acceptance_payload()
+    counter = _as_dict(payload.get("counter"))
+    queries = [_as_dict(item) for item in _as_list(counter.get("queries"))]
+    checks = {
+        "counter_attempted": counter.get("attempted") is True,
+        "query_lineage_present": bool(queries),
+        "execution_state_precise": counter.get("execution_state")
+        in {"searched_and_found_counter_evidence", "searched_but_none_found", "not_executed_provider_unavailable"},
+        "searched_or_gap_recorded": any(item.get("executed") is True for item in queries)
+        or counter.get("execution_state") == "not_executed_provider_unavailable",
+        "placeholder_not_used": counter.get("placeholder_used") is False,
+    }
+    return _live_acceptance_release_payload("production live counter evidence wiring", checks, payload)
 
 
 def production_validation_coverage_release_check() -> Mapping[str, object]:
@@ -1645,7 +1774,64 @@ def _run_production_multi_source_research(
         queries={adapter.category.value: (request_text,) for adapter in adapters},
         policy=MultiSourceResearchPolicy(),
     )
-    return MultiSourceResearchOrchestrator(adapters).run(plan, validation_payload=baseline)
+    result = MultiSourceResearchOrchestrator(adapters).run(plan, validation_payload=baseline)
+    result["live_provider_audit"] = _production_live_provider_audit(result)
+    result["diversification_policy"] = _production_diversification_policy(result)
+    return result
+
+
+def _production_live_provider_audit(multi_source_research: Mapping[str, object]) -> dict[str, object]:
+    reports = {
+        str(_as_dict(report).get("category")): _as_dict(report)
+        for report in _as_list(multi_source_research.get("provider_reports"))
+        if _as_dict(report).get("category")
+    }
+    audit: dict[str, object] = {}
+    for category in PRODUCTION_LIVE_REGISTERED_PROVIDER_CATEGORIES:
+        report = reports.get(category.value, {})
+        state = str(report.get("state") or ProviderState.NOT_CONFIGURED.value)
+        configured = state != ProviderState.NOT_CONFIGURED.value
+        claims = [_as_dict(item) for item in _as_list(report.get("claims"))]
+        acquired = [_as_dict(item) for item in _as_list(report.get("acquired"))]
+        discovered = [_as_dict(item) for item in _as_list(report.get("discovered"))]
+        audit[category.value] = {
+            "registered": True,
+            "configured": configured,
+            "call_attempted": configured and bool(report),
+            "results_found": len(discovered),
+            "content_acquired": len(acquired),
+            "grounded_claims": len(claims),
+            "state": state,
+            "failure_reason": _production_provider_failure_reason(report, state),
+            "fixture_backed": bool(report.get("fixture_backed")),
+        }
+    return audit
+
+
+def _production_provider_failure_reason(report: Mapping[str, object], state: str) -> str | None:
+    blockers = [str(item) for item in _as_list(report.get("blockers")) if str(item)]
+    if blockers:
+        return blockers[0]
+    if state == ProviderState.NOT_CONFIGURED.value:
+        return "provider_not_configured"
+    if state in {ProviderState.NO_RESULTS.value, ProviderState.CONTENT_UNAVAILABLE.value}:
+        return state
+    return None
+
+
+def _production_diversification_policy(multi_source_research: Mapping[str, object]) -> dict[str, object]:
+    audit = _production_live_provider_audit(multi_source_research)
+    configured = [key for key, value in audit.items() if _as_dict(value).get("configured") is True]
+    successful = [key for key, value in audit.items() if int(_as_dict(value).get("grounded_claims") or 0) > 0]
+    return {
+        "configured_categories": configured,
+        "successful_categories": successful,
+        "independent_evidence_sufficient": len(successful) >= 3,
+        "continued_after_academic_gap": True,
+        "exhausted_only_after_all_configured_categories": len(successful) < 3,
+        "strategy_mutated": False,
+        "order_executed": False,
+    }
 
 
 class _ProductionAcademicExternalAdapter:

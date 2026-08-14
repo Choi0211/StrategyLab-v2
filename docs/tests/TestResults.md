@@ -2,6 +2,28 @@
 
 Status: Passed
 
+## Final Production Acceptance Hotfix
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\telegram_autonomous_learning.py src\gaon\knowledge\autonomous_quant_partner.py src\gaon\runtime\research_grounding.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner.AutonomousQuantPartnerTests.test_final_live_acceptance_release_checks_pass tests.unit.test_autonomous_quant_partner.AutonomousQuantPartnerTests.test_live_partner_records_provider_audit_counter_lineage_and_horizon_policy tests.unit.test_autonomous_quant_partner.AutonomousQuantPartnerTests.test_natural_autonomous_learning_response_hides_internal_status_labels -v`: PASS, 3 tests
+  - `python -m unittest tests.unit.test_autonomous_quant_partner -v`: PASS, 29 tests
+  - `python -m gaon.runtime.cli gaon-production-live-provider-registry-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-live-source-diversification-readiness-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-live-adaptive-research-wiring-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-live-horizon-adaptation-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-live-counter-evidence-wiring-release-check`: PASS
+- `pytest` is unavailable in the bundled local Python runtime (`No module named pytest`), so local automated verification uses the repository's `unittest` tests.
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 861 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 204 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Production live Telegram/provider verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated metrics, no fixture-backed production promotion evidence.
+
 ## Gaon V2 Final Research Capability Closeout
 
 - Targeted local verification:
