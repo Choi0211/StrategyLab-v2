@@ -369,10 +369,12 @@ def _format_autonomous_research_cycle(output: dict[str, object]) -> str:
 
 def _format_autonomous_learning_research(output: dict[str, object], user_text: str = "") -> str:
     candidate_context = _as_dict(_as_dict(output.get("autonomous_learning_v2")).get("promotion_candidate_context") or output.get("promotion_candidate_context"))
-    if candidate_context and _promotion_candidate_detail_requested(user_text, candidate_context):
+    if candidate_context and _explicit_promotion_candidate_detail_requested(user_text):
         return _format_promotion_candidate_evidence(output, candidate_context)
     if _autonomous_learning_detail_requested(user_text):
         return _format_autonomous_learning_research_detail(output)
+    if candidate_context and _promotion_candidate_detail_requested(user_text, candidate_context):
+        return _format_promotion_candidate_evidence(output, candidate_context)
     followup = _format_autonomous_learning_targeted_followup(output, user_text)
     if followup is not None:
         return followup
@@ -393,6 +395,7 @@ def _format_autonomous_learning_research_natural(output: dict[str, object]) -> s
     partner_acquisition = _as_dict(partner.get("source_acquisition"))
     partner_counter = _as_dict(partner.get("counter_evidence"))
     partner_tournament = _as_dict(partner.get("strategy_tournament"))
+    adaptive_feedback = _as_dict(partner.get("adaptive_validation_feedback"))
     grade_multi_symbol = _as_dict(partner_grade.get("multi_symbol_validation"))
     grade_oos = _as_dict(partner_grade.get("out_of_sample"))
     grade_walk_forward = _as_dict(partner_grade.get("walk_forward"))
@@ -432,6 +435,7 @@ def _format_autonomous_learning_research_natural(output: dict[str, object]) -> s
         _natural_external_research_sentence(source_categories, source_count, partner_counter),
         "",
         _natural_candidate_sentence(candidate_count, partner_tournament),
+        _natural_adaptive_feedback_sentence(adaptive_feedback),
         "",
         _natural_promotion_sentence(promotion_status, human_gate_status, blockers),
         "",
@@ -461,6 +465,8 @@ def _format_autonomous_learning_research_detail(output: dict[str, object]) -> st
     partner_counter = _as_dict(partner.get("counter_evidence"))
     partner_validation = _as_dict(partner.get("validation_coverage"))
     partner_tournament = _as_dict(partner.get("strategy_tournament"))
+    partner_live_audit = _as_dict(partner.get("live_provider_audit") or learning.get("live_provider_audit") or output.get("live_provider_audit"))
+    adaptive_feedback = _as_dict(partner.get("adaptive_validation_feedback") or learning.get("adaptive_validation_feedback") or output.get("adaptive_validation_feedback"))
     partner_grade = _as_dict(partner.get("production_grade_validation"))
     grade_multi_symbol = _as_dict(partner_grade.get("multi_symbol_validation"))
     grade_oos = _as_dict(partner_grade.get("out_of_sample"))
@@ -505,6 +511,12 @@ def _format_autonomous_learning_research_detail(output: dict[str, object]) -> st
         f"- counter_evidence_status={partner_counter.get('status', 'unknown')}",
         f"- generated_candidates={len(partner_candidates)}",
         f"- validation_coverage={partner_validation.get('status', 'unknown')} trades={partner_validation.get('trade_count', 'unknown')}/{partner_validation.get('min_trades', 'unknown')} symbols={partner_validation.get('number_of_symbols', 'unknown')}",
+        "",
+        "[실제 외부 Provider 상태]",
+        *_live_provider_detail_lines(partner_live_audit),
+        "",
+        "[Adaptive Validation Feedback]",
+        *_adaptive_feedback_detail_lines(adaptive_feedback),
         "",
         "[검증 범위]",
         f"- period={partner_validation.get('actual_start', 'unknown')} ~ {partner_validation.get('actual_end', 'unknown')}",
@@ -652,6 +664,71 @@ def _natural_section_answer(intro: str, status: object, section: dict[str, objec
     return "\n".join(lines)
 
 
+def _live_provider_detail_lines(audit: dict[str, object]) -> list[str]:
+    if not audit:
+        return ["- provider audit=확인된 구조화 결과 없음"]
+    lines: list[str] = []
+    for category in (
+        "academic",
+        "official_market",
+        "corporate",
+        "regulatory",
+        "professional_research",
+        "news",
+        "web",
+        "youtube",
+        "community",
+        "social",
+    ):
+        row = _as_dict(audit.get(category))
+        if not row:
+            continue
+        lines.append(
+            "- "
+            + category
+            + f": configured={str(row.get('configured', False)).lower()}"
+            + f" attempted={str(row.get('call_attempted', False)).lower()}"
+            + f" state={row.get('state', 'unknown')}"
+            + f" acquired={row.get('content_acquired', 0)}"
+            + f" claims={row.get('grounded_claims', 0)}"
+            + (
+                f" failure={row.get('failure_reason')}"
+                if row.get("failure_reason")
+                else ""
+            )
+        )
+    return lines or ["- provider audit=확인된 구조화 결과 없음"]
+
+
+def _adaptive_feedback_detail_lines(adaptive: dict[str, object]) -> list[str]:
+    if not adaptive:
+        return ["- adaptive feedback=확인된 구조화 결과 없음"]
+    lines = [
+        f"- status={adaptive.get('status', 'unknown')}",
+        f"- executed={str(adaptive.get('executed', False)).lower()}",
+        f"- failures_observed={', '.join(_list_text(adaptive.get('failures_observed'))) or 'none'}",
+        f"- actual_retests={adaptive.get('actual_retests', 0)}",
+        f"- duplicate_candidates_skipped={adaptive.get('duplicate_candidates_skipped', 0)}",
+    ]
+    for item in _as_list(adaptive.get("iterations")):
+        row = _as_dict(item)
+        primary = _as_dict(row.get("primary_backtest"))
+        lines.extend(
+            [
+                f"- iteration={row.get('iteration', 'unknown')} failure={row.get('observed_failure', 'unknown')}",
+                f"  candidate_id={row.get('candidate_id', 'unknown')}",
+                f"  candidate_fingerprint={row.get('candidate_fingerprint', 'unknown')}",
+                f"  changed_rules={', '.join(_list_text(row.get('changed_rules'))) or 'none'}",
+                f"  actual_execution={str(row.get('actual_execution', False)).lower()} duplicate_skipped={str(row.get('duplicate_candidate_skipped', False)).lower()}",
+                f"  primary_trade_count={primary.get('trade_count', 'unknown')}",
+                f"  validation_result={row.get('validation_result', 'unknown')}",
+                f"  decision={row.get('decision', 'unknown')}",
+                f"  next_action={row.get('next_action', 'unknown')}",
+            ]
+        )
+    return lines
+
+
 def _first_available(*values: object) -> object:
     for value in values:
         if value not in (None, "", "unknown"):
@@ -728,6 +805,21 @@ def _natural_candidate_sentence(candidate_count: object, tournament: dict[str, o
     return "검증 가능한 개선 후보는 아직 충분히 만들어지지 않았습니다."
 
 
+def _natural_adaptive_feedback_sentence(adaptive: dict[str, object]) -> str | None:
+    if not adaptive or adaptive.get("executed") is not True:
+        return None
+    actual_retests = int(adaptive.get("actual_retests") or 0)
+    duplicate_skipped = int(adaptive.get("duplicate_candidates_skipped") or 0)
+    failures = [_status_to_korean(item) for item in _list_text(adaptive.get("failures_observed"))]
+    failure_text = ", ".join(failures) if failures else "검증 실패"
+    sentence = (
+        f"{failure_text} 결과를 다음 연구에 반영해 새 후보 {actual_retests}개를 실제 데이터로 재검증했습니다."
+    )
+    if duplicate_skipped:
+        sentence += f" 이전과 동일한 후보 {duplicate_skipped}개는 fingerprint 기준으로 다시 실행하지 않았습니다."
+    return sentence
+
+
 def _source_category_to_korean(value: object) -> str:
     return {
         "academic": "학술 자료",
@@ -777,6 +869,21 @@ def _status_to_korean(value: object) -> str:
         "fail_underperformed_baseline": "기준 전략보다 부진",
     }
     return translations.get(status, status)
+
+
+def _explicit_promotion_candidate_detail_requested(user_text: str) -> bool:
+    normalized = re.sub(r"[\s\W_]+", "", user_text.casefold(), flags=re.UNICODE)
+    return any(
+        token in normalized
+        for token in (
+            "승격후보",
+            "후보id",
+            "promotioncandidate",
+            "candidatefingerprint",
+            "승격후보근거",
+            "승격후보상세",
+        )
+    )
 
 
 def _promotion_candidate_detail_requested(user_text: str, candidate_context: dict[str, object]) -> bool:

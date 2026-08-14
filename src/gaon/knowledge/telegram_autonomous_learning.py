@@ -279,6 +279,7 @@ def production_autonomous_learning_payload_from_baseline(
         "autonomous_quant_partner_stop_reason": autonomous_quant_partner.get("stop_reason"),
         "autonomous_quant_partner_validation_status": _as_dict(autonomous_quant_partner.get("validation_sufficiency_v2")).get("status"),
         "production_validation_execution_summary": partner_execution_summary,
+        "adaptive_validation_feedback": _as_dict(autonomous_quant_partner.get("adaptive_validation_feedback")),
         "production_uses_release_fixture": False,
         "fixture_promotion_blocked": bool(production_blockers),
         "candidate_backtest_authoritative": bool(evidence and candidate_backtest),
@@ -351,6 +352,8 @@ def production_autonomous_learning_payload_from_baseline(
         "promotion_status": promotion_status,
         "autonomous_quant_partner_promotion_status": partner_projected_promotion_status,
         "production_validation_execution_summary": partner_execution_summary,
+        "adaptive_validation_feedback": _as_dict(autonomous_quant_partner.get("adaptive_validation_feedback")),
+        "live_provider_audit": _as_dict(autonomous_quant_partner.get("live_provider_audit")),
         "human_gate_status": human_gate_status,
         "production_uses_release_fixture": False,
         "fixture_promotion_blocked": bool(production_blockers),
@@ -369,6 +372,7 @@ def production_autonomous_learning_payload_from_baseline(
 
 def _partner_execution_summary(partner: Mapping[str, object]) -> dict[str, object]:
     grade = _as_dict(partner.get("production_grade_validation"))
+    adaptive = _as_dict(partner.get("adaptive_validation_feedback"))
     multi_symbol = _as_dict(grade.get("multi_symbol_validation"))
     oos = _as_dict(grade.get("out_of_sample"))
     walk_forward = _as_dict(grade.get("walk_forward"))
@@ -395,6 +399,12 @@ def _partner_execution_summary(partner: Mapping[str, object]) -> dict[str, objec
             and str(section.get("status") or section.get("cross_symbol_status") or "").startswith("not_run")
         ],
         "section_statuses": {key: section.get("status") or section.get("cross_symbol_status") for key, section in sections.items()},
+        "adaptive_feedback_status": adaptive.get("status"),
+        "adaptive_feedback_executed": adaptive.get("executed") is True,
+        "adaptive_actual_retests": int(adaptive.get("actual_retests") or 0),
+        "adaptive_duplicate_candidates_skipped": int(adaptive.get("duplicate_candidates_skipped") or 0),
+        "adaptive_failures_observed": list(_as_list(adaptive.get("failures_observed"))),
+        "adaptive_candidate_fingerprints": list(_as_list(adaptive.get("candidate_fingerprints"))),
         "fabricated_metrics": "fabricated_metrics': True" in str(grade),
         "strategy_mutated": partner.get("strategy_mutated"),
         "order_executed": partner.get("order_executed"),
