@@ -69,6 +69,7 @@ from .multi_source_research import (
     UnifiedDiscoveryResult,
     validation_sample_diagnostics,
 )
+from .production_external_providers import production_external_provider_adapters
 
 
 TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION = 2
@@ -571,7 +572,7 @@ def production_autonomous_research_wiring_release_check() -> Mapping[str, object
     checks = {
         "partner_selected_for_final_state": learning.get("selected_execution_orchestration") == "autonomous_quant_partner",
         "academic_exhaustion_not_terminal": "official_market" in _as_list(acquisition.get("source_categories_acquired")),
-        "provider_not_configured_honest": _as_dict(acquisition.get("provider_states")).get("news") == ProviderState.NOT_CONFIGURED.value,
+        "provider_not_configured_honest": _as_dict(acquisition.get("provider_states")).get("youtube") == ProviderState.NOT_CONFIGURED.value,
         "no_release_fixture_adapter": "deterministic:" not in json.dumps(partner, ensure_ascii=False).lower()
         and "example.org" not in json.dumps(partner, ensure_ascii=False).lower(),
         "metadata_only_evidence_blocked": acquisition.get("metadata_only_claims") == 0,
@@ -1756,11 +1757,7 @@ def _run_production_multi_source_research(
     adapters = (
         _ProductionAcademicExternalAdapter(academic_external),
         _ProductionBaselineMarketAdapter(symbol=symbol, baseline=baseline),
-        _ProductionProviderNotConfiguredAdapter(SourceCategory.CORPORATE),
-        _ProductionProviderNotConfiguredAdapter(SourceCategory.REGULATORY),
-        _ProductionProviderNotConfiguredAdapter(SourceCategory.NEWS),
-        _ProductionProviderNotConfiguredAdapter(SourceCategory.PROFESSIONAL_RESEARCH),
-        _ProductionProviderNotConfiguredAdapter(SourceCategory.WEB),
+        *production_external_provider_adapters(symbol=symbol),
         _ProductionProviderNotConfiguredAdapter(SourceCategory.YOUTUBE),
         _ProductionProviderNotConfiguredAdapter(SourceCategory.COMMUNITY),
         _ProductionProviderNotConfiguredAdapter(SourceCategory.SOCIAL),

@@ -272,7 +272,13 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         assert detail is not None
         self.assertIn("Autonomous Quant Partner", detail)
         self.assertIn("partner_status=needs_more_evidence", detail)
-        self.assertIn("investigated_source_categories=official_market", detail)
+        source_line = next(
+            line
+            for line in detail.splitlines()
+            if "investigated_source_categories=" in line
+        )
+        self.assertIn("official_market", source_line)
+        self.assertIn("corporate", source_line)
 
     def test_hotfix2402_release_checks_expose_validation_coverage(self) -> None:
         checks = (
