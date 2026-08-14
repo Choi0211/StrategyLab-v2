@@ -682,22 +682,22 @@ def _natural_validation_sentence(
 ) -> str:
     pieces: list[str] = []
     if multi_symbol:
-        pieces.append(f"다른 종목 검증은 {_status_to_korean(multi_symbol.get('cross_symbol_status') or multi_symbol.get('status'))}입니다")
+        pieces.append(f"다른 종목에서는 {_status_to_korean(multi_symbol.get('cross_symbol_status') or multi_symbol.get('status'))}")
     if oos:
-        pieces.append(f"OOS는 {_status_to_korean(oos.get('status'))}입니다")
+        pieces.append(f"OOS에서는 {_status_to_korean(oos.get('status'))}")
     if walk_forward:
-        pieces.append(f"walk-forward는 {_status_to_korean(walk_forward.get('status'))}입니다")
+        pieces.append(f"walk-forward 검증에서는 {_status_to_korean(walk_forward.get('status'))}")
     if regime:
-        pieces.append(f"시장 국면 검증은 {_status_to_korean(regime.get('status'))}입니다")
+        pieces.append(f"시장 국면별로는 {_status_to_korean(regime.get('status'))}")
     if parameter:
-        pieces.append(f"파라미터 민감도는 {_status_to_korean(parameter.get('status'))}입니다")
+        pieces.append(f"파라미터 민감도는 {_status_to_korean(parameter.get('status'))}")
     if cost:
-        pieces.append(f"거래비용 스트레스는 {_status_to_korean(cost.get('status'))}입니다")
+        pieces.append(f"거래비용을 높였을 때는 {_status_to_korean(cost.get('status'))}")
     if monte_carlo:
-        pieces.append(f"Monte Carlo는 {_status_to_korean(monte_carlo.get('status'))}입니다")
+        pieces.append(f"Monte Carlo는 {_status_to_korean(monte_carlo.get('status'))}")
     if not pieces:
         return "추가 검증 결과는 아직 충분히 확보되지 않았습니다."
-    return "가능한 검증을 이어서 확인했습니다. " + ", ".join(pieces) + "."
+    return "가능한 검증을 이어서 확인했습니다. " + ". ".join(pieces) + "."
 
 
 def _natural_external_research_sentence(source_categories: list[str], source_count: object, counter: dict[str, object]) -> str:
