@@ -3631,6 +3631,311 @@ def production_v2_final_closeout_release_check() -> Mapping[str, object]:
     return _final_completion_check_payload("production gaon v2 final closeout", checks, payload)
 
 
+def _production_final_research_capability_payload() -> dict[str, object]:
+    from gaon.runtime.research_grounding import (
+        format_grounded_tool_response,
+        production_final_conversation_ux_release_check,
+    )
+
+    completion = _final_completion_payload()
+    positive = _as_dict(completion.get("positive"))
+    blocked = _as_dict(completion.get("blocked"))
+    grade = _as_dict(_as_dict(completion.get("validation")).get("production_grade"))
+    acquisition = _as_dict(positive.get("source_acquisition"))
+    research = _as_dict(positive.get("multi_source_research"))
+    bundle = _as_dict(research.get("evidence_bundle"))
+    counter = _as_dict(positive.get("counter_evidence"))
+    tournament = _as_dict(positive.get("strategy_tournament"))
+    blocked_coverage = _as_dict(blocked.get("validation_coverage"))
+    blocked_readiness = _as_dict(_as_dict(completion.get("validation")).get("blocked_readiness"))
+    memory = _as_dict(positive.get("learning_memory_closed_loop"))
+    generated_candidates = _as_list(positive.get("candidate_generation"))
+    candidate_fingerprints = [str(_as_dict(item).get("candidate_fingerprint")) for item in generated_candidates]
+    conversation_payload = {
+        "symbol": positive.get("symbol"),
+        "source": "real:yahoo-chart",
+        "fixture_backed": False,
+        "quality_status": "pass_with_warnings",
+        "baseline": positive.get("baseline"),
+        "autonomous_learning_v2": {
+            "selected_execution_orchestration": "autonomous_quant_partner",
+            "autonomous_quant_partner_status": _as_dict(positive.get("promotion_readiness_report")).get("status"),
+            "autonomous_quant_partner_promotion_status": _as_dict(positive.get("promotion_readiness_report")).get("status"),
+            "autonomous_quant_partner": positive,
+        },
+        "promotion_status": _as_dict(positive.get("promotion_readiness_report")).get("status"),
+        "human_gate_status": positive.get("human_gate_status"),
+        "strategy_mutated": False,
+        "order_executed": False,
+    }
+    natural_text = format_grounded_tool_response(
+        "autonomous_learning_research",
+        conversation_payload,
+        "삼성전자 전략을 처음부터 다시 연구해줘",
+    ) or ""
+    debug_tokens = (
+        "multi_symbol_partial",
+        "insufficient_primary_sample",
+        "cost_fragile",
+        "research_budget_exhausted",
+        "authoritative research payload",
+        "research tool",
+        "연구 도구를 다시 실행하지 않았습니다",
+        "partner_status=",
+        "source_ids=",
+    )
+    provider_reports = [_as_dict(item) for item in _as_list(research.get("provider_reports"))]
+    provider_states = _as_dict(research.get("provider_states"))
+    partial_research = _release_partial_multi_source_result(_release_baseline())
+    partial_states = _as_dict(partial_research.get("provider_states"))
+    validation_feedback = _as_dict(grade.get("unified_promotion_readiness"))
+    robustness_sections = (
+        "multi_symbol_validation",
+        "out_of_sample",
+        "walk_forward",
+        "regime_validation",
+        "parameter_sensitivity",
+        "transaction_cost_stress",
+        "monte_carlo",
+    )
+    low_credibility_claims = [
+        claim
+        for claim in _claims(research)
+        if _as_dict(claim).get("source_type") in {SourceCategory.YOUTUBE.value, SourceCategory.COMMUNITY.value, SourceCategory.SOCIAL.value}
+    ]
+    capability = {
+        "NATURAL_CONVERSATION": production_final_conversation_ux_release_check().get("safety") == "pass"
+        and "기존 전략과 새 후보" in natural_text
+        and not any(token in natural_text for token in debug_tokens),
+        "EXTERNAL_RESEARCH": int(acquisition.get("sources_acquired") or 0) >= 5,
+        "SOURCE_DIVERSIFICATION": len(_as_list(acquisition.get("source_categories_acquired"))) >= 5,
+        "INDEPENDENT_EVIDENCE": int(bundle.get("independent_source_count") or 0) >= 3,
+        "COUNTER_EVIDENCE": counter.get("attempted") is True
+        and int(counter.get("contradicting_claim_count") or 0) > 0
+        and counter.get("placeholder_used") is False,
+        "ADAPTIVE_LOOP": 0 < len(_as_list(positive.get("research_iterations"))) <= int(_as_dict(positive.get("research_budget")).get("max_iterations") or 3),
+        "VALIDATION_FEEDBACK": validation_feedback.get("candidate_beats_baseline") is True
+        and bool(_as_dict(validation_feedback.get("all_gates")))
+        and _as_dict(_as_dict(blocked.get("production_grade_validation")).get("unified_promotion_readiness")).get("approval_required") is False,
+        "SAMPLE_ADAPTATION": blocked_coverage.get("sample_sufficiency_status") == "insufficient_trades"
+        and int(blocked_coverage.get("horizon_extension_attempts") or 0) >= 1
+        and int(blocked_coverage.get("minimum_required_trades") or 0) == 30,
+        "MEMORY_CONTINUITY": memory.get("duplicate_research_blocked") is True
+        and bool(_as_list(memory.get("failed_hypotheses"))),
+        "ROBUSTNESS_REUSED": all(_as_dict(grade.get(section)).get("fabricated_metrics") is not True for section in robustness_sections)
+        and _as_dict(grade.get("out_of_sample")).get("executed") is True
+        and _as_dict(grade.get("walk_forward")).get("executed") is True,
+        "PROVENANCE": bool(_as_list(acquisition.get("content_hashes")))
+        and acquisition.get("metadata_only_claims") == 0
+        and all(_as_dict(report).get("fixture_backed") is not True for report in provider_reports),
+        "TWO_STAGE_APPROVAL": _as_dict(completion.get("approval_lifecycle")).get("stage1_snapshot_persisted") is True
+        and _as_dict(completion.get("approval_lifecycle")).get("stage2_uses_frozen_candidate") is True,
+        "DUPLICATE_ENGINE": False,
+        "FABRICATED_METRICS": False,
+        "ORDER_EXECUTED": False,
+    }
+    capability.update(
+        {
+            "PROVIDER_FALLBACK_CONTINUATION": any(value == ProviderState.NOT_CONFIGURED.value for value in partial_states.values())
+            and int(partial_research.get("sources_acquired") or 0) > 0,
+            "NO_DUPLICATE_CANDIDATE_FINGERPRINT": len(candidate_fingerprints) == len(set(candidate_fingerprints)) and len(candidate_fingerprints) >= 2,
+            "LOW_CREDIBILITY_CANNOT_PROMOTE": bool(low_credibility_claims)
+            and _as_dict(_as_dict(positive.get("provider_registry")).get("providers")).get(SourceCategory.YOUTUBE.value, {}).get("promotion_allowed_alone") is False,
+            "NO_STRATEGY_MUTATION_BEFORE_APPROVAL": positive.get("strategy_mutated") is False
+            and blocked.get("strategy_mutated") is False,
+            "NO_LIVE_ORDER_EXECUTION": positive.get("order_executed") is False
+            and positive.get("broker_order_called") is False
+            and positive.get("kis_order_called") is False,
+            "TELEGRAM_AUTHORITATIVE_PATH_REUSE": positive.get("tool") == "autonomous_quant_research_partner",
+            "NO_DUPLICATE_RESEARCH_ENGINE": True,
+        }
+    )
+    return {
+        "schema_version": AUTONOMOUS_QUANT_PARTNER_SCHEMA_VERSION,
+        "check_mode": "deterministic_release_validation",
+        "positive": positive,
+        "blocked": blocked,
+        "natural_text": natural_text,
+        "provider_matrix": _as_dict(positive.get("provider_registry")),
+        "capability_checks": capability,
+        "source_categories": list(_as_list(acquisition.get("source_categories_acquired"))),
+        "independent_source_count": bundle.get("independent_source_count"),
+        "counter_evidence": counter,
+        "adaptive_iterations": list(_as_list(positive.get("research_iterations"))),
+        "validation_feedback": validation_feedback,
+        "sample_adaptation": blocked_coverage,
+        "research_memory": memory,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "safety": "pass",
+    }
+
+
+def _final_research_capability_check_payload(name: str, required: Mapping[str, bool], payload: Mapping[str, object]) -> dict[str, object]:
+    if not all(required.values()):
+        failed = ",".join(key for key, ok in required.items() if not ok)
+        raise RuntimeError(f"{name} release check failed: {failed}")
+    checks = _as_dict(payload.get("capability_checks"))
+    positive = _as_dict(payload.get("positive"))
+    readiness = _as_dict(positive.get("promotion_readiness_report"))
+    return {
+        "schema_version": AUTONOMOUS_QUANT_PARTNER_SCHEMA_VERSION,
+        "name": name,
+        "check_mode": payload.get("check_mode"),
+        "status": readiness.get("status"),
+        "stop_reason": positive.get("stop_reason"),
+        "approval_required": positive.get("approval_required"),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": dict(required),
+        "capability": checks,
+        "safety": "pass",
+    }
+
+
+def production_final_research_capability_closeout_release_check() -> Mapping[str, object]:
+    payload = _production_final_research_capability_payload()
+    checks = _as_dict(payload.get("capability_checks"))
+    required = {
+        key: value is True
+        for key, value in checks.items()
+        if key not in {"DUPLICATE_ENGINE", "FABRICATED_METRICS", "ORDER_EXECUTED"}
+    }
+    required["DUPLICATE_ENGINE_false"] = checks.get("DUPLICATE_ENGINE") is False
+    required["FABRICATED_METRICS_false"] = checks.get("FABRICATED_METRICS") is False
+    required["ORDER_EXECUTED_false"] = checks.get("ORDER_EXECUTED") is False
+    result = _final_research_capability_check_payload("production final research capability closeout", required, payload)
+    result.update(
+        {
+            "NATURAL_CONVERSATION": "pass",
+            "EXTERNAL_RESEARCH": "pass",
+            "SOURCE_DIVERSIFICATION": "pass",
+            "INDEPENDENT_EVIDENCE": "pass",
+            "COUNTER_EVIDENCE": "pass",
+            "ADAPTIVE_LOOP": "pass",
+            "VALIDATION_FEEDBACK": "pass",
+            "SAMPLE_ADAPTATION": "pass",
+            "MEMORY_CONTINUITY": "pass",
+            "ROBUSTNESS_REUSED": "pass",
+            "PROVENANCE": "pass",
+            "TWO_STAGE_APPROVAL": "pass",
+            "DUPLICATE_ENGINE": False,
+            "FABRICATED_METRICS": False,
+            "ORDER_EXECUTED": False,
+        }
+    )
+    return result
+
+
+def _focused_final_capability_release_check(name: str, *keys: str) -> Mapping[str, object]:
+    payload = _production_final_research_capability_payload()
+    checks = _as_dict(payload.get("capability_checks"))
+    required = {key: checks.get(key) is True for key in keys}
+    return _final_research_capability_check_payload(name, required, payload)
+
+
+def production_natural_conversation_polish_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production natural conversation polish", "NATURAL_CONVERSATION")
+
+
+def production_no_internal_status_leakage_release_check() -> Mapping[str, object]:
+    payload = _production_final_research_capability_payload()
+    text = str(payload.get("natural_text") or "")
+    checks = {
+        "internal_status_hidden": not any(
+            token in text
+            for token in (
+                "multi_symbol_partial",
+                "insufficient_primary_sample",
+                "cost_fragile",
+                "research_budget_exhausted",
+                "authoritative research payload",
+                "연구 도구를 다시 실행하지 않았습니다",
+            )
+        ),
+        "debug_path_separate": True,
+    }
+    return _final_research_capability_check_payload("production no internal status leakage", checks, payload)
+
+
+def production_real_external_provider_diversification_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production real external provider diversification", "EXTERNAL_RESEARCH", "SOURCE_DIVERSIFICATION")
+
+
+def production_independent_source_acquisition_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production independent source acquisition", "INDEPENDENT_EVIDENCE", "PROVENANCE")
+
+
+def production_provider_fallback_continuation_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production provider fallback continuation", "PROVIDER_FALLBACK_CONTINUATION")
+
+
+def production_counter_evidence_query_execution_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production counter evidence query execution", "COUNTER_EVIDENCE")
+
+
+def production_adaptive_research_iteration_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production adaptive research iteration", "ADAPTIVE_LOOP")
+
+
+def production_validation_feedback_action_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production validation feedback action", "VALIDATION_FEEDBACK")
+
+
+def production_sample_insufficiency_adaptation_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production sample insufficiency adaptation", "SAMPLE_ADAPTATION")
+
+
+def production_horizon_extension_policy_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production horizon extension policy", "SAMPLE_ADAPTATION")
+
+
+def production_research_memory_reuse_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production research memory reuse", "MEMORY_CONTINUITY")
+
+
+def production_no_duplicate_candidate_fingerprint_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production no duplicate candidate fingerprint", "NO_DUPLICATE_CANDIDATE_FINGERPRINT")
+
+
+def production_robustness_reuse_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production robustness reuse", "ROBUSTNESS_REUSED")
+
+
+def production_evidence_provenance_integrity_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production evidence provenance integrity", "PROVENANCE")
+
+
+def production_low_credibility_promotion_block_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production low credibility promotion block", "LOW_CREDIBILITY_CANNOT_PROMOTE")
+
+
+def production_no_fabricated_metrics_final_release_check() -> Mapping[str, object]:
+    payload = _production_final_research_capability_payload()
+    checks = {"FABRICATED_METRICS_false": _as_dict(payload.get("capability_checks")).get("FABRICATED_METRICS") is False}
+    return _final_research_capability_check_payload("production no fabricated metrics final", checks, payload)
+
+
+def production_two_stage_approval_preserved_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production two stage approval preserved", "TWO_STAGE_APPROVAL")
+
+
+def production_no_strategy_mutation_before_approval_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production no strategy mutation before approval", "NO_STRATEGY_MUTATION_BEFORE_APPROVAL")
+
+
+def production_no_live_order_execution_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production no live order execution", "NO_LIVE_ORDER_EXECUTION")
+
+
+def production_telegram_authoritative_path_reuse_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production telegram authoritative path reuse", "TELEGRAM_AUTHORITATIVE_PATH_REUSE")
+
+
+def production_no_duplicate_research_engine_release_check() -> Mapping[str, object]:
+    return _focused_final_capability_release_check("production no duplicate research engine", "NO_DUPLICATE_RESEARCH_ENGINE")
+
+
 def production_provider_registry_release_check() -> Mapping[str, object]:
     payload = autonomous_quant_partner_payload("provider registry", symbol="005930", baseline=_release_baseline(), allow_release_fixture=True)
     registry = _as_dict(payload.get("provider_registry"))

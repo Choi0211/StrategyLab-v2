@@ -409,7 +409,7 @@ def _format_autonomous_learning_research_natural(output: dict[str, object]) -> s
     min_trades = _first_available(partner_validation.get("minimum_required_trades"), partner_validation.get("min_trades"))
     source_categories = _list_text(partner_acquisition.get("source_categories_acquired"))
     source_count = _first_available(partner_acquisition.get("sources_acquired"), grade_evidence.get("independent_source_count"), 0)
-    candidate_count = _first_available(partner_tournament.get("candidate_count"), len(_as_list(partner.get("candidate_generation"))), 0)
+    candidate_count = _first_available(len(_as_list(partner.get("candidate_generation"))), partner_tournament.get("candidate_count"), 0)
     iteration_count = len(_as_list(partner.get("research_iterations")))
     promotion_status = str(learning.get("autonomous_quant_partner_promotion_status") or output.get("promotion_status") or partner_readiness.get("status") or "unknown")
     human_gate_status = str(output.get("human_gate_status") or "not_requested")
@@ -596,22 +596,22 @@ def _format_autonomous_learning_targeted_followup(output: dict[str, object], use
     if any(token in normalized for token in ("oos", "out-of-sample", "out of sample", "표본 외")):
         oos = _as_dict(grade.get("out_of_sample"))
         if not oos and not validation.get("out_of_sample_status"):
-            return "OOS는 표본 밖에서도 같은 전략이 버티는지 확인하는 검증입니다. 직전 authoritative research payload에는 OOS 실행 근거가 없어 실행했다고 말하지 않겠습니다."
+            return "OOS는 표본 밖에서도 같은 전략이 버티는지 확인하는 검증입니다. 직전 연구 결과에는 OOS 실행 근거가 저장되어 있지 않아 실행했다고 말하지 않겠습니다."
         return _natural_section_answer(
             "OOS는 표본 밖에서도 같은 전략이 버티는지 확인하는 검증입니다.",
             oos.get("status") or validation.get("out_of_sample_status"),
             oos,
-            "이번 payload에는 OOS 실행 근거가 없어 실행했다고 말하지 않겠습니다.",
+            "이번 연구 결과에는 OOS 실행 근거가 없어 실행했다고 말하지 않겠습니다.",
         )
     if any(token in normalized for token in ("거래비용", "비용", "transaction cost", "cost")):
         cost = _as_dict(grade.get("transaction_cost_stress"))
         if not cost:
-            return "거래비용 검증은 수수료와 슬리피지가 커졌을 때 전략이 얼마나 약해지는지 보는 단계입니다. 직전 authoritative research payload에는 거래비용 스트레스 실행 근거가 없어 임의로 판단하지 않겠습니다."
+            return "거래비용 검증은 수수료와 슬리피지가 커졌을 때 전략이 얼마나 약해지는지 보는 단계입니다. 직전 연구 결과에는 거래비용 스트레스 실행 근거가 없어 임의로 판단하지 않겠습니다."
         return _natural_section_answer(
             "거래비용 검증은 수수료와 슬리피지가 커졌을 때 후보 전략이 얼마나 약해지는지 보는 단계입니다.",
             cost.get("status"),
             cost,
-            "이번 payload에는 거래비용 스트레스 실행 근거가 없어 임의로 판단하지 않겠습니다.",
+            "이번 연구 결과에는 거래비용 스트레스 실행 근거가 없어 임의로 판단하지 않겠습니다.",
         )
     if any(token in normalized for token in ("monte", "몬테", "시뮬레이션")):
         monte = _as_dict(grade.get("monte_carlo"))
@@ -627,7 +627,7 @@ def _format_autonomous_learning_targeted_followup(output: dict[str, object], use
             "다른 종목 검증은 이 전략이 삼성전자 한 종목에만 맞춘 결과인지 확인하는 단계입니다.",
             multi.get("cross_symbol_status") or multi.get("status") or validation.get("multi_symbol_status"),
             multi,
-            "이번 payload에는 다른 종목 검증 근거가 없어 실행했다고 말하지 않겠습니다.",
+            "이번 연구 결과에는 다른 종목 검증 근거가 없어 실행했다고 말하지 않겠습니다.",
         )
     if any(token in normalized for token in ("승격", "승인", "후보", "approval", "promotion")):
         readiness = _as_dict(partner.get("promotion_readiness_report"))
@@ -648,7 +648,7 @@ def _natural_section_answer(intro: str, status: object, section: dict[str, objec
     executed = section.get("executed")
     if executed is False:
         lines.append("이 항목은 실행되지 않은 검증으로 기록되어 있으므로 성과를 만들어 말하지 않겠습니다.")
-    lines.append("직전 authoritative research payload만 근거로 설명했고, 연구 도구를 다시 실행하지 않았습니다.")
+    lines.append("방금 저장된 연구 결과를 기준으로만 설명했습니다.")
     return "\n".join(lines)
 
 
@@ -711,6 +711,15 @@ def _natural_external_research_sentence(source_categories: list[str], source_cou
 def _natural_candidate_sentence(candidate_count: object, tournament: dict[str, object]) -> str:
     best = tournament.get("best_candidate")
     if candidate_count not in ("unknown", 0, "0"):
+        tournament_count = int(tournament.get("candidate_count") or 0)
+        try:
+            generated = int(candidate_count)
+        except (TypeError, ValueError):
+            generated = 0
+        if tournament.get("baseline_included", True) is True and tournament_count == generated + 1:
+            if best:
+                return f"기존 전략과 새 후보 {generated}개, 총 {tournament_count}개를 비교했습니다. 현재 가장 앞선 후보는 {best}입니다."
+            return f"기존 전략과 새 후보 {generated}개, 총 {tournament_count}개를 비교했습니다."
         if best:
             return f"개선 후보는 {candidate_count}개까지 비교했고, 현재 가장 앞선 후보는 {best}입니다."
         return f"개선 후보는 {candidate_count}개까지 비교했습니다."
@@ -744,6 +753,9 @@ def _status_to_korean(value: object) -> str:
         "cost_fragile": "거래비용에 취약",
         "cost_stable": "거래비용 변화에 비교적 안정",
         "stable": "비교적 안정",
+        "acceptable": "허용 가능한 수준",
+        "multi_symbol_sufficient": "여러 종목에서 충분히 확인됨",
+        "single_symbol_only": "단일 종목만 확인됨",
         "fail_underperformed_baseline": "기준 전략보다 부진",
     }
     return translations.get(status, status)
@@ -1618,7 +1630,8 @@ def production_no_unnecessary_research_rerun_release_check() -> dict[str, object
     explanation = format_grounded_tool_response("autonomous_learning_research", payload, "OOS?") or ""
     detail = format_grounded_tool_response("autonomous_learning_research", payload, "상세 검증 결과 보여줘") or ""
     checks = {
-        "explanation_declares_no_rerun": "연구 도구를 다시 실행하지 않았습니다" in explanation,
+        "explanation_reuses_stored_result": "방금 저장된 연구 결과" in explanation,
+        "no_tool_wording_in_default": "연구 도구를 다시 실행하지 않았습니다" not in explanation,
         "detail_path_available": "partner_status=" in detail and "validation_coverage=" in detail,
         "default_not_detail": "partner_status=" not in (format_grounded_tool_response("autonomous_learning_research", payload, "쉽게 설명해줘") or ""),
         "research_engine_reused": True,

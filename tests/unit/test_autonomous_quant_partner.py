@@ -21,6 +21,28 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_authoritative_source_acquisition_release_check,
     production_autonomous_research_action_execution_release_check,
     production_autonomous_quant_partner_acceptance_release_check,
+    production_adaptive_research_iteration_release_check,
+    production_counter_evidence_query_execution_release_check,
+    production_evidence_provenance_integrity_release_check,
+    production_final_research_capability_closeout_release_check,
+    production_horizon_extension_policy_release_check,
+    production_independent_source_acquisition_release_check,
+    production_low_credibility_promotion_block_release_check,
+    production_natural_conversation_polish_release_check,
+    production_no_duplicate_candidate_fingerprint_release_check,
+    production_no_duplicate_research_engine_release_check,
+    production_no_fabricated_metrics_final_release_check,
+    production_no_internal_status_leakage_release_check,
+    production_no_live_order_execution_release_check,
+    production_no_strategy_mutation_before_approval_release_check,
+    production_provider_fallback_continuation_release_check,
+    production_real_external_provider_diversification_release_check,
+    production_research_memory_reuse_release_check,
+    production_robustness_reuse_release_check,
+    production_sample_insufficiency_adaptation_release_check,
+    production_telegram_authoritative_path_reuse_release_check,
+    production_two_stage_approval_preserved_release_check,
+    production_validation_feedback_action_release_check,
     production_counter_evidence_release_check,
     production_autonomous_research_action_loop_release_check,
     production_candidate_freeze_integrity_release_check,
@@ -429,6 +451,70 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         self.assertTrue(payload["checks"]["machine_checkable_safety_invariants"])
         self.assertFalse(payload["strategy_mutated"])
         self.assertFalse(payload["order_executed"])
+
+    def test_final_research_capability_closeout_release_check_reports_contract(self) -> None:
+        payload = production_final_research_capability_closeout_release_check()
+
+        self.assertEqual("pass", payload["safety"])
+        self.assertEqual("deterministic_release_validation", payload["check_mode"])
+        for key in (
+            "NATURAL_CONVERSATION",
+            "EXTERNAL_RESEARCH",
+            "SOURCE_DIVERSIFICATION",
+            "INDEPENDENT_EVIDENCE",
+            "COUNTER_EVIDENCE",
+            "ADAPTIVE_LOOP",
+            "VALIDATION_FEEDBACK",
+            "SAMPLE_ADAPTATION",
+            "MEMORY_CONTINUITY",
+            "ROBUSTNESS_REUSED",
+            "PROVENANCE",
+            "TWO_STAGE_APPROVAL",
+        ):
+            self.assertEqual("pass", payload[key], key)
+        self.assertFalse(payload["DUPLICATE_ENGINE"])
+        self.assertFalse(payload["FABRICATED_METRICS"])
+        self.assertFalse(payload["ORDER_EXECUTED"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+
+    def test_final_research_capability_focused_release_checks_pass(self) -> None:
+        checks = (
+            production_natural_conversation_polish_release_check,
+            production_no_internal_status_leakage_release_check,
+            production_real_external_provider_diversification_release_check,
+            production_independent_source_acquisition_release_check,
+            production_provider_fallback_continuation_release_check,
+            production_counter_evidence_query_execution_release_check,
+            production_adaptive_research_iteration_release_check,
+            production_validation_feedback_action_release_check,
+            production_sample_insufficiency_adaptation_release_check,
+            production_horizon_extension_policy_release_check,
+            production_research_memory_reuse_release_check,
+            production_no_duplicate_candidate_fingerprint_release_check,
+            production_robustness_reuse_release_check,
+            production_evidence_provenance_integrity_release_check,
+            production_low_credibility_promotion_block_release_check,
+            production_no_fabricated_metrics_final_release_check,
+            production_two_stage_approval_preserved_release_check,
+            production_no_strategy_mutation_before_approval_release_check,
+            production_no_live_order_execution_release_check,
+            production_telegram_authoritative_path_reuse_release_check,
+            production_no_duplicate_research_engine_release_check,
+        )
+        for check in checks:
+            with self.subTest(check=check.__name__):
+                payload = check()
+                self.assertEqual("pass", payload["safety"])
+                self.assertFalse(payload["strategy_mutated"])
+                self.assertFalse(payload["order_executed"])
+
+    def test_natural_conversation_hides_internal_status_and_explains_candidates(self) -> None:
+        payload = production_natural_conversation_polish_release_check()
+        capability = payload["capability"]
+
+        self.assertTrue(capability["NATURAL_CONVERSATION"])
+        self.assertFalse(capability["DUPLICATE_ENGINE"])
 
     def test_final_completion_blocks_insufficient_evidence_without_mutation(self) -> None:
         payload = production_final_autonomous_research_release_check()

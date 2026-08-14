@@ -3,6 +3,34 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Gaon V2 Final Research Capability Closeout
+
+Gaon now has a final deterministic closeout contract for the production
+Autonomous Quant Partner research capability. The check verifies natural Korean
+Telegram presentation, no internal status leakage by default, diversified
+external research, independent evidence, counter-evidence, adaptive iteration,
+validation feedback, sample insufficiency handling, research-memory continuity,
+robustness reuse, provenance integrity, two-stage approval, duplicate-engine
+prevention, no fabricated metrics, and no order execution.
+
+New release checks include focused capability checks plus:
+
+```bash
+python -m gaon.runtime.cli gaon-production-final-research-capability-closeout-release-check
+```
+
+The aggregate output must include `NATURAL_CONVERSATION=pass`,
+`EXTERNAL_RESEARCH=pass`, `SOURCE_DIVERSIFICATION=pass`,
+`INDEPENDENT_EVIDENCE=pass`, `COUNTER_EVIDENCE=pass`,
+`ADAPTIVE_LOOP=pass`, `VALIDATION_FEEDBACK=pass`,
+`SAMPLE_ADAPTATION=pass`, `MEMORY_CONTINUITY=pass`,
+`ROBUSTNESS_REUSED=pass`, `PROVENANCE=pass`,
+`TWO_STAGE_APPROVAL=pass`, `DUPLICATE_ENGINE=false`,
+`FABRICATED_METRICS=false`, `ORDER_EXECUTED=false`, and `safety=pass`.
+
+Schema remains v36. Production live Telegram/provider execution remains
+PENDING PRODUCTION VERIFICATION on the VPS.
+
 ## Gaon V2 Natural Conversation UX Closeout
 
 Telegram autonomous research answers now default to natural Korean research

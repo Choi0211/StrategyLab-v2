@@ -401,6 +401,28 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-natural-promotion-approval-conversation-release-check")
     sub.add_parser("gaon-production-conversation-grounding-integrity-release-check")
     sub.add_parser("gaon-production-final-conversation-ux-release-check")
+    sub.add_parser("gaon-production-natural-conversation-polish-release-check")
+    sub.add_parser("gaon-production-no-internal-status-leakage-release-check")
+    sub.add_parser("gaon-production-real-external-provider-diversification-release-check")
+    sub.add_parser("gaon-production-independent-source-acquisition-release-check")
+    sub.add_parser("gaon-production-provider-fallback-continuation-release-check")
+    sub.add_parser("gaon-production-counter-evidence-query-execution-release-check")
+    sub.add_parser("gaon-production-adaptive-research-iteration-release-check")
+    sub.add_parser("gaon-production-validation-feedback-action-release-check")
+    sub.add_parser("gaon-production-sample-insufficiency-adaptation-release-check")
+    sub.add_parser("gaon-production-horizon-extension-policy-release-check")
+    sub.add_parser("gaon-production-research-memory-reuse-release-check")
+    sub.add_parser("gaon-production-no-duplicate-candidate-fingerprint-release-check")
+    sub.add_parser("gaon-production-robustness-reuse-release-check")
+    sub.add_parser("gaon-production-evidence-provenance-integrity-release-check")
+    sub.add_parser("gaon-production-low-credibility-promotion-block-release-check")
+    sub.add_parser("gaon-production-no-fabricated-metrics-final-release-check")
+    sub.add_parser("gaon-production-two-stage-approval-preserved-release-check")
+    sub.add_parser("gaon-production-no-strategy-mutation-before-approval-release-check")
+    sub.add_parser("gaon-production-no-live-order-execution-release-check")
+    sub.add_parser("gaon-production-telegram-authoritative-path-reuse-release-check")
+    sub.add_parser("gaon-production-no-duplicate-research-engine-release-check")
+    sub.add_parser("gaon-production-final-research-capability-closeout-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2772,6 +2794,113 @@ def _run(args: argparse.Namespace) -> int:
             f"{check_mode}"
             f"status={payload['status']} "
             f"stop_reason={payload['stop_reason']} "
+            f"approval_required={str(payload['approval_required']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command in {
+        "gaon-production-natural-conversation-polish-release-check",
+        "gaon-production-no-internal-status-leakage-release-check",
+        "gaon-production-real-external-provider-diversification-release-check",
+        "gaon-production-independent-source-acquisition-release-check",
+        "gaon-production-provider-fallback-continuation-release-check",
+        "gaon-production-counter-evidence-query-execution-release-check",
+        "gaon-production-adaptive-research-iteration-release-check",
+        "gaon-production-validation-feedback-action-release-check",
+        "gaon-production-sample-insufficiency-adaptation-release-check",
+        "gaon-production-horizon-extension-policy-release-check",
+        "gaon-production-research-memory-reuse-release-check",
+        "gaon-production-no-duplicate-candidate-fingerprint-release-check",
+        "gaon-production-robustness-reuse-release-check",
+        "gaon-production-evidence-provenance-integrity-release-check",
+        "gaon-production-low-credibility-promotion-block-release-check",
+        "gaon-production-no-fabricated-metrics-final-release-check",
+        "gaon-production-two-stage-approval-preserved-release-check",
+        "gaon-production-no-strategy-mutation-before-approval-release-check",
+        "gaon-production-no-live-order-execution-release-check",
+        "gaon-production-telegram-authoritative-path-reuse-release-check",
+        "gaon-production-no-duplicate-research-engine-release-check",
+        "gaon-production-final-research-capability-closeout-release-check",
+    }:
+        from gaon.knowledge.autonomous_quant_partner import (
+            production_adaptive_research_iteration_release_check,
+            production_counter_evidence_query_execution_release_check,
+            production_evidence_provenance_integrity_release_check,
+            production_final_research_capability_closeout_release_check,
+            production_horizon_extension_policy_release_check,
+            production_independent_source_acquisition_release_check,
+            production_low_credibility_promotion_block_release_check,
+            production_natural_conversation_polish_release_check,
+            production_no_duplicate_candidate_fingerprint_release_check,
+            production_no_duplicate_research_engine_release_check,
+            production_no_fabricated_metrics_final_release_check,
+            production_no_internal_status_leakage_release_check,
+            production_no_live_order_execution_release_check,
+            production_no_strategy_mutation_before_approval_release_check,
+            production_provider_fallback_continuation_release_check,
+            production_real_external_provider_diversification_release_check,
+            production_research_memory_reuse_release_check,
+            production_robustness_reuse_release_check,
+            production_sample_insufficiency_adaptation_release_check,
+            production_telegram_authoritative_path_reuse_release_check,
+            production_two_stage_approval_preserved_release_check,
+            production_validation_feedback_action_release_check,
+        )
+
+        handlers = {
+            "gaon-production-natural-conversation-polish-release-check": production_natural_conversation_polish_release_check,
+            "gaon-production-no-internal-status-leakage-release-check": production_no_internal_status_leakage_release_check,
+            "gaon-production-real-external-provider-diversification-release-check": production_real_external_provider_diversification_release_check,
+            "gaon-production-independent-source-acquisition-release-check": production_independent_source_acquisition_release_check,
+            "gaon-production-provider-fallback-continuation-release-check": production_provider_fallback_continuation_release_check,
+            "gaon-production-counter-evidence-query-execution-release-check": production_counter_evidence_query_execution_release_check,
+            "gaon-production-adaptive-research-iteration-release-check": production_adaptive_research_iteration_release_check,
+            "gaon-production-validation-feedback-action-release-check": production_validation_feedback_action_release_check,
+            "gaon-production-sample-insufficiency-adaptation-release-check": production_sample_insufficiency_adaptation_release_check,
+            "gaon-production-horizon-extension-policy-release-check": production_horizon_extension_policy_release_check,
+            "gaon-production-research-memory-reuse-release-check": production_research_memory_reuse_release_check,
+            "gaon-production-no-duplicate-candidate-fingerprint-release-check": production_no_duplicate_candidate_fingerprint_release_check,
+            "gaon-production-robustness-reuse-release-check": production_robustness_reuse_release_check,
+            "gaon-production-evidence-provenance-integrity-release-check": production_evidence_provenance_integrity_release_check,
+            "gaon-production-low-credibility-promotion-block-release-check": production_low_credibility_promotion_block_release_check,
+            "gaon-production-no-fabricated-metrics-final-release-check": production_no_fabricated_metrics_final_release_check,
+            "gaon-production-two-stage-approval-preserved-release-check": production_two_stage_approval_preserved_release_check,
+            "gaon-production-no-strategy-mutation-before-approval-release-check": production_no_strategy_mutation_before_approval_release_check,
+            "gaon-production-no-live-order-execution-release-check": production_no_live_order_execution_release_check,
+            "gaon-production-telegram-authoritative-path-reuse-release-check": production_telegram_authoritative_path_reuse_release_check,
+            "gaon-production-no-duplicate-research-engine-release-check": production_no_duplicate_research_engine_release_check,
+            "gaon-production-final-research-capability-closeout-release-check": production_final_research_capability_closeout_release_check,
+        }
+        payload = handlers[args.command]()
+        aggregate = ""
+        if args.command == "gaon-production-final-research-capability-closeout-release-check":
+            aggregate = (
+                f"NATURAL_CONVERSATION={payload['NATURAL_CONVERSATION']} "
+                f"EXTERNAL_RESEARCH={payload['EXTERNAL_RESEARCH']} "
+                f"SOURCE_DIVERSIFICATION={payload['SOURCE_DIVERSIFICATION']} "
+                f"INDEPENDENT_EVIDENCE={payload['INDEPENDENT_EVIDENCE']} "
+                f"COUNTER_EVIDENCE={payload['COUNTER_EVIDENCE']} "
+                f"ADAPTIVE_LOOP={payload['ADAPTIVE_LOOP']} "
+                f"VALIDATION_FEEDBACK={payload['VALIDATION_FEEDBACK']} "
+                f"SAMPLE_ADAPTATION={payload['SAMPLE_ADAPTATION']} "
+                f"MEMORY_CONTINUITY={payload['MEMORY_CONTINUITY']} "
+                f"ROBUSTNESS_REUSED={payload['ROBUSTNESS_REUSED']} "
+                f"PROVENANCE={payload['PROVENANCE']} "
+                f"TWO_STAGE_APPROVAL={payload['TWO_STAGE_APPROVAL']} "
+                f"DUPLICATE_ENGINE={str(payload['DUPLICATE_ENGINE']).lower()} "
+                f"FABRICATED_METRICS={str(payload['FABRICATED_METRICS']).lower()} "
+                f"ORDER_EXECUTED={str(payload['ORDER_EXECUTED']).lower()} "
+            )
+        check_mode = f"check_mode={payload['check_mode']} " if "check_mode" in payload else ""
+        print(
+            f"{args.command}: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"{check_mode}"
+            f"status={payload['status']} "
+            f"stop_reason={payload['stop_reason']} "
+            f"{aggregate}"
             f"approval_required={str(payload['approval_required']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
