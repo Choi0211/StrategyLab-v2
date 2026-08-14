@@ -280,6 +280,7 @@ def autonomous_quant_partner_payload(
         baseline=baseline,
         production_grade=production_grade,
         budget=selected_budget,
+        connection=connection,
     )
     iterations = _research_iterations(
         selected_budget,
@@ -1895,6 +1896,7 @@ def _adaptive_validation_feedback_execution(
     baseline: Mapping[str, object],
     production_grade: Mapping[str, object],
     budget: ResearchBudget,
+    connection: object | None = None,
 ) -> dict[str, object]:
     failures = _adaptive_failures_from_validation(production_grade)
     if not failures:
@@ -1951,36 +1953,43 @@ def _adaptive_validation_feedback_execution(
         }
 
     starting_candidate = _candidate_strategy_from_baseline(baseline) or baseline_strategy
-    known_fingerprints = _known_candidate_fingerprints(baseline)
-    known_fingerprints.update({baseline_strategy.fingerprint, starting_candidate.fingerprint})
+    known_semantic_fingerprints = _known_candidate_semantic_fingerprints(baseline)
+    known_semantic_fingerprints.update(
+        {
+            _strategy_semantic_fingerprint(baseline_strategy),
+            _strategy_semantic_fingerprint(starting_candidate),
+        }
+    )
+    persistent_fingerprints = _persistent_adaptive_fingerprints(connection)
+    known_semantic_fingerprints.update(persistent_fingerprints)
     iterations: list[dict[str, object]] = []
     duplicate_count = 0
     max_attempts = min(len(failures), budget.max_iterations, budget.max_experiments)
 
     for index, observed_failure in enumerate(failures[:max_attempts], start=1):
-        candidate, changed_rules = _adaptive_candidate_for_failure(
-            starting_candidate,
-            observed_failure=observed_failure,
-            iteration=index,
+        candidate, changed_rules, semantic_fingerprint, skipped_semantics = (
+            _select_unique_adaptive_candidate(
+                starting_candidate,
+                observed_failure=observed_failure,
+                iteration=index,
+                known_semantic_fingerprints=known_semantic_fingerprints,
+            )
         )
-        experiment_id = (
-            f"adaptive-experiment:"
-            f"{_hash({'failure': observed_failure, 'fingerprint': candidate.fingerprint})[:16]}"
-        )
-        if candidate.fingerprint in known_fingerprints:
-            duplicate_count += 1
+        duplicate_count += len(skipped_semantics)
+        if candidate is None:
             iterations.append(
                 {
                     "iteration": index,
                     "observed_failure": observed_failure,
                     "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
-                    "candidate_id": f"candidate:{observed_failure}:duplicate",
-                    "candidate_fingerprint": candidate.fingerprint,
-                    "changed_rules": changed_rules,
-                    "experiment_id": experiment_id,
+                    "candidate_id": f"candidate:{observed_failure}:duplicate_exhausted",
+                    "candidate_fingerprint": None,
+                    "candidate_semantic_fingerprint": None,
+                    "changed_rules": [],
+                    "skipped_semantic_fingerprints": skipped_semantics,
                     "actual_execution": False,
                     "duplicate_candidate_skipped": True,
-                    "validation_result": "duplicate_candidate_skipped",
+                    "validation_result": "duplicate_candidate_space_exhausted",
                     "next_action": "select_different_hypothesis",
                     "strategy_mutated": False,
                     "order_executed": False,
@@ -1988,7 +1997,11 @@ def _adaptive_validation_feedback_execution(
             )
             continue
 
-        known_fingerprints.add(candidate.fingerprint)
+        experiment_id = (
+            f"adaptive-experiment:"
+            f"{_hash({'failure': observed_failure, 'semantic': semantic_fingerprint})[:16]}"
+        )
+        known_semantic_fingerprints.add(semantic_fingerprint)
         rid = (
             f"adaptive-feedback:{symbol}:{index}:"
             f"{_hash({'request': request_text, 'candidate': candidate.fingerprint})[:12]}"
@@ -2005,7 +2018,16 @@ def _adaptive_validation_feedback_execution(
         )
         validation_status = str(validation.get("status") or "pending_real_validation")
         accepted = validation_status in {"pass", "acceptable", "stable"}
-        candidate_id = f"candidate:{observed_failure}:{candidate.fingerprint[:12]}"
+        candidate_id = f"candidate:{observed_failure}:{semantic_fingerprint[:12]}"
+        _remember_adaptive_candidate(
+            connection,
+            symbol=symbol,
+            observed_failure=observed_failure,
+            semantic_fingerprint=semantic_fingerprint,
+            candidate=candidate,
+            validation_status=validation_status,
+            changed_rules=changed_rules,
+        )
         iterations.append(
             {
                 "iteration": index,
@@ -2013,8 +2035,12 @@ def _adaptive_validation_feedback_execution(
                 "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
                 "candidate_id": candidate_id,
                 "candidate_fingerprint": candidate.fingerprint,
+                "candidate_semantic_fingerprint": semantic_fingerprint,
+                "candidate_instance_fingerprint": candidate.fingerprint,
                 "parent_candidate_fingerprint": starting_candidate.fingerprint,
+                "parent_candidate_semantic_fingerprint": _strategy_semantic_fingerprint(starting_candidate),
                 "changed_rules": changed_rules,
+                "skipped_semantic_fingerprints": skipped_semantics,
                 "experiment_id": experiment_id,
                 "primary_backtest": _result_summary(primary),
                 "primary_metrics": _as_dict(_result_summary(primary).get("metrics")),
@@ -2058,6 +2084,12 @@ def _adaptive_validation_feedback_execution(
             for item in iterations
             if item.get("candidate_fingerprint")
         ],
+        "candidate_semantic_fingerprints": [
+            item.get("candidate_semantic_fingerprint")
+            for item in iterations
+            if item.get("candidate_semantic_fingerprint")
+        ],
+        "persistent_adaptive_fingerprints_loaded": len(persistent_fingerprints),
         "uses_existing_backtest_engine": True,
         "common_protocol_required": True,
         "promotion_from_adaptive_feedback_alone": False,
@@ -2080,11 +2112,143 @@ def _adaptive_failures_from_validation(production_grade: Mapping[str, object]) -
     return failures
 
 
+def _strategy_semantic_fingerprint(strategy: object) -> str:
+    def values(section: object) -> dict[str, object]:
+        return {
+            str(key): getattr(value, "value", value)
+            for key, value in sorted(dict(section).items())
+        }
+
+    return _hash(
+        {
+            "semantic_schema_version": 1,
+            "symbol": str(getattr(strategy, "symbol", "")),
+            "entry": values(getattr(strategy, "entry", {})),
+            "exit": values(getattr(strategy, "exit", {})),
+            "filters": values(getattr(strategy, "filters", {})),
+        }
+    )
+
+
+def _known_candidate_semantic_fingerprints(
+    baseline: Mapping[str, object],
+) -> set[str]:
+    fingerprints: set[str] = set()
+    for row in (_as_dict(item) for item in _as_list(baseline.get("candidates"))):
+        strategy_json = _as_dict(
+            _as_dict(row.get("backtest_result")).get("strategy")
+            or row.get("strategy")
+        )
+        if not strategy_json:
+            continue
+        try:
+            fingerprints.add(
+                _strategy_semantic_fingerprint(_strategy_from_json(strategy_json))
+            )
+        except Exception:
+            continue
+    return fingerprints
+
+
+def _persistent_adaptive_fingerprints(connection: object | None) -> set[str]:
+    if not isinstance(connection, sqlite3.Connection):
+        return set()
+    try:
+        from gaon.research.self_improving import SQLiteResearchMemoryRepository
+
+        repository = SQLiteResearchMemoryRepository(connection)
+        return {
+            memory.fingerprint
+            for memory in repository.search(
+                strategy_family="adaptive_validation_feedback",
+                timeframe="daily",
+                tag="adaptive_candidate",
+            )
+            if memory.fingerprint
+        }
+    except Exception:
+        return set()
+
+
+def _remember_adaptive_candidate(
+    connection: object | None,
+    *,
+    symbol: str,
+    observed_failure: str,
+    semantic_fingerprint: str,
+    candidate: object,
+    validation_status: str,
+    changed_rules: list[str],
+) -> None:
+    if not isinstance(connection, sqlite3.Connection):
+        return
+    try:
+        from gaon.research.self_improving import (
+            ResearchMemoryEntry,
+            SQLiteResearchMemoryRepository,
+            utc_now,
+        )
+
+        repository = SQLiteResearchMemoryRepository(connection)
+        if repository.find_by_fingerprint(semantic_fingerprint) is not None:
+            return
+        at = utc_now()
+        repository.add_memory(
+            ResearchMemoryEntry(
+                memory_id=f"memory:adaptive:{symbol}:{semantic_fingerprint[:16]}",
+                strategy_family="adaptive_validation_feedback",
+                market=symbol,
+                timeframe="daily",
+                hypothesis=f"adaptive_response_to:{observed_failure}",
+                result_summary=f"validation_status={validation_status}",
+                critic_summary=f"observed_failure={observed_failure}",
+                improvement_summary="; ".join(changed_rules) or "no_change",
+                final_status="adaptive_candidate_tested",
+                tags=(
+                    "adaptive_candidate",
+                    f"failure:{observed_failure}",
+                    f"symbol:{symbol}",
+                ),
+                created_at=at,
+                source_run_id=f"adaptive:{symbol}",
+                fingerprint=semantic_fingerprint,
+                source_refs=("production:adaptive_validation_feedback",),
+            )
+        )
+    except (sqlite3.Error, ValueError):
+        return
+
+
+def _select_unique_adaptive_candidate(
+    starting_candidate: object,
+    *,
+    observed_failure: str,
+    iteration: int,
+    known_semantic_fingerprints: set[str],
+    max_variants: int = 4,
+) -> tuple[object | None, list[str], str | None, list[str]]:
+    skipped: list[str] = []
+    for variant in range(max_variants):
+        candidate, changed_rules = _adaptive_candidate_for_failure(
+            starting_candidate,
+            observed_failure=observed_failure,
+            iteration=iteration,
+            variant=variant,
+        )
+        semantic = _strategy_semantic_fingerprint(candidate)
+        if semantic in known_semantic_fingerprints:
+            skipped.append(semantic)
+            continue
+        return candidate, changed_rules, semantic, skipped
+    return None, [], None, skipped
+
+
 def _adaptive_candidate_for_failure(
     strategy: object,
     *,
     observed_failure: str,
     iteration: int,
+    variant: int = 0,
 ) -> tuple[object, list[str]]:
     # Deterministic failure-specific candidates using supported rules only.
     from gaon.research.krx_real_pipeline import FieldProvenance, ProvenancedValue
@@ -2118,11 +2282,17 @@ def _adaptive_candidate_for_failure(
     breakout = int(getattr(breakout_rule, "value", 20) or 20)
 
     if observed_failure == "out_of_sample_fail":
-        if "close_gt_ma20" in entry and "ma20_gt_ma60" in entry:
+        if variant == 0 and "close_gt_ma20" in entry and "ma20_gt_ma60" in entry:
             entry.pop("close_gt_ma20")
             changes.append(
                 "close_gt_ma20:removed_as_redundant_oos_confirmation"
             )
+        elif variant == 1 and "volume_gte_ma20" in filters:
+            filters.pop("volume_gte_ma20")
+            changes.append("volume_gte_ma20:removed_for_oos_generalization_variant")
+        elif variant >= 2:
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 5 * variant))
+            changes.append(f"oos_generalization_variant:{variant}")
         elif "ma20_gt_ma60" not in entry:
             entry["ma20_gt_ma60"] = research_value(True)
             changes.append("ma20_gt_ma60:added_for_oos_generalization")
@@ -2133,10 +2303,20 @@ def _adaptive_candidate_for_failure(
             set_numeric(entry, "breakout_lookback", min(80, breakout + 5))
 
     elif observed_failure == "walk_forward_fail":
-        if "volume_gte_ma20" in filters:
+        if variant == 0 and "volume_gte_ma20" in filters:
             filters.pop("volume_gte_ma20")
             changes.append(
                 "volume_gte_ma20:removed_for_walk_forward_simplification"
+            )
+        elif variant == 1 and "close_gt_ma20" in entry:
+            entry.pop("close_gt_ma20")
+            changes.append(
+                "close_gt_ma20:removed_for_walk_forward_simplification_variant"
+            )
+        elif variant >= 2 and "ma20_gt_ma60" in entry:
+            entry.pop("ma20_gt_ma60")
+            changes.append(
+                "ma20_gt_ma60:removed_for_walk_forward_simplification_variant"
             )
         elif "close_gt_ma20" in entry:
             entry.pop("close_gt_ma20")
@@ -2152,14 +2332,18 @@ def _adaptive_candidate_for_failure(
             set_numeric(entry, "breakout_lookback", min(80, breakout + 3))
 
     elif observed_failure == "cost_fragile":
-        set_numeric(entry, "breakout_lookback", min(80, breakout + 10))
+        step = 10 + (variant * 5)
+        exit_step = 5 + (variant * 5)
+        set_numeric(entry, "breakout_lookback", min(80, breakout + step))
         exit_rule = exits.get("channel_exit_lookback")
         exit_lookback = int(getattr(exit_rule, "value", 10) or 10)
         set_numeric(
             exits,
             "channel_exit_lookback",
-            min(80, max(exit_lookback + 5, 15)),
+            min(80, max(exit_lookback + exit_step, 15)),
         )
+        if variant:
+            changes.append(f"cost_resilience_variant:{variant}")
 
     elif observed_failure in {
         "insufficient_trades",
