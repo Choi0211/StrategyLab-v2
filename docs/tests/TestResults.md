@@ -2,6 +2,37 @@
 
 Status: Passed
 
+## Gaon V1/V2 Asset Reuse Audit
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\v1_asset_reuse_audit.py src\gaon\runtime\cli.py tests\unit\test_v1_asset_reuse_audit.py tests\integration\test_v1_asset_reuse_audit_flow.py`: PASS
+  - `python -m unittest tests.unit.test_v1_asset_reuse_audit -v`: PASS, 3 tests
+  - `python -m unittest tests.integration.test_v1_asset_reuse_audit_flow -v`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-production-v1-asset-reuse-audit-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-v1-v2-authoritative-path-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-no-unintended-duplicate-engine-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-memory-continuity-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-legacy-path-isolation-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-v1-v2-final-integration-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 854 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 201 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-final-live-research-execution-readiness-release-check`: PASS
+  - `git diff --check`: PASS
+- Final verdict: `GAON V1/V2 INTEGRATION COMPLETE`.
+- Status summary:
+  - `V1_ASSET_REUSE_STATUS=complete`
+  - `V1_RESEARCH_MEMORY_STATUS=continuous`
+  - `DUPLICATE_ENGINE_STATUS=no_unintended_duplicate_engine`
+  - `LEGACY_PATH_STATUS=isolated`
+  - `PRODUCTION_AUTHORITATIVE_PATH_STATUS=complete`
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fixture-backed production promotion, no fabricated metrics.
+
 ## Hotfix Final Telegram Autonomous Research Routing
 
 - Targeted local verification:

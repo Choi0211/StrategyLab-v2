@@ -95,6 +95,7 @@ Aggregate command:
 
 ```bash
 python -m gaon.runtime.cli gaon-production-v2-final-closeout-release-check
+python -m gaon.runtime.cli gaon-production-v1-v2-final-integration-release-check
 ```
 
 Focused commands remain available:
@@ -108,7 +109,17 @@ python -m gaon.runtime.cli gaon-production-champion-replacement-release-check
 python -m gaon.runtime.cli gaon-production-champion-rollback-release-check
 python -m gaon.runtime.cli gaon-production-final-safety-boundary-release-check
 python -m gaon.runtime.cli gaon-production-gaon-v2-completion-release-check
+python -m gaon.runtime.cli gaon-production-v1-asset-reuse-audit-release-check
+python -m gaon.runtime.cli gaon-production-v1-v2-authoritative-path-release-check
+python -m gaon.runtime.cli gaon-production-no-unintended-duplicate-engine-release-check
+python -m gaon.runtime.cli gaon-production-research-memory-continuity-release-check
+python -m gaon.runtime.cli gaon-production-legacy-path-isolation-release-check
 ```
+
+The V1/V2 integration audit verdict is `GAON V1/V2 INTEGRATION COMPLETE`.
+It verifies that public V1 assets were reused or intentionally replaced, that
+private MyMoneyGuard/KIS runtime assets remain excluded, and that no unintended
+duplicate production engine is on the authoritative Telegram research path.
 
 ## Safety Invariants
 

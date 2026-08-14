@@ -389,6 +389,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-human-promotion-gate-release-check")
     sub.add_parser("gaon-production-autonomous-learning-loop-release-check")
     sub.add_parser("gaon-production-real-academic-content-resolution-release-check")
+    sub.add_parser("gaon-production-v1-asset-reuse-audit-release-check")
+    sub.add_parser("gaon-production-v1-v2-authoritative-path-release-check")
+    sub.add_parser("gaon-production-no-unintended-duplicate-engine-release-check")
+    sub.add_parser("gaon-production-research-memory-continuity-release-check")
+    sub.add_parser("gaon-production-legacy-path-isolation-release-check")
+    sub.add_parser("gaon-production-v1-v2-final-integration-release-check")
     adaptive_validation_release = sub.add_parser("gaon-adaptive-validation-release-check")
     adaptive_validation_release.add_argument("--db", default=":memory:")
     autonomous_planner_release = sub.add_parser("gaon-autonomous-research-planner-release-check")
@@ -2760,6 +2766,49 @@ def _run(args: argparse.Namespace) -> int:
             f"{check_mode}"
             f"status={payload['status']} "
             f"stop_reason={payload['stop_reason']} "
+            f"approval_required={str(payload['approval_required']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command in {
+        "gaon-production-v1-asset-reuse-audit-release-check",
+        "gaon-production-v1-v2-authoritative-path-release-check",
+        "gaon-production-no-unintended-duplicate-engine-release-check",
+        "gaon-production-research-memory-continuity-release-check",
+        "gaon-production-legacy-path-isolation-release-check",
+        "gaon-production-v1-v2-final-integration-release-check",
+    }:
+        from gaon.knowledge.v1_asset_reuse_audit import (
+            production_legacy_path_isolation_release_check,
+            production_no_unintended_duplicate_engine_release_check,
+            production_research_memory_continuity_release_check,
+            production_v1_asset_reuse_audit_release_check,
+            production_v1_v2_authoritative_path_release_check,
+            production_v1_v2_final_integration_release_check,
+        )
+
+        handlers = {
+            "gaon-production-v1-asset-reuse-audit-release-check": production_v1_asset_reuse_audit_release_check,
+            "gaon-production-v1-v2-authoritative-path-release-check": production_v1_v2_authoritative_path_release_check,
+            "gaon-production-no-unintended-duplicate-engine-release-check": production_no_unintended_duplicate_engine_release_check,
+            "gaon-production-research-memory-continuity-release-check": production_research_memory_continuity_release_check,
+            "gaon-production-legacy-path-isolation-release-check": production_legacy_path_isolation_release_check,
+            "gaon-production-v1-v2-final-integration-release-check": production_v1_v2_final_integration_release_check,
+        }
+        payload = handlers[args.command]()
+        statuses = payload["status_summary"]
+        print(
+            f"{args.command}: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"status={payload['status']} "
+            f"verdict={str(payload['verdict']).replace(' ', '_')} "
+            f"V1_ASSET_REUSE_STATUS={statuses['V1_ASSET_REUSE_STATUS']} "
+            f"V1_RESEARCH_MEMORY_STATUS={statuses['V1_RESEARCH_MEMORY_STATUS']} "
+            f"DUPLICATE_ENGINE_STATUS={statuses['DUPLICATE_ENGINE_STATUS']} "
+            f"LEGACY_PATH_STATUS={statuses['LEGACY_PATH_STATUS']} "
+            f"PRODUCTION_AUTHORITATIVE_PATH_STATUS={statuses['PRODUCTION_AUTHORITATIVE_PATH_STATUS']} "
             f"approval_required={str(payload['approval_required']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "

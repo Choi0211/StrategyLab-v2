@@ -1,5 +1,21 @@
 # Changelog
 
+## Gaon V1/V2 Asset Reuse Audit
+
+- Added a final deterministic V1/V2 asset reuse audit matrix covering market
+  data, KRX/Yahoo provider wiring, universe selection, backtesting, strategy
+  representation, cost assumptions, performance metrics, validation, research
+  memory, evidence provenance, tournament ranking, approval, Champion
+  replacement, rollback, Telegram routing, persistence, and safety boundaries.
+- Added production release checks for V1 asset reuse, V1/V2 authoritative call
+  path, duplicate-engine isolation, research-memory continuity, legacy-path
+  isolation, and final V1/V2 integration.
+- Documented that private MyMoneyGuard/KIS live execution assets are
+  intentionally excluded from the public V2 production path while public
+  adapter contracts and two-stage approval remain.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Hotfix Final Telegram Autonomous Research Routing
 
 - Added an explicit production Telegram routing gate for compound Autonomous
