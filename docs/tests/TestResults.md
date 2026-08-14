@@ -2337,3 +2337,25 @@ financial/trading relevance screening, rejection of the production
 resolution through an HTTP intermediate to an approved HTTPS final URL,
 content acquisition, normalization, grounded evidence, hypothesis generation,
 and candidate experiment creation. Schema remains v36; no migration was added.
+
+# Final Production Robustness Execution Wiring
+
+Targeted local verification:
+
+- `python -m py_compile src/gaon/knowledge/autonomous_quant_partner.py src/gaon/knowledge/telegram_autonomous_learning.py src/gaon/runtime/cli.py`: PASS
+- `gaon-production-robustness-execution-wiring-release-check`: PASS, `check_mode=deterministic_release_validation`
+- `gaon-production-autonomous-research-action-execution-release-check`: PASS, `check_mode=deterministic_release_validation`
+- `gaon-production-telegram-full-validation-execution-release-check`: PASS, `check_mode=deterministic_release_validation`
+- `gaon-production-no-premature-research-budget-stop-release-check`: PASS, `check_mode=deterministic_release_validation`
+- `gaon-production-final-live-research-execution-readiness-release-check`: PASS, `check_mode=deterministic_release_validation`
+
+- full unit tests: PASS, 851 tests
+- full integration tests: PASS, 200 tests
+- `scripts/verify_release.py`: PASS
+- `deployment-import-path-check --expected-source .\src\gaon`: PASS
+- `gaon-production-telegram-autonomous-research-routing-release-check`: PASS
+- `gaon-production-v2-live-acceptance-readiness-release-check`: PASS
+- `gaon-production-v2-final-closeout-release-check`: PASS
+- `git diff --check`: PASS
+
+Production Telegram acceptance remains pending deployment.

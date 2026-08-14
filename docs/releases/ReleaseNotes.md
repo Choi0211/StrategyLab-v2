@@ -2325,3 +2325,16 @@ GitHub Actions and Windows user installations, while preserving the existing
 No schema migration is included. Hotfix 140.7 zero-volume anomaly handling
 remains unchanged: only evidence-backed provider anomalies are excluded and
 reported as warnings; unregistered zero-volume bars remain fail-closed.
+
+# Final Production Robustness Execution Wiring
+
+Gaon V2 now exposes Autonomous Quant Partner production robustness execution
+artifacts through the Telegram Autonomous Learning payload. The final
+production report can distinguish validations that actually ran from remaining
+evidence or result-quality blockers, instead of showing legacy `not_run_*`
+statuses after the production route selected the Quant Partner.
+
+New deterministic release checks cover robustness execution wiring, autonomous
+research action execution, Telegram full validation execution, no premature
+budget-stop masking, and final live research execution readiness. No schema
+migration was added and the safety contract remains unchanged.

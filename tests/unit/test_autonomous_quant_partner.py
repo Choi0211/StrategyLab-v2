@@ -11,6 +11,7 @@ from gaon.knowledge.autonomous_quant_partner import (
     _select_peer_symbols,
     autonomous_quant_partner_payload,
     production_authoritative_source_acquisition_release_check,
+    production_autonomous_research_action_execution_release_check,
     production_autonomous_quant_partner_acceptance_release_check,
     production_counter_evidence_release_check,
     production_autonomous_research_action_loop_release_check,
@@ -36,6 +37,7 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_no_fabricated_research_results_release_check,
     production_no_fabricated_validation_metrics_release_check,
     production_no_evaluation_window_contamination_release_check,
+    production_no_premature_research_budget_stop_release_check,
     production_oos_evaluation_boundary_release_check,
     production_oos_performance_comparison_release_check,
     production_out_of_sample_release_check,
@@ -65,6 +67,7 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_regime_validation_release_check,
     production_research_budget_release_check,
     production_research_observability_release_check,
+    production_robustness_execution_wiring_release_check,
     production_robust_strategy_validation_release_check,
     production_signal_integrity_release_check,
     production_source_diversification_planner_release_check,
@@ -81,12 +84,14 @@ from gaon.knowledge.autonomous_quant_partner import (
     production_walk_forward_release_check,
 )
 from gaon.knowledge.telegram_autonomous_learning import (
+    production_final_live_research_execution_readiness_release_check,
     production_autonomous_learning_payload_from_baseline,
     production_autonomous_research_wiring_release_check,
     production_autonomous_validation_coverage_release_check,
     production_backtest_signal_diagnostic_release_check,
     production_research_horizon_release_check,
     production_sample_sufficiency_release_check,
+    production_telegram_full_validation_execution_release_check,
     production_validation_coverage_release_check,
     production_validation_window_integrity_release_check,
     telegram_autonomous_learning_payload,
@@ -347,6 +352,11 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             production_final_safety_boundary_release_check,
             production_gaon_v2_completion_release_check,
             production_v2_final_closeout_release_check,
+            production_robustness_execution_wiring_release_check,
+            production_autonomous_research_action_execution_release_check,
+            production_telegram_full_validation_execution_release_check,
+            production_no_premature_research_budget_stop_release_check,
+            production_final_live_research_execution_readiness_release_check,
         )
         for check in checks:
             with self.subTest(check=check.__name__):
@@ -458,6 +468,17 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         self.assertIn("out_of_sample=", rendered)
         self.assertIn("walk_forward=", rendered)
         self.assertIn("monte_carlo=", rendered)
+
+    def test_final_production_wiring_executes_validation_before_telegram_render(self) -> None:
+        payload = production_telegram_full_validation_execution_release_check()
+
+        self.assertEqual("pass", payload["safety"])
+        self.assertEqual("deterministic_release_validation", payload["check_mode"])
+        self.assertEqual([], payload["not_run_sections"])
+        self.assertIn("out_of_sample", payload["executed_sections"])
+        self.assertIn("walk_forward", payload["executed_sections"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
 
     def test_hotfix2481_missing_robustness_execution_does_not_fabricate_metrics(self) -> None:
         payload = autonomous_quant_partner_payload(

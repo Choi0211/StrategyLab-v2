@@ -1755,6 +1755,11 @@ class TelegramConversationAgentTests(unittest.TestCase):
             "gaon-production-candidate-freeze-integrity-release-check",
             "gaon-production-no-evaluation-window-contamination-release-check",
             "gaon-production-hotfix2561-release-check",
+            "gaon-production-robustness-execution-wiring-release-check",
+            "gaon-production-autonomous-research-action-execution-release-check",
+            "gaon-production-telegram-full-validation-execution-release-check",
+            "gaon-production-no-premature-research-budget-stop-release-check",
+            "gaon-production-final-live-research-execution-readiness-release-check",
         )
         for command in commands:
             with self.subTest(command=command):

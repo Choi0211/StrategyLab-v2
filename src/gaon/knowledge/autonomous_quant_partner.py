@@ -250,6 +250,7 @@ def autonomous_quant_partner_payload(
             budget=selected_budget,
             connection=connection,
         )
+    robustness_execution = _robustness_execution_input(baseline)
     research = dict(
         multi_source_research
         or (_release_multi_source_result(baseline) if allow_release_fixture else _empty_multi_source_result(request_text, symbol, baseline))
@@ -301,6 +302,7 @@ def autonomous_quant_partner_payload(
         "validation_coverage": _validation_coverage(sufficiency),
         "robustness_report": robustness.to_json(),
         "strategy_tournament": tournament,
+        "production_robustness_execution": robustness_execution,
         "production_grade_validation": production_grade,
         "learning_memory_closed_loop": memory,
         "promotion_readiness_report": readiness.to_json(),
@@ -2647,6 +2649,99 @@ def production_real_monte_carlo_execution_release_check() -> Mapping[str, object
         "no_market_evidence_created": report.get("creates_new_market_evidence") is False,
     }
     return _grade_check_payload("production real monte carlo execution", checks, payload)
+
+
+def _production_execution_checks(payload: Mapping[str, object]) -> dict[str, bool]:
+    grade = _grade(payload)
+    execution = _as_dict(payload.get("production_robustness_execution"))
+    multi_symbol = _as_dict(grade.get("multi_symbol_validation"))
+    oos = _as_dict(grade.get("out_of_sample"))
+    walk_forward = _as_dict(grade.get("walk_forward"))
+    regime = _as_dict(grade.get("regime_validation"))
+    parameter = _as_dict(grade.get("parameter_sensitivity"))
+    cost = _as_dict(grade.get("transaction_cost_stress"))
+    monte_carlo = _as_dict(grade.get("monte_carlo"))
+    readiness = _as_dict(grade.get("unified_promotion_readiness"))
+    iterations = _as_list(payload.get("research_iterations"))
+    return {
+        "structured_execution_artifact_present": execution.get("execution_state") == "executed",
+        "multi_symbol_executed": multi_symbol.get("executed") is True,
+        "oos_executed": oos.get("executed") is True,
+        "walk_forward_executed": walk_forward.get("executed") is True,
+        "regime_executed": regime.get("executed") is True,
+        "parameter_executed": parameter.get("executed") is True,
+        "cost_executed": cost.get("executed") is True,
+        "monte_carlo_executed": monte_carlo.get("executed") is True,
+        "not_run_statuses_absent": not any(
+            str(section.get("status") or section.get("cross_symbol_status") or "").startswith("not_run")
+            for section in (multi_symbol, oos, walk_forward, regime, parameter, cost, monte_carlo)
+        ),
+        "budget_iterations_record_actions": bool(iterations)
+        and all(str(_as_dict(item).get("status")) == "completed" for item in iterations),
+        "promotion_uses_executed_gates": bool(_as_dict(readiness.get("all_gates")).get("out_of_sample"))
+        and readiness.get("approval_required") in {True, False},
+        "no_mutation_or_order": payload.get("strategy_mutated") is False and payload.get("order_executed") is False,
+        "no_fabricated_metrics": "fabricated_metrics': True" not in str(grade),
+    }
+
+
+def production_robustness_execution_wiring_release_check() -> Mapping[str, object]:
+    payload = _real_execution_payload()
+    checks = _production_execution_checks(payload)
+    result = _grade_check_payload("production robustness execution wiring", checks, payload)
+    result["check_mode"] = "deterministic_release_validation"
+    return result
+
+
+def production_autonomous_research_action_execution_release_check() -> Mapping[str, object]:
+    payload = _real_execution_payload()
+    checks = _production_execution_checks(payload)
+    checks = {
+        "research_iterations_not_empty": checks["budget_iterations_record_actions"],
+        "robustness_actions_executed": all(
+            checks[key]
+            for key in (
+                "multi_symbol_executed",
+                "oos_executed",
+                "walk_forward_executed",
+                "regime_executed",
+                "parameter_executed",
+                "cost_executed",
+            )
+        ),
+        "monte_carlo_uses_actual_trade_returns": checks["monte_carlo_executed"],
+        "no_not_run_fallback": checks["not_run_statuses_absent"],
+        "no_mutation_or_order": checks["no_mutation_or_order"],
+    }
+    result = _grade_check_payload("production autonomous research action execution", checks, payload)
+    result["check_mode"] = "deterministic_release_validation"
+    return result
+
+
+def production_no_premature_research_budget_stop_release_check() -> Mapping[str, object]:
+    payload = _real_execution_payload()
+    grade = _grade(payload)
+    readiness = _as_dict(grade.get("unified_promotion_readiness"))
+    checks = {
+        "budget_iterations_completed": all(str(_as_dict(item).get("status")) == "completed" for item in _as_list(payload.get("research_iterations"))),
+        "missing_validation_not_due_to_unrun_actions": not any(
+            key in _as_list(readiness.get("blockers"))
+            for key in (
+                "multi_symbol_not_executed",
+                "oos_not_executed",
+                "walk_forward_not_executed",
+                "regime_validation_not_executed",
+                "parameter_sensitivity_not_executed",
+                "transaction_cost_stress_not_executed",
+                "monte_carlo_not_executed",
+            )
+        ),
+        "remaining_blockers_are_evidence_or_result_quality": bool(_as_list(readiness.get("blockers"))),
+        "no_mutation_or_order": payload.get("strategy_mutated") is False and payload.get("order_executed") is False,
+    }
+    result = _grade_check_payload("production no premature research budget stop", checks, payload)
+    result["check_mode"] = "deterministic_release_validation"
+    return result
 
 
 def production_multi_source_provider_state_release_check() -> Mapping[str, object]:
