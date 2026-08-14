@@ -274,6 +274,13 @@ def autonomous_quant_partner_payload(
         tournament=tournament,
         budget=selected_budget,
     )
+    adaptive_feedback = _adaptive_validation_feedback_execution(
+        request_text,
+        symbol=symbol,
+        baseline=baseline,
+        production_grade=production_grade,
+        budget=selected_budget,
+    )
     iterations = _research_iterations(
         selected_budget,
         actions,
@@ -281,6 +288,7 @@ def autonomous_quant_partner_payload(
         production_grade=production_grade,
         tournament=tournament,
         candidate_generation=candidate_generation,
+        adaptive_feedback=adaptive_feedback,
     )
     observability = _observability(
         symbol=symbol,
@@ -312,6 +320,7 @@ def autonomous_quant_partner_payload(
         "strategy_tournament": tournament,
         "production_robustness_execution": robustness_execution,
         "production_grade_validation": production_grade,
+        "adaptive_validation_feedback": adaptive_feedback,
         "learning_memory_closed_loop": memory,
         "promotion_readiness_report": readiness.to_json(),
         "observability": observability,
@@ -1759,11 +1768,25 @@ def _research_iterations(
     production_grade: Mapping[str, object] | None = None,
     tournament: Mapping[str, object] | None = None,
     candidate_generation: list[dict[str, object]] | None = None,
+    adaptive_feedback: Mapping[str, object] | None = None,
 ) -> list[dict[str, object]]:
     iterations = []
+    feedback_rows = [
+        _as_dict(item)
+        for item in _as_list(_as_dict(adaptive_feedback).get("iterations"))
+    ]
+    feedback_by_failure = {
+        str(item.get("observed_failure")): item
+        for item in feedback_rows
+        if item.get("observed_failure")
+    }
     for index, action in enumerate(actions[: budget.max_iterations], start=1):
         observed_failure = _observed_failure_for_action(action, sufficiency, production_grade or {}, tournament or {})
-        candidate_change = _candidate_change_for_failure(observed_failure, candidate_generation or [])
+        feedback = feedback_by_failure.get(observed_failure, {})
+        candidate_change = str(
+            feedback.get("candidate_id")
+            or _candidate_change_for_failure(observed_failure, candidate_generation or [])
+        )
         iterations.append(
             {
                 "iteration": index,
@@ -1771,9 +1794,12 @@ def _research_iterations(
                 "observed_failure": observed_failure,
                 "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
                 "candidate_change": candidate_change,
-                "experiment_id": f"adaptive-experiment:{_hash({'iteration': index, 'failure': observed_failure, 'change': candidate_change})[:16]}",
-                "validation_result": _validation_result_for_failure(observed_failure, production_grade or {}),
+                "experiment_id": str(feedback.get("experiment_id") or f"adaptive-experiment:{_hash({'iteration': index, 'failure': observed_failure, 'change': candidate_change})[:16]}"),
+                "validation_result": str(feedback.get("validation_result") or _validation_result_for_failure(observed_failure, production_grade or {})),
                 "next_action": _next_action_for_failure(observed_failure),
+                "actual_candidate_retest": bool(feedback.get("actual_execution")),
+                "candidate_fingerprint": feedback.get("candidate_fingerprint"),
+                "duplicate_candidate_skipped": bool(feedback.get("duplicate_candidate_skipped")),
                 "safe_to_execute": action.safe_to_execute,
                 "budget_remaining": max(budget.max_iterations - index, 0),
                 "status": "completed" if action.kind is not NextActionKind.STOP else "stopped",
@@ -1860,6 +1886,292 @@ def _next_action_for_failure(observed_failure: str) -> str:
         "cost_fragile": "generate_cost_aware_candidate_and_rerun_cost_stress",
         "candidate_not_dominant": "do_not_request_promotion",
     }.get(observed_failure, "stop_fail_closed")
+
+
+def _adaptive_validation_feedback_execution(
+    request_text: str,
+    *,
+    symbol: str,
+    baseline: Mapping[str, object],
+    production_grade: Mapping[str, object],
+    budget: ResearchBudget,
+) -> dict[str, object]:
+    failures = _adaptive_failures_from_validation(production_grade)
+    if not failures:
+        return {
+            "status": "no_actionable_validation_failure",
+            "executed": False,
+            "failures_observed": [],
+            "iterations": [],
+            "duplicate_candidates_skipped": 0,
+            "strategy_mutated": False,
+            "order_executed": False,
+        }
+
+    dataset_json = _as_dict(baseline.get("dataset"))
+    metadata = _as_dict(dataset_json.get("metadata"))
+    if metadata.get("fixture_backed") is True:
+        return {
+            "status": "blocked_fixture_baseline",
+            "executed": False,
+            "failures_observed": failures,
+            "iterations": [],
+            "duplicate_candidates_skipped": 0,
+            "blockers": ["fixture_baseline_not_allowed_for_adaptive_research"],
+            "strategy_mutated": False,
+            "order_executed": False,
+        }
+
+    try:
+        dataset = _dataset_from_json(dataset_json)
+        baseline_strategy = _strategy_from_json(_as_dict(baseline.get("strategy")))
+        assumptions = _assumptions_from_json(_as_dict(baseline.get("assumptions")))
+    except Exception as exc:
+        return {
+            "status": "not_run_missing_structured_baseline",
+            "executed": False,
+            "failures_observed": failures,
+            "iterations": [],
+            "duplicate_candidates_skipped": 0,
+            "blockers": [f"baseline_reconstruction_failed:{exc.__class__.__name__}"],
+            "strategy_mutated": False,
+            "order_executed": False,
+        }
+
+    if len(dataset.bars) < 140:
+        return {
+            "status": "not_run_insufficient_history",
+            "executed": False,
+            "failures_observed": failures,
+            "iterations": [],
+            "duplicate_candidates_skipped": 0,
+            "blockers": ["insufficient_history_for_adaptive_research"],
+            "strategy_mutated": False,
+            "order_executed": False,
+        }
+
+    starting_candidate = _candidate_strategy_from_baseline(baseline) or baseline_strategy
+    known_fingerprints = _known_candidate_fingerprints(baseline)
+    known_fingerprints.update({baseline_strategy.fingerprint, starting_candidate.fingerprint})
+    iterations: list[dict[str, object]] = []
+    duplicate_count = 0
+    max_attempts = min(len(failures), budget.max_iterations, budget.max_experiments)
+
+    for index, observed_failure in enumerate(failures[:max_attempts], start=1):
+        candidate, changed_rules = _adaptive_candidate_for_failure(
+            starting_candidate,
+            observed_failure=observed_failure,
+            iteration=index,
+        )
+        experiment_id = (
+            f"adaptive-experiment:"
+            f"{_hash({'failure': observed_failure, 'fingerprint': candidate.fingerprint})[:16]}"
+        )
+        if candidate.fingerprint in known_fingerprints:
+            duplicate_count += 1
+            iterations.append(
+                {
+                    "iteration": index,
+                    "observed_failure": observed_failure,
+                    "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
+                    "candidate_id": f"candidate:{observed_failure}:duplicate",
+                    "candidate_fingerprint": candidate.fingerprint,
+                    "changed_rules": changed_rules,
+                    "experiment_id": experiment_id,
+                    "actual_execution": False,
+                    "duplicate_candidate_skipped": True,
+                    "validation_result": "duplicate_candidate_skipped",
+                    "next_action": "select_different_hypothesis",
+                    "strategy_mutated": False,
+                    "order_executed": False,
+                }
+            )
+            continue
+
+        known_fingerprints.add(candidate.fingerprint)
+        rid = (
+            f"adaptive-feedback:{symbol}:{index}:"
+            f"{_hash({'request': request_text, 'candidate': candidate.fingerprint})[:12]}"
+        )
+        primary = _engine().run(f"{rid}:primary", candidate, dataset, assumptions)
+        validation = _adaptive_validation_rerun(
+            observed_failure,
+            rid=rid,
+            dataset=dataset,
+            baseline_strategy=baseline_strategy,
+            candidate_strategy=candidate,
+            assumptions=assumptions,
+            budget=budget,
+        )
+        validation_status = str(validation.get("status") or "pending_real_validation")
+        accepted = validation_status in {"pass", "acceptable", "stable"}
+        candidate_id = f"candidate:{observed_failure}:{candidate.fingerprint[:12]}"
+        iterations.append(
+            {
+                "iteration": index,
+                "observed_failure": observed_failure,
+                "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
+                "candidate_id": candidate_id,
+                "candidate_fingerprint": candidate.fingerprint,
+                "parent_candidate_fingerprint": starting_candidate.fingerprint,
+                "changed_rules": changed_rules,
+                "experiment_id": experiment_id,
+                "primary_backtest": _result_summary(primary),
+                "actual_execution": True,
+                "duplicate_candidate_skipped": False,
+                "validation_result": validation_status,
+                "validation": validation,
+                "decision": "retain_for_further_validation" if accepted else "reject_or_revise",
+                "next_action": (
+                    "continue_common_protocol_validation"
+                    if accepted
+                    else _next_action_for_failure(observed_failure)
+                ),
+                "strategy_mutated": False,
+                "order_executed": False,
+            }
+        )
+
+    actually_executed = [item for item in iterations if item.get("actual_execution") is True]
+    return {
+        "status": "executed" if actually_executed else "no_new_unique_candidate",
+        "executed": bool(actually_executed),
+        "failures_observed": failures,
+        "iterations": iterations,
+        "actual_retests": len(actually_executed),
+        "duplicate_candidates_skipped": duplicate_count,
+        "candidate_fingerprints": [
+            item.get("candidate_fingerprint")
+            for item in iterations
+            if item.get("candidate_fingerprint")
+        ],
+        "uses_existing_backtest_engine": True,
+        "common_protocol_required": True,
+        "promotion_from_adaptive_feedback_alone": False,
+        "strategy_mutated": False,
+        "order_executed": False,
+    }
+
+
+def _adaptive_failures_from_validation(production_grade: Mapping[str, object]) -> list[str]:
+    failures: list[str] = []
+    oos = str(_as_dict(production_grade.get("out_of_sample")).get("status") or "")
+    walk = str(_as_dict(production_grade.get("walk_forward")).get("status") or "")
+    cost = str(_as_dict(production_grade.get("transaction_cost_stress")).get("status") or "")
+    if oos.startswith("fail") or oos in {"out_of_sample_fail", "oos_fail"}:
+        failures.append("out_of_sample_fail")
+    if walk.startswith("fail") or walk in {"walk_forward_fail", "unstable"}:
+        failures.append("walk_forward_fail")
+    if cost == "cost_fragile" or cost.startswith("fail"):
+        failures.append("cost_fragile")
+    return failures
+
+
+def _adaptive_candidate_for_failure(
+    strategy: object,
+    *,
+    observed_failure: str,
+    iteration: int,
+) -> tuple[object, list[str]]:
+    entry = dict(getattr(strategy, "entry"))
+    exits = dict(getattr(strategy, "exit"))
+    filters = dict(getattr(strategy, "filters"))
+    changes: list[str] = []
+
+    def replace_numeric(section: dict[str, object], key: str, value: int | float) -> None:
+        current = section.get(key)
+        if current is None:
+            return
+        old = getattr(current, "value", None)
+        section[key] = replace(current, value=value)
+        changes.append(f"{key}:{old}->{value}")
+
+    breakout = entry.get("breakout_lookback")
+    breakout_value = int(getattr(breakout, "value", 20) or 20)
+    if observed_failure == "cost_fragile":
+        replace_numeric(entry, "breakout_lookback", min(60, breakout_value + 5))
+    elif observed_failure == "walk_forward_fail":
+        if "volume_gte_ma20" in filters:
+            filters.pop("volume_gte_ma20")
+            changes.append("volume_gte_ma20:removed_for_parameter_simplification")
+        elif "ma20_gt_ma60" in entry:
+            entry.pop("ma20_gt_ma60")
+            changes.append("ma20_gt_ma60:removed_for_parameter_simplification")
+        else:
+            replace_numeric(entry, "breakout_lookback", min(60, breakout_value + 3))
+    elif observed_failure == "out_of_sample_fail":
+        replace_numeric(entry, "breakout_lookback", min(60, breakout_value + 10))
+    else:
+        replace_numeric(entry, "breakout_lookback", min(60, breakout_value + max(1, iteration)))
+
+    if not changes:
+        replace_numeric(entry, "breakout_lookback", min(60, breakout_value + max(1, iteration)))
+
+    candidate = replace(
+        strategy,
+        spec_id=f"{getattr(strategy, 'spec_id')}:adaptive:{observed_failure}:{iteration}",
+        entry=entry,
+        exit=exits,
+        filters=filters,
+    )
+    return candidate, changes
+
+
+def _adaptive_validation_rerun(
+    observed_failure: str,
+    *,
+    rid: str,
+    dataset: object,
+    baseline_strategy: object,
+    candidate_strategy: object,
+    assumptions: object,
+    budget: ResearchBudget,
+) -> dict[str, object]:
+    if observed_failure == "out_of_sample_fail":
+        return _execute_oos(rid, dataset, baseline_strategy, candidate_strategy, assumptions)
+    if observed_failure == "walk_forward_fail":
+        return _execute_walk_forward(
+            rid,
+            dataset,
+            baseline_strategy,
+            candidate_strategy,
+            assumptions,
+            budget,
+        )
+    if observed_failure == "cost_fragile":
+        return _execute_cost_stress(
+            rid,
+            dataset,
+            baseline_strategy,
+            candidate_strategy,
+            assumptions,
+        )
+    return {
+        "status": "not_run_no_matching_validator",
+        "executed": False,
+        "blockers": ["no_matching_adaptive_validator"],
+        "fabricated_metrics": False,
+    }
+
+
+def _known_candidate_fingerprints(baseline: Mapping[str, object]) -> set[str]:
+    fingerprints = {
+        str(item)
+        for item in _as_list(baseline.get("candidate_fingerprints"))
+        if str(item)
+    }
+    for row in (_as_dict(item) for item in _as_list(baseline.get("candidates"))):
+        strategy_json = _as_dict(
+            _as_dict(row.get("backtest_result")).get("strategy")
+            or row.get("strategy")
+        )
+        if not strategy_json:
+            continue
+        try:
+            fingerprints.add(_strategy_from_json(strategy_json).fingerprint)
+        except Exception:
+            continue
+    return fingerprints
 
 
 def _robustness_report(symbol: str, sufficiency: Mapping[str, object]) -> RobustnessReport:
