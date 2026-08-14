@@ -581,6 +581,7 @@ Do not commit `.env`, token files, account files, real trade state, production l
 - `docs/rfc/RFC-0004-gaon-runtime-collaboration.md`: Gaon Runtime collaboration RFC
 - `docs/architecture/GaonRuntimeArchitecture.md`: Runtime architecture
 - `docs/architecture/ConversationRuntime.md`: Conversation Runtime contract
+- `docs/architecture/HotfixFinalProductionRobustnessExecutionWiring.md`: final Gaon V2 production robustness execution wiring hotfix
 - `docs/architecture/CollaborationIntegrations.md`: Telegram and Notion dry-run integration contracts
 - `docs/architecture/executive-planner.md`: Sprint 36 Executive Planner architecture
 - `docs/architecture/multi-agent-framework.md`: Sprint 37 Multi-Agent Execution Framework architecture

@@ -1213,3 +1213,10 @@
 - Added `tzdata` as a runtime dependency so `ZoneInfo("Asia/Seoul")` works consistently on Windows and Linux installations.
 - Added a timezone dependency regression test for the Yahoo KRX debug path and other IANA timezone consumers.
 - Preserved schema v35 and Hotfix 140.7 zero-volume anomaly fail-closed policy.
+
+# Final Production Robustness Execution Wiring
+
+- Exposed `production_robustness_execution` from the Autonomous Quant Partner payload.
+- Added Telegram `production_validation_execution_summary` so final responses preserve executed validation state.
+- Added release checks for production robustness execution wiring, autonomous action execution, Telegram full validation execution, budget-stop integrity, and final live execution readiness.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety boundaries.

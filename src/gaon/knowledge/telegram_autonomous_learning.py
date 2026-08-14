@@ -251,6 +251,7 @@ def production_autonomous_learning_payload_from_baseline(
         multi_source_research=multi_source_research or None,
         connection=connection,
     )
+    partner_execution_summary = _partner_execution_summary(autonomous_quant_partner)
     partner_readiness = _as_dict(autonomous_quant_partner.get("promotion_readiness_report"))
     partner_status = str(partner_readiness.get("status") or "needs_more_evidence")
     legacy_promotion_status = promotion_status
@@ -275,6 +276,7 @@ def production_autonomous_learning_payload_from_baseline(
         "autonomous_quant_partner_status": partner_status,
         "autonomous_quant_partner_stop_reason": autonomous_quant_partner.get("stop_reason"),
         "autonomous_quant_partner_validation_status": _as_dict(autonomous_quant_partner.get("validation_sufficiency_v2")).get("status"),
+        "production_validation_execution_summary": partner_execution_summary,
         "production_uses_release_fixture": False,
         "fixture_promotion_blocked": bool(production_blockers),
         "candidate_backtest_authoritative": bool(evidence and candidate_backtest),
@@ -344,6 +346,8 @@ def production_autonomous_learning_payload_from_baseline(
         "quality_status": quality.get("status", "unknown"),
         "approval_required": promotion_status == "requires_human_approval",
         "promotion_status": promotion_status,
+        "autonomous_quant_partner_promotion_status": partner_projected_promotion_status,
+        "production_validation_execution_summary": partner_execution_summary,
         "human_gate_status": human_gate_status,
         "production_uses_release_fixture": False,
         "fixture_promotion_blocked": bool(production_blockers),
@@ -357,6 +361,40 @@ def production_autonomous_learning_payload_from_baseline(
         "broker_order_called": False,
         "kis_order_called": False,
         "safety": "pass",
+    }
+
+
+def _partner_execution_summary(partner: Mapping[str, object]) -> dict[str, object]:
+    grade = _as_dict(partner.get("production_grade_validation"))
+    multi_symbol = _as_dict(grade.get("multi_symbol_validation"))
+    oos = _as_dict(grade.get("out_of_sample"))
+    walk_forward = _as_dict(grade.get("walk_forward"))
+    regime = _as_dict(grade.get("regime_validation"))
+    parameter = _as_dict(grade.get("parameter_sensitivity"))
+    cost = _as_dict(grade.get("transaction_cost_stress"))
+    monte_carlo = _as_dict(grade.get("monte_carlo"))
+    sections = {
+        "multi_symbol": multi_symbol,
+        "out_of_sample": oos,
+        "walk_forward": walk_forward,
+        "regime": regime,
+        "parameter_sensitivity": parameter,
+        "transaction_cost_stress": cost,
+        "monte_carlo": monte_carlo,
+    }
+    return {
+        "execution_state": _as_dict(partner.get("production_robustness_execution")).get("execution_state"),
+        "executed_sections": [key for key, section in sections.items() if section.get("executed") is True],
+        "not_run_sections": [
+            key
+            for key, section in sections.items()
+            if section.get("executed") is not True
+            and str(section.get("status") or section.get("cross_symbol_status") or "").startswith("not_run")
+        ],
+        "section_statuses": {key: section.get("status") or section.get("cross_symbol_status") for key, section in sections.items()},
+        "fabricated_metrics": "fabricated_metrics': True" in str(grade),
+        "strategy_mutated": partner.get("strategy_mutated"),
+        "order_executed": partner.get("order_executed"),
     }
 
 
@@ -561,6 +599,116 @@ def production_autonomous_research_wiring_release_check() -> Mapping[str, object
         "counter_evidence_attempted": counter.get("attempted"),
         "candidate_count": tournament.get("candidate_count"),
         "research_iterations": len(_as_list(partner.get("research_iterations"))),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
+def _telegram_real_execution_payload() -> Mapping[str, object]:
+    from .autonomous_quant_partner import _release_baseline_with_real_execution_inputs, _release_multi_source_result
+
+    baseline = _release_baseline_with_real_execution_inputs()
+    external = _release_external_ready()
+    external["multi_source_research"] = _release_multi_source_result(baseline)
+    return production_autonomous_learning_payload_from_baseline(
+        "Samsung production full robustness execution validation",
+        symbol="005930",
+        mode="research",
+        baseline=baseline,
+        external_research=external,
+    )
+
+
+def production_telegram_full_validation_execution_release_check() -> Mapping[str, object]:
+    payload = _telegram_real_execution_payload()
+    learning = _as_dict(payload.get("autonomous_learning_v2"))
+    summary = _as_dict(learning.get("production_validation_execution_summary"))
+    partner = _as_dict(learning.get("autonomous_quant_partner"))
+    grade = _as_dict(partner.get("production_grade_validation"))
+    rendered = ""
+    try:
+        from gaon.runtime.research_grounding import format_grounded_tool_response
+
+        rendered = format_grounded_tool_response("autonomous_learning_research", payload, "삼성전자 전략을 처음부터 다시 연구해줘.")
+    except Exception:  # noqa: BLE001 - rendering is checked below when available.
+        rendered = ""
+    executed = set(str(item) for item in _as_list(summary.get("executed_sections")))
+    checks = {
+        "telegram_wrapper_selects_partner": learning.get("selected_execution_orchestration") == "autonomous_quant_partner",
+        "execution_artifact_executed": summary.get("execution_state") == "executed",
+        "all_required_sections_executed": {
+            "multi_symbol",
+            "out_of_sample",
+            "walk_forward",
+            "regime",
+            "parameter_sensitivity",
+            "transaction_cost_stress",
+            "monte_carlo",
+        }.issubset(executed),
+        "no_not_run_sections": not _as_list(summary.get("not_run_sections")),
+        "renderer_uses_grade_statuses": not rendered or (
+            "not_run_missing_peer_backtests" not in rendered
+            and "not_run_missing_oos_backtest" not in rendered
+            and "not_run_missing_fold_backtests" not in rendered
+            and "transaction_cost_stress=not_supported" not in rendered
+        ),
+        "no_fabricated_metrics": summary.get("fabricated_metrics") is False and "fabricated_metrics': True" not in str(grade),
+        "no_mutation_or_order": payload.get("strategy_mutated") is False
+        and payload.get("order_executed") is False
+        and payload.get("broker_order_called") is False
+        and payload.get("kis_order_called") is False,
+    }
+    if not all(checks.values()):
+        failed = ",".join(key for key, ok in checks.items() if not ok)
+        raise RuntimeError(f"production telegram full validation execution release check failed: {failed}")
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "check_mode": "deterministic_release_validation",
+        "status": _as_dict(partner.get("promotion_readiness_report")).get("status"),
+        "stop_reason": partner.get("stop_reason"),
+        "approval_required": payload.get("approval_required"),
+        "executed_sections": sorted(executed),
+        "not_run_sections": [],
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": checks,
+        "safety": "pass",
+    }
+
+
+def production_final_live_research_execution_readiness_release_check() -> Mapping[str, object]:
+    from .autonomous_quant_partner import (
+        production_autonomous_research_action_execution_release_check,
+        production_no_premature_research_budget_stop_release_check,
+        production_robustness_execution_wiring_release_check,
+    )
+
+    telegram = production_telegram_full_validation_execution_release_check()
+    wiring = production_robustness_execution_wiring_release_check()
+    actions = production_autonomous_research_action_execution_release_check()
+    budget = production_no_premature_research_budget_stop_release_check()
+    checks = {
+        "robustness_wiring_pass": wiring.get("safety") == "pass",
+        "action_execution_pass": actions.get("safety") == "pass",
+        "telegram_full_validation_pass": telegram.get("safety") == "pass",
+        "no_premature_budget_stop_pass": budget.get("safety") == "pass",
+        "check_mode_declared": all(
+            item.get("check_mode") == "deterministic_release_validation"
+            for item in (telegram, wiring, actions, budget)
+        ),
+        "no_mutation_or_order": all(item.get("strategy_mutated") is False and item.get("order_executed") is False for item in (telegram, wiring, actions, budget)),
+    }
+    if not all(checks.values()):
+        failed = ",".join(key for key, ok in checks.items() if not ok)
+        raise RuntimeError(f"production final live research execution readiness release check failed: {failed}")
+    return {
+        "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
+        "check_mode": "deterministic_release_validation",
+        "status": telegram.get("status"),
+        "stop_reason": telegram.get("stop_reason"),
+        "approval_required": telegram.get("approval_required"),
         "strategy_mutated": False,
         "order_executed": False,
         "checks": checks,

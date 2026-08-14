@@ -376,6 +376,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-v2-final-closeout-release-check")
     sub.add_parser("gaon-production-telegram-autonomous-research-routing-release-check")
     sub.add_parser("gaon-production-v2-live-acceptance-readiness-release-check")
+    sub.add_parser("gaon-production-robustness-execution-wiring-release-check")
+    sub.add_parser("gaon-production-autonomous-research-action-execution-release-check")
+    sub.add_parser("gaon-production-telegram-full-validation-execution-release-check")
+    sub.add_parser("gaon-production-no-premature-research-budget-stop-release-check")
+    sub.add_parser("gaon-production-final-live-research-execution-readiness-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2572,8 +2577,14 @@ def _run(args: argparse.Namespace) -> int:
         "gaon-production-final-safety-boundary-release-check",
         "gaon-production-gaon-v2-completion-release-check",
         "gaon-production-v2-final-closeout-release-check",
+        "gaon-production-robustness-execution-wiring-release-check",
+        "gaon-production-autonomous-research-action-execution-release-check",
+        "gaon-production-telegram-full-validation-execution-release-check",
+        "gaon-production-no-premature-research-budget-stop-release-check",
+        "gaon-production-final-live-research-execution-readiness-release-check",
     }:
         from gaon.knowledge.autonomous_quant_partner import (
+            production_autonomous_research_action_execution_release_check,
             production_autonomous_research_action_loop_release_check,
             production_authoritative_source_acquisition_release_check,
             production_autonomous_quant_partner_acceptance_release_check,
@@ -2601,6 +2612,7 @@ def _run(args: argparse.Namespace) -> int:
             production_no_fabricated_research_results_release_check,
             production_no_fabricated_validation_metrics_release_check,
             production_no_evaluation_window_contamination_release_check,
+            production_no_premature_research_budget_stop_release_check,
             production_oos_evaluation_boundary_release_check,
             production_oos_performance_comparison_release_check,
             production_out_of_sample_release_check,
@@ -2630,6 +2642,7 @@ def _run(args: argparse.Namespace) -> int:
             production_real_youtube_provider_release_check,
             production_regime_validation_release_check,
             production_research_observability_release_check,
+            production_robustness_execution_wiring_release_check,
             production_robust_strategy_validation_release_check,
             production_signal_integrity_release_check,
             production_source_diversification_planner_release_check,
@@ -2648,8 +2661,10 @@ def _run(args: argparse.Namespace) -> int:
             production_autonomous_research_wiring_release_check,
             production_autonomous_validation_coverage_release_check,
             production_backtest_signal_diagnostic_release_check,
+            production_final_live_research_execution_readiness_release_check,
             production_research_horizon_release_check,
             production_sample_sufficiency_release_check,
+            production_telegram_full_validation_execution_release_check,
             production_validation_coverage_release_check,
             production_validation_window_integrity_release_check,
         )
@@ -2731,6 +2746,11 @@ def _run(args: argparse.Namespace) -> int:
             "gaon-production-final-safety-boundary-release-check": production_final_safety_boundary_release_check,
             "gaon-production-gaon-v2-completion-release-check": production_gaon_v2_completion_release_check,
             "gaon-production-v2-final-closeout-release-check": production_v2_final_closeout_release_check,
+            "gaon-production-robustness-execution-wiring-release-check": production_robustness_execution_wiring_release_check,
+            "gaon-production-autonomous-research-action-execution-release-check": production_autonomous_research_action_execution_release_check,
+            "gaon-production-telegram-full-validation-execution-release-check": production_telegram_full_validation_execution_release_check,
+            "gaon-production-no-premature-research-budget-stop-release-check": production_no_premature_research_budget_stop_release_check,
+            "gaon-production-final-live-research-execution-readiness-release-check": production_final_live_research_execution_readiness_release_check,
         }
         payload = handlers[args.command]()
         check_mode = f"check_mode={payload['check_mode']} " if "check_mode" in payload else ""
