@@ -1,5 +1,21 @@
 # Changelog
 
+## Gaon V2 Natural Conversation UX Closeout
+
+- Changed the default `autonomous_learning_research` Telegram rendering from a
+  developer/audit status dump to a natural Korean research explanation.
+- Preserved raw/detail diagnostic rendering behind explicit detail requests so
+  `partner_status=`, `validation_coverage=`, `source_ids=`, fingerprints, and
+  blocker codes remain available for troubleshooting without leaking by default.
+- Added stored-context follow-up handling for OOS, transaction-cost, Monte Carlo,
+  external-research, and promotion-readiness explanations without rerunning
+  research tools.
+- Added deterministic release checks for natural research response quality,
+  follow-up context reuse, unnecessary-rerun blocking, approval conversation,
+  grounding integrity, and the final aggregate UX contract.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Gaon V1/V2 Asset Reuse Audit
 
 - Added a final deterministic V1/V2 asset reuse audit matrix covering market

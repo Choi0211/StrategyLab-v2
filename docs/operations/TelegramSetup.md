@@ -88,6 +88,36 @@ Hotfix 152.3 result presentation release check:
 python -m gaon.runtime.cli gaon-result-presentation-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
 ```
 
+## Final Gaon V2 Natural Research UX
+
+For Autonomous Quant Partner Telegram requests, the default response should be a
+natural Korean research explanation. Internal audit fields such as
+`partner_status=`, `validation_coverage=`, `source_ids=`, fingerprints, and raw
+blocker codes should appear only after an explicit detail/raw prompt.
+
+Recommended production prompts:
+
+- `삼성전자 전략을 처음부터 다시 연구해줘. 외부 연구 자료도 찾아보고 개선 전략 후보를 검증해줘.`
+- `OOS가 뭐야?`
+- `거래비용에는 왜 약해?`
+- `Monte Carlo는 했어?`
+- `raw 결과 보여줘`
+
+The explanation follow-ups must reuse the prior authoritative result from the
+same Telegram chat and must not rerun `autonomous_learning_research`. The raw
+prompt may show structured diagnostic fields from the stored result.
+
+Release checks:
+
+```bash
+python -m gaon.runtime.cli gaon-production-natural-research-conversation-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+python -m gaon.runtime.cli gaon-production-research-followup-context-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+python -m gaon.runtime.cli gaon-production-no-unnecessary-research-rerun-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+python -m gaon.runtime.cli gaon-production-natural-promotion-approval-conversation-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+python -m gaon.runtime.cli gaon-production-conversation-grounding-integrity-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+python -m gaon.runtime.cli gaon-production-final-conversation-ux-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
 This check verifies that Telegram-facing research responses preserve metric
 units, render expectancy as a capital-denominated amount, hide internal
 fingerprints and raw provenance keys, use Korean data-quality/source labels, and

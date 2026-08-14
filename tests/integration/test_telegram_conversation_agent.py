@@ -1305,10 +1305,11 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertFalse(audits[0].result["output"]["strategy_mutated"])
             self.assertFalse(audits[0].result["output"]["order_executed"])
             final = client.sent[-1][1]
-            self.assertIn("Autonomous Learning V2", final)
-            self.assertIn("symbol=005930", final)
-            self.assertIn("requires_human_approval", final)
-            self.assertIn("awaiting_human_approval", final)
+            self.assertIn("005930", final)
+            self.assertIn("real:yahoo-chart", final)
+            self.assertIn("\uc2b9\uc778", final)
+            self.assertNotIn("partner_status=", final)
+            self.assertNotIn("source_ids=", final)
             self.assertNotIn("요청을 정확히 이해하지 못했습니다", final)
             self.assertNotIn("사용 가능한 기능", final)
         finally:
@@ -1360,9 +1361,10 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertEqual(len(store.tool_audit.list(tool_name="research_retest")), 0)
             self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
             final = client.sent[-1][1]
-            self.assertIn("Autonomous Learning V2", final)
+            self.assertIn("005930", final)
+            self.assertIn("real:yahoo-chart", final)
             self.assertIn("외부 연구 실행", final)
-            self.assertIn("requires_human_approval", final)
+            self.assertNotIn("partner_status=", final)
             self.assertNotIn("adequacy_status", final)
             self.assertNotIn("planner_steps", final)
             self.assertNotIn("historical_TESTED_candidates", final)
@@ -1388,7 +1390,9 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertEqual(len(audits), 2)
             self.assertEqual(audits[-1].request["arguments"]["symbol"], "005930")
             self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
-            self.assertIn("Autonomous Learning V2", client.sent[-1][1])
+            self.assertIn("005930", client.sent[-1][1])
+            self.assertIn("real:yahoo-chart", client.sent[-1][1])
+            self.assertNotIn("partner_status=", client.sent[-1][1])
         finally:
             store.close()
 
@@ -1446,7 +1450,7 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertFalse(final_output["order_executed"])
             self.assertFalse(final_output["broker_order_called"])
             self.assertFalse(final_output["kis_order_called"])
-            self.assertIn("명시적인 후보별 승인", client.sent[-1][1])
+            self.assertIn("1차 승인", client.sent[-1][1])
         finally:
             store.close()
 
@@ -1477,7 +1481,9 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertEqual(len(store.tool_audit.list(tool_name="research_retest")), 0)
             self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
             final = client.sent[-1][1]
-            self.assertIn("Autonomous Learning V2", final)
+            self.assertIn("005930", final)
+            self.assertIn("real:yahoo-chart", final)
+            self.assertNotIn("partner_status=", final)
             self.assertNotIn("adequacy_status", final)
             self.assertNotIn("planner_steps", final)
             self.assertNotIn("\uc5f0\uacb0\ub418\uc5b4 \uc788\uc9c0 \uc54a", final)
@@ -1495,6 +1501,70 @@ class TelegramConversationAgentTests(unittest.TestCase):
 
     def test_hotfix1852_telegram_autonomous_learning_priority_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-telegram-autonomous-learning-priority-release-check", "--db", ":memory:"]), 0)
+
+    def test_final_conversation_ux_followup_explains_without_research_rerun(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            initial = (
+                "\uc0bc\uc131\uc804\uc790 \uc804\ub7b5\uc744 \ucc98\uc74c\ubd80\ud130 \ub2e4\uc2dc \uc5f0\uad6c\ud574\uc918. "
+                "\uc678\ubd80 \uc5f0\uad6c \uc790\ub8cc\ub3c4 \ucc3e\uace0 \uac1c\uc120 \uc804\ub7b5 \ud6c4\ubcf4\ub97c \uac80\uc99d\ud574\uc918."
+            )
+            process_update(parse_update_result(_update(890, 890, initial), received_at="2026-08-08T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(891, 891, "OOS\uac00 \ubb50\uc57c?"), received_at="2026-08-08T00:00:01Z"), runtime, client)
+            oos = client.sent[-1][1]
+            process_update(parse_update_result(_update(892, 892, "\uac70\ub798\ube44\uc6a9\uc5d0\ub294 \uc65c \uc57d\ud574?"), received_at="2026-08-08T00:00:02Z"), runtime, client)
+            cost = client.sent[-1][1]
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_learning_research")), 1)
+            self.assertIn("OOS", oos)
+            self.assertIn("\uc9c1\uc804", oos)
+            self.assertIn("\uac70\ub798\ube44\uc6a9", cost)
+            self.assertIn("\uc9c1\uc804", cost)
+            self.assertNotIn("partner_status=", oos + cost)
+            self.assertNotIn("source_ids=", oos + cost)
+        finally:
+            store.close()
+
+    def test_final_conversation_ux_detail_request_uses_existing_context(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            initial = (
+                "\uc0bc\uc131\uc804\uc790 \uc804\ub7b5\uc744 \ucc98\uc74c\ubd80\ud130 \ub2e4\uc2dc \uc5f0\uad6c\ud574\uc918. "
+                "\uc678\ubd80 \uc5f0\uad6c \uc790\ub8cc\ub3c4 \ucc3e\uace0 \uac1c\uc120 \uc804\ub7b5 \ud6c4\ubcf4\ub97c \uac80\uc99d\ud574\uc918."
+            )
+            process_update(parse_update_result(_update(893, 893, initial), received_at="2026-08-08T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(894, 894, "raw \uacb0\uacfc \ubcf4\uc5ec\uc918"), received_at="2026-08-08T00:00:01Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="autonomous_learning_research")), 1)
+            final = client.sent[-1][1]
+            self.assertIn("partner_status=", final)
+            self.assertIn("validation_coverage=", final)
+            self.assertIn("real:yahoo-chart", final)
+        finally:
+            store.close()
+
+    def test_final_conversation_ux_release_checks_pass(self) -> None:
+        commands = (
+            "gaon-production-natural-research-conversation-release-check",
+            "gaon-production-research-followup-context-release-check",
+            "gaon-production-no-unnecessary-research-rerun-release-check",
+            "gaon-production-natural-promotion-approval-conversation-release-check",
+            "gaon-production-conversation-grounding-integrity-release-check",
+            "gaon-production-final-conversation-ux-release-check",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(cli_main([command]), 0)
 
     def test_hotfix1853_promotion_candidate_detail_followup_preserves_evidence_context(self) -> None:
         store = RuntimeStateStore(":memory:")

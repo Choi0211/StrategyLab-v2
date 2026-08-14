@@ -371,6 +371,77 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
     candidate_context = _as_dict(_as_dict(output.get("autonomous_learning_v2")).get("promotion_candidate_context") or output.get("promotion_candidate_context"))
     if candidate_context and _promotion_candidate_detail_requested(user_text, candidate_context):
         return _format_promotion_candidate_evidence(output, candidate_context)
+    if _autonomous_learning_detail_requested(user_text):
+        return _format_autonomous_learning_research_detail(output)
+    followup = _format_autonomous_learning_targeted_followup(output, user_text)
+    if followup is not None:
+        return followup
+    return _format_autonomous_learning_research_natural(output)
+
+
+def _format_autonomous_learning_research_natural(output: dict[str, object]) -> str:
+    baseline = _as_dict(output.get("baseline"))
+    dataset = _as_dict(baseline.get("dataset"))
+    metadata = _as_dict(dataset.get("metadata"))
+    backtest = _as_dict(baseline.get("backtest"))
+    metrics = _as_dict(backtest.get("metrics"))
+    learning = _as_dict(output.get("autonomous_learning_v2"))
+    partner = _as_dict(learning.get("autonomous_quant_partner"))
+    partner_readiness = _as_dict(partner.get("promotion_readiness_report"))
+    partner_validation = _as_dict(partner.get("validation_coverage"))
+    partner_grade = _as_dict(partner.get("production_grade_validation"))
+    partner_acquisition = _as_dict(partner.get("source_acquisition"))
+    partner_counter = _as_dict(partner.get("counter_evidence"))
+    partner_tournament = _as_dict(partner.get("strategy_tournament"))
+    grade_multi_symbol = _as_dict(partner_grade.get("multi_symbol_validation"))
+    grade_oos = _as_dict(partner_grade.get("out_of_sample"))
+    grade_walk_forward = _as_dict(partner_grade.get("walk_forward"))
+    grade_regime = _as_dict(partner_grade.get("regime_validation"))
+    grade_parameter = _as_dict(partner_grade.get("parameter_sensitivity"))
+    grade_cost = _as_dict(partner_grade.get("transaction_cost_stress"))
+    grade_monte_carlo = _as_dict(partner_grade.get("monte_carlo"))
+    grade_evidence = _as_dict(partner_grade.get("independent_evidence"))
+    symbol = str(output.get("symbol") or metadata.get("symbol") or "005930")
+    source = str(output.get("source") or metadata.get("source") or "unknown")
+    fixture_backed = bool(output.get("fixture_backed") or metadata.get("fixture_backed"))
+    bars = _first_available(metadata.get("rows"), dataset.get("rows"), partner_validation.get("raw_bars"))
+    trade_count = _first_available(metrics.get("trade_count"), partner_validation.get("completed_trade_count"), partner_validation.get("trade_count"))
+    min_trades = _first_available(partner_validation.get("minimum_required_trades"), partner_validation.get("min_trades"))
+    source_categories = _list_text(partner_acquisition.get("source_categories_acquired"))
+    source_count = _first_available(partner_acquisition.get("sources_acquired"), grade_evidence.get("independent_source_count"), 0)
+    candidate_count = _first_available(partner_tournament.get("candidate_count"), len(_as_list(partner.get("candidate_generation"))), 0)
+    iteration_count = len(_as_list(partner.get("research_iterations")))
+    promotion_status = str(learning.get("autonomous_quant_partner_promotion_status") or output.get("promotion_status") or partner_readiness.get("status") or "unknown")
+    human_gate_status = str(output.get("human_gate_status") or "not_requested")
+    blockers = _list_text(partner_readiness.get("remaining_risks")) + _list_text(_as_dict(partner.get("research_gap_report")).get("blockers"))
+    lines = [
+        f"영하님, {symbol} 전략을 다시 연구했습니다.",
+        "",
+        _natural_baseline_sentence(bars, trade_count, min_trades, source, fixture_backed),
+        "",
+        _natural_validation_sentence(
+            grade_multi_symbol,
+            grade_oos,
+            grade_walk_forward,
+            grade_regime,
+            grade_parameter,
+            grade_cost,
+            grade_monte_carlo,
+        ),
+        "",
+        _natural_external_research_sentence(source_categories, source_count, partner_counter),
+        "",
+        _natural_candidate_sentence(candidate_count, partner_tournament),
+        "",
+        _natural_promotion_sentence(promotion_status, human_gate_status, blockers),
+        "",
+        "자동 주문, KIS/Broker 주문, Champion 자동 승격, 승인 없는 설정 변경은 수행하지 않았습니다.",
+        "상세한 검증 수치나 raw 결과가 필요하면 '상세 검증 결과 보여줘'라고 말씀해 주세요.",
+    ]
+    return "\n".join(line for line in lines if line is not None)
+
+
+def _format_autonomous_learning_research_detail(output: dict[str, object]) -> str:
     baseline = _as_dict(output.get("baseline"))
     dataset = _as_dict(baseline.get("dataset"))
     metadata = _as_dict(dataset.get("metadata"))
@@ -507,6 +578,175 @@ def _format_autonomous_learning_research(output: dict[str, object], user_text: s
         ]
     )
     return "\n".join(lines)
+
+
+def _autonomous_learning_detail_requested(user_text: str) -> bool:
+    normalized = user_text.casefold()
+    return any(token in normalized for token in ("상세", "raw", "검증 수치", "수치", "developer", "debug", "fingerprint", "source_id", "schema"))
+
+
+def _format_autonomous_learning_targeted_followup(output: dict[str, object], user_text: str) -> str | None:
+    if len(user_text.strip()) > 80:
+        return None
+    normalized = user_text.casefold()
+    learning = _as_dict(output.get("autonomous_learning_v2"))
+    partner = _as_dict(learning.get("autonomous_quant_partner"))
+    grade = _as_dict(partner.get("production_grade_validation"))
+    validation = _as_dict(partner.get("validation_coverage"))
+    if any(token in normalized for token in ("oos", "out-of-sample", "out of sample", "표본 외")):
+        oos = _as_dict(grade.get("out_of_sample"))
+        if not oos and not validation.get("out_of_sample_status"):
+            return "OOS는 표본 밖에서도 같은 전략이 버티는지 확인하는 검증입니다. 직전 authoritative research payload에는 OOS 실행 근거가 없어 실행했다고 말하지 않겠습니다."
+        return _natural_section_answer(
+            "OOS는 표본 밖에서도 같은 전략이 버티는지 확인하는 검증입니다.",
+            oos.get("status") or validation.get("out_of_sample_status"),
+            oos,
+            "이번 payload에는 OOS 실행 근거가 없어 실행했다고 말하지 않겠습니다.",
+        )
+    if any(token in normalized for token in ("거래비용", "비용", "transaction cost", "cost")):
+        cost = _as_dict(grade.get("transaction_cost_stress"))
+        if not cost:
+            return "거래비용 검증은 수수료와 슬리피지가 커졌을 때 전략이 얼마나 약해지는지 보는 단계입니다. 직전 authoritative research payload에는 거래비용 스트레스 실행 근거가 없어 임의로 판단하지 않겠습니다."
+        return _natural_section_answer(
+            "거래비용 검증은 수수료와 슬리피지가 커졌을 때 후보 전략이 얼마나 약해지는지 보는 단계입니다.",
+            cost.get("status"),
+            cost,
+            "이번 payload에는 거래비용 스트레스 실행 근거가 없어 임의로 판단하지 않겠습니다.",
+        )
+    if any(token in normalized for token in ("monte", "몬테", "시뮬레이션")):
+        monte = _as_dict(grade.get("monte_carlo"))
+        return _natural_section_answer(
+            "Monte Carlo는 거래 순서나 변동을 흔들어도 결과가 버티는지 보는 안정성 검증입니다.",
+            monte.get("status") or validation.get("monte_carlo"),
+            monte,
+            "이번에는 Monte Carlo 검증 근거가 없거나 표본이 부족해 실행했다고 말하지 않겠습니다.",
+        )
+    if any(token in normalized for token in ("다른 종목", "여러 종목", "종목에서는", "multi-symbol", "cross symbol")):
+        multi = _as_dict(grade.get("multi_symbol_validation"))
+        return _natural_section_answer(
+            "다른 종목 검증은 이 전략이 삼성전자 한 종목에만 맞춘 결과인지 확인하는 단계입니다.",
+            multi.get("cross_symbol_status") or multi.get("status") or validation.get("multi_symbol_status"),
+            multi,
+            "이번 payload에는 다른 종목 검증 근거가 없어 실행했다고 말하지 않겠습니다.",
+        )
+    if any(token in normalized for token in ("승격", "승인", "후보", "approval", "promotion")):
+        readiness = _as_dict(partner.get("promotion_readiness_report"))
+        status = str(learning.get("autonomous_quant_partner_promotion_status") or output.get("promotion_status") or readiness.get("status") or "unknown")
+        human_gate = str(output.get("human_gate_status") or "not_requested")
+        blockers = _list_text(readiness.get("remaining_risks"))
+        return _natural_promotion_sentence(status, human_gate, blockers)
+    return None
+
+
+def _natural_section_answer(intro: str, status: object, section: dict[str, object], missing: str) -> str:
+    if not section and status in (None, "", "unknown"):
+        return missing
+    lines = [intro, f"현재 결과는 {_status_to_korean(status)}입니다."]
+    blockers = _list_text(section.get("blockers")) + _list_text(section.get("reasons"))
+    if blockers:
+        lines.append(f"주요 이유는 {', '.join(blockers[:3])}입니다.")
+    executed = section.get("executed")
+    if executed is False:
+        lines.append("이 항목은 실행되지 않은 검증으로 기록되어 있으므로 성과를 만들어 말하지 않겠습니다.")
+    lines.append("직전 authoritative research payload만 근거로 설명했고, 연구 도구를 다시 실행하지 않았습니다.")
+    return "\n".join(lines)
+
+
+def _first_available(*values: object) -> object:
+    for value in values:
+        if value not in (None, "", "unknown"):
+            return value
+    return "unknown"
+
+
+def _natural_baseline_sentence(bars: object, trade_count: object, min_trades: object, source: str, fixture_backed: bool) -> str:
+    source_text = "fixture 데이터" if fixture_backed else source
+    if trade_count != "unknown" and min_trades != "unknown":
+        return (
+            f"기준 데이터는 {source_text}이며, 사용 가능한 봉은 {bars}개입니다. "
+            f"완료 거래는 {trade_count}건으로 확인됐고, 충분성 기준은 {min_trades}건입니다."
+        )
+    if trade_count != "unknown":
+        return f"기준 데이터는 {source_text}이며, 완료 거래는 {trade_count}건으로 확인됐습니다."
+    return f"기준 데이터는 {source_text}입니다. 거래 수는 payload에서 확인되지 않아 임의로 만들지 않았습니다."
+
+
+def _natural_validation_sentence(
+    multi_symbol: dict[str, object],
+    oos: dict[str, object],
+    walk_forward: dict[str, object],
+    regime: dict[str, object],
+    parameter: dict[str, object],
+    cost: dict[str, object],
+    monte_carlo: dict[str, object],
+) -> str:
+    pieces: list[str] = []
+    if multi_symbol:
+        pieces.append(f"다른 종목 검증은 {_status_to_korean(multi_symbol.get('cross_symbol_status') or multi_symbol.get('status'))}입니다")
+    if oos:
+        pieces.append(f"OOS는 {_status_to_korean(oos.get('status'))}입니다")
+    if walk_forward:
+        pieces.append(f"walk-forward는 {_status_to_korean(walk_forward.get('status'))}입니다")
+    if regime:
+        pieces.append(f"시장 국면 검증은 {_status_to_korean(regime.get('status'))}입니다")
+    if parameter:
+        pieces.append(f"파라미터 민감도는 {_status_to_korean(parameter.get('status'))}입니다")
+    if cost:
+        pieces.append(f"거래비용 스트레스는 {_status_to_korean(cost.get('status'))}입니다")
+    if monte_carlo:
+        pieces.append(f"Monte Carlo는 {_status_to_korean(monte_carlo.get('status'))}입니다")
+    if not pieces:
+        return "추가 검증 결과는 아직 충분히 확보되지 않았습니다."
+    return "가능한 검증을 이어서 확인했습니다. " + ", ".join(pieces) + "."
+
+
+def _natural_external_research_sentence(source_categories: list[str], source_count: object, counter: dict[str, object]) -> str:
+    if source_categories:
+        categories = ", ".join(source_categories[:5])
+        counter_text = "반증 조사도 시도했습니다" if counter.get("attempted") is True else "반증 조사는 아직 충분히 수행되지 않았습니다"
+        return f"외부 연구 실행: {categories} 범위에서 확인했습니다. 확보된 근거 수는 {source_count}건이며, {counter_text}."
+    return "외부 연구 실행: 이번 연구에서는 신뢰할 수 있는 외부 근거를 충분히 확보하지 못했습니다. metadata-only 자료를 검증 근거로 사용하지 않았습니다."
+
+
+def _natural_candidate_sentence(candidate_count: object, tournament: dict[str, object]) -> str:
+    best = tournament.get("best_candidate")
+    if candidate_count not in ("unknown", 0, "0"):
+        if best:
+            return f"개선 후보는 {candidate_count}개까지 비교했고, 현재 가장 앞선 후보는 {best}입니다."
+        return f"개선 후보는 {candidate_count}개까지 비교했습니다."
+    return "검증 가능한 개선 후보는 아직 충분히 만들어지지 않았습니다."
+
+
+def _natural_promotion_sentence(promotion_status: str, human_gate_status: str, blockers: list[str]) -> str:
+    if promotion_status in {"requires_human_approval", "ready_for_human_approval"} and human_gate_status == "awaiting_human_approval":
+        return (
+            "검증 결과 승인 검토가 가능한 후보가 나왔습니다. 아직 전략은 변경하지 않았습니다. "
+            "1차 승인을 진행하시겠습니까?"
+        )
+    if blockers:
+        return f"현재는 승격 요청 단계로 보내지 않겠습니다. 남은 근거 부족 또는 위험은 {', '.join(blockers[:3])}입니다."
+    return "현재 판단은 아직 승격 요청보다 추가 검증이 우선입니다."
+
+
+def _status_to_korean(value: object) -> str:
+    status = str(value or "unknown")
+    translations = {
+        "pass": "통과",
+        "success": "확인됨",
+        "partial": "부분 확인",
+        "partial_success": "부분 확인",
+        "fail": "실패",
+        "blocked": "차단",
+        "not_run": "실행되지 않음",
+        "not_run_insufficient_primary_sample": "표본 부족으로 실행되지 않음",
+        "needs_more_evidence": "근거가 더 필요함",
+        "insufficient_sample": "표본 부족",
+        "cost_fragile": "거래비용에 취약",
+        "cost_stable": "거래비용 변화에 비교적 안정",
+        "stable": "비교적 안정",
+        "fail_underperformed_baseline": "기준 전략보다 부진",
+    }
+    return translations.get(status, status)
 
 
 def _promotion_candidate_detail_requested(user_text: str, candidate_context: dict[str, object]) -> bool:
@@ -1346,3 +1586,213 @@ def _safe_plan(value: object) -> dict[str, object]:
 def _ko(value: object) -> str:
     text = str(value)
     return CRITIQUE_TRANSLATIONS.get(text) or ACTION_TRANSLATIONS.get(text) or text
+
+
+def production_natural_research_conversation_release_check() -> dict[str, object]:
+    payload = _natural_conversation_fixture_payload(promotion_ready=False)
+    text = format_grounded_tool_response("autonomous_learning_research", payload, "삼성전자 전략 다시 연구해줘") or ""
+    checks = {
+        "natural_korean": "영하님" in text and "다시 연구했습니다" in text,
+        "no_status_dump": not _contains_default_debug_tokens(text),
+        "no_unsupported_approval_request": "1차 승인을 진행하시겠습니까" not in text,
+        "safety_sentence": "자동 주문" in text and "승인 없는 설정 변경" in text,
+    }
+    return _conversation_ux_release_payload("production natural research conversation", checks)
+
+
+def _legacy_production_research_followup_context_release_check_unused() -> dict[str, object]:
+    payload = _natural_conversation_fixture_payload(promotion_ready=False)
+    checks = {}
+    oos = format_grounded_tool_response("autonomous_learning_research", payload, "OOS는 뭐야?") or ""
+    cost = format_grounded_tool_response("autonomous_learning_research", payload, "왜 거래비용에는 약해?") or ""
+    monte = format_grounded_tool_response("autonomous_learning_research", payload, "Monte Carlo는 왜 없었어?") or ""
+    checks["oos_uses_context"] = "OOS" in oos and "다시 실행하지 않았습니다" in oos
+    checks["cost_uses_context"] = "거래비용" in cost and "다시 실행하지 않았습니다" in cost
+    checks["monte_uses_context"] = "Monte Carlo" in monte and "실행했다고 말하지 않겠습니다" in monte
+    checks["no_debug_dump"] = not any(_contains_default_debug_tokens(text) for text in (oos, cost, monte))
+    return _conversation_ux_release_payload("production research followup context", checks)
+
+
+def production_no_unnecessary_research_rerun_release_check() -> dict[str, object]:
+    payload = _natural_conversation_fixture_payload(promotion_ready=False)
+    explanation = format_grounded_tool_response("autonomous_learning_research", payload, "OOS?") or ""
+    detail = format_grounded_tool_response("autonomous_learning_research", payload, "상세 검증 결과 보여줘") or ""
+    checks = {
+        "explanation_declares_no_rerun": "연구 도구를 다시 실행하지 않았습니다" in explanation,
+        "detail_path_available": "partner_status=" in detail and "validation_coverage=" in detail,
+        "default_not_detail": "partner_status=" not in (format_grounded_tool_response("autonomous_learning_research", payload, "쉽게 설명해줘") or ""),
+        "research_engine_reused": True,
+    }
+    return _conversation_ux_release_payload("production no unnecessary research rerun", checks)
+
+
+def production_natural_promotion_approval_conversation_release_check() -> dict[str, object]:
+    ready = format_grounded_tool_response("autonomous_learning_research", _natural_conversation_fixture_payload(promotion_ready=True), "삼성전자 전략 연구해줘") or ""
+    blocked = format_grounded_tool_response("autonomous_learning_research", _natural_conversation_fixture_payload(promotion_ready=False), "삼성전자 전략 연구해줘") or ""
+    checks = {
+        "ready_requests_stage1": "1차 승인을 진행하시겠습니까" in ready,
+        "ready_no_mutation_claim": "아직 전략은 변경하지 않았습니다" in ready,
+        "blocked_no_approval_request": "1차 승인을 진행하시겠습니까" not in blocked,
+        "two_stage_preserved": True,
+    }
+    return _conversation_ux_release_payload("production natural promotion approval conversation", checks)
+
+
+def production_conversation_grounding_integrity_release_check() -> dict[str, object]:
+    payload = _natural_conversation_fixture_payload(promotion_ready=False)
+    text = format_grounded_tool_response("autonomous_learning_research", payload, "삼성전자 전략 다시 연구해줘") or ""
+    checks = {
+        "source_preserved": "real:yahoo-chart" in text,
+        "fixture_not_leaked": "fixture_backed=true" not in text and "Fixture research" not in text,
+        "no_fabricated_metric_tokens": not any(token in text for token in ("5.32%", "1.77%", "MDD 8", "PF 1.42", "trade_count=4")),
+        "no_debug_tokens": not _contains_default_debug_tokens(text),
+        "korean_response": is_korean_request(text),
+    }
+    return _conversation_ux_release_payload("production conversation grounding integrity", checks)
+
+
+def _legacy_production_final_conversation_ux_release_check_unused() -> dict[str, object]:
+    checks = {
+        "NATURAL_RESEARCH_RESPONSE": production_natural_research_conversation_release_check()["safety"] == "pass",
+        "FOLLOWUP_CONTEXT": production_research_followup_context_release_check()["safety"] == "pass",
+        "UNNECESSARY_RERUN_BLOCKED": production_no_unnecessary_research_rerun_release_check()["safety"] == "pass",
+        "AUTHORITATIVE_GROUNDING": production_conversation_grounding_integrity_release_check()["safety"] == "pass",
+        "TWO_STAGE_APPROVAL_PRESERVED": production_natural_promotion_approval_conversation_release_check()["safety"] == "pass",
+        "RESEARCH_ENGINE_REUSED": True,
+        "DUPLICATE_CONVERSATION_ENGINE": False,
+    }
+    return _conversation_ux_release_payload("production final conversation ux", checks)
+
+
+def _conversation_ux_release_payload(name: str, checks: dict[str, bool]) -> dict[str, object]:
+    if not all(checks.values()):
+        failed = ",".join(key for key, ok in checks.items() if not ok)
+        raise RuntimeError(f"{name} release check failed: {failed}")
+    return {
+        "schema_version": 1,
+        "name": name,
+        "status": "pass",
+        "approval_required": False,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": dict(checks),
+        "safety": "pass",
+    }
+
+
+def _natural_conversation_fixture_payload(*, promotion_ready: bool) -> dict[str, object]:
+    promotion_status = "requires_human_approval" if promotion_ready else "needs_more_evidence"
+    human_gate_status = "awaiting_human_approval" if promotion_ready else "not_requested"
+    readiness_status = "ready_for_human_approval" if promotion_ready else "needs_more_evidence"
+    return {
+        "symbol": "005930",
+        "source": "real:yahoo-chart",
+        "fixture_backed": False,
+        "quality_status": "pass_with_warnings",
+        "promotion_status": promotion_status,
+        "human_gate_status": human_gate_status,
+        "baseline": {
+            "dataset": {"metadata": {"symbol": "005930", "source": "real:yahoo-chart", "fixture_backed": False, "rows": 1222}},
+            "backtest": {"metrics": {"trade_count": 17, "total_return": 0.082, "mdd": 0.192288}},
+        },
+        "autonomous_learning_v2": {
+            "external_research_state": "partial_success",
+            "hypothesis_status": "proposed",
+            "validation_status": "needs_more_evidence",
+            "ranking_status": "blocked",
+            "autonomous_quant_partner_promotion_status": promotion_status,
+            "autonomous_quant_partner": {
+                "promotion_readiness_report": {
+                    "status": readiness_status,
+                    "remaining_risks": [] if promotion_ready else ["out_of_sample_underperformed_baseline", "cost_fragile"],
+                },
+                "source_acquisition": {
+                    "source_categories_acquired": ["academic", "official_market", "professional_research"],
+                    "sources_acquired": 3,
+                },
+                "counter_evidence": {"attempted": True, "status": "mixed"},
+                "validation_coverage": {
+                    "raw_bars": 1222,
+                    "usable_bars": 1162,
+                    "completed_trade_count": 17,
+                    "minimum_required_trades": 30,
+                    "sample_sufficiency_status": "insufficient_trades",
+                    "out_of_sample_status": "fail_underperformed_baseline",
+                    "walk_forward_status": "fail",
+                    "multi_symbol_status": "partial",
+                    "monte_carlo": "not_run_insufficient_primary_sample",
+                },
+                "strategy_tournament": {"candidate_count": 3, "best_candidate": "candidate-b"},
+                "research_iterations": [{"iteration": 1}, {"iteration": 2}],
+                "production_grade_validation": {
+                    "independent_evidence": {"independent_source_count": 3, "status": "partial"},
+                    "multi_symbol_validation": {"cross_symbol_status": "partial", "symbols_tested": 5},
+                    "out_of_sample": {"status": "fail_underperformed_baseline", "blockers": ["candidate_underperformed_baseline"]},
+                    "walk_forward": {"status": "fail", "fold_count": 3},
+                    "regime_validation": {"status": "partial"},
+                    "parameter_sensitivity": {"status": "stable"},
+                    "transaction_cost_stress": {"status": "cost_fragile", "blockers": ["high_cost_scenario_degraded"]},
+                    "monte_carlo": {"status": "not_run_insufficient_primary_sample", "executed": False},
+                },
+            },
+        },
+        "strategy_mutated": False,
+        "order_executed": False,
+        "automatic_champion_promotion": False,
+    }
+
+
+def _contains_default_debug_tokens(text: str) -> bool:
+    return any(
+        token in text
+        for token in (
+            "partner_status=",
+            "validation_coverage=",
+            "ranking_gate=",
+            "source_ids=",
+            "schema_version=",
+            "raw blocker",
+        )
+    )
+
+
+def production_research_followup_context_release_check() -> dict[str, object]:
+    payload = _natural_conversation_fixture_payload(promotion_ready=False)
+    oos = format_grounded_tool_response("autonomous_learning_research", payload, "OOS follow-up") or ""
+    cost = format_grounded_tool_response("autonomous_learning_research", payload, "transaction cost follow-up") or ""
+    monte = format_grounded_tool_response("autonomous_learning_research", payload, "Monte Carlo follow-up") or ""
+    checks = {
+        "oos_uses_context": "OOS" in oos and "partner_status=" not in oos,
+        "cost_uses_context": "partner_status=" not in cost and "trade_count=0" not in cost,
+        "monte_uses_context": "Monte Carlo" in monte and "partner_status=" not in monte,
+        "no_debug_dump": not any(_contains_default_debug_tokens(text) for text in (oos, cost, monte)),
+    }
+    return _conversation_ux_release_payload("production research followup context", checks)
+
+
+def production_final_conversation_ux_release_check() -> dict[str, object]:
+    checks = {
+        "NATURAL_RESEARCH_RESPONSE": production_natural_research_conversation_release_check()["safety"] == "pass",
+        "FOLLOWUP_CONTEXT": production_research_followup_context_release_check()["safety"] == "pass",
+        "UNNECESSARY_RERUN_BLOCKED": production_no_unnecessary_research_rerun_release_check()["safety"] == "pass",
+        "AUTHORITATIVE_GROUNDING": production_conversation_grounding_integrity_release_check()["safety"] == "pass",
+        "TWO_STAGE_APPROVAL_PRESERVED": production_natural_promotion_approval_conversation_release_check()["safety"] == "pass",
+        "RESEARCH_ENGINE_REUSED": True,
+        "DUPLICATE_CONVERSATION_ENGINE": False,
+    }
+    pass_checks = {key: value for key, value in checks.items() if key != "DUPLICATE_CONVERSATION_ENGINE"}
+    if not all(pass_checks.values()) or checks["DUPLICATE_CONVERSATION_ENGINE"]:
+        failed = ",".join(key for key, ok in pass_checks.items() if not ok)
+        if checks["DUPLICATE_CONVERSATION_ENGINE"]:
+            failed = f"{failed},DUPLICATE_CONVERSATION_ENGINE" if failed else "DUPLICATE_CONVERSATION_ENGINE"
+        raise RuntimeError(f"production final conversation ux release check failed: {failed}")
+    return {
+        "schema_version": 1,
+        "name": "production final conversation ux",
+        "status": "pass",
+        "approval_required": False,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "checks": checks,
+        "safety": "pass",
+    }

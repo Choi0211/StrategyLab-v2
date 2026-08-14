@@ -3,7 +3,15 @@ from unittest.mock import patch
 import os
 import sqlite3
 
-from gaon.runtime.research_grounding import format_grounded_tool_response
+from gaon.runtime.research_grounding import (
+    format_grounded_tool_response,
+    production_conversation_grounding_integrity_release_check,
+    production_final_conversation_ux_release_check,
+    production_natural_promotion_approval_conversation_release_check,
+    production_natural_research_conversation_release_check,
+    production_no_unnecessary_research_rerun_release_check,
+    production_research_followup_context_release_check,
+)
 from gaon.runtime.migrations import migrate
 from gaon.knowledge.autonomous_quant_partner import (
     _compare_validation_metrics,
@@ -225,12 +233,19 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
                 payload = telegram_autonomous_learning_payload(connection, "Samsung production wiring", symbol="005930")
 
         rendered = format_grounded_tool_response("autonomous_learning_research", dict(payload), "Samsung production wiring")
+        detail = format_grounded_tool_response("autonomous_learning_research", dict(payload), "raw results")
 
         self.assertIsNotNone(rendered)
         assert rendered is not None
-        self.assertIn("Autonomous Quant Partner", rendered)
-        self.assertIn("partner_status=needs_more_evidence", rendered)
-        self.assertIn("investigated_source_categories=official_market", rendered)
+        self.assertNotIn("Autonomous Quant Partner", rendered)
+        self.assertNotIn("partner_status=needs_more_evidence", rendered)
+        self.assertNotIn("source_ids=", rendered)
+        self.assertIn("real:yahoo-chart", rendered)
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertIn("Autonomous Quant Partner", detail)
+        self.assertIn("partner_status=needs_more_evidence", detail)
+        self.assertIn("investigated_source_categories=official_market", detail)
 
     def test_hotfix2402_release_checks_expose_validation_coverage(self) -> None:
         checks = (
@@ -280,18 +295,24 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             external_research={"state": "content_unavailable"},
         )
         rendered = format_grounded_tool_response("autonomous_learning_research", dict(payload), "Samsung validation coverage render")
+        detail = format_grounded_tool_response("autonomous_learning_research", dict(payload), "raw results")
 
         self.assertIsNotNone(rendered)
         assert rendered is not None
-        self.assertIn("bars=730", rendered)
-        self.assertIn("usable_bars=670", rendered)
-        self.assertIn("entry_signals=5", rendered)
-        self.assertIn("sample_status=insufficient_trades", rendered)
-        self.assertIn("horizon_extension_attempts=2", rendered)
-        self.assertIn("counter_evidence_attempted=true", rendered)
-        self.assertIn("generated_candidates=2", rendered)
-        self.assertIn("research_iterations=", rendered)
-        self.assertIn("promotion_status=needs_more_evidence", rendered)
+        self.assertNotIn("bars=730", rendered)
+        self.assertNotIn("validation_coverage=", rendered)
+        self.assertIn("real:yahoo-chart", rendered)
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertIn("bars=730", detail)
+        self.assertIn("usable_bars=670", detail)
+        self.assertIn("entry_signals=5", detail)
+        self.assertIn("sample_status=insufficient_trades", detail)
+        self.assertIn("horizon_extension_attempts=2", detail)
+        self.assertIn("counter_evidence_attempted=true", detail)
+        self.assertIn("generated_candidates=2", detail)
+        self.assertIn("research_iterations=", detail)
+        self.assertIn("promotion_status=needs_more_evidence", detail)
 
     def test_sprint241_248_production_grade_release_checks_pass(self) -> None:
         checks = (
@@ -460,14 +481,20 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             external_research={"state": "content_unavailable"},
         )
         rendered = format_grounded_tool_response("autonomous_learning_research", dict(payload), "Samsung production grade")
+        detail = format_grounded_tool_response("autonomous_learning_research", dict(payload), "raw results")
 
         self.assertIsNotNone(rendered)
         assert rendered is not None
-        self.assertIn("Production-Grade Validation", rendered)
-        self.assertIn("cross_symbol_status=", rendered)
-        self.assertIn("out_of_sample=", rendered)
-        self.assertIn("walk_forward=", rendered)
-        self.assertIn("monte_carlo=", rendered)
+        self.assertNotIn("Production-Grade Validation", rendered)
+        self.assertNotIn("cross_symbol_status=", rendered)
+        self.assertIn("real:yahoo-chart", rendered)
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertIn("Production-Grade Validation", detail)
+        self.assertIn("cross_symbol_status=", detail)
+        self.assertIn("out_of_sample=", detail)
+        self.assertIn("walk_forward=", detail)
+        self.assertIn("monte_carlo=", detail)
 
     def test_final_production_wiring_executes_validation_before_telegram_render(self) -> None:
         payload = production_telegram_full_validation_execution_release_check()
@@ -479,6 +506,22 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         self.assertIn("walk_forward", payload["executed_sections"])
         self.assertFalse(payload["strategy_mutated"])
         self.assertFalse(payload["order_executed"])
+
+    def test_final_conversation_ux_release_checks_pass(self) -> None:
+        checks = (
+            production_natural_research_conversation_release_check,
+            production_research_followup_context_release_check,
+            production_no_unnecessary_research_rerun_release_check,
+            production_natural_promotion_approval_conversation_release_check,
+            production_conversation_grounding_integrity_release_check,
+            production_final_conversation_ux_release_check,
+        )
+        for check in checks:
+            with self.subTest(check=check.__name__):
+                payload = check()
+                self.assertEqual("pass", payload["safety"])
+                self.assertFalse(payload["strategy_mutated"])
+                self.assertFalse(payload["order_executed"])
 
     def test_hotfix2481_missing_robustness_execution_does_not_fabricate_metrics(self) -> None:
         payload = autonomous_quant_partner_payload(

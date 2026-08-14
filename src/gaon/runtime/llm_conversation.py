@@ -17,6 +17,7 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.conversational_mvp import (
     ConversationalMVPContext,
     ConversationalMVPIntent,
+    ConversationalRoute,
     ExplanationLevel,
     PresentationPreference,
     classify_conversational_route,
@@ -635,6 +636,10 @@ class LLMConversationBrain:
         if not _is_conversational_mvp_source(request):
             return None
         route = classify_conversational_route(request.text)
+        if route.intent is ConversationalMVPIntent.UNKNOWN and _is_stored_research_explanation_followup(request.text):
+            context = self._mvp_context_for(request.session_id)
+            if context is not None:
+                route = ConversationalRoute(ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, route.symbols)
         autonomous = self._try_autonomous_research_conversation(request, route, warnings, references)
         if autonomous is not None:
             return autonomous
@@ -1694,6 +1699,44 @@ def _is_natural_presentation_request(text: str) -> bool:
     )
     normalized = text.casefold()
     return any(token.casefold() in normalized for token in tokens)
+
+
+def _is_stored_research_explanation_followup(text: str) -> bool:
+    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
+    if not normalized:
+        return False
+    topics = (
+        "oos",
+        "outofsample",
+        "walkforward",
+        "\uc6cc\ud06c\ud3ec\uc6cc\ub4dc",
+        "\uac70\ub798\ube44\uc6a9",
+        "transactioncost",
+        "\ubaac\ud14c\uce74\ub97c\ub85c",
+        "montecarlo",
+        "\uc2dc\uc7a5\uad6d\uba74",
+        "\ub808\uc9d0",
+        "regime",
+        "\ud30c\ub77c\ubbf8\ud130\ubbfc\uac10\ub3c4",
+        "\ub2e4\ub978\uc885\ubaa9",
+        "\uc678\ubd80\uadfc\uac70",
+        "\uc678\ubd80\uc5f0\uad6c",
+    )
+    explainers = (
+        "\ubb50\uc57c",
+        "\uc65c",
+        "\ubb34\uc2a8\ub73b",
+        "\uc124\uba85",
+        "\ubb38\uc81c",
+        "\uc57d\ud574",
+        "\ubcf4\uc5ec\uc918",
+        "why",
+        "what",
+        "explain",
+    )
+    return any(token in normalized for token in topics) and (
+        any(token in normalized for token in explainers) or len(normalized) <= 32
+    )
 
 
 def _mvp_metadata_root(metadata: dict[str, object]) -> dict[str, object]:
