@@ -776,7 +776,7 @@ class LLMConversationBrain:
         if (
             context is not None
             and context.last_result_kind == "autonomous_learning_v2"
-            and _is_promotion_candidate_presentation_request(request.text)
+            and _should_use_promotion_candidate_presentation(request.text)
         ):
             response_route = f"conversation_autonomous_presentation_{route.intent.value}"
             self._remember_mvp_response_context(request, route.intent, response_route)
@@ -860,11 +860,16 @@ class LLMConversationBrain:
         if context is None and not route.symbols:
             return "영하님, 직전 연구나 전략 맥락이 없습니다. 이어서 자율 연구할 종목을 먼저 삼성전자처럼 말씀해 주세요.", "conversation_autonomous_learning_missing_target", _dedupe((*warnings, "autonomous learning requires target")), references, "deterministic", ()
         symbol = _resolve_autonomous_symbol(route, context)
-        original_text = previous_request_text(context, request.text) if context is not None else request.text
+        previous_text = previous_request_text(context, request.text) if context is not None else None
+        execution_text = _autonomous_learning_execution_text(
+            request.text,
+            previous_text=previous_text,
+            mode=mode,
+        )
         result = self._tool_executor.execute(
             ToolRequest(
                 "autonomous_learning_research",
-                {"request_text": original_text, "symbol": symbol, "mode": mode},
+                {"request_text": execution_text, "symbol": symbol, "mode": mode},
                 request.user_ref,
                 request.received_at,
             )
@@ -1936,7 +1941,8 @@ def _autonomous_learning_request_mode(text: str) -> str | None:
     robustness = ("oos", "outofsample", "워크포워드", "walkforward", "walk-forward", "시장국면", "레짐", "regime", "파라미터민감도", "거래비용", "transactioncost", "몬테카를로", "montecarlo", "monte-carlo", "robustness")
     plain_start = ("전략연구", "전략을연구", "전략연구해", "autonomousresearch", "autonomouslearning")
     subject = ("삼성전자", "005930", "전략", "연구", "검증", "백테스트", "실제", "시장데이터", "strategy", "research", "validate")
-    if any(token in normalized for token in approval):
+    fresh_execution_override = _has_fresh_research_execution_markers(text)
+    if any(token in normalized for token in approval) and not fresh_execution_override:
         return "approval_review"
     if any(token in normalized for token in learning) and any(token in normalized for token in ("바탕", "기반", "개선", "검증", "전략", "research", "strategy")):
         return "research"
@@ -1951,6 +1957,60 @@ def _autonomous_learning_request_mode(text: str) -> str | None:
     if any(token in normalized for token in plain_start) and not any(token in normalized for token in ("백테스트", "실제데이터", "실제시장데이터", "다중종목", "여러종목", "재검증", "검증해봐")):
         return "research"
     return None
+
+
+def _has_fresh_research_execution_markers(text: str) -> bool:
+    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
+    restart_tokens = (
+        "처음부터다시연구",
+        "다시처음부터연구",
+        "처음부터연구",
+        "새로연구",
+    )
+    execution_tokens = (
+        "provider",
+        "fingerprint",
+        "oos",
+        "walkforward",
+        "거래비용",
+        "재검증",
+        "새후보",
+    )
+    return (
+        any(token in normalized for token in restart_tokens)
+        and any(token in normalized for token in execution_tokens)
+    )
+
+
+def _is_fresh_autonomous_learning_execution_request(text: str) -> bool:
+    mode = _autonomous_learning_request_mode(text)
+    return (
+        mode in {"research", "external_research"}
+        and _has_explicit_autonomous_learning_v2_intent(text)
+        and _has_fresh_research_execution_markers(text)
+    )
+
+
+def _should_use_promotion_candidate_presentation(text: str) -> bool:
+    return (
+        _is_promotion_candidate_presentation_request(text)
+        and not _is_fresh_autonomous_learning_execution_request(text)
+    )
+
+
+def _autonomous_learning_execution_text(
+    current_text: str,
+    *,
+    previous_text: str | None,
+    mode: str,
+) -> str:
+    if (
+        mode in {"research", "external_research"}
+        and _has_explicit_autonomous_learning_v2_intent(current_text)
+        and _has_fresh_research_execution_markers(current_text)
+    ):
+        return current_text
+    return previous_text or current_text
 
 
 def _has_explicit_autonomous_learning_v2_intent(text: str) -> bool:
