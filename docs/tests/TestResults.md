@@ -2,6 +2,44 @@
 
 Status: Passed
 
+## Gaon V2 Final Research Capability Closeout
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\autonomous_quant_partner.py src\gaon\runtime\research_grounding.py src\gaon\runtime\cli.py tests\unit\test_autonomous_quant_partner.py`: PASS
+  - `python -m unittest tests.unit.test_autonomous_quant_partner.AutonomousQuantPartnerTests.test_final_research_capability_closeout_release_check_reports_contract tests.unit.test_autonomous_quant_partner.AutonomousQuantPartnerTests.test_final_research_capability_focused_release_checks_pass tests.unit.test_autonomous_quant_partner.AutonomousQuantPartnerTests.test_natural_conversation_hides_internal_status_and_explains_candidates -q`: PASS, 3 tests
+  - Focused final research capability release checks: PASS
+  - `python -m gaon.runtime.cli gaon-production-final-research-capability-closeout-release-check`: PASS
+- Aggregate output verified:
+  - `NATURAL_CONVERSATION=pass`
+  - `EXTERNAL_RESEARCH=pass`
+  - `SOURCE_DIVERSIFICATION=pass`
+  - `INDEPENDENT_EVIDENCE=pass`
+  - `COUNTER_EVIDENCE=pass`
+  - `ADAPTIVE_LOOP=pass`
+  - `VALIDATION_FEEDBACK=pass`
+  - `SAMPLE_ADAPTATION=pass`
+  - `MEMORY_CONTINUITY=pass`
+  - `ROBUSTNESS_REUSED=pass`
+  - `PROVENANCE=pass`
+  - `TWO_STAGE_APPROVAL=pass`
+  - `DUPLICATE_ENGINE=false`
+  - `FABRICATED_METRICS=false`
+  - `ORDER_EXECUTED=false`
+  - `safety=pass`
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 858 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 204 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `gaon-production-v2-final-closeout-release-check`: PASS
+  - `gaon-production-v1-v2-final-integration-release-check`: PASS
+  - `gaon-production-final-conversation-ux-release-check`: PASS
+  - `gaon-production-final-live-research-execution-readiness-release-check`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Production live Telegram/provider verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation before approval, no approval bypass, no fabricated metrics, no fixture-backed promotion evidence.
+
 ## Gaon V2 Natural Conversation UX Closeout
 
 - Targeted local verification:

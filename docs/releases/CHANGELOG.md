@@ -1,5 +1,23 @@
 # Changelog
 
+## Gaon V2 Final Research Capability Closeout
+
+- Added focused and aggregate production release checks for natural Korean
+  conversation polish, internal-status leakage blocking, external-provider
+  diversification, independent source acquisition, provider fallback
+  continuation, counter-evidence execution, adaptive research iteration,
+  validation feedback, sample insufficiency adaptation, research-memory reuse,
+  duplicate candidate fingerprint blocking, robustness reuse, evidence
+  provenance, low-credibility promotion blocking, no fabricated metrics,
+  two-stage approval, no mutation, no live order execution, Telegram
+  authoritative path reuse, and duplicate-engine prevention.
+- Updated the default autonomous-learning follow-up renderer so it no longer
+  exposes payload/tool wording in normal user-facing answers.
+- Clarified baseline-plus-candidate presentation as “existing strategy plus new
+  candidates” when the tournament includes the baseline.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Gaon V2 Natural Conversation UX Closeout
 
 - Changed the default `autonomous_learning_research` Telegram rendering from a

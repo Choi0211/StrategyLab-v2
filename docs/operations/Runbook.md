@@ -67,6 +67,25 @@ The final aggregate must report `NATURAL_RESEARCH_RESPONSE=pass`,
 `RESEARCH_ENGINE_REUSED=pass`, `DUPLICATE_CONVERSATION_ENGINE=false`, and
 `safety=pass`.
 
+For final Gaon V2 research-capability closeout verification, run:
+
+```bash
+.venv/bin/python -m gaon.runtime.cli gaon-production-final-research-capability-closeout-release-check
+```
+
+The aggregate must report `NATURAL_CONVERSATION=pass`,
+`EXTERNAL_RESEARCH=pass`, `SOURCE_DIVERSIFICATION=pass`,
+`INDEPENDENT_EVIDENCE=pass`, `COUNTER_EVIDENCE=pass`,
+`ADAPTIVE_LOOP=pass`, `VALIDATION_FEEDBACK=pass`,
+`SAMPLE_ADAPTATION=pass`, `MEMORY_CONTINUITY=pass`,
+`ROBUSTNESS_REUSED=pass`, `PROVENANCE=pass`, `TWO_STAGE_APPROVAL=pass`,
+`DUPLICATE_ENGINE=false`, `FABRICATED_METRICS=false`,
+`ORDER_EXECUTED=false`, and `safety=pass`.
+
+Production live Telegram/provider acceptance remains a separate operational
+verification because provider configuration and network availability are
+environment-specific.
+
 For Autonomous Learning V2 production-loop verification, run:
 
 ```bash

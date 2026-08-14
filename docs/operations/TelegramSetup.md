@@ -51,6 +51,16 @@ Release check:
 python -m gaon.runtime.cli gaon-conversation-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
 ```
 
+Final production research-capability closeout:
+
+```bash
+python -m gaon.runtime.cli gaon-production-final-research-capability-closeout-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
+Normal Telegram answers should be natural Korean and should not expose internal
+status enums, source IDs, fingerprints, payload names, or tool-rerun wording
+unless the user explicitly asks for detail/raw diagnostics.
+
 Hotfix 152.1 follow-up context release check:
 
 ```bash
