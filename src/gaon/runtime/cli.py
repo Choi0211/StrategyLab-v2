@@ -381,6 +381,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-telegram-full-validation-execution-release-check")
     sub.add_parser("gaon-production-no-premature-research-budget-stop-release-check")
     sub.add_parser("gaon-production-final-live-research-execution-readiness-release-check")
+    sub.add_parser("gaon-production-live-provider-registry-release-check")
+    sub.add_parser("gaon-production-live-source-diversification-readiness-release-check")
+    sub.add_parser("gaon-production-live-adaptive-research-wiring-release-check")
+    sub.add_parser("gaon-production-live-horizon-adaptation-release-check")
+    sub.add_parser("gaon-production-live-counter-evidence-wiring-release-check")
     sub.add_parser("gaon-production-grounded-evidence-release-check")
     sub.add_parser("gaon-production-evidence-backed-hypothesis-release-check")
     sub.add_parser("gaon-production-strategy-experiment-release-check")
@@ -2616,6 +2621,11 @@ def _run(args: argparse.Namespace) -> int:
         "gaon-production-telegram-full-validation-execution-release-check",
         "gaon-production-no-premature-research-budget-stop-release-check",
         "gaon-production-final-live-research-execution-readiness-release-check",
+        "gaon-production-live-provider-registry-release-check",
+        "gaon-production-live-source-diversification-readiness-release-check",
+        "gaon-production-live-adaptive-research-wiring-release-check",
+        "gaon-production-live-horizon-adaptation-release-check",
+        "gaon-production-live-counter-evidence-wiring-release-check",
     }:
         from gaon.knowledge.autonomous_quant_partner import (
             production_autonomous_research_action_execution_release_check,
@@ -2701,6 +2711,11 @@ def _run(args: argparse.Namespace) -> int:
             production_telegram_full_validation_execution_release_check,
             production_validation_coverage_release_check,
             production_validation_window_integrity_release_check,
+            production_live_provider_registry_release_check,
+            production_live_source_diversification_readiness_release_check,
+            production_live_adaptive_research_wiring_release_check,
+            production_live_horizon_adaptation_release_check,
+            production_live_counter_evidence_wiring_release_check,
         )
 
         handlers = {
@@ -2785,6 +2800,11 @@ def _run(args: argparse.Namespace) -> int:
             "gaon-production-telegram-full-validation-execution-release-check": production_telegram_full_validation_execution_release_check,
             "gaon-production-no-premature-research-budget-stop-release-check": production_no_premature_research_budget_stop_release_check,
             "gaon-production-final-live-research-execution-readiness-release-check": production_final_live_research_execution_readiness_release_check,
+            "gaon-production-live-provider-registry-release-check": production_live_provider_registry_release_check,
+            "gaon-production-live-source-diversification-readiness-release-check": production_live_source_diversification_readiness_release_check,
+            "gaon-production-live-adaptive-research-wiring-release-check": production_live_adaptive_research_wiring_release_check,
+            "gaon-production-live-horizon-adaptation-release-check": production_live_horizon_adaptation_release_check,
+            "gaon-production-live-counter-evidence-wiring-release-check": production_live_counter_evidence_wiring_release_check,
         }
         payload = handlers[args.command]()
         check_mode = f"check_mode={payload['check_mode']} " if "check_mode" in payload else ""

@@ -1,5 +1,24 @@
 # Changelog
 
+## Final Production Acceptance Hotfix
+
+- Added production-path live provider audit reporting for all Autonomous Quant
+  Partner source categories, including configured/call-attempted/result/content
+  acquisition/claim counts and explicit failure reasons.
+- Added source-diversification readiness reporting so academic content
+  exhaustion does not obscure official-market evidence or remaining configured
+  provider gaps.
+- Added counter-evidence query lineage and precise states for searched/no-result
+  versus provider-unavailable cases.
+- Added adaptive research iteration lineage from observed validation failures
+  to derived hypotheses, candidate changes, validation result, and next action.
+- Added horizon adaptation reporting for insufficient completed-trade samples
+  without lowering the 30-trade threshold.
+- Polished default Korean Telegram presentation to avoid raw provider/status
+  labels while preserving structured payload fields for detail/debug views.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Gaon V2 Final Research Capability Closeout
 
 - Added focused and aggregate production release checks for natural Korean

@@ -119,6 +119,11 @@ from gaon.knowledge.telegram_autonomous_learning import (
     production_autonomous_research_wiring_release_check,
     production_autonomous_validation_coverage_release_check,
     production_backtest_signal_diagnostic_release_check,
+    production_live_adaptive_research_wiring_release_check,
+    production_live_counter_evidence_wiring_release_check,
+    production_live_horizon_adaptation_release_check,
+    production_live_provider_registry_release_check,
+    production_live_source_diversification_readiness_release_check,
     production_research_horizon_release_check,
     production_sample_sufficiency_release_check,
     production_telegram_full_validation_execution_release_check,
@@ -678,6 +683,105 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
         self.assertEqual(5, multi_symbol["symbols_executed"])
         self.assertEqual(0, multi_symbol["symbols_failed"])
         self.assertTrue(all(not row["fixture_backed"] for row in multi_symbol["symbols"]))
+
+    def test_final_live_acceptance_release_checks_pass(self) -> None:
+        checks = (
+            production_live_provider_registry_release_check,
+            production_live_source_diversification_readiness_release_check,
+            production_live_adaptive_research_wiring_release_check,
+            production_live_horizon_adaptation_release_check,
+            production_live_counter_evidence_wiring_release_check,
+        )
+        for check in checks:
+            with self.subTest(check=check.__name__):
+                payload = check()
+                self.assertEqual("pass", payload["safety"])
+                self.assertEqual("production_path_readiness", payload["check_mode"])
+                self.assertFalse(payload["strategy_mutated"])
+                self.assertFalse(payload["order_executed"])
+
+    def test_live_partner_records_provider_audit_counter_lineage_and_horizon_policy(self) -> None:
+        baseline = _baseline(trades=17, symbols=1)
+        baseline["validation_coverage"] = {
+            "schema_version": 1,
+            "symbol": "005930",
+            "data_source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "requested_start": "2021-07-25",
+            "requested_end": "2026-07-24",
+            "actual_start": "2021-07-26",
+            "actual_end": "2026-07-24",
+            "raw_bars": 1207,
+            "usable_bars": 1147,
+            "warmup_bars": 60,
+            "entry_signal_count": 41,
+            "exit_signal_count": 17,
+            "completed_trade_count": 17,
+            "minimum_required_trades": 30,
+            "validation_horizon_days": 1825,
+            "horizon_extension_attempts": 0,
+            "sample_sufficiency_status": "insufficient_trades",
+            "sample_sufficiency_reasons": ["insufficient_trades"],
+        }
+        payload = autonomous_quant_partner_payload(
+            "삼성전자 전략을 처음부터 다시 연구해줘",
+            symbol="005930",
+            baseline=baseline,
+        )
+
+        audit = payload["live_provider_audit"]
+        self.assertEqual(set(audit), {"academic", "official_market", "corporate", "regulatory", "professional_research", "news", "web", "youtube", "community", "social"})
+        self.assertFalse(any(row["fixture_backed"] for row in audit.values()))
+        validation = payload["validation_sufficiency_v2"]
+        self.assertEqual(30, validation["min_trades"])
+        self.assertEqual(1, validation["horizon_extension_attempts"])
+        self.assertEqual("maximum_available_history_reached", validation["horizon_extension_behavior"])
+        counter = payload["counter_evidence"]
+        self.assertTrue(counter["attempted"])
+        self.assertTrue(counter["queries"])
+        self.assertIn(counter["execution_state"], {"searched_but_none_found", "not_executed_provider_unavailable", "searched_and_found_counter_evidence"})
+        iterations = payload["research_iterations"]
+        self.assertTrue(all(row["observed_failure"] for row in iterations))
+        self.assertTrue(all(row["derived_hypothesis"] for row in iterations))
+        self.assertTrue(all(row["candidate_change"] for row in iterations))
+        self.assertFalse(any(row["strategy_mutated"] or row["order_executed"] for row in iterations))
+
+    def test_natural_autonomous_learning_response_hides_internal_status_labels(self) -> None:
+        payload = {
+            "symbol": "005930",
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+            "quality_status": "pass_with_warnings",
+            "baseline": {
+                "dataset": {"metadata": {"rows": 1207, "source": "real:yahoo-chart", "fixture_backed": False}},
+                "backtest": {"metrics": {"trade_count": 17}},
+            },
+            "autonomous_learning_v2": {
+                "autonomous_quant_partner": {
+                    "source_acquisition": {"source_categories_acquired": ["official_market"], "sources_acquired": 1},
+                    "counter_evidence": {"attempted": True},
+                    "validation_coverage": {"completed_trade_count": 17, "min_trades": 30},
+                    "production_grade_validation": {
+                        "multi_symbol_validation": {"status": "multi_symbol_partial"},
+                        "out_of_sample": {"status": "fail_underperformed_baseline"},
+                        "walk_forward": {"status": "fail"},
+                        "transaction_cost_stress": {"status": "cost_fragile"},
+                    },
+                    "candidate_generation": [{"candidate_id": "candidate:a"}, {"candidate_id": "candidate:b"}],
+                    "strategy_tournament": {"baseline_included": True, "candidate_count": 3, "best_candidate": "baseline"},
+                },
+                "promotion_status": "needs_real_validation",
+                "human_gate_status": "not_requested",
+            },
+            "promotion_status": "needs_real_validation",
+            "human_gate_status": "not_requested",
+        }
+        text = format_grounded_tool_response("autonomous_learning_research", payload, "삼성전자 다시 연구해줘") or ""
+
+        for token in ("multi_symbol_partial", "cost_fragile", "independent_sources", "trade_count", "best=baseline"):
+            self.assertNotIn(token, text)
+        self.assertIn("공식 시장 데이터", text)
+        self.assertIn("기존 전략", text)
 
 
 def _baseline(*, trades: int, symbols: int) -> dict[str, object]:
