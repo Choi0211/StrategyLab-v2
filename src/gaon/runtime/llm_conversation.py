@@ -1903,6 +1903,8 @@ def _autonomous_request_mode(text: str) -> str | None:
     normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
     if not normalized:
         return None
+    if _has_fresh_research_execution_markers(text):
+        return "validate"
     learning = ("지금까지무엇을배웠", "지금까지뭘배웠", "무엇을배웠", "뭘배웠", "학습기록", "learningmemory", "whatlearned")
     critique = ("문제점을찾아", "문제점을찾아줘", "약점을분석", "약점", "취약", "개선해", "보완", "critic", "critique")
     compare = ("어느종목", "어떤종목", "더잘맞", "비교", "compare", "whichsymbol")
@@ -1942,7 +1944,9 @@ def _autonomous_learning_request_mode(text: str) -> str | None:
     plain_start = ("전략연구", "전략을연구", "전략연구해", "autonomousresearch", "autonomouslearning")
     subject = ("삼성전자", "005930", "전략", "연구", "검증", "백테스트", "실제", "시장데이터", "strategy", "research", "validate")
     fresh_execution_override = _has_fresh_research_execution_markers(text)
-    if any(token in normalized for token in approval) and not fresh_execution_override:
+    if fresh_execution_override:
+        return "research"
+    if any(token in normalized for token in approval):
         return "approval_review"
     if any(token in normalized for token in learning) and any(token in normalized for token in ("바탕", "기반", "개선", "검증", "전략", "research", "strategy")):
         return "research"

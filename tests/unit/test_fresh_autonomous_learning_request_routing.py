@@ -5,6 +5,8 @@ import unittest
 from gaon.runtime.llm_conversation import (
     _autonomous_learning_execution_text,
     _autonomous_learning_request_mode,
+    _autonomous_request_mode,
+    _has_explicit_autonomous_learning_v2_intent,
     _is_fresh_autonomous_learning_execution_request,
     _should_use_promotion_candidate_presentation,
 )
@@ -35,6 +37,31 @@ PROMOTION_DETAIL = (
 
 
 class FreshAutonomousLearningRequestRoutingTests(unittest.TestCase):
+    def test_fresh_restart_preempts_internal_continue_and_approval_language(self) -> None:
+        text = (
+            "\uac00\uc628\uc544 \uc0bc\uc131\uc804\uc790 \uc804\ub7b5\uc744 "
+            "\ucc98\uc74c\ubd80\ud130 \ub2e4\uc2dc \uc5f0\uad6c\ud574\uc918.\n"
+            "\uc2e4\uc81c \uc2dc\uc7a5 \ub370\uc774\ud130\uc640 provider\ub97c "
+            "\uc0ac\uc6a9\ud574\uc11c \uc870\uc0ac\ud574\uc918.\n"
+            "\uae30\uc874 OOS, walk-forward, \uac70\ub798\ube44\uc6a9 "
+            "\uac80\uc99d \uc2e4\ud328\ub97c \ub2e4\uc74c \ud6c4\ubcf4 "
+            "\uc5f0\uad6c\uc5d0 \ubc18\uc601\ud558\uace0 \uc7ac\uac80\uc99d\ud574\uc918.\n"
+            "\uc774\uc804\uc5d0 \uac80\uc99d\ud55c \ud6c4\ubcf4\ub294 fingerprint\ub85c "
+            "\ucc28\ub2e8\ud574\uc918.\n"
+            "\ud55c \ud6c4\ubcf4\uac00 \uc2e4\ud328\ud558\uba74 \uac19\uc740 "
+            "\uc694\uccad \uc548\uc5d0\uc11c \ub2e4\uc74c \ud6c4\ubcf4\ub97c "
+            "\uacc4\uc18d \uc5f0\uad6c\ud574\uc918.\n"
+            "\uc790\ub3d9 \uad50\uccb4\ud558\uc9c0 \ub9d0\uace0 1\ucc28 "
+            "\uc2b9\uc778 \uc694\uccad\uc5d0\uc11c \uba48\ucdb0\uc918."
+        )
+
+        self.assertEqual("research", _autonomous_learning_request_mode(text))
+        self.assertEqual("validate", _autonomous_request_mode(text))
+        self.assertTrue(_has_explicit_autonomous_learning_v2_intent(text))
+        self.assertTrue(_is_fresh_autonomous_learning_execution_request(text))
+        self.assertFalse(_should_use_promotion_candidate_presentation(text))
+
+
     def test_new_live_research_contract_runs_as_fresh_research(self) -> None:
         self.assertIn(
             _autonomous_learning_request_mode(FRESH_RESEARCH),
