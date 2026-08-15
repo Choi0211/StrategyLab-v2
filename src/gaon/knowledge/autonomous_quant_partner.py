@@ -1964,141 +1964,214 @@ def _adaptive_validation_feedback_execution(
     known_semantic_fingerprints.update(persistent_fingerprints)
     iterations: list[dict[str, object]] = []
     duplicate_count = 0
-    max_attempts = min(len(failures), budget.max_iterations, budget.max_experiments)
 
-    for index, observed_failure in enumerate(failures[:max_attempts], start=1):
-        candidate, changed_rules, semantic_fingerprint, skipped_semantics = (
-            _select_unique_adaptive_candidate(
-                starting_candidate,
-                observed_failure=observed_failure,
-                iteration=index,
-                known_semantic_fingerprints=known_semantic_fingerprints,
+    # max_iterations bounds distinct failure families. max_experiments bounds
+    # total candidate executions across continuation rounds in one request.
+    eligible_failures = list(
+        failures[: min(len(failures), budget.max_iterations)]
+    )
+    active_failures = list(eligible_failures)
+    attempts_by_failure = {failure: 0 for failure in eligible_failures}
+    experiment_limit = budget.max_experiments
+    experiments_executed = 0
+    research_round = 0
+    budget_exhausted = False
+
+    while active_failures and experiments_executed < experiment_limit:
+        research_round += 1
+        round_failures = list(active_failures)
+        active_failures = []
+        round_executions = 0
+
+        for position, observed_failure in enumerate(round_failures):
+            if experiments_executed >= experiment_limit:
+                active_failures.extend(round_failures[position:])
+                budget_exhausted = True
+                break
+
+            attempts_by_failure[observed_failure] = (
+                attempts_by_failure.get(observed_failure, 0) + 1
             )
-        )
-        duplicate_count += len(skipped_semantics)
-        hypothesis_family = _primary_hypothesis_family_for_failure(observed_failure)
-        hypothesis_branch_level = 0
-        hypothesis_branch_reason = None
+            failure_attempt = attempts_by_failure[observed_failure]
+            index = len(iterations) + 1
 
-        if candidate is None:
-            (
+            candidate, changed_rules, semantic_fingerprint, skipped_semantics = (
+                _select_unique_adaptive_candidate(
+                    starting_candidate,
+                    observed_failure=observed_failure,
+                    iteration=failure_attempt,
+                    known_semantic_fingerprints=known_semantic_fingerprints,
+                )
+            )
+            duplicate_count += len(skipped_semantics)
+            hypothesis_family = _primary_hypothesis_family_for_failure(
+                observed_failure
+            )
+            hypothesis_branch_level = 0
+            hypothesis_branch_reason = None
+
+            if candidate is None:
+                (
+                    candidate,
+                    changed_rules,
+                    semantic_fingerprint,
+                    branch_skipped,
+                    hypothesis_family,
+                ) = _select_unique_hypothesis_branch_candidate(
+                    starting_candidate,
+                    observed_failure=observed_failure,
+                    iteration=failure_attempt,
+                    known_semantic_fingerprints=known_semantic_fingerprints,
+                )
+                duplicate_count += len(branch_skipped)
+                skipped_semantics = [*skipped_semantics, *branch_skipped]
+                hypothesis_branch_level = 1
+                hypothesis_branch_reason = "primary_candidate_family_exhausted"
+
+            if candidate is None:
+                iterations.append(
+                    {
+                        "iteration": index,
+                        "intra_run_round": research_round,
+                        "failure_attempt": failure_attempt,
+                        "observed_failure": observed_failure,
+                        "derived_hypothesis": _derived_hypothesis_for_failure(
+                            observed_failure
+                        ),
+                        "hypothesis_family": hypothesis_family,
+                        "hypothesis_branch_level": hypothesis_branch_level,
+                        "hypothesis_branch_reason": hypothesis_branch_reason,
+                        "candidate_id": (
+                            f"candidate:{observed_failure}:hypothesis_exhausted"
+                        ),
+                        "candidate_fingerprint": None,
+                        "candidate_semantic_fingerprint": None,
+                        "changed_rules": [],
+                        "skipped_semantic_fingerprints": skipped_semantics,
+                        "actual_execution": False,
+                        "duplicate_candidate_skipped": True,
+                        "validation_result": "hypothesis_branch_space_exhausted",
+                        "next_action": "stop_bounded_hypothesis_search",
+                        "continuation_eligible": False,
+                        "strategy_mutated": False,
+                        "order_executed": False,
+                    }
+                )
+                continue
+
+            experiment_id = (
+                f"adaptive-experiment:"
+                f"{_hash({'failure': observed_failure, 'semantic': semantic_fingerprint})[:16]}"
+            )
+            known_semantic_fingerprints.add(semantic_fingerprint)
+            rid = (
+                f"adaptive-feedback:{symbol}:{index}:"
+                f"{_hash({'request': request_text, 'candidate': candidate.fingerprint})[:12]}"
+            )
+            primary = _engine().run(
+                f"{rid}:primary",
                 candidate,
-                changed_rules,
-                semantic_fingerprint,
-                branch_skipped,
-                hypothesis_family,
-            ) = _select_unique_hypothesis_branch_candidate(
-                starting_candidate,
-                observed_failure=observed_failure,
-                iteration=index,
-                known_semantic_fingerprints=known_semantic_fingerprints,
+                dataset,
+                assumptions,
             )
-            duplicate_count += len(branch_skipped)
-            skipped_semantics = [*skipped_semantics, *branch_skipped]
-            hypothesis_branch_level = 1
-            hypothesis_branch_reason = "primary_candidate_family_exhausted"
+            validation = _adaptive_validation_rerun(
+                observed_failure,
+                rid=rid,
+                dataset=dataset,
+                baseline_strategy=baseline_strategy,
+                candidate_strategy=candidate,
+                assumptions=assumptions,
+                budget=budget,
+            )
+            experiments_executed += 1
+            round_executions += 1
 
-        if candidate is None:
+            validation_status = str(
+                validation.get("status") or "pending_real_validation"
+            )
+            accepted = validation_status in {"pass", "acceptable", "stable"}
+            candidate_id = (
+                f"candidate:{observed_failure}:{semantic_fingerprint[:12]}"
+            )
+            _remember_adaptive_candidate(
+                connection,
+                symbol=symbol,
+                observed_failure=observed_failure,
+                semantic_fingerprint=semantic_fingerprint,
+                candidate=candidate,
+                validation_status=validation_status,
+                changed_rules=changed_rules,
+                hypothesis_family=hypothesis_family,
+            )
             iterations.append(
                 {
                     "iteration": index,
+                    "intra_run_round": research_round,
+                    "failure_attempt": failure_attempt,
                     "observed_failure": observed_failure,
-                    "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
+                    "derived_hypothesis": _derived_hypothesis_for_failure(
+                        observed_failure
+                    ),
                     "hypothesis_family": hypothesis_family,
                     "hypothesis_branch_level": hypothesis_branch_level,
                     "hypothesis_branch_reason": hypothesis_branch_reason,
-                    "candidate_id": f"candidate:{observed_failure}:hypothesis_exhausted",
-                    "candidate_fingerprint": None,
-                    "candidate_semantic_fingerprint": None,
-                    "changed_rules": [],
+                    "candidate_id": candidate_id,
+                    "candidate_fingerprint": candidate.fingerprint,
+                    "candidate_semantic_fingerprint": semantic_fingerprint,
+                    "candidate_instance_fingerprint": candidate.fingerprint,
+                    "parent_candidate_fingerprint": starting_candidate.fingerprint,
+                    "parent_candidate_semantic_fingerprint": (
+                        _strategy_semantic_fingerprint(starting_candidate)
+                    ),
+                    "changed_rules": changed_rules,
                     "skipped_semantic_fingerprints": skipped_semantics,
-                    "actual_execution": False,
-                    "duplicate_candidate_skipped": True,
-                    "validation_result": "hypothesis_branch_space_exhausted",
-                    "next_action": "stop_bounded_hypothesis_search",
+                    "experiment_id": experiment_id,
+                    "primary_backtest": _result_summary(primary),
+                    "primary_metrics": _as_dict(
+                        _result_summary(primary).get("metrics")
+                    ),
+                    "primary_trade_count": _as_dict(
+                        _result_summary(primary).get("metrics")
+                    ).get(
+                        "trade_count",
+                        _result_summary(primary).get("completed_trades"),
+                    ),
+                    "validation_metrics": _adaptive_validation_metrics_snapshot(
+                        observed_failure,
+                        validation,
+                    ),
+                    "research_dimensions": _adaptive_research_dimensions(
+                        observed_failure,
+                        changed_rules,
+                    ),
+                    "actual_execution": True,
+                    "duplicate_candidate_skipped": False,
+                    "validation_result": validation_status,
+                    "validation": validation,
+                    "decision": (
+                        "retain_for_further_validation"
+                        if accepted
+                        else "reject_or_revise"
+                    ),
+                    "next_action": (
+                        "continue_common_protocol_validation"
+                        if accepted
+                        else _next_action_for_failure(observed_failure)
+                    ),
+                    "continuation_eligible": not accepted,
                     "strategy_mutated": False,
                     "order_executed": False,
                 }
             )
-            continue
 
-        experiment_id = (
-            f"adaptive-experiment:"
-            f"{_hash({'failure': observed_failure, 'semantic': semantic_fingerprint})[:16]}"
-        )
-        known_semantic_fingerprints.add(semantic_fingerprint)
-        rid = (
-            f"adaptive-feedback:{symbol}:{index}:"
-            f"{_hash({'request': request_text, 'candidate': candidate.fingerprint})[:12]}"
-        )
-        primary = _engine().run(f"{rid}:primary", candidate, dataset, assumptions)
-        validation = _adaptive_validation_rerun(
-            observed_failure,
-            rid=rid,
-            dataset=dataset,
-            baseline_strategy=baseline_strategy,
-            candidate_strategy=candidate,
-            assumptions=assumptions,
-            budget=budget,
-        )
-        validation_status = str(validation.get("status") or "pending_real_validation")
-        accepted = validation_status in {"pass", "acceptable", "stable"}
-        candidate_id = f"candidate:{observed_failure}:{semantic_fingerprint[:12]}"
-        _remember_adaptive_candidate(
-            connection,
-            symbol=symbol,
-            observed_failure=observed_failure,
-            semantic_fingerprint=semantic_fingerprint,
-            candidate=candidate,
-            validation_status=validation_status,
-            changed_rules=changed_rules,
-            hypothesis_family=hypothesis_family,
-        )
-        iterations.append(
-            {
-                "iteration": index,
-                "observed_failure": observed_failure,
-                "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
-                "hypothesis_family": hypothesis_family,
-                "hypothesis_branch_level": hypothesis_branch_level,
-                "hypothesis_branch_reason": hypothesis_branch_reason,
-                "candidate_id": candidate_id,
-                "candidate_fingerprint": candidate.fingerprint,
-                "candidate_semantic_fingerprint": semantic_fingerprint,
-                "candidate_instance_fingerprint": candidate.fingerprint,
-                "parent_candidate_fingerprint": starting_candidate.fingerprint,
-                "parent_candidate_semantic_fingerprint": _strategy_semantic_fingerprint(starting_candidate),
-                "changed_rules": changed_rules,
-                "skipped_semantic_fingerprints": skipped_semantics,
-                "experiment_id": experiment_id,
-                "primary_backtest": _result_summary(primary),
-                "primary_metrics": _as_dict(_result_summary(primary).get("metrics")),
-                "primary_trade_count": _as_dict(_result_summary(primary).get("metrics")).get(
-                    "trade_count",
-                    _result_summary(primary).get("completed_trades"),
-                ),
-                "validation_metrics": _adaptive_validation_metrics_snapshot(
-                    observed_failure,
-                    validation,
-                ),
-                "research_dimensions": _adaptive_research_dimensions(
-                    observed_failure,
-                    changed_rules,
-                ),
-                "actual_execution": True,
-                "duplicate_candidate_skipped": False,
-                "validation_result": validation_status,
-                "validation": validation,
-                "decision": "retain_for_further_validation" if accepted else "reject_or_revise",
-                "next_action": (
-                    "continue_common_protocol_validation"
-                    if accepted
-                    else _next_action_for_failure(observed_failure)
-                ),
-                "strategy_mutated": False,
-                "order_executed": False,
-            }
-        )
+            if not accepted:
+                active_failures.append(observed_failure)
+
+        if experiments_executed >= experiment_limit and active_failures:
+            budget_exhausted = True
+
+        if round_executions == 0 and active_failures:
+            break
 
     actually_executed = [item for item in iterations if item.get("actual_execution") is True]
     return {
@@ -2107,6 +2180,18 @@ def _adaptive_validation_feedback_execution(
         "failures_observed": failures,
         "iterations": iterations,
         "actual_retests": len(actually_executed),
+        "experiments_executed": experiments_executed,
+        "experiment_budget": experiment_limit,
+        "research_rounds": research_round,
+        "continuation_rounds": max(0, research_round - 1),
+        "failure_attempts": dict(attempts_by_failure),
+        "unresolved_failures": list(active_failures),
+        "budget_exhausted": budget_exhausted,
+        "adaptive_stop_reason": (
+            "adaptive_experiment_budget_exhausted"
+            if budget_exhausted
+            else "failure_paths_resolved_or_bounded_space_exhausted"
+        ),
         "duplicate_candidates_skipped": duplicate_count,
         "candidate_fingerprints": [
             item.get("candidate_fingerprint")
