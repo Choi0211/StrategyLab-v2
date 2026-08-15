@@ -1976,21 +1976,46 @@ def _adaptive_validation_feedback_execution(
             )
         )
         duplicate_count += len(skipped_semantics)
+        hypothesis_family = _primary_hypothesis_family_for_failure(observed_failure)
+        hypothesis_branch_level = 0
+        hypothesis_branch_reason = None
+
+        if candidate is None:
+            (
+                candidate,
+                changed_rules,
+                semantic_fingerprint,
+                branch_skipped,
+                hypothesis_family,
+            ) = _select_unique_hypothesis_branch_candidate(
+                starting_candidate,
+                observed_failure=observed_failure,
+                iteration=index,
+                known_semantic_fingerprints=known_semantic_fingerprints,
+            )
+            duplicate_count += len(branch_skipped)
+            skipped_semantics = [*skipped_semantics, *branch_skipped]
+            hypothesis_branch_level = 1
+            hypothesis_branch_reason = "primary_candidate_family_exhausted"
+
         if candidate is None:
             iterations.append(
                 {
                     "iteration": index,
                     "observed_failure": observed_failure,
                     "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
-                    "candidate_id": f"candidate:{observed_failure}:duplicate_exhausted",
+                    "hypothesis_family": hypothesis_family,
+                    "hypothesis_branch_level": hypothesis_branch_level,
+                    "hypothesis_branch_reason": hypothesis_branch_reason,
+                    "candidate_id": f"candidate:{observed_failure}:hypothesis_exhausted",
                     "candidate_fingerprint": None,
                     "candidate_semantic_fingerprint": None,
                     "changed_rules": [],
                     "skipped_semantic_fingerprints": skipped_semantics,
                     "actual_execution": False,
                     "duplicate_candidate_skipped": True,
-                    "validation_result": "duplicate_candidate_space_exhausted",
-                    "next_action": "select_different_hypothesis",
+                    "validation_result": "hypothesis_branch_space_exhausted",
+                    "next_action": "stop_bounded_hypothesis_search",
                     "strategy_mutated": False,
                     "order_executed": False,
                 }
@@ -2027,12 +2052,16 @@ def _adaptive_validation_feedback_execution(
             candidate=candidate,
             validation_status=validation_status,
             changed_rules=changed_rules,
+            hypothesis_family=hypothesis_family,
         )
         iterations.append(
             {
                 "iteration": index,
                 "observed_failure": observed_failure,
                 "derived_hypothesis": _derived_hypothesis_for_failure(observed_failure),
+                "hypothesis_family": hypothesis_family,
+                "hypothesis_branch_level": hypothesis_branch_level,
+                "hypothesis_branch_reason": hypothesis_branch_reason,
                 "candidate_id": candidate_id,
                 "candidate_fingerprint": candidate.fingerprint,
                 "candidate_semantic_fingerprint": semantic_fingerprint,
@@ -2179,6 +2208,7 @@ def _remember_adaptive_candidate(
     candidate: object,
     validation_status: str,
     changed_rules: list[str],
+    hypothesis_family: str | None = None,
 ) -> None:
     if not isinstance(connection, sqlite3.Connection):
         return
@@ -2199,7 +2229,10 @@ def _remember_adaptive_candidate(
                 strategy_family="adaptive_validation_feedback",
                 market=symbol,
                 timeframe="daily",
-                hypothesis=f"adaptive_response_to:{observed_failure}",
+                hypothesis=(
+                    f"adaptive_response_to:{observed_failure}:"
+                    f"{hypothesis_family or 'primary'}"
+                ),
                 result_summary=f"validation_status={validation_status}",
                 critic_summary=f"observed_failure={observed_failure}",
                 improvement_summary="; ".join(changed_rules) or "no_change",
@@ -2207,6 +2240,7 @@ def _remember_adaptive_candidate(
                 tags=(
                     "adaptive_candidate",
                     f"failure:{observed_failure}",
+                    f"hypothesis_family:{hypothesis_family or 'primary'}",
                     f"symbol:{symbol}",
                 ),
                 created_at=at,
@@ -2241,6 +2275,128 @@ def _select_unique_adaptive_candidate(
             continue
         return candidate, changed_rules, semantic, skipped
     return None, [], None, skipped
+
+
+def _primary_hypothesis_family_for_failure(observed_failure: str) -> str:
+    return {
+        "out_of_sample_fail": "entry_generalization",
+        "walk_forward_fail": "rule_simplification",
+        "cost_fragile": "turnover_reduction",
+        "insufficient_trades": "opportunity_frequency",
+        "insufficient_sample": "opportunity_frequency",
+        "insufficient_primary_sample": "opportunity_frequency",
+    }.get(observed_failure, "parameter_robustness")
+
+
+def _hypothesis_branch_candidate(
+    strategy: object,
+    *,
+    observed_failure: str,
+    iteration: int,
+    branch: int,
+) -> tuple[object, list[str], str]:
+    from gaon.research.krx_real_pipeline import FieldProvenance, ProvenancedValue
+
+    entry = dict(getattr(strategy, "entry"))
+    exits = dict(getattr(strategy, "exit"))
+    filters = dict(getattr(strategy, "filters"))
+    changes: list[str] = []
+
+    def research_value(value: object) -> ProvenancedValue:
+        return ProvenancedValue(value, FieldProvenance.RESEARCH_CANDIDATE)
+
+    def set_numeric(section: dict[str, object], key: str, value: int | float) -> None:
+        current = section.get(key)
+        old = getattr(current, "value", None) if current is not None else None
+        if old == value:
+            return
+        section[key] = research_value(value)
+        changes.append(
+            f"{key}:{old}->{value}" if current is not None else f"{key}:added->{value}"
+        )
+
+    breakout = int(getattr(entry.get("breakout_lookback"), "value", 20) or 20)
+    exit_lookback = int(getattr(exits.get("channel_exit_lookback"), "value", 10) or 10)
+    stop = float(getattr(exits.get("protective_stop_pct"), "value", -5.0) or -5.0)
+
+    if observed_failure == "out_of_sample_fail":
+        if branch == 0:
+            family = "risk_adjusted_generalization"
+            set_numeric(exits, "protective_stop_pct", max(-4.0, stop + 1.0))
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 5))
+        else:
+            family = "trend_persistence_generalization"
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 15))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 10, 20)))
+
+    elif observed_failure == "walk_forward_fail":
+        if branch == 0:
+            family = "regime_persistence"
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 10))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 10, 20)))
+        else:
+            family = "risk_smoothing"
+            set_numeric(exits, "protective_stop_pct", max(-4.0, stop + 1.0))
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 5))
+
+    elif observed_failure == "cost_fragile":
+        if branch == 0:
+            family = "trend_quality_selectivity"
+            if "ma20_gt_ma60" not in entry:
+                entry["ma20_gt_ma60"] = research_value(True)
+                changes.append("ma20_gt_ma60:added_for_cost_selectivity")
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 20))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 10, 20)))
+        else:
+            family = "loss_containment_cost_efficiency"
+            set_numeric(exits, "protective_stop_pct", max(-4.0, stop + 1.0))
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 20))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 10, 20)))
+
+    else:
+        family = "bounded_alternative_hypothesis"
+        set_numeric(entry, "breakout_lookback", min(80, breakout + 10 + branch * 5))
+
+    if not changes:
+        changes.append(f"hypothesis_family:{family}:no_safe_structural_delta")
+
+    candidate = replace(
+        strategy,
+        spec_id=(
+            f"{getattr(strategy, 'spec_id')}:hypothesis:"
+            f"{observed_failure}:{family}:{iteration}:{branch}"
+        ),
+        entry=entry,
+        exit=exits,
+        filters=filters,
+    )
+    return candidate, changes, family
+
+
+def _select_unique_hypothesis_branch_candidate(
+    starting_candidate: object,
+    *,
+    observed_failure: str,
+    iteration: int,
+    known_semantic_fingerprints: set[str],
+    max_branches: int = 2,
+) -> tuple[object | None, list[str], str | None, list[str], str]:
+    skipped: list[str] = []
+    last_family = "hypothesis_branch_exhausted"
+    for branch in range(max_branches):
+        candidate, changed_rules, family = _hypothesis_branch_candidate(
+            starting_candidate,
+            observed_failure=observed_failure,
+            iteration=iteration,
+            branch=branch,
+        )
+        last_family = family
+        semantic = _strategy_semantic_fingerprint(candidate)
+        if semantic in known_semantic_fingerprints:
+            skipped.append(semantic)
+            continue
+        return candidate, changed_rules, semantic, skipped, family
+    return None, [], None, skipped, last_family
 
 
 def _adaptive_candidate_for_failure(
