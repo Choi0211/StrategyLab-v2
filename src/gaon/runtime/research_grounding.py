@@ -708,6 +708,10 @@ def _adaptive_feedback_detail_lines(adaptive: dict[str, object]) -> list[str]:
         f"- executed={str(adaptive.get('executed', False)).lower()}",
         f"- failures_observed={', '.join(_list_text(adaptive.get('failures_observed'))) or 'none'}",
         f"- actual_retests={adaptive.get('actual_retests', 0)}",
+        f"- experiments_executed={adaptive.get('experiments_executed', adaptive.get('actual_retests', 0))}/{adaptive.get('experiment_budget', 'unknown')}",
+        f"- research_rounds={adaptive.get('research_rounds', 1)} continuation_rounds={adaptive.get('continuation_rounds', 0)}",
+        f"- budget_exhausted={str(adaptive.get('budget_exhausted', False)).lower()} stop_reason={adaptive.get('adaptive_stop_reason', 'unknown')}",
+        f"- unresolved_failures={', '.join(_list_text(adaptive.get('unresolved_failures'))) or 'none'}",
         f"- duplicate_candidates_skipped={adaptive.get('duplicate_candidates_skipped', 0)}",
     ]
     for item in _as_list(adaptive.get("iterations")):
@@ -717,7 +721,7 @@ def _adaptive_feedback_detail_lines(adaptive: dict[str, object]) -> list[str]:
         validation_metrics = _as_dict(row.get("validation_metrics"))
         lines.extend(
             [
-                f"- iteration={row.get('iteration', 'unknown')} failure={row.get('observed_failure', 'unknown')}",
+                f"- iteration={row.get('iteration', 'unknown')} round={row.get('intra_run_round', 1)} failure_attempt={row.get('failure_attempt', 1)} failure={row.get('observed_failure', 'unknown')}",
                 f"  candidate_id={row.get('candidate_id', 'unknown')}",
                 f"  candidate_fingerprint={row.get('candidate_fingerprint', 'unknown')}",
                 f"  candidate_semantic_fingerprint={row.get('candidate_semantic_fingerprint', 'unknown')}",
@@ -829,8 +833,15 @@ def _natural_adaptive_feedback_sentence(adaptive: dict[str, object]) -> str | No
     sentence = (
         f"{failure_text} 결과를 다음 연구에 반영해 새 후보 {actual_retests}개를 실제 데이터로 재검증했습니다."
     )
+    continuation_rounds = int(adaptive.get("continuation_rounds") or 0)
+    if continuation_rounds:
+        sentence += (
+            f" 같은 요청 안에서 추가 연구를 {continuation_rounds}개 라운드 이어서 수행했습니다."
+        )
     if duplicate_skipped:
         sentence += f" 이전과 동일한 후보 {duplicate_skipped}개는 fingerprint 기준으로 다시 실행하지 않았습니다."
+    if adaptive.get("budget_exhausted") is True:
+        sentence += " 설정된 adaptive 실험 예산에 도달해 추가 자동 연구는 안전하게 중단했습니다."
     return sentence
 
 

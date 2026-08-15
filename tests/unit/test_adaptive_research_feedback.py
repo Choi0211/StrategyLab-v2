@@ -41,7 +41,9 @@ class AdaptiveResearchFeedbackTests(unittest.TestCase):
             result["failures_observed"],
         )
         rows = result["iterations"]
-        self.assertEqual(3, len(rows))
+        self.assertGreaterEqual(len(rows), 3)
+        self.assertGreater(result["actual_retests"], 3)
+        self.assertGreaterEqual(result["continuation_rounds"], 1)
         self.assertTrue(any(row["actual_execution"] for row in rows))
         executed = [row for row in rows if row["actual_execution"]]
         self.assertTrue(all(row["candidate_fingerprint"] for row in executed))
