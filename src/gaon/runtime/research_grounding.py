@@ -720,6 +720,8 @@ def _adaptive_feedback_detail_lines(adaptive: dict[str, object]) -> list[str]:
                 f"- iteration={row.get('iteration', 'unknown')} failure={row.get('observed_failure', 'unknown')}",
                 f"  candidate_id={row.get('candidate_id', 'unknown')}",
                 f"  candidate_fingerprint={row.get('candidate_fingerprint', 'unknown')}",
+                f"  candidate_semantic_fingerprint={row.get('candidate_semantic_fingerprint', 'unknown')}",
+                f"  skipped_prior_candidates={len(_list_text(row.get('skipped_semantic_fingerprints')))}",
                 f"  changed_rules={', '.join(_list_text(row.get('changed_rules'))) or 'none'}",
                 f"  research_dimensions={', '.join(_list_text(row.get('research_dimensions'))) or 'none'}",
                 f"  actual_execution={str(row.get('actual_execution', False)).lower()} duplicate_skipped={str(row.get('duplicate_candidate_skipped', False)).lower()}",
