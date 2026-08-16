@@ -324,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-real-youtube-provider-release-check")
     sub.add_parser("gaon-production-news-intelligence-release-check")
     sub.add_parser("gaon-production-research-director-release-check")
+    sub.add_parser("gaon-production-daily-briefing-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2582,6 +2583,21 @@ def _run(args: argparse.Namespace) -> int:
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-daily-briefing-release-check":
+        from gaon.runtime.daily_briefing import production_daily_briefing_release_check
+
+        payload = production_daily_briefing_release_check()
+        print(
+            "gaon-production-daily-briefing-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"pre_market_news_items={payload['pre_market_news_items']} "
+            f"post_market_completed_trades={payload['post_market_completed_trades']} "
+            f"jobs_registered={payload['jobs_registered']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"
         )
 
