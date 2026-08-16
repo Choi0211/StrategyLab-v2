@@ -1955,7 +1955,14 @@ def _autonomous_request_mode(text: str) -> str | None:
     learning = ("지금까지무엇을배웠", "지금까지뭘배웠", "무엇을배웠", "뭘배웠", "학습기록", "learningmemory", "whatlearned")
     critique = ("문제점을찾아", "문제점을찾아줘", "약점을분석", "약점", "취약", "개선해", "보완", "critic", "critique")
     compare = ("어느종목", "어떤종목", "더잘맞", "비교", "compare", "whichsymbol")
-    continue_terms = ("계속연구", "더연구", "다음검증", "계속검증", "continue")
+    continue_terms = (
+        "계속연구", "더연구", "다음검증", "계속검증", "continue",
+        "다음연구", "연구진행", "연구계속", "이어서연구", "이어가",
+        "계속해", "계속진행", "다음단계연구",
+        "증거가충분할때까지", "증거가충분해질때까지",
+        "근거가충분할때까지", "근거가충분해질때까지",
+        "부족하지않을때까지", "결론을내릴수있을때까지",
+    )
     validate = ("전략을검증", "전략검증", "검증해봐", "검증해줘", "추가검증", "표본이부족", "충분한표본", "근거가충분", "validate", "researchcycle")
     if any(token in normalized for token in learning):
         return "learning_query"
@@ -1988,7 +1995,15 @@ def _autonomous_learning_request_mode(text: str) -> str | None:
     if memory_only and not explicit_v2:
         return None
     approval = ("승인요청", "승격승인", "좋은전략후보", "가장좋은후보", "좋으면알아서적용", "좋으면적용", "알아서적용", "bestcandidate", "promotioncandidate")
-    continuation = ("계속연구", "더연구", "추가연구", "자료를더", "근거를더", "continueresearch", "continuelearning")
+    continuation = (
+        "계속연구", "더연구", "추가연구", "자료를더", "근거를더",
+        "continueresearch", "continuelearning",
+        "다음연구", "연구진행", "연구계속", "이어서연구", "이어가",
+        "계속해", "계속진행", "다음단계연구",
+        "증거가충분할때까지", "증거가충분해질때까지",
+        "근거가충분할때까지", "근거가충분해질때까지",
+        "부족하지않을때까지", "결론을내릴수있을때까지",
+    )
     external = ("자료를찾아", "자료찾아", "연구자료", "연구자료를찾아", "외부연구자료", "외부자료", "근거자료", "evidence", "externalresearch", "findevidence")
     improvement = ("문제점을찾", "약점을찾", "후보를만", "다시연구", "처음부터다시연구", "처음부터다시연구해")
     learning = ("지금까지배운", "배운내용", "학습내용", "learningmemory")

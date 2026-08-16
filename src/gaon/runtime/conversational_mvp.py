@@ -239,6 +239,26 @@ MULTI_SYMBOL_TOKENS = ("여러 종목", "다종목", "전체 종목", "유니버
 DETAIL_TOKENS = ("자세히", "자세하게", "상세히", "상세하게", "원본", "전체 결과", "상세", "detail", "raw")
 SIMPLIFY_TOKENS = ("쉽게", "쉽개", "간단히", "간단하게", "요약", "초등", "쉽게 설명", "simple")
 EXPLAIN_TOKENS = ("왜", "이유", "판단", "판간", "근거", "그렇게", "그절", "그런", "explain")
+RESULT_RECALL_TOKENS = (
+    "결과가 뭐",
+    "결과가 뭔",
+    "결과 알려",
+    "결과를 알려",
+    "결론이 뭐",
+    "결론 알려",
+    "결론을 알려",
+    "그래서 결과",
+    "그래서 결론",
+    "연구 결과",
+    "연구결과",
+    "최종 결과",
+    "최종결과",
+    "어떻게 됐",
+    "어떻게 되었",
+    "어떻게 됐어",
+    "what was the result",
+    "research result",
+)
 STATUS_TOKENS = ("상태", "status", "정상", "하고 있어")
 PROFESSIONAL_TOKENS = ("전문적으로", "전문가처럼", "전문 설명", "professional", "technical")
 INVESTMENT_DECISION_TOKENS = ("지금 사도", "매수해도", "사도 돼", "사야", "팔아야", "매도해야", "buy now", "should buy", "sell now")
@@ -336,6 +356,8 @@ def classify_conversational_route(text: str) -> ConversationalRoute:
         return ConversationalRoute(ConversationalMVPIntent.SHOW_DETAILS, symbols)
     if any(token in normalized for token in SIMPLIFY_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT, symbols)
+    if any(token in normalized for token in RESULT_RECALL_TOKENS):
+        return ConversationalRoute(ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT, symbols)
     if any(token in normalized for token in PROFESSIONAL_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.PROFESSIONAL_EXPLANATION, symbols)
     if any(token in normalized for token in INVESTMENT_DECISION_TOKENS):
