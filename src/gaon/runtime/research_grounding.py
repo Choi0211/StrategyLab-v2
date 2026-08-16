@@ -1,4 +1,4 @@
-"""Grounded research response helpers for conversational safe tools."""
+﻿"""Grounded research response helpers for conversational safe tools."""
 
 from __future__ import annotations
 
@@ -713,6 +713,7 @@ def _adaptive_feedback_detail_lines(adaptive: dict[str, object]) -> list[str]:
         f"- budget_exhausted={str(adaptive.get('budget_exhausted', False)).lower()} stop_reason={adaptive.get('adaptive_stop_reason', 'unknown')}",
         f"- unresolved_failures={', '.join(_list_text(adaptive.get('unresolved_failures'))) or 'none'}",
         f"- duplicate_candidates_skipped={adaptive.get('duplicate_candidates_skipped', 0)}",
+        f"- dynamic_hypotheses_generated={adaptive.get('dynamic_hypotheses_generated', 0)} dynamic_exhaustions={adaptive.get('dynamic_hypothesis_exhaustions', 0)}",
     ]
     for item in _as_list(adaptive.get("iterations")):
         row = _as_dict(item)
@@ -729,6 +730,8 @@ def _adaptive_feedback_detail_lines(adaptive: dict[str, object]) -> list[str]:
                 f"  hypothesis_family={row.get('hypothesis_family', 'unknown')}",
                 f"  hypothesis_branch_level={row.get('hypothesis_branch_level', 0)}",
                 f"  hypothesis_branch_reason={row.get('hypothesis_branch_reason') or 'none'}",
+                f"  hypothesis_origin={row.get('hypothesis_origin', 'legacy')}",
+                f"  hypothesis_driver={_as_dict(row.get('hypothesis_driver')) or 'none'}",
                 f"  changed_rules={', '.join(_list_text(row.get('changed_rules'))) or 'none'}",
                 f"  research_dimensions={', '.join(_list_text(row.get('research_dimensions'))) or 'none'}",
                 f"  actual_execution={str(row.get('actual_execution', False)).lower()} duplicate_skipped={str(row.get('duplicate_candidate_skipped', False)).lower()}",
