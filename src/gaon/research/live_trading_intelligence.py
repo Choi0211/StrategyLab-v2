@@ -115,7 +115,13 @@ class LiveTradingEvidenceAdapter:
         self.max_bytes=max_bytes
 
     def available(self):
-        return self.root.is_dir() and (self.root/"order_ledger.json").is_file()
+        try:
+            return (
+                self.root.is_dir()
+                and (self.root / "order_ledger.json").is_file()
+            )
+        except OSError:
+            return False
 
     def _read_json(self, name: str, missing_ok: bool=False):
         if name in DENYLIST: raise PermissionError("secret file denied")

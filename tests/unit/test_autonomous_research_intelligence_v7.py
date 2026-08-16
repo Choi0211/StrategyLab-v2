@@ -3,6 +3,7 @@ import json, os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from gaon.research.live_trading_intelligence import (
     LiveTradingEvidenceAdapter, adaptive_budget, adaptive_batches, build_feedback, release_check
@@ -36,6 +37,20 @@ class AutonomousResearchIntelligenceV7Tests(unittest.TestCase):
             fb=build_feedback(snap,"US")
             self.assertEqual(fb.completed_trade_count,1)
             self.assertIn("incomplete_history",fb.classifications)
+
+    def test_inaccessible_production_root_is_unavailable(self):
+        adapter = LiveTradingEvidenceAdapter(
+            "/root/MyMoneyGuard"
+        )
+
+        with patch.object(
+            Path,
+            "is_dir",
+            side_effect=PermissionError(
+                "CI runner cannot stat /root"
+            ),
+        ):
+            self.assertFalse(adapter.available())
 
     def test_secret_access_is_denied(self):
         with TemporaryDirectory() as tmp:
