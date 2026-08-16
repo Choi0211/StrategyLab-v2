@@ -1,4 +1,4 @@
-"""Sprints 199-240 - autonomous quant research partner contracts.
+﻿"""Sprints 199-240 - autonomous quant research partner contracts.
 
 This module composes the existing real-data and multi-source research contracts
 into a bounded, restart-safe research loop. External content remains inert
@@ -2028,6 +2028,39 @@ def _adaptive_validation_feedback_execution(
                 hypothesis_branch_level = 1
                 hypothesis_branch_reason = "primary_candidate_family_exhausted"
 
+            hypothesis_origin = (
+                "static_hypothesis_branch"
+                if hypothesis_branch_level == 1
+                else "primary_failure_variant"
+            )
+            hypothesis_driver: dict[str, object] = {}
+
+            if candidate is None:
+                hypothesis_driver = _dynamic_hypothesis_driver(
+                    observed_failure,
+                    production_grade,
+                    iterations,
+                )
+                (
+                    candidate,
+                    changed_rules,
+                    semantic_fingerprint,
+                    dynamic_skipped,
+                    hypothesis_family,
+                ) = _select_unique_dynamic_hypothesis_candidate(
+                    starting_candidate,
+                    observed_failure=observed_failure,
+                    iteration=failure_attempt,
+                    known_semantic_fingerprints=known_semantic_fingerprints,
+                    driver=hypothesis_driver,
+                    max_variants=max(1, budget.max_parameter_variants),
+                )
+                duplicate_count += len(dynamic_skipped)
+                skipped_semantics = [*skipped_semantics, *dynamic_skipped]
+                hypothesis_branch_level = 2
+                hypothesis_branch_reason = "bounded_static_hypothesis_space_exhausted"
+                hypothesis_origin = "dynamic_metric_driven"
+
             if candidate is None:
                 iterations.append(
                     {
@@ -2041,6 +2074,8 @@ def _adaptive_validation_feedback_execution(
                         "hypothesis_family": hypothesis_family,
                         "hypothesis_branch_level": hypothesis_branch_level,
                         "hypothesis_branch_reason": hypothesis_branch_reason,
+                        "hypothesis_origin": hypothesis_origin,
+                        "hypothesis_driver": hypothesis_driver,
                         "candidate_id": (
                             f"candidate:{observed_failure}:hypothesis_exhausted"
                         ),
@@ -2115,6 +2150,8 @@ def _adaptive_validation_feedback_execution(
                     "hypothesis_family": hypothesis_family,
                     "hypothesis_branch_level": hypothesis_branch_level,
                     "hypothesis_branch_reason": hypothesis_branch_reason,
+                    "hypothesis_origin": hypothesis_origin,
+                    "hypothesis_driver": hypothesis_driver,
                     "candidate_id": candidate_id,
                     "candidate_fingerprint": candidate.fingerprint,
                     "candidate_semantic_fingerprint": semantic_fingerprint,
@@ -2204,6 +2241,18 @@ def _adaptive_validation_feedback_execution(
             if item.get("candidate_semantic_fingerprint")
         ],
         "persistent_adaptive_fingerprints_loaded": len(persistent_fingerprints),
+        "dynamic_hypotheses_generated": sum(
+            1
+            for item in iterations
+            if item.get("hypothesis_origin") == "dynamic_metric_driven"
+            and item.get("actual_execution") is True
+        ),
+        "dynamic_hypothesis_exhaustions": sum(
+            1
+            for item in iterations
+            if item.get("hypothesis_origin") == "dynamic_metric_driven"
+            and item.get("actual_execution") is not True
+        ),
         "uses_existing_backtest_engine": True,
         "common_protocol_required": True,
         "promotion_from_adaptive_feedback_alone": False,
@@ -2474,6 +2523,195 @@ def _select_unique_hypothesis_branch_candidate(
             observed_failure=observed_failure,
             iteration=iteration,
             branch=branch,
+        )
+        last_family = family
+        semantic = _strategy_semantic_fingerprint(candidate)
+        if semantic in known_semantic_fingerprints:
+            skipped.append(semantic)
+            continue
+        return candidate, changed_rules, semantic, skipped, family
+    return None, [], None, skipped, last_family
+
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _dynamic_hypothesis_driver(
+    observed_failure: str,
+    production_grade: Mapping[str, object],
+    prior_iterations: list[dict[str, object]],
+) -> dict[str, object]:
+    latest = next(
+        (
+            item
+            for item in reversed(prior_iterations)
+            if item.get("observed_failure") == observed_failure
+            and item.get("actual_execution") is True
+        ),
+        {},
+    )
+    latest_metrics = _as_dict(latest.get("validation_metrics"))
+
+    if observed_failure == "out_of_sample_fail":
+        section = _as_dict(production_grade.get("out_of_sample"))
+        comparison = _as_dict(latest_metrics.get("comparison")) or _as_dict(section.get("comparison"))
+        baseline_return = _safe_float(comparison.get("baseline_return"))
+        candidate_return = _safe_float(comparison.get("candidate_return"))
+        baseline_mdd = _safe_float(comparison.get("baseline_mdd"))
+        candidate_mdd = _safe_float(comparison.get("candidate_mdd"))
+        return_delta = _safe_float(comparison.get("return_delta"), candidate_return - baseline_return)
+        mdd_delta = _safe_float(comparison.get("mdd_delta"), candidate_mdd - baseline_mdd)
+        if return_delta < 0 and mdd_delta < 0:
+            family = "dynamic_return_recovery_after_drawdown_gain"
+            mechanism = "recover_return_while_preserving_observed_drawdown_improvement"
+        else:
+            family = "dynamic_oos_horizon_rebalance"
+            mechanism = "rebalance_entry_and_exit_horizons_for_forward_generalization"
+        return {
+            "family": family,
+            "mechanism": mechanism,
+            "return_delta": round(return_delta, 6),
+            "mdd_delta": round(mdd_delta, 6),
+            "source": "actual_validation_metrics",
+        }
+
+    if observed_failure == "walk_forward_fail":
+        section = _as_dict(production_grade.get("walk_forward"))
+        fold_count = int(latest_metrics.get("fold_count") or section.get("fold_count") or section.get("folds") or 0)
+        folds_passed = int(latest_metrics.get("folds_passed") or section.get("folds_passed") or 0)
+        pass_ratio = folds_passed / fold_count if fold_count else 0.0
+        return {
+            "family": "dynamic_fold_consistency_rebalance" if pass_ratio < 0.5 else "dynamic_partial_fold_stability",
+            "mechanism": "reduce_fold_specific_parameter_dependence",
+            "fold_count": fold_count,
+            "folds_passed": folds_passed,
+            "pass_ratio": round(pass_ratio, 6),
+            "source": "actual_validation_metrics",
+        }
+
+    if observed_failure == "cost_fragile":
+        section = _as_dict(production_grade.get("transaction_cost_stress"))
+        scenarios = _as_list(latest_metrics.get("scenarios")) or _as_list(section.get("scenarios"))
+        by_name = {str(_as_dict(item).get("name")): _as_dict(item) for item in scenarios}
+        base_return = _safe_float(by_name.get("base", {}).get("net_return"))
+        high_return = _safe_float(by_name.get("high", {}).get("net_return"))
+        degradation = max(0.0, base_return - high_return)
+        degradation_ratio = degradation / abs(base_return) if base_return else 0.0
+        return {
+            "family": "dynamic_cost_elasticity_turnover_control" if degradation_ratio >= 0.03 else "dynamic_cost_efficiency_rebalance",
+            "mechanism": "reduce_turnover_from_observed_cost_return_elasticity",
+            "base_return": round(base_return, 6),
+            "high_cost_return": round(high_return, 6),
+            "cost_return_degradation": round(degradation, 6),
+            "degradation_ratio": round(degradation_ratio, 6),
+            "source": "actual_validation_metrics",
+        }
+
+    return {
+        "family": "dynamic_bounded_parameter_rebalance",
+        "mechanism": "bounded_metric_driven_parameter_rebalance",
+        "source": "actual_validation_metrics",
+    }
+
+
+def _dynamic_hypothesis_candidate(
+    strategy: object,
+    *,
+    observed_failure: str,
+    iteration: int,
+    variant: int,
+    driver: Mapping[str, object],
+) -> tuple[object, list[str], str]:
+    from gaon.research.krx_real_pipeline import FieldProvenance, ProvenancedValue
+
+    entry = dict(getattr(strategy, "entry"))
+    exits = dict(getattr(strategy, "exit"))
+    filters = dict(getattr(strategy, "filters"))
+    changes: list[str] = []
+
+    def research_value(value: object) -> ProvenancedValue:
+        return ProvenancedValue(value, FieldProvenance.RESEARCH_CANDIDATE)
+
+    def set_numeric(section: dict[str, object], key: str, value: int | float) -> None:
+        current = section.get(key)
+        old = getattr(current, "value", None) if current is not None else None
+        if old == value:
+            return
+        section[key] = research_value(value)
+        changes.append(f"{key}:{old}->{value}" if current is not None else f"{key}:added->{value}")
+
+    breakout = int(getattr(entry.get("breakout_lookback"), "value", 20) or 20)
+    exit_lookback = int(getattr(exits.get("channel_exit_lookback"), "value", 10) or 10)
+    stop = float(getattr(exits.get("protective_stop_pct"), "value", -5.0) or -5.0)
+    ordinal = max(1, int(iteration)) + max(0, int(variant))
+    family = str(driver.get("family") or "dynamic_bounded_parameter_rebalance")
+
+    if observed_failure == "out_of_sample_fail":
+        return_delta = _safe_float(driver.get("return_delta"))
+        mdd_delta = _safe_float(driver.get("mdd_delta"))
+        if return_delta < 0 and mdd_delta < 0:
+            set_numeric(entry, "breakout_lookback", max(8, breakout - (2 + ordinal)))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 3 + ordinal, 14)))
+        else:
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 7 + (ordinal * 2)))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 4 + ordinal, 15)))
+
+    elif observed_failure == "walk_forward_fail":
+        pass_ratio = _safe_float(driver.get("pass_ratio"))
+        step = 6 + ordinal * 2 if pass_ratio < 0.5 else 4 + ordinal
+        set_numeric(entry, "breakout_lookback", min(80, breakout + step))
+        set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + max(3, ordinal), 13)))
+        set_numeric(exits, "protective_stop_pct", round(max(-3.5, stop + min(1.5, 0.25 * ordinal)), 2))
+
+    elif observed_failure == "cost_fragile":
+        degradation_ratio = _safe_float(driver.get("degradation_ratio"))
+        severity = 2 if degradation_ratio >= 0.03 else 1
+        set_numeric(entry, "breakout_lookback", min(80, breakout + 9 + ordinal * (2 + severity)))
+        set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 7 + ordinal * severity, 18)))
+        if degradation_ratio >= 0.03 and "ma20_gt_ma60" not in entry:
+            entry["ma20_gt_ma60"] = research_value(True)
+            changes.append("ma20_gt_ma60:added_from_cost_elasticity_driver")
+
+    else:
+        set_numeric(entry, "breakout_lookback", min(80, breakout + 7 + ordinal * 2))
+        set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + ordinal, 12)))
+
+    changes.append(f"dynamic_hypothesis_family:{family}")
+    changes.append(f"dynamic_driver:{driver.get('mechanism', 'metric_driven_rebalance')}")
+
+    candidate = replace(
+        strategy,
+        spec_id=f"{getattr(strategy, 'spec_id')}:dynamic-hypothesis:{observed_failure}:{family}:{iteration}:{variant}",
+        entry=entry,
+        exit=exits,
+        filters=filters,
+    )
+    return candidate, changes, family
+
+
+def _select_unique_dynamic_hypothesis_candidate(
+    starting_candidate: object,
+    *,
+    observed_failure: str,
+    iteration: int,
+    known_semantic_fingerprints: set[str],
+    driver: Mapping[str, object],
+    max_variants: int = 3,
+) -> tuple[object | None, list[str], str | None, list[str], str]:
+    skipped: list[str] = []
+    last_family = str(driver.get("family") or "dynamic_bounded_parameter_rebalance")
+    for variant in range(max(1, max_variants)):
+        candidate, changed_rules, family = _dynamic_hypothesis_candidate(
+            starting_candidate,
+            observed_failure=observed_failure,
+            iteration=iteration,
+            variant=variant,
+            driver=driver,
         )
         last_family = family
         semantic = _strategy_semantic_fingerprint(candidate)
