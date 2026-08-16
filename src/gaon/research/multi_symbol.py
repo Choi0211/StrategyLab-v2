@@ -1,4 +1,4 @@
-"""Autonomous multi-symbol KRX research for Sprint 141-150.
+﻿"""Autonomous multi-symbol KRX research for Sprint 141-150.
 
 This module applies one user-provided strategy and one execution-assumption set
 to an explicit or curated KRX universe. It records per-symbol evidence,
@@ -47,6 +47,9 @@ from gaon.research.krx_universe import KRXUniverseResult
 from gaon.research.global_market import (
     GlobalMarketDataProvider, MarketScope, resolve_market_scope,
     research_sample_size, select_bounded_universe,
+)
+from gaon.research.live_trading_intelligence import (
+    adaptive_budget, adaptive_batches, production_feedback, live_report_lines,
 )
 
 
@@ -310,6 +313,7 @@ class MultiSymbolResearchRun:
     final_recommendation: str
     korean_report: str
     generated_at: str
+    adaptive_sampling: dict[str, object] | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -325,6 +329,7 @@ class MultiSymbolResearchRun:
             "final_recommendation": self.final_recommendation,
             "korean_report": self.korean_report,
             "generated_at": self.generated_at,
+            "adaptive_sampling": dict(self.adaptive_sampling or {}),
             "automatic_order": False,
             "automatic_champion_promotion": False,
             "automatic_config_apply": False,
@@ -477,7 +482,7 @@ class AutonomousMultiSymbolResearchOrchestrator:
     ) -> MultiSymbolResearchRun:
         at=generated_at or utc_now()
         rid=run_id or f"multi-symbol-research:{uuid4().hex}"
-        market_scope=resolve_market_scope(request_text,require_universe=True); selection=None
+        market_scope=resolve_market_scope(request_text,require_universe=True); selection=None; candidate_pool=()
 
         # Overseas and multi-market research must use the market-agnostic
         # provider even when symbols were explicitly supplied.
@@ -509,7 +514,9 @@ class AutonomousMultiSymbolResearchOrchestrator:
         if not symbols and universe_result is None and market_scope is not None:
             provider=self._provider
             if not getattr(provider,"market_agnostic",False): provider=GlobalMarketDataProvider.from_env(os.environ)
-            try: candidates=provider.fetch_universe(market_scope.selector)
+            try:
+                candidates=provider.fetch_universe(market_scope.selector)
+                candidate_pool=tuple(candidates)
             except Exception as exc:
                 if isinstance(exc,RealMarketDataUnavailable): raise
                 raise RealMarketDataUnavailable(f"real_data_unavailable: global market universe unavailable: {exc.__class__.__name__}") from exc
@@ -525,9 +532,72 @@ class AutonomousMultiSymbolResearchOrchestrator:
         for symbol in universe.symbols:
             item = self._symbol_evidence(rid, request_text, symbol, start_date, end_date, strategy, assumptions, at)
             evidence.append(item)
-        eligible_symbols = tuple(item.symbol for item in evidence if item.eligible and item.backtest_result is not None)
-        candidate_results = self._candidate_evidence(rid, strategy, assumptions, tuple(evidence), at)
         summary = aggregate_symbol_evidence(tuple(evidence))
+        adaptive_sampling = {
+            "sampling_rounds": 1,
+            "attempted_symbols": len(evidence),
+            "eligible_symbols": summary.eligible_symbols,
+            "blocked_symbols": summary.blocked_symbols,
+            "exchange_coverage": {},
+            "stop_reason": "initial_sample_sufficient" if summary.sample_confidence != "low" else "initial_sample_insufficient",
+            "evidence_sufficient": summary.sample_confidence != "low",
+            "research_budget_used": len(evidence),
+            "research_budget_limit": len(evidence),
+        }
+        if selection is not None and market_scope is not None and candidate_pool:
+            budget = adaptive_budget(os.environ, len(evidence), len(candidate_pool))
+            rounds = 1
+            if summary.sample_confidence == "low" and len(evidence) < budget and selection.coverage_mode != "exhaustive":
+                batches = adaptive_batches(
+                    candidate_pool,
+                    market_scope.exchanges,
+                    tuple(item.symbol for item in evidence),
+                    budget,
+                    max(1, research_sample_size(os.environ)),
+                    f"{end_date}|{request_text}|adaptive-v7",
+                )
+                for batch in batches:
+                    if not batch:
+                        continue
+                    rounds += 1
+                    for symbol in batch:
+                        if any(item.symbol == symbol.upper() for item in evidence):
+                            continue
+                        evidence.append(self._symbol_evidence(
+                            rid, request_text, symbol, start_date, end_date,
+                            strategy, assumptions, at,
+                        ))
+                    summary = aggregate_symbol_evidence(tuple(evidence))
+                    if summary.sample_confidence != "low":
+                        break
+            refs = {item.symbol.upper(): item for item in candidate_pool}
+            coverage = {}
+            for item in evidence:
+                ref = refs.get(item.symbol.upper())
+                if ref is not None:
+                    ex = ref.exchange.upper()
+                    coverage[ex] = coverage.get(ex, 0) + 1
+            sufficient = summary.sample_confidence != "low"
+            adaptive_sampling = {
+                "sampling_rounds": rounds,
+                "attempted_symbols": len(evidence),
+                "eligible_symbols": summary.eligible_symbols,
+                "blocked_symbols": summary.blocked_symbols,
+                "exchange_coverage": coverage,
+                "stop_reason": "evidence_sufficient" if sufficient else (
+                    "research_budget_exhausted" if len(evidence) >= budget else "candidate_pool_exhausted"
+                ),
+                "evidence_sufficient": sufficient,
+                "research_budget_used": len(evidence),
+                "research_budget_limit": budget,
+            }
+            universe = replace(
+                universe,
+                symbols=tuple(item.symbol for item in evidence),
+                candidate_count=len(candidate_pool),
+                coverage_mode="adaptive_bounded_cross_exchange_sample" if rounds > 1 else universe.coverage_mode,
+            )
+        candidate_results = self._candidate_evidence(rid, strategy, assumptions, tuple(evidence), at)
         generalization = compare_candidate_generalization(tuple(evidence), candidate_results)
         recommendation = _recommend(summary, generalization)
         any_real = any(item.source == "real" for item in evidence)
@@ -544,8 +614,8 @@ class AutonomousMultiSymbolResearchOrchestrator:
             any(item.fixture_backed for item in evidence),
             at,
         )
-        report = render_multi_symbol_report(request, tuple(evidence), summary, generalization, recommendation)
-        run = MultiSymbolResearchRun(rid, request, strategy, assumptions, tuple(evidence), candidate_results, summary, generalization, recommendation, report, at)
+        report = render_multi_symbol_report(request, tuple(evidence), summary, generalization, recommendation, adaptive_sampling=adaptive_sampling)
+        run = MultiSymbolResearchRun(rid, request, strategy, assumptions, tuple(evidence), candidate_results, summary, generalization, recommendation, report, at, adaptive_sampling=adaptive_sampling)
         if self._connection is not None:
             SQLiteMultiSymbolResearchRepository(self._connection).add_run(run)
         return run
@@ -722,87 +792,71 @@ def compare_candidate_generalization(original: tuple[SymbolResearchEvidence, ...
     return CandidateGeneralization(CandidateGeneralizationDecision.NO_CLEAR_WINNER, None, tuple(rows), "candidate evidence is mixed across symbols")
 
 
-def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tuple[SymbolResearchEvidence, ...], summary: UniverseResearchSummary, generalization: CandidateGeneralization, recommendation: str) -> str:
-    lines = [
-        "[다중종목 실제 연구]",
-        "",
-        "[Universe]",
-        f"- type={request.universe.universe_type.value}",
-        f"- provenance={request.universe.provenance}",
+def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tuple[SymbolResearchEvidence, ...], summary: UniverseResearchSummary, generalization: CandidateGeneralization, recommendation: str, *, adaptive_sampling: dict[str, object] | None = None) -> str:
+    def pct(value):
+        if value is None: return "계산 불가"
+        try: return f"{float(value)*100:+.1f}%"
+        except (TypeError,ValueError): return "계산 불가"
+    confidence={"low":"낮음","medium":"보통","high":"높음"}.get(summary.sample_confidence,summary.sample_confidence)
+    conclusions={
+        CandidateGeneralizationDecision.NEEDS_MORE_EVIDENCE:"아직 결론을 내리기에는 증거가 부족합니다.",
+        CandidateGeneralizationDecision.CANDIDATE_PREFERRED:"검증된 개선 후보가 기존 전략보다 나은 가능성을 보였습니다.",
+        CandidateGeneralizationDecision.ORIGINAL_PREFERRED:"현재 증거에서는 기존 전략이 가장 안정적입니다.",
+        CandidateGeneralizationDecision.NO_CLEAR_WINNER:"후보 간 우열이 뚜렷하지 않습니다.",
+    }
+    conclusion=conclusions[generalization.decision]
+    sampling=dict(adaptive_sampling or {})
+    lines=[
+        "[다중종목 실제 연구]","[연구 결과]","","[결론]",conclusion,"",
+        "[이번 연구]",
         f"- market={request.universe.market}",
-        f"- exchanges={','.join(request.universe.exchanges)}",
-        f"- currency={request.universe.currency}",
-        f"- timezone={request.universe.timezone}",
-        f"- coverage_mode={request.universe.coverage_mode}",
-        f"- candidate_count={request.universe.candidate_count if request.universe.candidate_count is not None else 'unknown'}",
-        f"- symbols={len(request.universe.symbols)} ({', '.join(request.universe.symbols)})",
-        f"- eligible={summary.eligible_symbols}",
-        f"- blocked={summary.blocked_symbols}",
-        "",
-        "[전략]",
-        f"- strategy_fingerprint={request.strategy_fingerprint}",
-        f"- assumptions_fingerprint={request.assumptions_fingerprint}",
-        f"- period={request.period_start}~{request.period_end}",
-        f"- provider={request.provider}",
-        f"- source={request.source}",
-        f"- fixture_backed={str(request.fixture_backed).lower()}",
-        "",
-        "[종목별 결과]",
+        f"- 시장: {request.universe.market}",
+        f"- 거래소: {', '.join(request.universe.exchanges)}",
+        f"- 실제 데이터: {request.provider} / fixture_backed={str(request.fixture_backed).lower()}",
+        f"- 기간: {request.period_start} ~ {request.period_end}",
+        f"- 연구 시도: {len(evidence)}종목",
+        f"- 정상 검증: {summary.eligible_symbols}종목",
+        f"- 데이터 문제로 제외: {summary.blocked_symbols}종목",
+        f"- 총 거래 표본: {summary.aggregate_trade_count}회",
+        f"- 연구 신뢰도: {confidence}",
     ]
-    for item in evidence:
-        if item.eligible:
-            lines.append(
-                f"- {item.symbol}: eligible=true trades={item.trade_count} "
-                f"return={item.metrics.get('total_return', 'unknown')} mdd={item.metrics.get('mdd', 'unknown')} "
-                f"quality={item.quality_status} rows={item.rows}"
-            )
-            if item.provider_gap_dates:
-                lines.append(f"  provider_gap_dates={','.join(item.provider_gap_dates)}")
-            if item.provider_ohlc_anomaly_dates:
-                lines.append(f"  provider_ohlc_anomaly_dates={','.join(item.provider_ohlc_anomaly_dates)}")
-            if item.provider_zero_volume_anomaly_dates:
-                lines.append(f"  provider_zero_volume_anomaly_dates={','.join(item.provider_zero_volume_anomaly_dates)}")
-        else:
-            lines.append(f"- {item.symbol}: eligible=false reason={item.blocked_reason or 'unknown'} quality={item.quality_status}")
-    lines.extend(
-        [
-            "",
-            "[전체 표본]",
-            f"- aggregate_trade_count={summary.aggregate_trade_count}",
-            f"- symbols_with_trades={summary.symbols_with_trades}",
-            f"- sample_confidence={summary.sample_confidence}",
-            "",
-            "[일반화 분석]",
-            f"- breadth={summary.symbols_with_trades}/{summary.eligible_symbols}",
-            f"- concentration={summary.concentration_decision.value}",
-            f"- trade_concentration={summary.trade_concentration}",
-            f"- return_concentration={summary.return_concentration}",
-            f"- best_symbol={summary.best_symbol}",
-            f"- worst_symbol={summary.worst_symbol}",
-            "",
-            "[Original vs TESTED]",
-        ]
-    )
-    for row in generalization.rows:
-        lines.append(
-            f"- {row['candidate_id']}: aggregate_trade_count={row['aggregate_trade_count']} "
-            f"median_return={row['median_return']} median_mdd={row['median_mdd']} "
-            f"profitable_symbol_ratio={row['profitable_symbol_ratio']} concentration={row['concentration']} confidence={row['confidence']}"
-        )
-    lines.extend(
-        [
-            "",
-            "[가온의 판단]",
-            f"- generalization={generalization.decision.value}",
-            f"- recommendation={recommendation}",
-            f"- reason={generalization.reason}",
-            "",
-            "[Safety]",
-            "- 자동 주문 없음",
-            "- Champion 자동 승격 없음",
-            "- 승인 없는 config 변경 없음",
-        ]
-    )
+    if sampling:
+        lines.extend(["","[표본 확장]",
+            f"- 연구 라운드: {sampling.get('sampling_rounds',1)}회",
+            f"- budget: {sampling.get('research_budget_used',len(evidence))}/{sampling.get('research_budget_limit',len(evidence))}종목",
+            f"- 종료 이유: {sampling.get('stop_reason','unknown')}"])
+        coverage=sampling.get("exchange_coverage")
+        if isinstance(coverage,dict) and coverage:
+            lines.append("- 거래소 표본: "+", ".join(f"{k} {v}" for k,v in sorted(coverage.items())))
+    lines.extend(live_report_lines(production_feedback(request.universe.market)))
+    original=generalization.rows[0] if generalization.rows else {}
+    lines.extend(["","[기존 전략]",
+        f"- 중앙 수익률: {pct(original.get('median_return'))}",
+        f"- 중앙 MDD: {pct(original.get('median_mdd'))}",
+        f"- 총 거래: {original.get('aggregate_trade_count',summary.aggregate_trade_count)}회",
+        f"- 수익 종목 비율: {pct(original.get('profitable_symbol_ratio'))}"])
+    candidates=[row for row in generalization.rows if row.get("candidate_id")!="original"]
+    if candidates:
+        lines.extend(["","[개선 후보]"])
+        for i,row in enumerate(candidates):
+            label=chr(65+i) if i<26 else str(i+1)
+            star=" ⭐" if row.get("candidate_id")==generalization.winner_id else ""
+            lines.append(f"- 후보 {label}{star}: 중앙 수익률 {pct(row.get('median_return'))}, MDD {pct(row.get('median_mdd'))}, 거래 {row.get('aggregate_trade_count',0)}회")
+    lines.extend(["","[가온의 판단]",f"- {conclusion}"])
+    if summary.sample_confidence=="low":
+        lines.append("- 현재 표본만으로 일반화하지 않고 추가 검증이 필요합니다.")
+    elif generalization.decision is CandidateGeneralizationDecision.CANDIDATE_PREFERRED:
+        lines.append("- 개선 후보는 자동 승격하지 않고 추가 OOS/강건성 검증 대상으로 둡니다.")
+    else:
+        lines.append("- 서로 다른 종목·기간에서도 같은 결과가 반복되는지 확인해야 합니다.")
+    lines.extend(["","[다음 연구]"])
+    if sampling.get("stop_reason")=="research_budget_exhausted":
+        lines.append("- 설정된 연구 budget을 모두 사용했습니다. 다음 표본/기간으로 증거를 확장합니다.")
+    elif summary.sample_confidence=="low":
+        lines.append("- 중복되지 않는 대표 종목을 추가해 표본 신뢰도를 높입니다.")
+    else:
+        lines.append("- 우수 후보를 OOS·walk-forward·비용 스트레스 검증으로 넘기는 것이 적절합니다.")
+    lines.extend(["","[Safety]","- 자동 주문 없음","- Champion 자동 승격 없음","- 승인 없는 config 변경 없음"])
     return "\n".join(lines)
 
 

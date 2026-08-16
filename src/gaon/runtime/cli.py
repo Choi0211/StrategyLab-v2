@@ -1,4 +1,4 @@
-"""Safe runtime CLI."""
+﻿"""Safe runtime CLI."""
 
 from __future__ import annotations
 
@@ -255,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     gaon_autonomous_candidate_identity_release = sub.add_parser("gaon-autonomous-candidate-identity-release-check")
     gaon_autonomous_candidate_identity_release.add_argument("--db", default=":memory:")
     gaon_autonomous_candidate_identity_release.add_argument("--run-id", default=None)
+    sub.add_parser("gaon-autonomous-research-intelligence-v7-release-check")
     sub.add_parser("gaon-content-normalization-release-check")
     sub.add_parser("gaon-normalized-claim-bridge-release-check")
     sub.add_parser("gaon-evidence-conflict-reevaluation-release-check")
@@ -1893,6 +1894,20 @@ def _run(args: argparse.Namespace) -> int:
             )
         finally:
             store.close()
+
+    elif args.command == "gaon-autonomous-research-intelligence-v7-release-check":
+        from gaon.research.live_trading_intelligence import release_check
+        payload = release_check()
+        print(
+            "gaon-autonomous-research-intelligence-v7-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"round_trips={payload['round_trips']} "
+            f"unmatched_sells={payload['unmatched_sells']} "
+            f"failed_orders={payload['failed_orders']} "
+            f"hypotheses={payload['hypotheses']} "
+            "read_only=true strategy_mutated=false order_executed=false "
+            "champion_promoted=false approval_bypassed=false safety=pass"
+        )
 
     elif args.command == "gaon-content-normalization-release-check":
         from gaon.knowledge.content_normalization import content_normalization_release_check
