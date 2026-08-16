@@ -70,6 +70,7 @@ from .multi_source_research import (
     validation_sample_diagnostics,
 )
 from .production_external_providers import production_external_provider_adapters
+from .research_director_bridge import decide_next_research_action, live_execution_fields_from_real_adapter
 
 
 TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION = 2
@@ -110,6 +111,8 @@ def telegram_autonomous_learning_payload(
     symbol: str = "005930",
     mode: str = "research",
     storage_root: str | None = None,
+    steps_used: int = 0,
+    max_steps: int = 8,
 ) -> Mapping[str, object]:
     """Run the production Autonomous Learning V2 route behind Telegram."""
 
@@ -135,6 +138,8 @@ def telegram_autonomous_learning_payload(
         baseline=baseline,
         external_research=external,
         connection=connection,
+        steps_used=steps_used,
+        max_steps=max_steps,
     )
 
 
@@ -146,6 +151,8 @@ def production_autonomous_learning_payload_from_baseline(
     baseline: Mapping[str, object],
     external_research: Mapping[str, object] | None = None,
     connection: sqlite3.Connection | None = None,
+    steps_used: int = 0,
+    max_steps: int = 8,
 ) -> Mapping[str, object]:
     """Build a production payload from authoritative real-research output.
 
@@ -263,6 +270,20 @@ def production_autonomous_learning_payload_from_baseline(
         partner_approval_required=bool(autonomous_quant_partner.get("approval_required")),
         production_blockers=production_blockers,
     )
+    sample_diagnostics = validation_sample_diagnostics(baseline)
+    live_execution_fields = live_execution_fields_from_real_adapter()
+    research_director_decision = decide_next_research_action(
+        {
+            "autonomous_quant_partner": autonomous_quant_partner,
+            "multi_source_research": multi_source_research,
+            "validation_sample_diagnostics": sample_diagnostics,
+            "autonomous_quant_partner_stop_reason": autonomous_quant_partner.get("stop_reason"),
+        },
+        live_execution_fields=live_execution_fields,
+        steps_used=steps_used,
+        max_steps=max_steps,
+        candidate_rejected=promotion_status == "blocked_fixture",
+    )
 
     learning = {
         "schema_version": TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION,
@@ -277,6 +298,9 @@ def production_autonomous_learning_payload_from_baseline(
         "human_gate_status": human_gate_status,
         "autonomous_quant_partner_status": partner_status,
         "autonomous_quant_partner_stop_reason": autonomous_quant_partner.get("stop_reason"),
+        "research_director_decision": research_director_decision.to_json(),
+        "research_director_steps_used": steps_used,
+        "research_director_max_steps": max_steps,
         "autonomous_quant_partner_validation_status": _as_dict(autonomous_quant_partner.get("validation_sufficiency_v2")).get("status"),
         "production_validation_execution_summary": partner_execution_summary,
         "adaptive_validation_feedback": _as_dict(autonomous_quant_partner.get("adaptive_validation_feedback")),
@@ -298,7 +322,7 @@ def production_autonomous_learning_payload_from_baseline(
         "hypotheses": hypotheses,
         "candidate_experiments": candidate_experiments,
         "authoritative_candidate_validation": authoritative_validation,
-        "validation_sample_diagnostics": validation_sample_diagnostics(baseline),
+        "validation_sample_diagnostics": sample_diagnostics,
         "validation": validation.to_json(),
         "ranking": ranking.to_json(),
         "promotion_candidate": promotion.to_json(),

@@ -878,10 +878,11 @@ class LLMConversationBrain:
             previous_text=previous_text,
             mode=mode,
         )
+        steps_used = _autonomous_learning_v2_steps_used(context, mode)
         result = self._tool_executor.execute(
             ToolRequest(
                 "autonomous_learning_research",
-                {"request_text": execution_text, "symbol": symbol, "mode": mode},
+                {"request_text": execution_text, "symbol": symbol, "mode": mode, "steps_used": steps_used},
                 request.user_ref,
                 request.received_at,
             )
@@ -2067,6 +2068,23 @@ def _should_use_promotion_candidate_presentation(text: str) -> bool:
         _is_promotion_candidate_presentation_request(text)
         and not _is_fresh_autonomous_learning_execution_request(text)
     )
+
+
+def _autonomous_learning_v2_steps_used(context: "ConversationalMVPContext | None", mode: str) -> int:
+    """Read the Research Director's step counter forward from stored V2 context.
+
+    A fresh research request (anything other than an explicit continuation
+    of an existing autonomous_learning_v2 candidate) starts a new budget at
+    0. A continuation increments the count the previous turn round-tripped
+    through the payload (research_director_steps_used), so the Director's
+    budget check in gaon.knowledge.research_director_bridge actually spans
+    the whole conversation instead of resetting every call.
+    """
+    if context is None or context.last_result_kind != "autonomous_learning_v2" or mode != "continue":
+        return 0
+    payload = _as_dict(context.last_detail_payload.get("autonomous_learning_v2"))
+    previous = int(payload.get("research_director_steps_used", 0) or 0)
+    return previous + 1
 
 
 def _autonomous_learning_execution_text(

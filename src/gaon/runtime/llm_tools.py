@@ -300,12 +300,20 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         ),
     )
     registry.register(
-        ToolDefinition("autonomous_learning_research", "Run the read-only Autonomous Learning V2 research orchestration behind Telegram.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbol", "mode")),
+        ToolDefinition(
+            "autonomous_learning_research",
+            "Run the read-only Autonomous Learning V2 research orchestration behind Telegram.",
+            ToolRiskLevel.READ_ONLY,
+            required_args=("request_text",),
+            allowed_args=("symbol", "mode", "steps_used", "max_steps"),
+        ),
         lambda args: telegram_autonomous_learning_payload(
             connection,
             str(args["request_text"]),
             symbol=str(args.get("symbol", "005930")),
             mode=str(args.get("mode", "research")),
+            steps_used=int(args.get("steps_used", 0)),
+            max_steps=int(args.get("max_steps", 8)),
         ),
     )
     registry.register(

@@ -325,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-news-intelligence-release-check")
     sub.add_parser("gaon-production-research-director-release-check")
     sub.add_parser("gaon-production-daily-briefing-release-check")
+    sub.add_parser("gaon-production-research-director-wiring-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2598,6 +2599,22 @@ def _run(args: argparse.Namespace) -> int:
             f"jobs_registered={payload['jobs_registered']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-research-director-wiring-release-check":
+        from gaon.knowledge.research_director_bridge import production_research_director_wiring_release_check
+
+        payload = production_research_director_wiring_release_check()
+        print(
+            "gaon-production-research-director-wiring-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"decision_action={payload['decision_action']} "
+            f"dispatched_tool={payload['dispatched_tool']} "
+            f"terminal_action_dispatched_tool={payload['terminal_action_dispatched_tool']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
             "safety=pass"
         )
 
@@ -6114,7 +6131,7 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
             "Run deterministic Telegram Autonomous Learning V2 release-check route.",
             ToolRiskLevel.READ_ONLY,
             required_args=("request_text",),
-            allowed_args=("symbol", "mode"),
+            allowed_args=("symbol", "mode", "steps_used", "max_steps"),
         ),
         handle_autonomous_learning,
     )

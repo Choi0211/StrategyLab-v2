@@ -2150,7 +2150,7 @@ def _sprint152_tool_executor(
             "Run deterministic autonomous learning V2 route for conversation tests.",
             ToolRiskLevel.READ_ONLY,
             required_args=("request_text",),
-            allowed_args=("symbol", "mode"),
+            allowed_args=("symbol", "mode", "steps_used", "max_steps"),
         ),
         handle_autonomous_learning,
     )
