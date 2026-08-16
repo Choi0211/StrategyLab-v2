@@ -147,3 +147,36 @@ class GlobalMarketScopeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_us_multiple_named_exchanges_are_preserved():
+    from gaon.research.global_market import resolve_market_scope
+
+    text = (
+        "\ubbf8\uad6d \uc8fc\uc2dd \uc804\uccb4\ub97c "
+        "\ub098\uc2a4\ub2e5, NYSE, AMEX \uae30\uc900\uc73c\ub85c "
+        "\uc5f0\uad6c\ud574\uc918"
+    )
+
+    scope = resolve_market_scope(text)
+
+    assert scope is not None
+    assert scope.market == "US"
+    assert scope.exchanges == (
+        "NASDAQ",
+        "NYSE",
+        "AMEX",
+    )
+
+
+def test_nasdaq_only_stays_single_exchange():
+    from gaon.research.global_market import resolve_market_scope
+
+    scope = resolve_market_scope(
+        "\ub098\uc2a4\ub2e5 \uc804\uccb4\ub97c "
+        "\ub300\uc0c1\uc73c\ub85c \uc5f0\uad6c\ud574\uc918"
+    )
+
+    assert scope is not None
+    assert scope.market == "US"
+    assert scope.exchanges == ("NASDAQ",)

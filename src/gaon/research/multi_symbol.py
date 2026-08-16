@@ -1,4 +1,4 @@
-﻿"""Autonomous multi-symbol KRX research for Sprint 141-150.
+"""Autonomous multi-symbol KRX research for Sprint 141-150.
 
 This module applies one user-provided strategy and one execution-assumption set
 to an explicit or curated KRX universe. It records per-symbol evidence,
@@ -478,6 +478,34 @@ class AutonomousMultiSymbolResearchOrchestrator:
         at=generated_at or utc_now()
         rid=run_id or f"multi-symbol-research:{uuid4().hex}"
         market_scope=resolve_market_scope(request_text,require_universe=True); selection=None
+
+        # Overseas and multi-market research must use the market-agnostic
+        # provider even when symbols were explicitly supplied.
+        #
+        # Explicit symbols still retain precedence over universe sampling,
+        # but the KIS master is loaded first so the provider learns the
+        # authoritative exchange for symbols such as AAPL/IBM/BRK.B.
+        if (
+            market_scope is not None
+            and market_scope.market in {"US", "JP", "HK", "CN", "MULTI", "GLOBAL"}
+            and not getattr(self._provider, "market_agnostic", False)
+        ):
+            provider = GlobalMarketDataProvider.from_env(os.environ)
+
+            try:
+                provider.fetch_universe(
+                    market_scope.selector
+                )
+            except Exception as exc:
+                if isinstance(exc, RealMarketDataUnavailable):
+                    raise
+                raise RealMarketDataUnavailable(
+                    "real_data_unavailable: global market "
+                    f"universe unavailable: {exc.__class__.__name__}"
+                ) from exc
+
+            self._provider = provider
+
         if not symbols and universe_result is None and market_scope is not None:
             provider=self._provider
             if not getattr(provider,"market_agnostic",False): provider=GlobalMarketDataProvider.from_env(os.environ)

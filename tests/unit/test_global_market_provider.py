@@ -370,3 +370,31 @@ class GlobalMarketProviderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_explicit_us_symbol_registers_real_exchange_before_bars():
+    from gaon.research.global_market import (
+        GlobalMarketDataProvider,
+        MarketSymbol,
+    )
+
+    class Universe:
+        def fetch_universe(self, market):
+            return (
+                MarketSymbol(
+                    "IBM",
+                    "IBM",
+                    "US",
+                    "NYSE",
+                ),
+            )
+
+    provider = GlobalMarketDataProvider(
+        universe_provider=Universe(),
+        opener=lambda req, timeout: None,
+    )
+
+    rows = provider.fetch_universe("US:NYSE")
+
+    assert rows[0].symbol == "IBM"
+    assert provider._symbols["IBM"].exchange == "NYSE"

@@ -1,4 +1,4 @@
-﻿"""Gaon LLM conversation brain with deterministic fallback."""
+"""Gaon LLM conversation brain with deterministic fallback."""
 
 from __future__ import annotations
 
@@ -641,9 +641,20 @@ class LLMConversationBrain:
             context = self._mvp_context_for(request.session_id)
             if context is not None:
                 route = ConversationalRoute(ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, route.symbols)
+        # Explicit whole-market / multi-market research is an authoritative
+        # execution request and must not be reinterpreted as a contextual
+        # autonomous comparison against an earlier single-symbol run.
+        existing_tool = route_read_only_tool(
+            request.text
+        )
+
+        if existing_tool == "multi_symbol_research":
+            return None
+
         autonomous = self._try_autonomous_research_conversation(request, route, warnings, references)
         if autonomous is not None:
             return autonomous
+
         reasoning_followup_intents = {
             ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
             ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT,

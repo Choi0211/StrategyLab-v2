@@ -30,3 +30,21 @@ class GlobalMultiSymbolResearchTests(unittest.TestCase):
             if old is None: os.environ.pop("GAON_GLOBAL_RESEARCH_MAX_SYMBOLS",None)
             else: os.environ["GAON_GLOBAL_RESEARCH_MAX_SYMBOLS"]=old
         u=run.request.universe; self.assertEqual(5,u.candidate_count); self.assertEqual(3,len(u.symbols)); self.assertEqual("bounded_cross_exchange_sample",u.coverage_mode); self.assertFalse(u.to_json()["exhaustive"])
+
+
+def test_kr_us_compare_routes_to_multi_symbol():
+    from gaon.runtime.llm_tool_routing import route_read_only_tool
+
+    text = (
+        "\uac00\uc628\uc544 \ud55c\uad6d\uacfc \ubbf8\uad6d "
+        "\uc8fc\uc2dd \uc804\uccb4\ub97c \ub300\uc0c1\uc73c\ub85c "
+        "\ube44\uad50 \uc5f0\uad6c\ud574\uc918. "
+        "\ucf54\uc2a4\ud53c, \ucf54\uc2a4\ub2e5, "
+        "\ub098\uc2a4\ub2e5, NYSE, AMEX\ub97c "
+        "\ud3ec\ud568\ud574\uc918."
+    )
+
+    assert (
+        route_read_only_tool(text)
+        == "multi_symbol_research"
+    )
