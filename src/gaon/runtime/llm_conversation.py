@@ -54,6 +54,7 @@ from gaon.runtime.research_grounding import contains_fixture_leakage, contains_u
 from gaon.runtime.research_failures import classify_tool_failure, warning_for_failure
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import route_read_only_tool
+from gaon.research.global_market import extract_market_symbols, resolve_market_scope
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
 
 CONVERSATION_SCHEMA_VERSION = 1
@@ -1869,15 +1870,35 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
         return {"request_text": text, "symbol": "005930", "mode": _autonomous_learning_request_mode(text) or "research"}
     if tool_name == "multi_symbol_research":
         start_date, end_date = _extract_date_range(text)
-        market_scope = _extract_krx_market_scope(text)
-        if market_scope is not None:
-            return {
-                "request_text": text,
-                "symbols": (),
-                "universe_type": "curated",
-                "start_date": start_date,
-                "end_date": end_date,
-            }
+        scope = resolve_market_scope(text)
+
+        # Explicit symbols always have precedence over generic whole-market
+        # language elsewhere in the request. Example: a five-symbol request
+        # may later say "apply the same strategy to all symbols".
+        if scope is not None:
+            explicit_symbols = extract_market_symbols(
+                text,
+                scope,
+            )
+
+            if explicit_symbols:
+                return {
+                    "request_text": text,
+                    "symbols": explicit_symbols,
+                    "universe_type": "explicit",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                }
+
+            if scope.universe_requested:
+                return {
+                    "request_text": text,
+                    "symbols": (),
+                    "universe_type": "curated",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                }
+
         return {
             "request_text": text,
             "symbols": _extract_krx_symbols(text),
@@ -1893,32 +1914,10 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
 
 
 def _extract_krx_market_scope(text: str) -> str | None:
-    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
-
-    both = (
-        "\ud55c\uad6d\uc8fc\uc2dd\uc804\uccb4",
-        "\uad6d\ub0b4\uc8fc\uc2dd\uc804\uccb4",
-        "\ud55c\uad6d\uc8fc\uc2dd\uc804\uc885\ubaa9",
-        "\uad6d\ub0b4\uc8fc\uc2dd\uc804\uc885\ubaa9",
-        "\ucf54\uc2a4\ud53c\ucf54\uc2a4\ub2e5",
-        "\ucf54\uc2a4\ud53c\uc640\ucf54\uc2a4\ub2e5",
-        "\ucf54\uc2a4\ud53c\ubc0f\ucf54\uc2a4\ub2e5",
-        "kospikosdaq",
-        "kospiandkosdaq",
-        "krx\uc804\uccb4",
-        "krx\uc804\uc885\ubaa9",
-    )
-
-    if any(token in normalized for token in both):
-        return "ALL"
-
-    if "\ucf54\uc2a4\ub2e5" in normalized or "kosdaq" in normalized:
-        return "KOSDAQ"
-
-    if "\ucf54\uc2a4\ud53c" in normalized or "kospi" in normalized:
-        return "KOSPI"
-
-    return None
+    scope=resolve_market_scope(text)
+    if scope is None or scope.market!="KR": return None
+    if set(scope.exchanges)=={"KOSPI","KOSDAQ"}: return "ALL"
+    return scope.exchanges[0] if len(scope.exchanges)==1 else "ALL"
 
 def _extract_krx_symbols(text: str) -> tuple[str, ...]:
     known = {"005930", "000660", "005380", "035420", "051910"}
