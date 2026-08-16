@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import re
 
+from gaon.research.global_market import is_market_research_request, is_market_universe_request, resolve_market_scope
 
 def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized:
         return None
+    if is_market_universe_request(text): return "multi_symbol_research"
+    if _single_overseas_market_research(text): return "multi_symbol_research"
     if _krx_whole_market_research(normalized):
         return "multi_symbol_research"
     if _multi_symbol_research_utf8(normalized) and not _autonomous_learning_multi_symbol_override(normalized):
@@ -181,6 +184,15 @@ def _autonomous_learning_research_ascii(value: str) -> bool:
     return False
 
 
+def _single_overseas_market_research(text: str) -> bool:
+    scope=resolve_market_scope(text)
+    if scope is None or scope.market not in {"US","JP","HK","CN"}: return False
+    if scope.universe_requested: return True
+    if not is_market_research_request(text): return False
+    if scope.market=="US": return bool(re.search(r"(?<![A-Za-z0-9])([A-Z]{1,5}(?:[.-][A-Z])?)(?![A-Za-z0-9])",text))
+    return False
+
+
 def _krx_whole_market_research(value: str) -> bool:
     scope = (
         "한국주식전체", "국내주식전체", "한국주식전종목", "국내주식전종목",
@@ -206,6 +218,10 @@ def _multi_symbol_research_ascii(value: str) -> bool:
         "코스피및코스닥",
         "krx전체",
         "krx전종목",
+        "미국주식전체", "미국주식전종목", "미국시장전체", "미장전체",
+        "나스닥전체", "뉴욕증권거래소전체", "뉴욕거래소전체", "아멕스전체",
+        "usstocks", "usmarket", "nasdaq", "nyse", "amex",
+        "일본주식전체", "홍콩주식전체", "중국주식전체", "전세계주식", "글로벌주식",
         "모두",
         "종목들",
         "5개종목",

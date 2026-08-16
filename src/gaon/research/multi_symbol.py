@@ -39,8 +39,15 @@ from gaon.research.krx_real_pipeline import (
     default_execution_assumptions,
     utc_now,
 )
-from gaon.research.real_research import DataQualityReport, DataQualityStatus, MarketDataset, MarketSymbol
-from gaon.research.krx_universe import KRXUniverseRequest, KRXUniverseResult, KRXUniverseSelector
+from gaon.research.real_research import (
+    DataQualityEngine, DataQualityReport, DataQualityStatus, MarketDataProvider,
+    MarketDataset, MarketSymbol, SQLiteDatasetRegistry,
+)
+from gaon.research.krx_universe import KRXUniverseResult
+from gaon.research.global_market import (
+    GlobalMarketDataProvider, MarketScope, resolve_market_scope,
+    research_sample_size, select_bounded_universe,
+)
 
 
 MULTI_SYMBOL_SCHEMA_VERSION = 1
@@ -115,23 +122,21 @@ class MultiSymbolBacktestRunner(Protocol):
 
 @dataclass(frozen=True)
 class KRXResearchUniverse:
+    """Backward-compatible name for the market-agnostic research universe."""
     universe_id: str
     universe_type: UniverseType
     symbols: tuple[str, ...]
     provenance: str
     fixture_backed: bool
     created_at: str
-
+    market: str = "KR"
+    exchanges: tuple[str, ...] = ("KOSPI", "KOSDAQ")
+    currency: str = "KRW"
+    timezone: str = "Asia/Seoul"
+    candidate_count: int | None = None
+    coverage_mode: str = "explicit"
     def to_json(self) -> dict[str, object]:
-        return {
-            "schema_version": MULTI_SYMBOL_SCHEMA_VERSION,
-            "universe_id": self.universe_id,
-            "universe_type": self.universe_type.value,
-            "symbols": list(self.symbols),
-            "provenance": self.provenance,
-            "fixture_backed": self.fixture_backed,
-            "created_at": self.created_at,
-        }
+        return {"schema_version":MULTI_SYMBOL_SCHEMA_VERSION,"universe_id":self.universe_id,"universe_type":self.universe_type.value,"symbols":list(self.symbols),"provenance":self.provenance,"fixture_backed":self.fixture_backed,"created_at":self.created_at,"market":self.market,"exchanges":list(self.exchanges),"currency":self.currency,"timezone":self.timezone,"candidate_count":self.candidate_count,"selected_count":len(self.symbols),"coverage_mode":self.coverage_mode,"exhaustive":self.candidate_count==len(self.symbols) if self.candidate_count is not None else None}
 
 
 @dataclass(frozen=True)
@@ -328,16 +333,16 @@ class MultiSymbolResearchRun:
 
 
 class KRXResearchUniverseResolver:
-    def resolve(self, symbols: tuple[str, ...] | None = None, *, universe_type: str = "explicit", universe_result: KRXUniverseResult | None = None, created_at: str | None = None) -> KRXResearchUniverse:
-        at = created_at or utc_now()
+    def resolve(self, symbols: tuple[str, ...] | None = None, *, universe_type: str = "explicit", universe_result: KRXUniverseResult | None = None, created_at: str | None = None, market_scope: MarketScope | None = None, candidate_count: int | None = None, provenance: str | None = None, coverage_mode: str | None = None) -> KRXResearchUniverse:
+        at=created_at or utc_now()
         if symbols:
-            normalized = _normalize_symbols(symbols)
-            return KRXResearchUniverse(f"universe:explicit:{_sha({'symbols': normalized})[:12]}", UniverseType.EXPLICIT, normalized, "explicit_user_provided", False, at)
+            normalized=_normalize_symbols(symbols); kind=UniverseType.CURATED if universe_type=="curated" else UniverseType.EXPLICIT; scope=market_scope; market=scope.market if scope else "KR"; exchanges=scope.exchanges if scope else ("KOSPI","KOSDAQ"); currency=scope.primary_currency if scope else "KRW"; timezone=scope.primary_timezone if scope else "Asia/Seoul"; prov=provenance or ("market_provider_snapshot" if kind is UniverseType.CURATED else "explicit_user_provided"); uid=f"universe:{market.lower()}:{kind.value}:{_sha({'symbols':normalized,'market':market})[:12]}"
+            return KRXResearchUniverse(uid,kind,normalized,prov,False,at,market,exchanges,currency,timezone,candidate_count,coverage_mode or ("bounded_sample" if kind is UniverseType.CURATED else "explicit"))
         if universe_result is not None:
-            return KRXResearchUniverse(universe_result.universe_id, UniverseType.CURATED, universe_result.symbols, f"dynamic_{universe_result.request.ranking_metric}", universe_result.fixture_backed, at)
-        if universe_type == "curated":
-            return KRXResearchUniverse("universe:curated:krx-largecap-v1", UniverseType.CURATED, DEFAULT_CURATED_SYMBOLS, "curated_static_research_universe_v1", False, at)
-        return KRXResearchUniverse(f"universe:explicit:{_sha({'symbols': DEFAULT_CURATED_SYMBOLS})[:12]}", UniverseType.EXPLICIT, DEFAULT_CURATED_SYMBOLS, "explicit_default_release_universe", False, at)
+            exchanges=("KOSPI","KOSDAQ") if universe_result.request.market=="ALL" else (universe_result.request.market,)
+            return KRXResearchUniverse(universe_result.universe_id,UniverseType.CURATED,universe_result.symbols,f"dynamic_{universe_result.request.ranking_metric}",universe_result.fixture_backed,at,"KR",exchanges,"KRW","Asia/Seoul",int(universe_result.data_quality_summary.get("candidate_count",universe_result.selected_size)),"ranked_trading_value")
+        if universe_type=="curated": return KRXResearchUniverse("universe:curated:krx-largecap-v1",UniverseType.CURATED,DEFAULT_CURATED_SYMBOLS,"curated_static_research_universe_v1",False,at)
+        return KRXResearchUniverse(f"universe:explicit:{_sha({'symbols':DEFAULT_CURATED_SYMBOLS})[:12]}",UniverseType.EXPLICIT,DEFAULT_CURATED_SYMBOLS,"explicit_default_release_universe",False,at)
 
 
 class SQLiteMultiSymbolResearchRepository:
@@ -452,7 +457,7 @@ class SQLiteMultiSymbolResearchRepository:
 
 
 class AutonomousMultiSymbolResearchOrchestrator:
-    def __init__(self, connection: sqlite3.Connection | None = None, provider: KRXHistoricalDataProvider | None = None, runner: MultiSymbolBacktestRunner | None = None) -> None:
+    def __init__(self, connection: sqlite3.Connection | None = None, provider: MarketDataProvider | KRXHistoricalDataProvider | None = None, runner: MultiSymbolBacktestRunner | None = None) -> None:
         self._connection = connection
         self._provider = provider or build_market_data_provider_from_env(os.environ)
         self._runner = runner or RuleBasedBacktestEngine()
@@ -470,22 +475,18 @@ class AutonomousMultiSymbolResearchOrchestrator:
         run_id: str | None = None,
         generated_at: str | None = None,
     ) -> MultiSymbolResearchRun:
-        at = generated_at or utc_now()
-        rid = run_id or f"multi-symbol-research:{uuid4().hex}"
-        requested_market = _requested_krx_market_scope(request_text)
-        if not symbols and universe_result is None and requested_market is not None:
-            if not hasattr(self._provider, "fetch_universe"):
-                raise RealMarketDataUnavailable(
-                    "real_data_unavailable: approved KRX universe provider is not configured; "
-                    f"cannot claim {requested_market} whole-market coverage"
-                )
-            universe_result = KRXUniverseSelector(self._provider).select(
-                KRXUniverseRequest(requested_market, end_date, "trading_value", 5),
-                generated_at=at,
-            )
-        universe = KRXResearchUniverseResolver().resolve(
-            symbols, universe_type=universe_type, universe_result=universe_result, created_at=at
-        )
+        at=generated_at or utc_now()
+        rid=run_id or f"multi-symbol-research:{uuid4().hex}"
+        market_scope=resolve_market_scope(request_text,require_universe=True); selection=None
+        if not symbols and universe_result is None and market_scope is not None:
+            provider=self._provider
+            if not getattr(provider,"market_agnostic",False): provider=GlobalMarketDataProvider.from_env(os.environ)
+            try: candidates=provider.fetch_universe(market_scope.selector)
+            except Exception as exc:
+                if isinstance(exc,RealMarketDataUnavailable): raise
+                raise RealMarketDataUnavailable(f"real_data_unavailable: global market universe unavailable: {exc.__class__.__name__}") from exc
+            selection=select_bounded_universe(candidates,market_scope,requested_size=research_sample_size(os.environ),seed=f"{end_date}|{request_text}",source=getattr(provider,"source","unknown")); symbols=selection.symbols; universe_type="curated"; self._provider=provider
+        universe=KRXResearchUniverseResolver().resolve(symbols,universe_type=universe_type,universe_result=universe_result,created_at=at,market_scope=market_scope,candidate_count=selection.candidate_count if selection else None,provenance=selection.source if selection else None,coverage_mode=selection.coverage_mode if selection else None)
         if not universe.symbols:
             raise RealMarketDataUnavailable("real_data_unavailable: universe has no symbols")
         strategy = UserStrategyParser().parse(request_text or DEFAULT_REQUEST_TEXT, symbol=universe.symbols[0], created_at=at)
@@ -533,7 +534,11 @@ class AutonomousMultiSymbolResearchOrchestrator:
         at: str,
     ) -> SymbolResearchEvidence:
         try:
-            dataset, quality, _inserted = KRXDatasetBuilder(self._connection, self._provider).build(symbol, start_date=start_date, end_date=end_date)
+            if getattr(self._provider,"market_agnostic",False):
+                dataset=self._provider.fetch_bars(symbol,start_date=start_date,end_date=end_date); validator=getattr(self._provider,"validate_dataset",None); quality=validator(dataset) if callable(validator) else DataQualityEngine().validate(dataset,min_bars=60)
+                if self._connection is not None: SQLiteDatasetRegistry(self._connection).put_dataset(dataset,quality)
+            else:
+                dataset,quality,_inserted=KRXDatasetBuilder(self._connection,self._provider).build(symbol,start_date=start_date,end_date=end_date)
             self._dataset_cache[symbol.upper()] = dataset
             blocking = _blocking_quality_findings(quality)
             if blocking:
@@ -696,6 +701,12 @@ def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tu
         "[Universe]",
         f"- type={request.universe.universe_type.value}",
         f"- provenance={request.universe.provenance}",
+        f"- market={request.universe.market}",
+        f"- exchanges={','.join(request.universe.exchanges)}",
+        f"- currency={request.universe.currency}",
+        f"- timezone={request.universe.timezone}",
+        f"- coverage_mode={request.universe.coverage_mode}",
+        f"- candidate_count={request.universe.candidate_count if request.universe.candidate_count is not None else 'unknown'}",
         f"- symbols={len(request.universe.symbols)} ({', '.join(request.universe.symbols)})",
         f"- eligible={summary.eligible_symbols}",
         f"- blocked={summary.blocked_symbols}",
@@ -917,16 +928,10 @@ def _dataset_from_backtest_stub(result: RealBacktestResult) -> MarketDataset:
 
 
 def _requested_krx_market_scope(text: str) -> str | None:
-    normalized = "".join(ch for ch in text.casefold() if ch.isalnum())
-    both = (
-        "한국주식전체", "국내주식전체", "한국주식전종목", "국내주식전종목",
-        "코스피코스닥", "코스피와코스닥", "코스피및코스닥",
-        "kospikosdaq", "kospiandkosdaq", "krx전체", "krx전종목",
-    )
-    if any(token in normalized for token in both): return "ALL"
-    if "코스닥" in normalized or "kosdaq" in normalized: return "KOSDAQ"
-    if "코스피" in normalized or "kospi" in normalized: return "KOSPI"
-    return None
+    scope=resolve_market_scope(text,require_universe=True)
+    if scope is None or scope.market!="KR": return None
+    if set(scope.exchanges)=={"KOSPI","KOSDAQ"}: return "ALL"
+    return scope.exchanges[0] if len(scope.exchanges)==1 else "ALL"
 
 
 def _normalize_symbols(symbols: tuple[str, ...]) -> tuple[str, ...]:
