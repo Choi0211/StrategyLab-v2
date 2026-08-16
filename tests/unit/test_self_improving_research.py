@@ -87,6 +87,7 @@ class ResearchSelfCriticTests(unittest.TestCase):
 
     def test_memory_duplicate_fingerprint_and_filters(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         repository = SQLiteResearchMemoryRepository(connection)
         candidate = fixture_candidate("balanced")
@@ -123,6 +124,7 @@ class ResearchSelfCriticTests(unittest.TestCase):
 
     def test_orchestrator_full_flow_saves_memory_and_preserves_safety(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         repository = SQLiteResearchMemoryRepository(connection)
         request = AutonomousResearchRequest("req-1", "KRX", "daily", "breakout", "Improve volume breakout")
@@ -136,6 +138,7 @@ class ResearchSelfCriticTests(unittest.TestCase):
 
     def test_safe_tools_are_read_only_and_audited(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         executor = SafeToolExecutor(default_tool_registry(connection), SQLiteToolAuditRepository(connection))
         result = executor.execute(ToolRequest("strategy_critique", {"scenario": "overfit"}, "unit", NOW))
@@ -148,6 +151,7 @@ class ResearchSelfCriticTests(unittest.TestCase):
 
     def test_schema_version_increments_to_self_improving_tables(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         self.assertGreaterEqual(SCHEMA_VERSION, 31)
         row = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='research_memories'").fetchone()

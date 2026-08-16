@@ -129,6 +129,7 @@ class KRXRealResearchPipelineIntegrationTests(unittest.TestCase):
 
     def test_safe_tool_runs_read_only_pipeline(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         executor = SafeToolExecutor(default_tool_registry(connection))
         result = executor.execute(

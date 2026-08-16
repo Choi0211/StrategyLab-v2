@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+import contextlib
 import os
 import sqlite3
 
@@ -214,7 +215,7 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             "blockers": ["academic_content_exhausted"],
             "network_executed": True,
         }
-        with sqlite3.connect(":memory:") as connection:
+        with contextlib.closing(sqlite3.connect(":memory:")) as connection:
             with patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=baseline), patch(
                 "gaon.knowledge.telegram_autonomous_learning._run_production_external_research",
                 return_value=external,
@@ -252,7 +253,7 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
             "blockers": ["academic_content_exhausted"],
             "network_executed": True,
         }
-        with sqlite3.connect(":memory:") as connection:
+        with contextlib.closing(sqlite3.connect(":memory:")) as connection:
             with patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=baseline), patch(
                 "gaon.knowledge.telegram_autonomous_learning._run_production_external_research",
                 return_value=external,
@@ -665,7 +666,7 @@ class AutonomousQuantPartnerTests(unittest.TestCase):
 
                 return _dataset_from_json(payload)
 
-        with sqlite3.connect(":memory:") as connection, patch.dict(
+        with contextlib.closing(sqlite3.connect(":memory:")) as connection, patch.dict(
             os.environ,
             {"GAON_REAL_MARKET_DATA_ENABLED": "true", "GAON_MARKET_DATA_PROVIDER": "yahoo-chart"},
         ), patch(

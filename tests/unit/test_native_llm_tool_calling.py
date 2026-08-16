@@ -16,6 +16,7 @@ NOW = "2026-07-19T00:00:00Z"
 class NativeLLMToolCallingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
         migrate(self.connection)
         self.repository = SQLiteConversationRepository(self.connection)
         self.audit = SQLiteToolAuditRepository(self.connection)

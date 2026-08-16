@@ -648,7 +648,15 @@ class LLMConversationBrain:
             request.text
         )
 
-        if existing_tool == "multi_symbol_research":
+        if (
+            existing_tool == "multi_symbol_research"
+            and not (
+                (context := self._mvp_context_for(request.session_id))
+                is not None
+                and context.last_result_kind == "autonomous_learning_v2"
+                and _is_symbol_generalization_request(request.text)
+            )
+        ):
             return None
 
         autonomous = self._try_autonomous_research_conversation(request, route, warnings, references)
@@ -684,9 +692,16 @@ class LLMConversationBrain:
             return None
         existing_tool = route_read_only_tool(request.text)
         if existing_tool in {"research_retest", "multi_symbol_research", "multi_symbol_research_status", "multi_symbol_research_history", "champion_status", "runtime_status", "v5_pipeline_history"}:
-            if not (
+            context = self._mvp_context_for(request.session_id)
+            contextual_generalization = (
+                existing_tool == "multi_symbol_research"
+                and context is not None
+                and context.last_result_kind == "autonomous_learning_v2"
+                and _is_symbol_generalization_request(request.text)
+            )
+            if not contextual_generalization and not (
                 route.intent in {ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, ConversationalMVPIntent.RERUN_REQUEST}
-                and self._mvp_context_for(request.session_id) is not None
+                and context is not None
             ):
                 return None
         if route.intent in {ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS, ConversationalMVPIntent.COMPARE_SYMBOLS} and not _is_simple_conversational_research_request(request.text):
@@ -872,16 +887,27 @@ class LLMConversationBrain:
         if context is None and not route.symbols:
             return "영하님, 직전 연구나 전략 맥락이 없습니다. 이어서 자율 연구할 종목을 먼저 삼성전자처럼 말씀해 주세요.", "conversation_autonomous_learning_missing_target", _dedupe((*warnings, "autonomous learning requires target")), references, "deterministic", ()
         symbol = _resolve_autonomous_symbol(route, context)
+        if (
+            mode == "continue"
+            and context is not None
+            and context.last_result_kind == "autonomous_learning_v2"
+            and not route.symbols
+            and _is_symbol_generalization_request(request.text)
+        ):
+            generalization = self._try_autonomous_learning_generalization(request, context, symbol, warnings, references)
+            if generalization is not None:
+                return generalization
         previous_text = previous_request_text(context, request.text) if context is not None else None
         execution_text = _autonomous_learning_execution_text(
             request.text,
             previous_text=previous_text,
             mode=mode,
         )
+        steps_used = _autonomous_learning_v2_steps_used(context, mode)
         result = self._tool_executor.execute(
             ToolRequest(
                 "autonomous_learning_research",
-                {"request_text": execution_text, "symbol": symbol, "mode": mode},
+                {"request_text": execution_text, "symbol": symbol, "mode": mode, "steps_used": steps_used},
                 request.user_ref,
                 request.received_at,
             )
@@ -900,6 +926,55 @@ class LLMConversationBrain:
             f"external_research_state={audit.get('external_research_state', 'unknown')}",
         )
         return text, "conversation_autonomous_learning_v2", _dedupe((*warnings, *result.warnings, *audit_warnings)), _dedupe((*references, "tool:autonomous_learning_research")), "deterministic", ("autonomous_learning_research",)
+
+    def _try_autonomous_learning_generalization(
+        self,
+        request: LLMConversationRequest,
+        context: ConversationalMVPContext,
+        symbol: str,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """Route "다른 종목에도 일반화되는지 확인해봐" through the Research
+        Director's own expand_symbols judgment instead of blindly re-running
+        the single-symbol pipeline or requiring the user to name peers.
+
+        Returns None (falls through to the normal continuation path) unless
+        the Director, looking at the stored candidate's actual state, agrees
+        expand_symbols is the right next step - this never overrides a
+        Director decision, it only acts on one that already says so.
+        """
+        from gaon.knowledge.research_director_bridge import decide_next_research_action
+
+        payload = dict(context.last_detail_payload)
+        decision = decide_next_research_action(payload)
+        if decision.action.value != "expand_symbols":
+            return None
+        candidate_context = _as_dict(_as_dict(payload.get("autonomous_learning_v2")).get("promotion_candidate_context"))
+        candidate_id = str(candidate_context.get("candidate_id") or "unknown")
+        candidate_fingerprint = str(candidate_context.get("fingerprint") or candidate_context.get("candidate_fingerprint") or "")
+        peers = tuple(code for code in _KNOWN_KRX_GENERALIZATION_PEERS if code != symbol)[:2]
+        result = self._execute_mvp_multi_symbol_research(request, (symbol, *peers), request.text, None, None)
+        self._record_tool_result(request.session_id, result, request.received_at)
+        if result.status != "success":
+            failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+            return failure.user_message, f"research_failure_{failure.stage}", _dedupe((*warnings, *result.warnings, warning_for_failure(failure))), references, "deterministic", ("multi_symbol_research",)
+        text = _format_tool_response("multi_symbol_research", result.output, request.text)
+        lineage_note = f"\n\n(기존 candidate_id={candidate_id} 계보를 유지한 채 다른 종목으로 일반화를 확인했습니다.)" if candidate_id != "unknown" else ""
+        self._remember_mvp_context(request, ConversationalMVPIntent.COMPARE_SYMBOLS, self._payloads_from_multi_symbol_result(result.output), text + lineage_note)
+        audit_warnings = (
+            "research_director_action=expand_symbols",
+            f"candidate_lineage_id={candidate_id}",
+            f"candidate_lineage_fingerprint={candidate_fingerprint or 'unknown'}",
+        )
+        return (
+            text + lineage_note,
+            "conversation_autonomous_learning_generalization",
+            _dedupe((*warnings, *result.warnings, *audit_warnings)),
+            _dedupe((*references, "tool:multi_symbol_research")),
+            "deterministic",
+            ("multi_symbol_research",),
+        )
 
     def _try_conversational_research_execution(self, request: LLMConversationRequest, context: ConversationalMVPContext, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
@@ -1955,7 +2030,14 @@ def _autonomous_request_mode(text: str) -> str | None:
     learning = ("지금까지무엇을배웠", "지금까지뭘배웠", "무엇을배웠", "뭘배웠", "학습기록", "learningmemory", "whatlearned")
     critique = ("문제점을찾아", "문제점을찾아줘", "약점을분석", "약점", "취약", "개선해", "보완", "critic", "critique")
     compare = ("어느종목", "어떤종목", "더잘맞", "비교", "compare", "whichsymbol")
-    continue_terms = ("계속연구", "더연구", "다음검증", "계속검증", "continue")
+    continue_terms = (
+        "계속연구", "더연구", "다음검증", "계속검증", "continue",
+        "다음연구", "연구진행", "연구계속", "이어서연구", "이어가",
+        "계속해", "계속진행", "다음단계연구",
+        "증거가충분할때까지", "증거가충분해질때까지",
+        "근거가충분할때까지", "근거가충분해질때까지",
+        "부족하지않을때까지", "결론을내릴수있을때까지",
+    )
     validate = ("전략을검증", "전략검증", "검증해봐", "검증해줘", "추가검증", "표본이부족", "충분한표본", "근거가충분", "validate", "researchcycle")
     if any(token in normalized for token in learning):
         return "learning_query"
@@ -1988,7 +2070,16 @@ def _autonomous_learning_request_mode(text: str) -> str | None:
     if memory_only and not explicit_v2:
         return None
     approval = ("승인요청", "승격승인", "좋은전략후보", "가장좋은후보", "좋으면알아서적용", "좋으면적용", "알아서적용", "bestcandidate", "promotioncandidate")
-    continuation = ("계속연구", "더연구", "추가연구", "자료를더", "근거를더", "continueresearch", "continuelearning")
+    continuation = (
+        "계속연구", "더연구", "추가연구", "자료를더", "근거를더",
+        "continueresearch", "continuelearning",
+        "다음연구", "연구진행", "연구계속", "이어서연구", "이어가",
+        "계속해", "계속진행", "다음단계연구",
+        "증거가충분할때까지", "증거가충분해질때까지",
+        "근거가충분할때까지", "근거가충분해질때까지",
+        "부족하지않을때까지", "결론을내릴수있을때까지",
+        *_GENERALIZATION_REQUEST_TOKENS,
+    )
     external = ("자료를찾아", "자료찾아", "연구자료", "연구자료를찾아", "외부연구자료", "외부자료", "근거자료", "evidence", "externalresearch", "findevidence")
     improvement = ("문제점을찾", "약점을찾", "후보를만", "다시연구", "처음부터다시연구", "처음부터다시연구해")
     learning = ("지금까지배운", "배운내용", "학습내용", "learningmemory")
@@ -2052,6 +2143,42 @@ def _should_use_promotion_candidate_presentation(text: str) -> bool:
         _is_promotion_candidate_presentation_request(text)
         and not _is_fresh_autonomous_learning_execution_request(text)
     )
+
+
+_GENERALIZATION_REQUEST_TOKENS = ("다른종목", "다른종목에도", "다른주식", "다른주식에도", "일반화")
+# Same known-symbol universe _extract_krx_symbols() already falls back to;
+# reused here as the default peer pool when the user asks for
+# generalization without naming any peer symbols themselves.
+_KNOWN_KRX_GENERALIZATION_PEERS = ("005930", "000660", "005380", "035420", "051910")
+
+
+def _is_symbol_generalization_request(text: str) -> bool:
+    """"다른 종목에도 일반화되는지 확인해봐" style requests: no explicit symbol
+    is named, so this cannot be handled as an ordinary COMPARE_SYMBOLS
+    request (which requires >= 2 named symbols) - it asks the Research
+    Director's own expand_symbols judgment to pick peers for the candidate
+    already under research."""
+    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
+    if not normalized:
+        return False
+    return any(token in normalized for token in _GENERALIZATION_REQUEST_TOKENS)
+
+
+def _autonomous_learning_v2_steps_used(context: "ConversationalMVPContext | None", mode: str) -> int:
+    """Read the Research Director's step counter forward from stored V2 context.
+
+    A fresh research request (anything other than an explicit continuation
+    of an existing autonomous_learning_v2 candidate) starts a new budget at
+    0. A continuation increments the count the previous turn round-tripped
+    through the payload (research_director_steps_used), so the Director's
+    budget check in gaon.knowledge.research_director_bridge actually spans
+    the whole conversation instead of resetting every call.
+    """
+    if context is None or context.last_result_kind != "autonomous_learning_v2" or mode != "continue":
+        return 0
+    payload = _as_dict(context.last_detail_payload.get("autonomous_learning_v2"))
+    previous = int(payload.get("research_director_steps_used", 0) or 0)
+    return previous + 1
 
 
 def _autonomous_learning_execution_text(

@@ -23,6 +23,7 @@ NOW = "2026-07-26T00:00:00Z"
 class ResearchOperationsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
         migrate(self.connection)
         self.repository = SQLiteResearchOperationRepository(self.connection)
         self.service = ResearchOperationsService(self.repository)

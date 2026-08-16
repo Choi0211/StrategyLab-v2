@@ -50,6 +50,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_dataset_builder_marks_fixture_source_and_reuses_cache(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         builder = KRXDatasetBuilder(connection, KRXFixtureMarketDataProvider())
         first, quality, inserted = builder.build("005930", start_date="2026-01-01", end_date="2026-07-10")
@@ -183,6 +184,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_real_release_check_allows_provider_gap_only(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         dataset = _large_yahoo_gap_dataset()
         result = real_krx_data_release_check(connection, symbol="005930", start_date=dataset.metadata.start_date, end_date=dataset.metadata.end_date, provider=_StaticProvider(dataset))
@@ -194,6 +196,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_real_release_check_blocks_unknown_gap(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         dates = tuple(day for day in KRXTradingCalendar().expected_open_dates(start_date="2025-09-17", end_date="2025-12-31") if day != "2025-09-19")
         dataset = _quality_dataset("unknown-large-gap", "2025-09-17", "2025-12-31", dates, source="real:other-provider")
@@ -202,6 +205,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_real_release_check_reports_invalid_ohlc_detail(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         dates = KRXTradingCalendar().expected_open_dates(start_date="2026-01-02", end_date="2026-04-10")
         dataset = _quality_dataset("release-invalid-detail", "2026-01-02", "2026-04-10", dates, invalid_ohlc=True, source="real:yahoo-chart")
@@ -210,6 +214,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_krx_trading_calendar_release_check_preserves_schema_and_provenance(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         result = krx_trading_calendar_release_check(connection)
         self.assertEqual(result["schema_version"], 33)
@@ -258,6 +263,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_historical_yahoo_3y_gap_is_only_provider_gap(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         result = historical_krx_calendar_release_check(connection)
         self.assertEqual(result["schema_version"], 33)
@@ -268,6 +274,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_historical_data_quality_release_check_classifies_known_provider_anomalies(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         result = historical_krx_data_quality_release_check(connection)
         self.assertEqual(result["schema_version"], 33)
@@ -366,6 +373,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_provider_gap_release_check_preserves_schema_and_provenance(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         result = provider_gap_release_check(connection)
         self.assertEqual(result["schema_version"], 33)
@@ -385,6 +393,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_real_release_check_rejects_fixture_and_accepts_fake_real_data(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         with self.assertRaises(RealMarketDataUnavailable):
             real_krx_data_release_check(connection, symbol="005930", start_date="2026-01-01", end_date="2026-04-10", provider=KRXFixtureMarketDataProvider())
@@ -423,6 +432,7 @@ class KRXRealPipelineUnitTests(unittest.TestCase):
 
     def test_pipeline_report_is_korean_and_persists_memory(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         report = RealAutonomousResearchPipeline(connection).run(STRATEGY_TEXT, run_id="unit-pipeline", generated_at="2026-07-25T00:00:00Z")
         self.assertIn("[분석 기준]", report.korean_report)

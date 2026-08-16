@@ -27,6 +27,7 @@ USER_STRATEGY = "\uc0ac\uc6a9\uc790 \uc804\ub7b5: 20\uc77c \uace0\uac00 \ub3cc\u
 class ResearchGroundingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
         migrate(self.connection)
         self.brain = LLMConversationBrain(
             GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic"),

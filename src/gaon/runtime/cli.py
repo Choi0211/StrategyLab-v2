@@ -322,6 +322,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-multi-symbol-validation-release-check")
     sub.add_parser("gaon-production-real-web-news-provider-release-check")
     sub.add_parser("gaon-production-real-youtube-provider-release-check")
+    sub.add_parser("gaon-production-news-intelligence-release-check")
+    sub.add_parser("gaon-production-research-director-release-check")
+    sub.add_parser("gaon-production-daily-briefing-release-check")
+    sub.add_parser("gaon-production-research-director-wiring-release-check")
+    sub.add_parser("gaon-production-news-research-integration-release-check")
+    sub.add_parser("gaon-production-daily-briefing-telegram-delivery-release-check")
+    sub.add_parser("gaon-production-daily-briefing-scheduler-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2549,6 +2556,111 @@ def _run(args: argparse.Namespace) -> int:
             f"candidate_experiments={payload['candidate_experiments']} "
             f"sufficiency_status={payload['sufficiency_status']} "
             f"promotion_status={payload['promotion_status']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-news-intelligence-release-check":
+        from gaon.knowledge.news_intelligence import production_news_intelligence_release_check
+
+        payload = production_news_intelligence_release_check()
+        print(
+            "gaon-production-news-intelligence-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"items={payload['items']} "
+            f"production_safe_items={payload['production_safe_items']} "
+            f"fixture_items_excluded={payload['fixture_items_excluded']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-research-director-release-check":
+        from gaon.research.research_director import production_research_director_release_check
+
+        payload = production_research_director_release_check()
+        print(
+            "gaon-production-research-director-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"branches_verified={payload['branches_verified']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-daily-briefing-release-check":
+        from gaon.runtime.daily_briefing import production_daily_briefing_release_check
+
+        payload = production_daily_briefing_release_check()
+        print(
+            "gaon-production-daily-briefing-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"pre_market_news_items={payload['pre_market_news_items']} "
+            f"post_market_completed_trades={payload['post_market_completed_trades']} "
+            f"jobs_registered={payload['jobs_registered']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-research-director-wiring-release-check":
+        from gaon.knowledge.research_director_bridge import production_research_director_wiring_release_check
+
+        payload = production_research_director_wiring_release_check()
+        print(
+            "gaon-production-research-director-wiring-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"decision_action={payload['decision_action']} "
+            f"dispatched_tool={payload['dispatched_tool']} "
+            f"terminal_action_dispatched_tool={payload['terminal_action_dispatched_tool']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-news-research-integration-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_news_research_integration_release_check
+
+        payload = production_news_research_integration_release_check()
+        print(
+            "gaon-production-news-research-integration-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"relevant_action={payload['relevant_action']} "
+            f"irrelevant_action={payload['irrelevant_action']} "
+            f"fixture_items_excluded={payload['fixture_items_excluded']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-daily-briefing-telegram-delivery-release-check":
+        from gaon.runtime.daily_briefing import production_daily_briefing_telegram_delivery_release_check
+
+        payload = production_daily_briefing_telegram_delivery_release_check()
+        print(
+            "gaon-production-daily-briefing-telegram-delivery-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"dry_run_messages={payload['dry_run_messages']} "
+            f"live_messages_sent={payload['live_messages_sent']} "
+            f"long_briefing_chunks={payload['long_briefing_chunks']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-daily-briefing-scheduler-release-check":
+        from gaon.runtime.daily_briefing import production_daily_briefing_scheduler_release_check
+
+        payload = production_daily_briefing_scheduler_release_check()
+        print(
+            "gaon-production-daily-briefing-scheduler-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"first_tick_jobs={payload['first_tick_jobs']} "
+            f"full_tick_jobs={payload['full_tick_jobs']} "
+            f"restart_tick_jobs={payload['restart_tick_jobs']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"
@@ -6067,7 +6179,7 @@ def _telegram_autonomous_research_release_tool_executor(store: RuntimeStateStore
             "Run deterministic Telegram Autonomous Learning V2 release-check route.",
             ToolRiskLevel.READ_ONLY,
             required_args=("request_text",),
-            allowed_args=("symbol", "mode"),
+            allowed_args=("symbol", "mode", "steps_used", "max_steps"),
         ),
         handle_autonomous_learning,
     )

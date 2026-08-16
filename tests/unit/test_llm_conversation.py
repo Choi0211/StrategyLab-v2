@@ -17,6 +17,7 @@ from gaon.runtime.migrations import SCHEMA_VERSION, migrate
 class LLMConversationBrainTests(unittest.TestCase):
     def setUp(self) -> None:
         self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
         migrate(self.connection)
         self.repository = SQLiteConversationRepository(self.connection)
 

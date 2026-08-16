@@ -54,6 +54,7 @@ class RealResearchIntegrationUnitTests(unittest.TestCase):
 
     def test_dataset_registry_fingerprint_reuse(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         dataset = FixtureMarketDataProvider().fetch_bars("005930", start_date="2026-07-01", end_date="2026-07-05")
         quality = DataQualityEngine().validate(dataset)
@@ -100,6 +101,7 @@ class RealResearchIntegrationUnitTests(unittest.TestCase):
 
     def test_real_research_gateway_persists_and_marks_fixture(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         report = RealResearchGateway(connection=connection).run(RealResearchRequest("unit-real", "005930", "2026-07-01", "2026-07-10"), generated_at=NOW)
         self.assertEqual(report.backtest_result.status.value, "completed")
@@ -110,6 +112,7 @@ class RealResearchIntegrationUnitTests(unittest.TestCase):
 
     def test_safe_tools_are_read_only(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         migrate(connection)
         executor = SafeToolExecutor(default_tool_registry(connection), SQLiteToolAuditRepository(connection))
         result = executor.execute(ToolRequest("data_quality_check", {"symbol": "005930"}, "unit", NOW))
