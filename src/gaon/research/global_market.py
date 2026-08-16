@@ -267,28 +267,32 @@ def resolve_market_scope(
         )
 
     if has_us:
+        selected_exchanges = []
+
         if (
             "nasdaq" in normalized
             or "\ub098\uc2a4\ub2e5" in normalized
         ):
-            exchanges = ("NASDAQ",)
-            universe_requested = True
+            selected_exchanges.append("NASDAQ")
 
-        elif (
+        if (
             "nyse" in normalized
             or "\ub274\uc695\uc99d\uad8c\uac70\ub798\uc18c" in normalized
             or "\ub274\uc695\uac70\ub798\uc18c" in normalized
         ):
-            exchanges = ("NYSE",)
-            universe_requested = True
+            selected_exchanges.append("NYSE")
 
-        elif (
+        if (
             "amex" in normalized
             or "\uc544\uba55\uc2a4" in normalized
         ):
-            exchanges = ("AMEX",)
-            universe_requested = True
+            selected_exchanges.append("AMEX")
 
+        if selected_exchanges:
+            exchanges = tuple(
+                dict.fromkeys(selected_exchanges)
+            )
+            universe_requested = True
         else:
             exchanges = (
                 "NASDAQ",
