@@ -1,5 +1,20 @@
 # Changelog
 
+## Patch 8.0 Final Production Runtime Wiring
+
+- Wired the existing Daily Briefing durable scheduler into the production
+  `GaonRuntimeService` tick beside Telegram polling.
+- Added idempotent runtime registration for deterministic daily briefing jobs
+  using `ScheduledJobRepository`.
+- Reused the existing Daily Briefing scheduler, Telegram delivery helper, and
+  Telegram send path without adding a new scheduler or transport.
+- Added safe no-chat and dry-run behavior for runtime briefing delivery.
+- Preserved live-feedback unavailability as briefing context instead of a
+  runtime crash.
+- Added `gaon-production-daily-briefing-runtime-wiring-release-check`.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion safety
+  boundaries.
+
 ## Final Production Acceptance Hotfix
 
 - Added production-path live provider audit reporting for all Autonomous Quant

@@ -504,7 +504,7 @@ def _format_autonomous_learning_research_detail(output: dict[str, object]) -> st
         f"- orchestration={learning.get('selected_execution_orchestration', 'autonomous_quant_partner')}",
         f"- partner_status={partner_readiness.get('status', learning.get('autonomous_quant_partner_status', 'unknown'))}",
         f"- stop_reason={partner.get('stop_reason', learning.get('autonomous_quant_partner_stop_reason', 'unknown'))}",
-        f"- investigated_source_categories={', '.join(_list_text(partner_acquisition.get('source_categories_acquired'))) or 'none'}",
+        f"- investigated_source_categories={', '.join(_list_text(partner_acquisition.get('source_categories_attempted')) or _list_text(partner_acquisition.get('source_categories_acquired'))) or 'none'}",
         f"- sources_acquired={partner_acquisition.get('sources_acquired', 0)}",
         f"- source_ids={', '.join(_partner_source_ids(partner)) or 'none'}",
         f"- counter_evidence_attempted={str(partner_counter.get('attempted', False)).lower()}",

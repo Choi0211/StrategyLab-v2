@@ -20,7 +20,7 @@ change is implied by anything here.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Callable, Mapping
 
 from gaon.integrations.telegram.client import DryRunTelegramClient
@@ -37,6 +37,8 @@ from gaon.runtime.scheduled_automation import (
     ToolSelection,
     _validate_utc,
 )
+from gaon.runtime.config import GaonRuntimeConfig, timezone_for
+from gaon.runtime.metrics import MetricsCollector
 
 DAILY_BRIEFING_SCHEMA_VERSION = 1
 DEFAULT_MARKET_TIMEZONE = "Asia/Seoul"
@@ -326,6 +328,15 @@ class DailyBriefingRunResult:
     rescheduled_job_id: str | None
 
 
+@dataclass(frozen=True)
+class DailyBriefingRuntimeTickResult:
+    enabled: bool
+    attempted: bool
+    jobs_registered: bool
+    results: tuple[DailyBriefingRunResult, ...] = ()
+    error_type: str | None = None
+
+
 class DailyBriefingScheduler:
     """Runs due daily-briefing jobs through the existing durable scheduler.
 
@@ -443,6 +454,184 @@ def send_daily_briefing(
         dry_run=dry_run,
         correlation_id=f"daily-briefing:{kind}:{chat_id}",
     )
+
+
+class DailyBriefingRuntimeWorker:
+    """Production service tick adapter for durable daily briefing jobs.
+
+    This composes the existing ScheduledJobRepository,
+    schedule_daily_briefing_jobs(), DailyBriefingScheduler, and the
+    TelegramClient send path. It is deliberately a thin runtime wiring
+    adapter, not a new scheduler or transport.
+    """
+
+    def __init__(
+        self,
+        config: GaonRuntimeConfig,
+        repository: ScheduledJobRepository,
+        *,
+        client_factory: Callable[[GaonRuntimeConfig], TelegramClient],
+        metrics: MetricsCollector | None = None,
+        now_factory: Callable[[], str] | None = None,
+    ) -> None:
+        self._config = config
+        self._repository = repository
+        self._client_factory = client_factory
+        self._metrics = metrics or MetricsCollector()
+        self._now_factory = now_factory or _utc_now
+
+    def tick(self) -> DailyBriefingRuntimeTickResult:
+        now = self._now_factory()
+        try:
+            if not self._config.telegram_allowed_chat_ids:
+                self._metrics.increment("daily_briefing_runtime_ticks", status="skipped", reason="no_allowed_chat")
+                return DailyBriefingRuntimeTickResult(enabled=False, attempted=False, jobs_registered=False)
+
+            jobs_registered = ensure_daily_briefing_jobs(self._repository, config=self._config, now=now)
+            client: TelegramClient = (
+                DryRunTelegramClient() if self._config.dry_run else self._client_factory(self._config)
+            )
+            scheduler = DailyBriefingScheduler(
+                self._repository,
+                client,
+                chat_id=self._config.telegram_allowed_chat_ids[0],
+                compose_pre_market=lambda: _compose_runtime_pre_market(now),
+                compose_post_market=lambda: _compose_runtime_post_market(now),
+                compose_unresolved_review=lambda: _compose_runtime_unresolved_review(now),
+                dry_run=self._config.dry_run,
+            )
+            results = scheduler.run_due(now=now)
+            self._metrics.increment("daily_briefing_runtime_ticks", status="ok")
+            self._metrics.increment("daily_briefing_runtime_jobs", amount=len(results), status="observed")
+            return DailyBriefingRuntimeTickResult(True, True, jobs_registered, results)
+        except Exception as exc:  # noqa: BLE001 - briefing must not terminate the runtime service.
+            error_type = exc.__class__.__name__
+            self._metrics.increment("daily_briefing_runtime_ticks", status="failed")
+            return DailyBriefingRuntimeTickResult(True, True, False, error_type=error_type)
+
+
+def ensure_daily_briefing_jobs(
+    repository: ScheduledJobRepository,
+    *,
+    config: GaonRuntimeConfig,
+    now: str,
+) -> bool:
+    """Idempotently register production daily briefing jobs if absent."""
+    _validate_utc(now)
+    missing = []
+    for job_id in (_PRE_MARKET_JOB_ID, _POST_MARKET_JOB_ID, _UNRESOLVED_REVIEW_JOB_ID):
+        try:
+            repository.get(job_id)
+        except KeyError:
+            missing.append(job_id)
+    if not missing:
+        return False
+    pre_at = _next_daily_utc(now, config.daily_report_time, config.timezone)
+    post_at = _next_daily_utc(now, "15:40", config.timezone)
+    review_at = _next_daily_utc(now, "16:10", config.timezone)
+    for job in _daily_briefing_job_definitions(
+        timezone=config.timezone,
+        next_pre_market_at=pre_at,
+        next_post_market_at=post_at,
+        next_unresolved_review_at=review_at,
+        created_at=now,
+    ):
+        if job.job_id not in missing:
+            continue
+        try:
+            repository.create(job)
+        except ValueError:
+            continue
+    return True
+
+
+def _daily_briefing_job_definitions(
+    *,
+    timezone: str,
+    next_pre_market_at: str,
+    next_post_market_at: str,
+    next_unresolved_review_at: str | None,
+    created_at: str,
+) -> tuple[ScheduledJob, ScheduledJob, ScheduledJob]:
+    pre_market = ScheduledJob(
+        _PRE_MARKET_JOB_ID,
+        "Gaon Pre-Market Briefing",
+        "daily_briefing:pre_market",
+        ScheduleDefinition(timezone, next_pre_market_at, "daily"),
+        True,
+        created_at,
+        created_at,
+        agent_selection=AgentSelection.RESEARCH_BRAIN,
+        tool_constraints=(ToolSelection.EVIDENCE_SEARCH, ToolSelection.RUNTIME_STATUS),
+        metadata={"kind": "daily_briefing", "briefing": "pre_market"},
+        max_attempts=2,
+    )
+    post_market = ScheduledJob(
+        _POST_MARKET_JOB_ID,
+        "Gaon Post-Market Briefing",
+        "daily_briefing:post_market",
+        ScheduleDefinition(timezone, next_post_market_at, "daily"),
+        True,
+        created_at,
+        created_at,
+        agent_selection=AgentSelection.RESEARCH_BRAIN,
+        tool_constraints=(ToolSelection.RUNTIME_STATUS,),
+        metadata={"kind": "daily_briefing", "briefing": "post_market"},
+        max_attempts=2,
+    )
+    unresolved_review = ScheduledJob(
+        _UNRESOLVED_REVIEW_JOB_ID,
+        "Gaon Unresolved Research Review",
+        "daily_briefing:unresolved_review",
+        ScheduleDefinition(timezone, next_unresolved_review_at or next_post_market_at, "daily"),
+        True,
+        created_at,
+        created_at,
+        agent_selection=AgentSelection.RESEARCH_BRAIN,
+        tool_constraints=(ToolSelection.RUNTIME_STATUS,),
+        metadata={"kind": "daily_briefing", "briefing": "unresolved_review"},
+        max_attempts=2,
+    )
+    return pre_market, post_market, unresolved_review
+
+
+def _next_daily_utc(now: str, hhmm: str, tz_name: str) -> str:
+    _validate_utc(now)
+    parsed = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    hour, minute = (int(part) for part in hhmm.split(":", 1))
+    local_tz = timezone_for(tz_name)
+    local_now = parsed.astimezone(local_tz)
+    candidate = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate.astimezone(UTC) <= parsed:
+        candidate += timedelta(days=1)
+    return candidate.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _compose_runtime_pre_market(now: str) -> str:
+    return render_pre_market_briefing_ko(compose_pre_market_briefing(generated_at=now, market="KOSPI"))
+
+
+def _compose_runtime_post_market(now: str) -> str:
+    feedback_json: Mapping[str, object] = {"classifications": ("live_feedback_unavailable",)}
+    try:
+        from gaon.research.live_trading_intelligence import production_feedback
+
+        feedback = production_feedback("KOSPI")
+        if feedback is not None:
+            feedback_json = feedback.to_json()
+    except Exception:
+        feedback_json = {"classifications": ("live_feedback_unavailable",)}
+    return render_post_market_briefing_ko(
+        compose_post_market_briefing(generated_at=now, market="KOSPI", live_feedback_json=feedback_json)
+    )
+
+
+def _compose_runtime_unresolved_review(now: str) -> str:
+    return render_unresolved_research_review_ko({"unresolved_count": 0, "unresolved": []}, generated_at=now)
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _raise_if_failed(label: str, checks: Mapping[str, bool]) -> None:

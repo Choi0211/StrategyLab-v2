@@ -4,10 +4,12 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
-from gaon.runtime.cli import main as cli_main
+from gaon.runtime.cli import main as cli_main, _runtime_tick
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.health import readiness
 from gaon.runtime.migrations import SCHEMA_VERSION
+from gaon.runtime.metrics import MetricsCollector
+from gaon.runtime.scheduled_automation import ScheduledJobRepository
 from gaon.runtime.service import GaonRuntimeService
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_worker import TelegramPollingWorker
@@ -124,6 +126,39 @@ class RuntimeServiceTest(unittest.TestCase):
             self.assertEqual(store.telegram.get_offset("__telegram_poll__"), 21)
         finally:
             store.close()
+
+    def test_runtime_tick_invokes_telegram_and_daily_briefing_scheduler(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = _FakeTelegramClient(({"update_id": 40, "message": {"message_id": 4, "chat": {"id": 100}, "from": {"id": 1}, "text": "/status"}},))
+        try:
+            tick = _runtime_tick(
+                _execute_telegram_config(),
+                store,
+                MetricsCollector(),
+                telegram_client_factory=lambda _: client,
+                briefing_client_factory=lambda _: client,
+                briefing_now_factory=lambda: "2026-08-17T00:00:00Z",
+            )
+
+            first = tick()
+            second = tick()
+
+            self.assertTrue(first["telegram"].attempted)
+            self.assertTrue(first["daily_briefing"].attempted)
+            self.assertTrue(first["daily_briefing"].jobs_registered)
+            self.assertFalse(second["daily_briefing"].jobs_registered)
+            self.assertEqual(len([job for job in ScheduledJobRepository(store._connection).list() if (job.metadata or {}).get("kind") == "daily_briefing"]), 3)
+            self.assertEqual(len(client.sent), 1)
+        finally:
+            store.close()
+
+    def test_daily_briefing_runtime_release_check_cli_passes(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(cli_main(["gaon-production-daily-briefing-runtime-wiring-release-check"]), 0)
+        self.assertIn("telegram_worker_invoked=true", output.getvalue())
+        self.assertIn("daily_briefing_worker_invoked=true", output.getvalue())
+        self.assertIn("safety=pass", output.getvalue())
 
 
 class _FakeTelegramClient:
