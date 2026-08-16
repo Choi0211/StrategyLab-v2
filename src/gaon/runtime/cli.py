@@ -322,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-multi-symbol-validation-release-check")
     sub.add_parser("gaon-production-real-web-news-provider-release-check")
     sub.add_parser("gaon-production-real-youtube-provider-release-check")
+    sub.add_parser("gaon-production-news-intelligence-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2549,6 +2550,21 @@ def _run(args: argparse.Namespace) -> int:
             f"candidate_experiments={payload['candidate_experiments']} "
             f"sufficiency_status={payload['sufficiency_status']} "
             f"promotion_status={payload['promotion_status']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-news-intelligence-release-check":
+        from gaon.knowledge.news_intelligence import production_news_intelligence_release_check
+
+        payload = production_news_intelligence_release_check()
+        print(
+            "gaon-production-news-intelligence-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"items={payload['items']} "
+            f"production_safe_items={payload['production_safe_items']} "
+            f"fixture_items_excluded={payload['fixture_items_excluded']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"
