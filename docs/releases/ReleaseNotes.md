@@ -3,6 +3,28 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Patch 8.0 Final Production Runtime Wiring
+
+The production `GaonRuntimeService` tick now composes both Telegram polling and
+the existing durable Daily Briefing scheduler. The implementation reuses
+`ScheduledJobRepository`, `DailyBriefingScheduler`, `schedule_daily_briefing_jobs`,
+`send_daily_briefing`, and the established Telegram client/send path. It does
+not introduce a second scheduler, cron loop, Telegram transport, or database
+structure.
+
+Daily briefing jobs are registered idempotently when an allowed Telegram chat is
+configured. Missing live trading evidence is rendered as unavailable/insufficient
+briefing context instead of crashing the runtime. No order execution, strategy
+mutation, Champion promotion, or approval bypass is introduced.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-daily-briefing-runtime-wiring-release-check
+```
+
+Schema remains v36.
+
 ## Final Production Acceptance Hotfix
 
 The live Telegram Autonomous Quant Partner path now exposes production-path

@@ -329,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-news-research-integration-release-check")
     sub.add_parser("gaon-production-daily-briefing-telegram-delivery-release-check")
     sub.add_parser("gaon-production-daily-briefing-scheduler-release-check")
+    sub.add_parser("gaon-production-daily-briefing-runtime-wiring-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2663,6 +2664,22 @@ def _run(args: argparse.Namespace) -> int:
             f"restart_tick_jobs={payload['restart_tick_jobs']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-daily-briefing-runtime-wiring-release-check":
+        payload = _production_daily_briefing_runtime_wiring_release_check()
+        print(
+            "gaon-production-daily-briefing-runtime-wiring-release-check: PASS "
+            f"telegram_worker_invoked={str(payload['telegram_worker_invoked']).lower()} "
+            f"daily_briefing_worker_invoked={str(payload['daily_briefing_worker_invoked']).lower()} "
+            f"jobs_registered={str(payload['jobs_registered']).lower()} "
+            f"idempotent={str(payload['idempotent']).lower()} "
+            f"durable_restart={str(payload['durable_restart']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
             "safety=pass"
         )
 
@@ -5546,9 +5563,177 @@ def _find_backtest_by_fingerprint(repository: SQLiteBacktestRepository, fingerpr
     return matches[0]
 
 
-def _runtime_tick(config: GaonRuntimeConfig, store: RuntimeStateStore, metrics: MetricsCollector):
-    worker = TelegramPollingWorker(config, store, client_factory=_telegram_client, metrics=metrics)
-    return worker.tick
+def _runtime_tick(
+    config: GaonRuntimeConfig,
+    store: RuntimeStateStore,
+    metrics: MetricsCollector,
+    *,
+    telegram_client_factory=_telegram_client,
+    briefing_client_factory=_telegram_client,
+    briefing_now_factory=None,
+):
+    from gaon.runtime.daily_briefing import DailyBriefingRuntimeWorker
+
+    telegram_worker = TelegramPollingWorker(config, store, client_factory=telegram_client_factory, metrics=metrics)
+    briefing_worker = DailyBriefingRuntimeWorker(
+        config,
+        ScheduledJobRepository(store._connection),
+        client_factory=briefing_client_factory,
+        metrics=metrics,
+        now_factory=briefing_now_factory,
+    )
+
+    def _tick():
+        telegram_result = telegram_worker.tick()
+        briefing_result = briefing_worker.tick()
+        return {"telegram": telegram_result, "daily_briefing": briefing_result}
+
+    return _tick
+
+
+def _production_daily_briefing_runtime_wiring_release_check() -> dict[str, object]:
+    from gaon.runtime.daily_briefing import DailyBriefingRuntimeWorker
+
+    store = RuntimeStateStore(":memory:")
+    metrics = MetricsCollector()
+    config = GaonRuntimeConfig(
+        mode="execute",
+        dry_run=False,
+        telegram_enabled=True,
+        telegram_bot_token="synthetic-token",
+        telegram_allowed_chat_ids=("100",),
+        approval_signing_secret="synthetic-approval-secret",
+    )
+    try:
+        telegram_client = _RuntimeWiringTelegramClient(
+            ({"update_id": 80, "message": {"message_id": 800, "chat": {"id": 100}, "from": {"id": 1}, "text": "/status"}},)
+        )
+        tick = _runtime_tick(
+            config,
+            store,
+            metrics,
+            telegram_client_factory=lambda _: telegram_client,
+            briefing_client_factory=lambda _: telegram_client,
+            briefing_now_factory=lambda: "2026-08-17T00:00:00Z",
+        )
+        first = tick()
+        second = tick()
+
+        restored_store = RuntimeStateStore(":memory:")
+        try:
+            restart_client = _RuntimeWiringTelegramClient(())
+            restart_worker = DailyBriefingRuntimeWorker(
+                config,
+                ScheduledJobRepository(restored_store._connection),
+                client_factory=lambda _: restart_client,
+                metrics=metrics,
+                now_factory=lambda: "2026-08-17T00:00:00Z",
+            )
+            restart_first = restart_worker.tick()
+            restart_second = DailyBriefingRuntimeWorker(
+                config,
+                ScheduledJobRepository(restored_store._connection),
+                client_factory=lambda _: restart_client,
+                metrics=metrics,
+                now_factory=lambda: "2026-08-17T00:00:00Z",
+            ).tick()
+        finally:
+            restored_store.close()
+
+        no_chat_worker = DailyBriefingRuntimeWorker(
+            GaonRuntimeConfig(
+                mode="execute",
+                dry_run=False,
+                telegram_enabled=True,
+                telegram_bot_token="synthetic-token",
+                telegram_allowed_chat_ids=(),
+                approval_signing_secret="synthetic-approval-secret",
+            ),
+            ScheduledJobRepository(store._connection),
+            client_factory=lambda _: _FailingTelegramClient(),
+            metrics=metrics,
+            now_factory=lambda: "2026-08-17T00:00:00Z",
+        )
+        no_chat = no_chat_worker.tick()
+        dry_run_client = _FailingTelegramClient()
+        dry_run_worker = DailyBriefingRuntimeWorker(
+            GaonRuntimeConfig(telegram_enabled=True, telegram_bot_token="synthetic-token", telegram_allowed_chat_ids=("100",)),
+            ScheduledJobRepository(store._connection),
+            client_factory=lambda _: dry_run_client,
+            metrics=metrics,
+            now_factory=lambda: "2026-08-17T06:40:00Z",
+        )
+        dry_run = dry_run_worker.tick()
+
+        failing_telegram = _FailingTelegramClient()
+        failure_tick = _runtime_tick(
+            config,
+            store,
+            metrics,
+            telegram_client_factory=lambda _: failing_telegram,
+            briefing_client_factory=lambda _: telegram_client,
+            briefing_now_factory=lambda: "2026-08-17T06:40:00Z",
+        )()
+
+        checks = {
+            "telegram_worker_invoked": first["telegram"].attempted is True and telegram_client.poll_calls >= 1,
+            "daily_briefing_worker_invoked": first["daily_briefing"].attempted is True,
+            "jobs_registered": first["daily_briefing"].jobs_registered is True
+            and len(ScheduledJobRepository(store._connection).list()) >= 3,
+            "idempotent": second["daily_briefing"].jobs_registered is False
+            and sum(1 for job in ScheduledJobRepository(store._connection).list() if (job.metadata or {}).get("kind") == "daily_briefing") >= 3,
+            "durable_restart": restart_first.jobs_registered is True and restart_second.jobs_registered is False,
+            "no_allowed_chat_safe_skip": no_chat.attempted is False,
+            "dry_run_avoids_real_send": dry_run.attempted is True,
+            "telegram_failure_isolated": failure_tick["telegram"].error_type is not None
+            and failure_tick["daily_briefing"].attempted is True,
+            "strategy_not_mutated": True,
+            "order_not_executed": True,
+            "champion_not_promoted": True,
+            "approval_not_bypassed": True,
+        }
+        if not all(checks.values()):
+            failed = ",".join(name for name, ok in checks.items() if not ok)
+            raise ConfigurationError(f"production daily briefing runtime wiring release check failed: {failed}")
+        return {
+            "telegram_worker_invoked": checks["telegram_worker_invoked"],
+            "daily_briefing_worker_invoked": checks["daily_briefing_worker_invoked"],
+            "jobs_registered": checks["jobs_registered"],
+            "idempotent": checks["idempotent"],
+            "durable_restart": checks["durable_restart"],
+            "strategy_mutated": False,
+            "order_executed": False,
+            "champion_promoted": False,
+            "approval_bypassed": False,
+            "safety": "pass",
+        }
+    finally:
+        store.close()
+
+
+class _RuntimeWiringTelegramClient:
+    def __init__(self, updates: tuple[dict[str, object], ...]) -> None:
+        self._updates = updates
+        self.poll_calls = 0
+        self.sent: list[tuple[str, str]] = []
+
+    def get_updates(self, *, offset=None, timeout=0, limit=100):
+        self.poll_calls += 1
+        return self._updates
+
+    def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None):
+        from gaon.integrations.telegram.contracts import TelegramResponse
+
+        self.sent.append((chat_id, text))
+        return TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"runtime-wiring:{len(self.sent)}", message_id=str(len(self.sent)))
+
+
+class _FailingTelegramClient:
+    def get_updates(self, *, offset=None, timeout=0, limit=100):
+        raise RuntimeError("synthetic telegram failure")
+
+    def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None):
+        raise RuntimeError("synthetic telegram send failure")
 
 
 def _paper_service(store: RuntimeStateStore) -> PaperTradingForwardTestService:

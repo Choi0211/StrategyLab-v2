@@ -2,6 +2,26 @@
 
 Status: Passed
 
+## Patch 8.0 Final Production Runtime Wiring
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\runtime\cli.py src\gaon\runtime\daily_briefing.py`: PASS
+  - `python -m unittest tests.unit.test_runtime_service.RuntimeServiceTest.test_runtime_tick_invokes_telegram_and_daily_briefing_scheduler tests.unit.test_runtime_service.RuntimeServiceTest.test_daily_briefing_runtime_release_check_cli_passes -q`: PASS, 2 tests
+  - `python -m gaon.runtime.cli gaon-production-research-director-wiring-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-news-research-integration-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-daily-briefing-telegram-delivery-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-daily-briefing-scheduler-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-daily-briefing-runtime-wiring-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests/unit -q`: PASS, 1001 tests
+  - `python -m unittest discover -s tests/integration -q`: PASS, 219 tests
+  - `python scripts/verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Production Telegram daily briefing delivery: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass.
+
 ## Final Production Acceptance Hotfix
 
 - Targeted local verification:
