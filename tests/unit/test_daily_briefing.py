@@ -133,6 +133,7 @@ class DailyBriefingTests(unittest.TestCase):
 
     def test_schedule_daily_briefing_jobs_reuses_existing_scheduler(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         try:
             migrate(connection)
             repository = ScheduledJobRepository(connection)

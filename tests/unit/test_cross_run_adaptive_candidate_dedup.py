@@ -59,6 +59,7 @@ class CrossRunAdaptiveCandidateDedupTests(unittest.TestCase):
 
     def test_persistent_memory_skips_previous_variant_and_selects_next(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         connection.execute(
             """
             CREATE TABLE research_memories(

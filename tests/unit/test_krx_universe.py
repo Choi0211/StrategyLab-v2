@@ -72,6 +72,7 @@ class KRXUniverseSelectionTests(unittest.TestCase):
         self.assertFalse(payload["automatic_champion_promotion"])
 
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         try:
             migrate(connection)
             result = SafeToolExecutor(default_tool_registry(connection)).execute(
@@ -91,6 +92,7 @@ class KRXUniverseSelectionTests(unittest.TestCase):
 
     def test_universe_result_connects_to_multi_symbol_pipeline(self) -> None:
         connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
         try:
             migrate(connection)
             universe_result = KRXUniverseSelector(KRXUniverseFixtureProvider()).select(KRXUniverseRequest("ALL", "2026-07-30", "trading_value", 2), generated_at=NOW)

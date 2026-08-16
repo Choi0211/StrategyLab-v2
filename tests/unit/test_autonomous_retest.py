@@ -25,6 +25,7 @@ REQUEST = "20일 고가 돌파 종가 > MA20 > MA60 거래량 20일 평균 이�
 class AutonomousRetestTests(unittest.TestCase):
     def setUp(self) -> None:
         self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
         migrate(self.connection)
 
     def tearDown(self) -> None:
