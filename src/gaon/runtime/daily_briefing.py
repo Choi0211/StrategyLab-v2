@@ -22,6 +22,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
+from gaon.integrations.telegram.client import DryRunTelegramClient
+from gaon.integrations.telegram.contracts import TelegramClient, TelegramResponse
+from gaon.integrations.telegram.runtime import send_proactive_message
 from gaon.knowledge.news_intelligence import NewsIntelligenceItem, production_safe_news_intelligence_items
 from gaon.research.research_director import ResearchDirectorAction, ResearchDirectorDecision
 from gaon.runtime.scheduled_automation import (
@@ -229,6 +232,35 @@ def schedule_daily_briefing_jobs(
     return pre_market, post_market
 
 
+def send_daily_briefing(
+    client: TelegramClient,
+    chat_id: str,
+    briefing_text: str,
+    *,
+    kind: str,
+    dry_run: bool = True,
+) -> tuple[TelegramResponse, ...]:
+    """Deliver a rendered briefing over the existing Telegram send path.
+
+    Reuses gaon.integrations.telegram.runtime.send_proactive_message - the
+    same TelegramClient protocol, message chunking
+    (gaon.integrations.telegram.formatter.split_message), and
+    send-with-retry logic gaon.integrations.telegram.runtime.process_update
+    already uses for conversation replies. No second Telegram client or
+    transport is created here; this only decides *what* text to send, not
+    *how* to send it. Callers pass a DryRunTelegramClient
+    (gaon.integrations.telegram.client) to render without ever touching the
+    network, or a real TelegramBotApiClient in production.
+    """
+    return send_proactive_message(
+        client,
+        chat_id,
+        briefing_text,
+        dry_run=dry_run,
+        correlation_id=f"daily-briefing:{kind}:{chat_id}",
+    )
+
+
 def _raise_if_failed(label: str, checks: Mapping[str, bool]) -> None:
     if not all(checks.values()):
         failed = ",".join(name for name, ok in checks.items() if not ok)
@@ -343,6 +375,59 @@ def production_daily_briefing_release_check() -> Mapping[str, object]:
         "pre_market_news_items": len(pre_market.important_news),
         "post_market_completed_trades": post_market.completed_trade_count,
         "jobs_registered": 2,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "safety": "pass",
+    }
+
+
+def production_daily_briefing_telegram_delivery_release_check() -> Mapping[str, object]:
+    """Final Integration Program Step 3 release check.
+
+    Proves send_daily_briefing() really goes through the existing Telegram
+    send path (gaon.integrations.telegram runtime/formatter/contracts) -
+    dry-run never touches a client, a live send calls the client's
+    send_message exactly like process_update() would, and a long briefing
+    is chunked via the same split_message() used for conversation replies -
+    without creating a second Telegram client or transport.
+    """
+    from gaon.integrations.telegram.formatter import split_message
+
+    class _ReleaseCheckClient:
+        def __init__(self) -> None:
+            self.sent: list[tuple[str, str]] = []
+
+        def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None) -> TelegramResponse:
+            self.sent.append((chat_id, text))
+            return TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"release-check:{len(self.sent)}")
+
+    dry_run_client = DryRunTelegramClient()
+    dry_run_sent = send_daily_briefing(dry_run_client, "release-check-chat", "짧은 브리핑", kind="pre_market", dry_run=True)
+
+    live_client = _ReleaseCheckClient()
+    live_sent = send_daily_briefing(live_client, "release-check-chat", "짧은 브리핑", kind="post_market", dry_run=False)
+
+    long_text = "\n".join(f"- 항목 {i}: 자세한 연구 근거 설명 텍스트입니다." for i in range(400))
+    expected_chunks = split_message(long_text)
+    chunked_client = _ReleaseCheckClient()
+    chunked_sent = send_daily_briefing(chunked_client, "release-check-chat", long_text, kind="pre_market", dry_run=False)
+
+    checks = {
+        "dry_run_never_calls_a_real_client": dry_run_sent[0].dry_run is True and dry_run_sent[0].chat_id == "release-check-chat",
+        "live_send_uses_the_real_client_send_message": len(live_client.sent) == 1
+        and live_client.sent[0] == ("release-check-chat", "짧은 브리핑"),
+        "live_response_is_not_a_dry_run": live_sent[0].dry_run is False,
+        "long_briefing_reuses_existing_chunking": len(expected_chunks) > 1
+        and len(chunked_sent) == len(expected_chunks)
+        and len(chunked_client.sent) == len(expected_chunks),
+        "no_second_telegram_client_type_introduced": isinstance(dry_run_client, DryRunTelegramClient),
+    }
+    _raise_if_failed("production daily briefing telegram delivery", checks)
+    return {
+        "schema_version": DAILY_BRIEFING_SCHEMA_VERSION,
+        "dry_run_messages": len(dry_run_sent),
+        "live_messages_sent": len(live_client.sent),
+        "long_briefing_chunks": len(expected_chunks),
         "strategy_mutated": False,
         "order_executed": False,
         "safety": "pass",

@@ -3,6 +3,9 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
+from gaon.integrations.telegram.client import DryRunTelegramClient
+from gaon.integrations.telegram.contracts import TelegramResponse
+from gaon.integrations.telegram.formatter import split_message
 from gaon.knowledge.news_intelligence import NewsImpact, NewsIntelligenceItem
 from gaon.research.research_director import ResearchDirector, ResearchDirectorAction, ResearchDirectorState
 from gaon.runtime.daily_briefing import (
@@ -12,9 +15,19 @@ from gaon.runtime.daily_briefing import (
     render_post_market_briefing_ko,
     render_pre_market_briefing_ko,
     schedule_daily_briefing_jobs,
+    send_daily_briefing,
 )
 from gaon.runtime.migrations import migrate
 from gaon.runtime.scheduled_automation import ScheduledJobRepository
+
+
+class _FakeTelegramClient:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None):
+        self.sent.append((chat_id, text))
+        return TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"sent:{len(self.sent)}", message_id=str(len(self.sent)))
 
 
 def _news(item_id: str, importance: int, *, fixture_backed: bool = False) -> NewsIntelligenceItem:
@@ -156,6 +169,45 @@ class DailyBriefingTests(unittest.TestCase):
         self.assertFalse(payload["strategy_mutated"])
         self.assertFalse(payload["order_executed"])
         self.assertEqual(payload["jobs_registered"], 2)
+
+
+class SendDailyBriefingTests(unittest.TestCase):
+    """Step 3: daily_briefing must reuse the existing Telegram send path
+    (gaon.integrations.telegram.runtime/formatter/contracts/client) rather
+    than creating a second one."""
+
+    def test_dry_run_never_touches_a_real_client(self) -> None:
+        client = DryRunTelegramClient()
+        sent = send_daily_briefing(client, "12345", "짧은 브리핑", kind="pre_market", dry_run=True)
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(sent[0].dry_run)
+        self.assertEqual(sent[0].chat_id, "12345")
+
+    def test_live_send_uses_the_real_client_send_message(self) -> None:
+        client = _FakeTelegramClient()
+        sent = send_daily_briefing(client, "12345", "짧은 브리핑", kind="post_market", dry_run=False)
+        self.assertEqual(len(client.sent), 1)
+        self.assertEqual(client.sent[0], ("12345", "짧은 브리핑"))
+        self.assertFalse(sent[0].dry_run)
+
+    def test_long_briefing_reuses_the_existing_chunking_infrastructure(self) -> None:
+        long_text = "\n".join(f"- 항목 {i}: 자세한 연구 근거 설명 텍스트입니다." for i in range(400))
+        expected_chunks = split_message(long_text)
+        self.assertGreater(len(expected_chunks), 1)
+        client = _FakeTelegramClient()
+        sent = send_daily_briefing(client, "12345", long_text, kind="pre_market", dry_run=False)
+        self.assertEqual(len(sent), len(expected_chunks))
+        self.assertEqual(len(client.sent), len(expected_chunks))
+
+    def test_correlation_id_identifies_briefing_kind_in_dry_run(self) -> None:
+        # In dry-run mode the response is constructed locally (no real
+        # client round-trip), so the correlation_id we pass through is
+        # exactly what callers see. In a live send, Telegram's own response
+        # supplies the correlation_id instead, matching how
+        # process_update()'s conversation replies already behave.
+        client = DryRunTelegramClient()
+        sent = send_daily_briefing(client, "12345", "text", kind="post_market", dry_run=True)
+        self.assertIn("daily-briefing:post_market", sent[0].correlation_id)
 
 
 if __name__ == "__main__":

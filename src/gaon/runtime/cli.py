@@ -327,6 +327,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-daily-briefing-release-check")
     sub.add_parser("gaon-production-research-director-wiring-release-check")
     sub.add_parser("gaon-production-news-research-integration-release-check")
+    sub.add_parser("gaon-production-daily-briefing-telegram-delivery-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2629,6 +2630,21 @@ def _run(args: argparse.Namespace) -> int:
             f"relevant_action={payload['relevant_action']} "
             f"irrelevant_action={payload['irrelevant_action']} "
             f"fixture_items_excluded={payload['fixture_items_excluded']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-daily-briefing-telegram-delivery-release-check":
+        from gaon.runtime.daily_briefing import production_daily_briefing_telegram_delivery_release_check
+
+        payload = production_daily_briefing_telegram_delivery_release_check()
+        print(
+            "gaon-production-daily-briefing-telegram-delivery-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"dry_run_messages={payload['dry_run_messages']} "
+            f"live_messages_sent={payload['live_messages_sent']} "
+            f"long_briefing_chunks={payload['long_briefing_chunks']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"

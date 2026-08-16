@@ -39,6 +39,33 @@ class TelegramRuntime:
         )
 
 
+def send_proactive_message(
+    client: TelegramClient,
+    chat_id: str,
+    text: str,
+    *,
+    dry_run: bool = True,
+    correlation_id: str,
+) -> tuple[TelegramResponse, ...]:
+    """Send a message that isn't a reply to an inbound Telegram update.
+
+    Reuses the exact chunking (split_message) and send-with-retry machinery
+    process_update() already uses for conversation replies - this is the
+    only difference: there is no inbound TelegramUpdate to react to (e.g. a
+    scheduled daily briefing), so callers invoke this directly instead of
+    going through process_update(). No new Telegram client or transport is
+    created here.
+    """
+    if dry_run:
+        return tuple(
+            TelegramResponse(chat_id, part, dry_run=True, correlation_id=correlation_id) for part in split_message(text)
+        )
+    sent: list[TelegramResponse] = []
+    for part in split_message(text):
+        sent.append(_send_with_retry(client, TelegramResponse(chat_id, part, dry_run=False, correlation_id=correlation_id)))
+    return tuple(sent)
+
+
 def process_update(update: TelegramUpdate, runtime: TelegramRuntime, client: TelegramClient) -> TelegramPollResult:
     if update.message is None:
         return TelegramPollResult(update.update_id, update.next_offset, "ignored", error=update.ignored_reason)
