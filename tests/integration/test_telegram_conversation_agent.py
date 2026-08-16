@@ -402,10 +402,10 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertEqual(audit.request["arguments"]["end_date"], "2026-07-24")
             final = client.sent[0][1]
             self.assertIn("[다중종목 실제 연구]", final)
-            self.assertIn("aggregate_trade_count=", final)
-            self.assertIn("sample_confidence=", final)
-            self.assertIn("concentration=", final)
-            self.assertIn("generalization=", final)
+            self.assertIn("총 거래 표본:", final)
+            self.assertIn("연구 신뢰도:", final)
+            self.assertIn("[가온의 판단]", final)
+            self.assertIn("[Safety]", final)
             self.assertNotIn("현재는 아직 실제 시세", final)
             self.assertNotIn("5.32%", final)
             assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
