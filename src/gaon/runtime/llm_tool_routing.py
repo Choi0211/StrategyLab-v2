@@ -9,6 +9,8 @@ def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized:
         return None
+    if _krx_whole_market_research(normalized):
+        return "multi_symbol_research"
     if _multi_symbol_research_utf8(normalized) and not _autonomous_learning_multi_symbol_override(normalized):
         return "multi_symbol_research"
     if _autonomous_retest_execution_ascii(normalized) and not _autonomous_learning_retest_override(normalized):
@@ -179,12 +181,31 @@ def _autonomous_learning_research_ascii(value: str) -> bool:
     return False
 
 
+def _krx_whole_market_research(value: str) -> bool:
+    scope = (
+        "한국주식전체", "국내주식전체", "한국주식전종목", "국내주식전종목",
+        "코스피코스닥", "코스피와코스닥", "코스피및코스닥",
+        "kospikosdaq", "kospiandkosdaq", "krx전체", "krx전종목", "전체한국주식",
+    )
+    action = ("연구", "분석", "검증", "대상", "기준", "해주세요", "해줘", "research", "analyze", "validate")
+    return _contains_any(value, scope) and _contains_any(value, action)
+
+
 def _multi_symbol_research_ascii(value: str) -> bool:
     explicit_universe = (
         "여러종목",
         "다중종목",
         "복수종목",
         "모든종목",
+        "한국주식전체",
+        "국내주식전체",
+        "한국주식전종목",
+        "국내주식전종목",
+        "코스피코스닥",
+        "코스피와코스닥",
+        "코스피및코스닥",
+        "krx전체",
+        "krx전종목",
         "모두",
         "종목들",
         "5개종목",

@@ -40,7 +40,7 @@ from gaon.research.krx_real_pipeline import (
     utc_now,
 )
 from gaon.research.real_research import DataQualityReport, DataQualityStatus, MarketDataset, MarketSymbol
-from gaon.research.krx_universe import KRXUniverseResult
+from gaon.research.krx_universe import KRXUniverseRequest, KRXUniverseResult, KRXUniverseSelector
 
 
 MULTI_SYMBOL_SCHEMA_VERSION = 1
@@ -472,7 +472,20 @@ class AutonomousMultiSymbolResearchOrchestrator:
     ) -> MultiSymbolResearchRun:
         at = generated_at or utc_now()
         rid = run_id or f"multi-symbol-research:{uuid4().hex}"
-        universe = KRXResearchUniverseResolver().resolve(symbols, universe_type=universe_type, universe_result=universe_result, created_at=at)
+        requested_market = _requested_krx_market_scope(request_text)
+        if not symbols and universe_result is None and requested_market is not None:
+            if not hasattr(self._provider, "fetch_universe"):
+                raise RealMarketDataUnavailable(
+                    "real_data_unavailable: approved KRX universe provider is not configured; "
+                    f"cannot claim {requested_market} whole-market coverage"
+                )
+            universe_result = KRXUniverseSelector(self._provider).select(
+                KRXUniverseRequest(requested_market, end_date, "trading_value", 5),
+                generated_at=at,
+            )
+        universe = KRXResearchUniverseResolver().resolve(
+            symbols, universe_type=universe_type, universe_result=universe_result, created_at=at
+        )
         if not universe.symbols:
             raise RealMarketDataUnavailable("real_data_unavailable: universe has no symbols")
         strategy = UserStrategyParser().parse(request_text or DEFAULT_REQUEST_TEXT, symbol=universe.symbols[0], created_at=at)
@@ -901,6 +914,19 @@ def _dataset_from_backtest_stub(result: RealBacktestResult) -> MarketDataset:
     )
     metadata = MarketDataMetadata(result.source.value, "KOSPI", "daily", synthetic_bars[0].timestamp, synthetic_bars[-1].timestamp, True, result.generated_at, result.source.value == "fixture")
     return MarketDataset(result.dataset_id, (MarketSymbol(result.strategy.symbol, result.strategy.symbol, "KOSPI"),), synthetic_bars, metadata)
+
+
+def _requested_krx_market_scope(text: str) -> str | None:
+    normalized = "".join(ch for ch in text.casefold() if ch.isalnum())
+    both = (
+        "한국주식전체", "국내주식전체", "한국주식전종목", "국내주식전종목",
+        "코스피코스닥", "코스피와코스닥", "코스피및코스닥",
+        "kospikosdaq", "kospiandkosdaq", "krx전체", "krx전종목",
+    )
+    if any(token in normalized for token in both): return "ALL"
+    if "코스닥" in normalized or "kosdaq" in normalized: return "KOSDAQ"
+    if "코스피" in normalized or "kospi" in normalized: return "KOSPI"
+    return None
 
 
 def _normalize_symbols(symbols: tuple[str, ...]) -> tuple[str, ...]:

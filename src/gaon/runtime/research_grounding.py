@@ -714,6 +714,8 @@ def _adaptive_feedback_detail_lines(adaptive: dict[str, object]) -> list[str]:
         f"- unresolved_failures={', '.join(_list_text(adaptive.get('unresolved_failures'))) or 'none'}",
         f"- duplicate_candidates_skipped={adaptive.get('duplicate_candidates_skipped', 0)}",
         f"- dynamic_hypotheses_generated={adaptive.get('dynamic_hypotheses_generated', 0)} dynamic_exhaustions={adaptive.get('dynamic_hypothesis_exhaustions', 0)}",
+        f"- cross_family_hypotheses_generated={adaptive.get('cross_family_hypotheses_generated', 0)}",
+        f"- evidence_categories_used={', '.join(_list_text(adaptive.get('evidence_categories_used'))) or 'none'}",
     ]
     for item in _as_list(adaptive.get("iterations")):
         row = _as_dict(item)
