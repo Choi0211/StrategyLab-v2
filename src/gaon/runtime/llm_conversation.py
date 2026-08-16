@@ -56,6 +56,27 @@ from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import route_read_only_tool
 from gaon.research.global_market import extract_market_symbols, resolve_market_scope
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
+from gaon.knowledge.research_mission import (
+    MissionStatus,
+    MissionUniverseScope,
+    ResearchMission,
+    best_symbol_from_multi_symbol_output,
+    clear_focus_symbol,
+    extract_or_update_mission,
+    is_cycle_budget_exhausted,
+    is_generic_continuation_request,
+    is_provider_acquisition_blocker,
+    mission_awaiting_approval_message,
+    mission_blocked_message,
+    mission_budget_exhausted_message,
+    mission_cycle_request_text,
+    mission_status_block,
+    next_unexplored_symbols,
+    record_blocked,
+    record_cycle_result,
+    record_focus_symbol,
+    record_promotion_candidate,
+)
 
 CONVERSATION_SCHEMA_VERSION = 1
 CONVERSATION_MVP_CONTEXT_VERSION = 1
@@ -537,6 +558,22 @@ class LLMConversationBrain:
                 return fallback
             return _provider_unavailable_message(), "fallback", _dedupe((*warnings, f"provider fallback: {reason}")), references, "deterministic", ()
 
+    def _format_multi_tool_response_for_session(self, results: tuple[AssistantToolResult, ...], request: LLMConversationRequest) -> str:
+        """Same rendering as ``_format_multi_tool_response``, except that when
+        every tool call in this turn failed (the opaque "safety validation"
+        fallback), an active Research Mission's status is surfaced instead -
+        the safety gate that blocked every call is unchanged, only the
+        explanation improves."""
+        text = _format_multi_tool_response(results)
+        if text != _OPAQUE_TOOL_SAFETY_FALLBACK_TEXT:
+            return text
+        mission = self._mission_for(request.session_id)
+        if mission is None:
+            return text
+        if mission.status is MissionStatus.BLOCKED:
+            return mission_blocked_message(mission)
+        return mission_budget_exhausted_message(mission)
+
     def _execute_provider_tool_calls(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, provider_response, warnings: tuple[str, ...], references: tuple[str, ...], tools) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         assert self._tool_executor is not None
         max_calls = self._config.assistant_max_tool_calls_per_turn
@@ -575,15 +612,15 @@ class LLMConversationBrain:
             reason = exc.__class__.__name__
             self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=f"tool_roundtrip_{reason}")
             self._append_provider_event("LLMProviderToolRoundtripFailed", request, {"provider": provider_response.provider_name, "error_type": reason})
-            text = _format_multi_tool_response(tuple(results))
+            text = self._format_multi_tool_response_for_session(tuple(results), request)
             return text, "provider_tool_fallback", _dedupe((*warnings, f"provider fallback: {reason}")), _dedupe((*references, *(f"tool:{name}" for name in executed))), "deterministic", tuple(executed)
         if final.truncated:
             final = self._continue_provider_response(provider, request, intent, final, _dedupe((*references, *(f"tool:{name}" for name in executed))))
-        raw_text = final.text or _format_multi_tool_response(tuple(results))
+        raw_text = final.text or self._format_multi_tool_response_for_session(tuple(results), request)
         text = raw_text
         strict_real_results = tuple(result for result in results if is_strict_real_research_tool(result.name))
         if strict_real_results:
-            text = _format_multi_tool_response(tuple(results))
+            text = self._format_multi_tool_response_for_session(tuple(results), request)
             if any(isinstance(result.result.get("output"), dict) and strict_real_research_grounding_violations(raw_text, result.result["output"]) for result in strict_real_results):
                 warnings = (*warnings, "provider strict real research grounding fallback")
             else:
@@ -593,7 +630,7 @@ class LLMConversationBrain:
             or contains_fixture_leakage(text)
             or (is_korean_request(request.text) and looks_like_english_final(text))
         ):
-            text = _format_multi_tool_response(tuple(results))
+            text = self._format_multi_tool_response_for_session(tuple(results), request)
             warnings = (*warnings, "provider research grounding fallback")
         elif contains_wrapper_tags(text):
             text = normalize_final_response(text, request.text)
@@ -641,12 +678,50 @@ class LLMConversationBrain:
             context = self._mvp_context_for(request.session_id)
             if context is not None:
                 route = ConversationalRoute(ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, route.symbols)
+        mission = extract_or_update_mission(request.text, existing=self._mission_for(request.session_id), now=request.received_at)
+        if mission is not None:
+            self._remember_mission(request, mission)
+
         # Explicit whole-market / multi-market research is an authoritative
         # execution request and must not be reinterpreted as a contextual
         # autonomous comparison against an earlier single-symbol run.
         existing_tool = route_read_only_tool(
             request.text
         )
+
+        # Patch 8.1 scope-regression guard: once a mission has an
+        # established non-single-symbol scope (market-wide KR / an
+        # explicitly selected symbol set), a generic continuation message
+        # ("증거가 충분할 때까지 연구해주세요") must keep researching within
+        # that scope instead of falling through to the single-symbol
+        # autonomous research path, which would resolve to
+        # ``context.last_symbols[0]`` (or the "005930" default) and silently
+        # narrow a market-wide mission back down to one symbol.
+        if (
+            existing_tool != "multi_symbol_research"
+            and mission is not None
+            and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
+            and not route.symbols
+            and is_generic_continuation_request(request.text)
+        ):
+            if mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
+                # The target promotion-ready candidate count was already
+                # reached; a generic continuation message must not start
+                # further research behind the human's back - it re-surfaces
+                # the existing approval request instead.
+                self._remember_mission(request, mission)
+                return (
+                    mission_awaiting_approval_message(mission),
+                    "conversation_mission_awaiting_approval",
+                    _dedupe((*warnings, "mission awaiting human approval; no further research started")),
+                    references,
+                    "deterministic",
+                    (),
+                )
+            if mission.status in (MissionStatus.ACTIVE, MissionStatus.BLOCKED):
+                mission_result = self._try_mission_driven_research_cycle(request, mission, warnings, references)
+                if mission_result is not None:
+                    return mission_result
 
         if (
             existing_tool == "multi_symbol_research"
@@ -795,6 +870,177 @@ class LLMConversationBrain:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_unknown")
             return render_unknown(route.symbols), "conversation_mvp_unknown", _dedupe(warnings), references, "deterministic", ()
         return None
+
+    def _try_mission_driven_research_cycle(
+        self,
+        request: LLMConversationRequest,
+        mission: ResearchMission,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """Continues an active market-wide / selected-symbols mission with one
+        bounded ``multi_symbol_research`` cycle, instead of ever collapsing a
+        generic continuation message down to a single symbol.
+
+        Budget exhaustion within this one cycle does not mark the mission
+        complete: the mission stays ``active`` and the next cycle continues
+        from the still-unexplored part of the universe. A hard blocker
+        (provider/data acquisition failure across the whole cycle) is
+        recorded explicitly on the mission rather than being misread as a
+        negative strategy result.
+        """
+        if self._tool_executor is None:
+            return None
+        if mission.status is MissionStatus.BLOCKED:
+            self._remember_mission(request, mission)
+            text = mission_blocked_message(mission)
+            return text, "conversation_mission_blocked", _dedupe((*warnings, "mission blocked; safe explanation only")), references, "deterministic", ()
+
+        # Coverage (multi_symbol_research) and per-candidate promotion
+        # validation (the full Research Director pipeline) alternate across
+        # turns rather than both running inside one request: a mission-wide
+        # research_budget_exhausted signal from one still bounds this turn to
+        # a single tool call.
+        if mission.pending_promotion_symbol:
+            return self._try_mission_promotion_cycle(request, mission, warnings, references)
+
+        if mission.universe_scope is MissionUniverseScope.SELECTED_SYMBOLS:
+            batch = next_unexplored_symbols(mission, batch_size=5)
+            if not batch:
+                updated = record_blocked(mission, reason="selected_symbol_universe_exhausted", now=request.received_at)
+                self._remember_mission(request, updated)
+                return mission_blocked_message(updated), "conversation_mission_blocked", _dedupe((*warnings, "mission selected-symbol universe exhausted")), references, "deterministic", ()
+            result = self._execute_mvp_multi_symbol_research(request, batch, request.text, None, None)
+        else:
+            cycle_text = mission_cycle_request_text(mission)
+            result = self._execute_mvp_multi_symbol_research(request, (), cycle_text, None, None)
+
+        if result.status != "success":
+            failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+            updated = record_blocked(mission, reason=f"{failure.stage}:{failure.error_type}", now=request.received_at)
+            self._remember_mission(request, updated)
+            return (
+                f"{mission_blocked_message(updated)}\n\n({failure.user_message})",
+                f"research_failure_{failure.stage}",
+                _dedupe((*warnings, *result.warnings, warning_for_failure(failure))),
+                references,
+                "deterministic",
+                ("multi_symbol_research",),
+            )
+
+        output = result.output
+        researched_symbols = tuple(
+            str(item.get("symbol")) for item in _as_list(output.get("evidence")) if isinstance(item, dict) and item.get("symbol")
+        )
+        updated = record_cycle_result(mission, researched_symbols=researched_symbols, now=request.received_at)
+        exclusion = _as_dict(output.get("exclusion_diagnostics"))
+        if not researched_symbols and is_provider_acquisition_blocker(exclusion):
+            by_category = _as_dict(exclusion.get("by_category"))
+            reason = "provider_acquisition_blocker: " + ",".join(f"{key}={value}" for key, value in sorted(by_category.items()))
+            updated = record_blocked(updated, reason=reason, now=request.received_at)
+            self._remember_mission(request, updated)
+            return (
+                mission_blocked_message(updated),
+                "conversation_mission_blocked",
+                _dedupe((*warnings, "provider acquisition blocker; not a negative strategy result")),
+                _dedupe((*references, "tool:multi_symbol_research")),
+                "deterministic",
+                ("multi_symbol_research",),
+            )
+
+        best_symbol = best_symbol_from_multi_symbol_output(output)
+        if best_symbol:
+            updated = record_focus_symbol(updated, symbol=best_symbol, now=request.received_at)
+        self._remember_mission(request, updated)
+        self._remember_mvp_context(request, ConversationalMVPIntent.COMPARE_SYMBOLS, self._payloads_from_multi_symbol_result(output), request.text)
+
+        # A within-one-call adaptive-sampling budget exhaustion is a cycle
+        # checkpoint, never mission completion: the mission stays active and
+        # the caller is told plainly that the NEXT cycle continues from the
+        # still-unexplored part of the universe, instead of the opaque
+        # generic tool-safety fallback message.
+        if is_cycle_budget_exhausted(output):
+            text = f"{_format_tool_response('multi_symbol_research', output, request.text)}\n\n{mission_budget_exhausted_message(updated)}"
+            return (
+                text,
+                "conversation_mission_cycle_budget_exhausted",
+                _dedupe((*warnings, "mission cycle budget exhausted; mission remains active")),
+                _dedupe((*references, "tool:multi_symbol_research")),
+                "deterministic",
+                ("multi_symbol_research",),
+            )
+
+        text = _format_tool_response("multi_symbol_research", output, request.text)
+        text = f"{text}\n\n{mission_status_block(updated)}"
+        return (
+            text,
+            "conversation_mission_driven_multi_symbol_research",
+            _dedupe((*warnings, "mission-driven scope preserved", f"mission_scope={updated.universe_scope.value}")),
+            _dedupe((*references, "tool:multi_symbol_research")),
+            "deterministic",
+            ("multi_symbol_research",),
+        )
+
+    def _try_mission_promotion_cycle(
+        self,
+        request: LLMConversationRequest,
+        mission: ResearchMission,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+        """Runs the EXISTING single-candidate Autonomous Learning V2 /
+        Research Director pipeline (OOS/walk-forward/regime/cost/Monte Carlo)
+        against the symbol the last coverage cycle flagged as strongest, and
+        only records a promotion-ready candidate when that real pipeline's
+        already-wired ``research_director_decision`` says
+        ``request_human_promotion_review`` - this never invents or weakens
+        promotion readiness, it only reads the existing gate's verdict."""
+        symbol = str(mission.pending_promotion_symbol)
+        cleared = clear_focus_symbol(mission, now=request.received_at)
+        request_text = mission_cycle_request_text(mission, request.text)
+        result = self._tool_executor.execute(
+            ToolRequest(
+                "autonomous_learning_research",
+                {"request_text": request_text, "symbol": symbol, "mode": "research", "steps_used": 0},
+                request.user_ref,
+                request.received_at,
+            )
+        )
+        self._record_tool_result(request.session_id, result, request.received_at)
+        if result.status != "success":
+            failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+            self._remember_mission(request, cleared)
+            return (
+                f"{failure.user_message}\n\n{mission_status_block(cleared)}",
+                f"research_failure_{failure.stage}",
+                _dedupe((*warnings, *result.warnings, warning_for_failure(failure))),
+                references,
+                "deterministic",
+                ("autonomous_learning_research",),
+            )
+        output = result.output
+        text = _format_tool_response("autonomous_learning_research", output, request.text)
+        self._remember_autonomous_learning_v2_context(request, output, text)
+        learning = _as_dict(output.get("autonomous_learning_v2"))
+        director = _as_dict(learning.get("research_director_decision"))
+        candidate_ctx = _as_dict(learning.get("promotion_candidate_context"))
+        updated = cleared
+        if str(director.get("action")) == "request_human_promotion_review":
+            candidate_id = str(candidate_ctx.get("candidate_id") or f"{symbol}:{output.get('run_id', 'unknown')}")
+            updated = record_promotion_candidate(updated, symbol=symbol, run_id=candidate_id, now=request.received_at)
+        self._remember_mission(request, updated)
+        if updated.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
+            text = mission_awaiting_approval_message(updated)
+        else:
+            text = f"{text}\n\n{mission_status_block(updated)}"
+        return (
+            text,
+            "conversation_mission_driven_promotion_cycle",
+            _dedupe((*warnings, *result.warnings, f"research_director_action={director.get('action', 'unknown')}")),
+            _dedupe((*references, "tool:autonomous_learning_research")),
+            "deterministic",
+            ("autonomous_learning_research",),
+        )
 
     def _try_autonomous_research_conversation(self, request: LLMConversationRequest, route, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
@@ -1326,6 +1572,33 @@ class LLMConversationBrain:
             updated_at=request.received_at,
         )
         self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route="conversation_autonomous_learning_query")
+
+    def _mission_for(self, session_id: str) -> ResearchMission | None:
+        try:
+            session = self._repository.get_session(session_id)
+        except KeyError:
+            return None
+        root = session.metadata.get("conversation_mvp")
+        if not isinstance(root, dict):
+            return None
+        raw = root.get("research_mission")
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return ResearchMission.from_json(raw)
+        except (KeyError, ValueError, TypeError):
+            return None
+
+    def _remember_mission(self, request: LLMConversationRequest, mission: ResearchMission) -> None:
+        try:
+            session = self._repository.get_session(request.session_id)
+        except KeyError:
+            return
+        metadata = dict(session.metadata)
+        payload = _mvp_metadata_root(metadata)
+        payload["research_mission"] = mission.to_json()
+        metadata["conversation_mvp"] = payload
+        self._repository.upsert_session(LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, request.received_at, metadata))
 
     def _mvp_context_for(self, session_id: str) -> ConversationalMVPContext | None:
         context = self._mvp_contexts.get(session_id)
@@ -2629,6 +2902,9 @@ def _format_tool_response(tool_name: str, output: dict[str, object], user_text: 
     return "요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님."
 
 
+_OPAQUE_TOOL_SAFETY_FALLBACK_TEXT = "요청하신 도구 호출은 안전 검증을 통과하지 못했습니다, 영하님."
+
+
 def _format_multi_tool_response(results: tuple[AssistantToolResult, ...]) -> str:
     grounded = [_format_tool_result_response(result) for result in results if result.result.get("status") == "success"]
     grounded = [item for item in grounded if item]
@@ -2637,7 +2913,7 @@ def _format_multi_tool_response(results: tuple[AssistantToolResult, ...]) -> str
     successful = [result.name for result in results if result.result.get("status") == "success"]
     if successful:
         return f"요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님.\n실행 도구: {', '.join(successful)}"
-    return "요청하신 도구 호출은 안전 검증을 통과하지 못했습니다, 영하님."
+    return _OPAQUE_TOOL_SAFETY_FALLBACK_TEXT
 
 
 def _format_tool_result_response(result: AssistantToolResult) -> str | None:
