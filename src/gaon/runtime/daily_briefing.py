@@ -19,8 +19,9 @@ change is implied by anything here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Mapping
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Mapping
 
 from gaon.integrations.telegram.client import DryRunTelegramClient
 from gaon.integrations.telegram.contracts import TelegramClient, TelegramResponse
@@ -32,14 +33,17 @@ from gaon.runtime.scheduled_automation import (
     ScheduleDefinition,
     ScheduledJob,
     ScheduledJobRepository,
+    ScheduledRunStatus,
     ToolSelection,
     _validate_utc,
 )
 
 DAILY_BRIEFING_SCHEMA_VERSION = 1
+DEFAULT_MARKET_TIMEZONE = "Asia/Seoul"
 
 _PRE_MARKET_JOB_ID = "daily-briefing:pre-market"
 _POST_MARKET_JOB_ID = "daily-briefing:post-market"
+_UNRESOLVED_REVIEW_JOB_ID = "daily-briefing:unresolved-review"
 
 _TERMINAL_NO_FOLLOWUP_ACTIONS = frozenset({ResearchDirectorAction.HOLD, ResearchDirectorAction.REJECT_CANDIDATE})
 
@@ -187,19 +191,26 @@ def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
 def schedule_daily_briefing_jobs(
     repository: ScheduledJobRepository,
     *,
-    timezone: str,
+    timezone: str = DEFAULT_MARKET_TIMEZONE,
     next_pre_market_at: str,
     next_post_market_at: str,
+    next_unresolved_review_at: str | None = None,
     created_at: str,
-) -> tuple[ScheduledJob, ScheduledJob]:
-    """Register the two daily briefing jobs on the existing scheduler.
+) -> tuple[ScheduledJob, ScheduledJob, ScheduledJob]:
+    """Register the three daily briefing jobs on the existing scheduler.
 
     Reuses ``gaon.runtime.scheduled_automation.ScheduledJobRepository`` -
     the same durable scheduler ``gaon.runtime.daily_research`` already
     uses - rather than creating a second scheduling mechanism. Registering a
-    job does not send anything; a caller still has to run it (mirroring
-    ``daily-research-run``) and is responsible for delivering the rendered
-    text (e.g. to Telegram).
+    job does not send anything; ``DailyBriefingScheduler.run_due()`` (or a
+    manual CLI invocation, mirroring ``daily-research-run``) is what
+    actually composes and delivers the text.
+
+    ``timezone`` defaults to the KRX market timezone (Asia/Seoul), not
+    UTC - only ``next_run_at``/``created_at`` timestamps themselves must be
+    UTC (``ScheduleDefinition`` enforces this), matching how the rest of
+    the scheduler already stores wall-clock-independent instants while
+    still recording which market's calendar a job follows.
     """
     pre_market = ScheduledJob(
         _PRE_MARKET_JOB_ID,
@@ -227,9 +238,182 @@ def schedule_daily_briefing_jobs(
         metadata={"kind": "daily_briefing", "briefing": "post_market"},
         max_attempts=2,
     )
+    unresolved_review = ScheduledJob(
+        _UNRESOLVED_REVIEW_JOB_ID,
+        "Gaon Unresolved Research Review",
+        "daily_briefing:unresolved_review",
+        ScheduleDefinition(timezone, next_unresolved_review_at or next_post_market_at, "daily"),
+        True,
+        created_at,
+        created_at,
+        agent_selection=AgentSelection.RESEARCH_BRAIN,
+        tool_constraints=(ToolSelection.RUNTIME_STATUS,),
+        metadata={"kind": "daily_briefing", "briefing": "unresolved_review"},
+        max_attempts=2,
+    )
     repository.create(pre_market)
     repository.create(post_market)
-    return pre_market, post_market
+    repository.create(unresolved_review)
+    return pre_market, post_market, unresolved_review
+
+
+def compose_unresolved_research_review(audit_records: tuple[object, ...]) -> dict[str, object]:
+    """Review already-persisted autonomous_learning_research tool-audit
+    records for research the Director has not yet terminally resolved.
+
+    This reads gaon.runtime.llm_tools.ToolAuditRecord rows the runtime
+    already writes on every real autonomous_learning_research tool call
+    (SQLiteToolAuditRepository) - it does not compute or fabricate any new
+    research state. A candidate counts as unresolved when the most recent
+    call for it carries a non-terminal research_director_decision (i.e.
+    still needs collect_more_evidence / expand_symbols / run_oos / ... -
+    hold, reject_candidate, and request_human_promotion_review are all
+    terminal).
+    """
+    unresolved: list[dict[str, object]] = []
+    seen_symbols: set[str] = set()
+    for record in reversed(audit_records):
+        output = getattr(record, "result", {}).get("output") if hasattr(record, "result") else None
+        if not isinstance(output, Mapping):
+            continue
+        symbol = str(output.get("symbol") or "")
+        if not symbol or symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        learning = output.get("autonomous_learning_v2")
+        if not isinstance(learning, Mapping):
+            continue
+        decision = learning.get("research_director_decision")
+        if not isinstance(decision, Mapping):
+            continue
+        if decision.get("terminal") is True:
+            continue
+        unresolved.append(
+            {
+                "symbol": symbol,
+                "action": decision.get("action"),
+                "reason": decision.get("reason"),
+                "audit_id": getattr(record, "audit_id", None),
+            }
+        )
+    return {"schema_version": DAILY_BRIEFING_SCHEMA_VERSION, "unresolved_count": len(unresolved), "unresolved": unresolved}
+
+
+def render_unresolved_research_review_ko(review: Mapping[str, object], *, generated_at: str) -> str:
+    lines = [f"[가온 미해결 연구 점검 - {generated_at}]", ""]
+    items = review.get("unresolved") or []
+    if not items:
+        lines.append("현재 후속 조치가 필요한 연구가 없습니다.")
+        return "\n".join(lines)
+    lines.append(f"후속 조치가 필요한 연구 {len(items)}건:")
+    for item in items:
+        lines.append(f"- {item.get('symbol')}: {item.get('action')} - {item.get('reason')}")
+    return "\n".join(lines)
+
+
+def _advance_by_one_day(iso_utc: str) -> str:
+    _validate_utc(iso_utc)
+    parsed = datetime.strptime(iso_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    return (parsed + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@dataclass(frozen=True)
+class DailyBriefingRunResult:
+    job_id: str
+    kind: str
+    status: str
+    messages_sent: int
+    rescheduled_job_id: str | None
+
+
+class DailyBriefingScheduler:
+    """Runs due daily-briefing jobs through the existing durable scheduler.
+
+    This is not a new cron/timer implementation: a caller (a periodic
+    service tick, or a manual CLI invocation mirroring
+    ``daily-research-run --due``) invokes ``run_due()``, which reuses
+    ``ScheduledJobRepository.due()``/``claim_run()``/``complete_run()`` -
+    exactly what ``gaon.runtime.daily_research.DailyResearchPipeline``
+    already does for research profiles.
+
+    Idempotent: ``claim_run()`` inserts one run row per attempt with a
+    unique key derived from (job_id, attempt); calling ``run_due()`` again
+    for a job already claimed this tick returns ``None`` from
+    ``claim_run()`` and is skipped, and rescheduling the next occurrence
+    uses a date-derived job id, so re-registering the same day's occurrence
+    twice raises instead of duplicating it.
+
+    Durable: all state (job definitions, run history, next_run_at) lives in
+    ``ScheduledJobRepository``'s SQLite tables. A service restart simply
+    calls ``run_due()`` again against the persisted ``next_run_at`` - there
+    is no in-memory timer state to lose.
+    """
+
+    def __init__(
+        self,
+        repository: ScheduledJobRepository,
+        client: TelegramClient,
+        *,
+        chat_id: str,
+        compose_pre_market: Callable[[], str],
+        compose_post_market: Callable[[], str],
+        compose_unresolved_review: Callable[[], str],
+        dry_run: bool = True,
+    ) -> None:
+        self._repository = repository
+        self._client = client
+        self._chat_id = chat_id
+        self._composers: dict[str, Callable[[], str]] = {
+            "pre_market": compose_pre_market,
+            "post_market": compose_post_market,
+            "unresolved_review": compose_unresolved_review,
+        }
+        self._dry_run = dry_run
+
+    def run_due(self, *, now: str) -> tuple[DailyBriefingRunResult, ...]:
+        results: list[DailyBriefingRunResult] = []
+        for job in self._repository.due(now):
+            metadata = job.metadata or {}
+            if metadata.get("kind") != "daily_briefing":
+                continue
+            run = self._repository.claim_run(job, now=now)
+            if run is None:
+                continue  # already claimed this tick, or max_attempts reached - idempotent no-op
+            briefing_kind = str(metadata.get("briefing", "pre_market"))
+            composer = self._composers.get(briefing_kind)
+            try:
+                text = composer() if composer is not None else ""
+                sent = send_daily_briefing(self._client, self._chat_id, text, kind=briefing_kind, dry_run=self._dry_run)
+                self._repository.complete_run(
+                    run, ScheduledRunStatus.SUCCEEDED, completed_at=now, result={"messages_sent": str(len(sent))}
+                )
+                status, messages_sent = "succeeded", len(sent)
+            except Exception as exc:  # noqa: BLE001 - one job's failure must not block the others.
+                self._repository.complete_run(run, ScheduledRunStatus.FAILED, completed_at=now, result={}, error=exc.__class__.__name__)
+                status, messages_sent = "failed", 0
+            next_job = self._reschedule_next_occurrence(job, now=now)
+            results.append(
+                DailyBriefingRunResult(job.job_id, briefing_kind, status, messages_sent, next_job.job_id if next_job else None)
+            )
+        return tuple(results)
+
+    def _reschedule_next_occurrence(self, job: ScheduledJob, *, now: str) -> ScheduledJob | None:
+        if job.schedule.cadence != "daily":
+            return None
+        next_run_at = _advance_by_one_day(job.schedule.next_run_at)
+        next_job = replace(
+            job,
+            job_id=f"{job.job_id}:{next_run_at[:10]}",
+            schedule=ScheduleDefinition(job.schedule.timezone, next_run_at, "daily"),
+            enabled=True,
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            self._repository.create(next_job)
+        except ValueError:
+            return None  # this occurrence was already scheduled - idempotent
+        return next_job
 
 
 def send_daily_briefing(
@@ -344,7 +528,7 @@ def production_daily_briefing_release_check() -> Mapping[str, object]:
 
     migrate(connection)
     repository = ScheduledJobRepository(connection)
-    pre_job, post_job = schedule_daily_briefing_jobs(
+    pre_job, post_job, unresolved_job = schedule_daily_briefing_jobs(
         repository,
         timezone="Asia/Seoul",
         next_pre_market_at="2026-08-17T00:00:00Z",
@@ -353,6 +537,7 @@ def production_daily_briefing_release_check() -> Mapping[str, object]:
     )
     stored_pre = repository.get(_PRE_MARKET_JOB_ID)
     stored_post = repository.get(_POST_MARKET_JOB_ID)
+    stored_unresolved = repository.get(_UNRESOLVED_REVIEW_JOB_ID)
     connection.close()
 
     checks = {
@@ -365,16 +550,19 @@ def production_daily_briefing_release_check() -> Mapping[str, object]:
         "post_market_never_claims_order_or_mutation": post_market.to_json()["strategy_mutated"] is False
         and post_market.to_json()["order_executed"] is False,
         "jobs_registered_on_existing_scheduler": stored_pre.job_id == _PRE_MARKET_JOB_ID
-        and stored_post.job_id == _POST_MARKET_JOB_ID,
+        and stored_post.job_id == _POST_MARKET_JOB_ID
+        and stored_unresolved.job_id == _UNRESOLVED_REVIEW_JOB_ID,
         "jobs_carry_daily_briefing_metadata": (stored_pre.metadata or {}).get("kind") == "daily_briefing"
-        and (stored_post.metadata or {}).get("kind") == "daily_briefing",
+        and (stored_post.metadata or {}).get("kind") == "daily_briefing"
+        and (stored_unresolved.metadata or {}).get("kind") == "daily_briefing",
+        "market_timezone_respected": stored_pre.schedule.timezone == "Asia/Seoul",
     }
     _raise_if_failed("production daily briefing", checks)
     return {
         "schema_version": DAILY_BRIEFING_SCHEMA_VERSION,
         "pre_market_news_items": len(pre_market.important_news),
         "post_market_completed_trades": post_market.completed_trade_count,
-        "jobs_registered": 2,
+        "jobs_registered": 3,
         "strategy_mutated": False,
         "order_executed": False,
         "safety": "pass",
@@ -428,6 +616,76 @@ def production_daily_briefing_telegram_delivery_release_check() -> Mapping[str, 
         "dry_run_messages": len(dry_run_sent),
         "live_messages_sent": len(live_client.sent),
         "long_briefing_chunks": len(expected_chunks),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "safety": "pass",
+    }
+
+
+def production_daily_briefing_scheduler_release_check() -> Mapping[str, object]:
+    """Final Integration Program Step 4 release check.
+
+    Proves the daily briefing scheduler is a real, durable, idempotent
+    reuse of gaon.runtime.scheduled_automation.ScheduledJobRepository -
+    not a new cron implementation: only jobs actually due are sent, running
+    the same tick twice never double-sends, a "daily" job is rescheduled
+    (not left permanently disabled), the registered timezone is the KRX
+    market timezone, and a simulated service restart (a brand new
+    DailyBriefingScheduler over the same repository, no in-memory state
+    carried over) resumes exactly where it left off.
+    """
+    import sqlite3
+
+    from gaon.runtime.migrations import migrate
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        migrate(connection)
+        repository = ScheduledJobRepository(connection)
+        pre_job, post_job, unresolved_job = schedule_daily_briefing_jobs(
+            repository,
+            next_pre_market_at="2026-08-17T00:00:00Z",
+            next_post_market_at="2026-08-17T06:40:00Z",
+            created_at="2026-08-16T00:00:00Z",
+        )
+        timezone_respected = pre_job.schedule.timezone == DEFAULT_MARKET_TIMEZONE == "Asia/Seoul"
+
+        client = DryRunTelegramClient()
+
+        def _scheduler() -> DailyBriefingScheduler:
+            return DailyBriefingScheduler(
+                repository,
+                client,
+                chat_id="release-check-chat",
+                compose_pre_market=lambda: "pre",
+                compose_post_market=lambda: "post",
+                compose_unresolved_review=lambda: "review",
+                dry_run=True,
+            )
+
+        first_tick = _scheduler().run_due(now="2026-08-17T00:00:00Z")
+        duplicate_tick = _scheduler().run_due(now="2026-08-17T00:00:00Z")
+        full_tick = _scheduler().run_due(now="2026-08-17T07:00:00Z")
+        rescheduled = repository.get(full_tick[-1].rescheduled_job_id) if full_tick else None
+
+        # Simulate a service restart with a brand new scheduler instance.
+        restarted_tick = _scheduler().run_due(now="2026-08-18T00:00:00Z")
+    finally:
+        connection.close()
+
+    checks = {
+        "only_actually_due_jobs_run": [r.kind for r in first_tick] == ["pre_market"],
+        "same_tick_rerun_is_idempotent": duplicate_tick == (),
+        "daily_job_rescheduled_not_disabled": rescheduled is not None and rescheduled.enabled is True,
+        "market_timezone_respected": timezone_respected,
+        "restart_resumes_from_durable_state": len(restarted_tick) >= 1,
+    }
+    _raise_if_failed("production daily briefing scheduler", checks)
+    return {
+        "schema_version": DAILY_BRIEFING_SCHEMA_VERSION,
+        "first_tick_jobs": len(first_tick),
+        "full_tick_jobs": len(full_tick),
+        "restart_tick_jobs": len(restarted_tick),
         "strategy_mutated": False,
         "order_executed": False,
         "safety": "pass",

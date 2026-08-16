@@ -9,11 +9,14 @@ from gaon.integrations.telegram.formatter import split_message
 from gaon.knowledge.news_intelligence import NewsImpact, NewsIntelligenceItem
 from gaon.research.research_director import ResearchDirector, ResearchDirectorAction, ResearchDirectorState
 from gaon.runtime.daily_briefing import (
+    DailyBriefingScheduler,
     compose_post_market_briefing,
     compose_pre_market_briefing,
+    compose_unresolved_research_review,
     production_daily_briefing_release_check,
     render_post_market_briefing_ko,
     render_pre_market_briefing_ko,
+    render_unresolved_research_review_ko,
     schedule_daily_briefing_jobs,
     send_daily_briefing,
 )
@@ -150,13 +153,14 @@ class DailyBriefingTests(unittest.TestCase):
         try:
             migrate(connection)
             repository = ScheduledJobRepository(connection)
-            pre_job, post_job = schedule_daily_briefing_jobs(
+            pre_job, post_job, unresolved_job = schedule_daily_briefing_jobs(
                 repository,
                 timezone="Asia/Seoul",
                 next_pre_market_at="2026-08-17T00:00:00Z",
                 next_post_market_at="2026-08-17T06:40:00Z",
                 created_at="2026-08-16T00:00:00Z",
             )
+            self.assertEqual(repository.get(unresolved_job.job_id).job_id, unresolved_job.job_id)
             self.assertEqual(repository.get(pre_job.job_id).job_id, pre_job.job_id)
             self.assertEqual(repository.get(post_job.job_id).job_id, post_job.job_id)
             self.assertEqual((pre_job.metadata or {}).get("kind"), "daily_briefing")
@@ -168,7 +172,7 @@ class DailyBriefingTests(unittest.TestCase):
         self.assertEqual(payload["safety"], "pass")
         self.assertFalse(payload["strategy_mutated"])
         self.assertFalse(payload["order_executed"])
-        self.assertEqual(payload["jobs_registered"], 2)
+        self.assertEqual(payload["jobs_registered"], 3)
 
 
 class SendDailyBriefingTests(unittest.TestCase):
@@ -208,6 +212,201 @@ class SendDailyBriefingTests(unittest.TestCase):
         client = DryRunTelegramClient()
         sent = send_daily_briefing(client, "12345", "text", kind="post_market", dry_run=True)
         self.assertIn("daily-briefing:post_market", sent[0].correlation_id)
+
+
+class _StubAuditRecord:
+    def __init__(self, audit_id: str, output: dict) -> None:
+        self.audit_id = audit_id
+        self.result = {"output": output}
+
+
+class ComposeUnresolvedResearchReviewTests(unittest.TestCase):
+    def test_reads_only_already_persisted_audit_records(self) -> None:
+        records = (
+            _StubAuditRecord(
+                "a1",
+                {
+                    "symbol": "005930",
+                    "autonomous_learning_v2": {
+                        "research_director_decision": {
+                            "action": "collect_more_evidence",
+                            "reason": "evidence too weak",
+                            "terminal": False,
+                        }
+                    },
+                },
+            ),
+            _StubAuditRecord(
+                "a2",
+                {
+                    "symbol": "000660",
+                    "autonomous_learning_v2": {
+                        "research_director_decision": {"action": "hold", "reason": "budget exhausted", "terminal": True}
+                    },
+                },
+            ),
+        )
+        review = compose_unresolved_research_review(records)
+        self.assertEqual(review["unresolved_count"], 1)
+        self.assertEqual(review["unresolved"][0]["symbol"], "005930")
+
+    def test_only_the_most_recent_record_per_symbol_counts(self) -> None:
+        records = (
+            _StubAuditRecord(
+                "a1",
+                {
+                    "symbol": "005930",
+                    "autonomous_learning_v2": {
+                        "research_director_decision": {"action": "collect_more_evidence", "reason": "x", "terminal": False}
+                    },
+                },
+            ),
+            _StubAuditRecord(
+                "a2",
+                {
+                    "symbol": "005930",
+                    "autonomous_learning_v2": {
+                        "research_director_decision": {
+                            "action": "request_human_promotion_review",
+                            "reason": "fully validated",
+                            "terminal": True,
+                        }
+                    },
+                },
+            ),
+        )
+        review = compose_unresolved_research_review(records)
+        self.assertEqual(review["unresolved_count"], 0)
+
+    def test_no_records_is_honestly_empty(self) -> None:
+        review = compose_unresolved_research_review(())
+        self.assertEqual(review["unresolved_count"], 0)
+        self.assertEqual(render_unresolved_research_review_ko(review, generated_at="2026-08-16T09:00:00Z"), "[가온 미해결 연구 점검 - 2026-08-16T09:00:00Z]\n\n현재 후속 조치가 필요한 연구가 없습니다.")
+
+
+class DailyBriefingSchedulerTests(unittest.TestCase):
+    def _repository(self) -> ScheduledJobRepository:
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        migrate(connection)
+        return ScheduledJobRepository(connection)
+
+    def _scheduler(self, repository: ScheduledJobRepository, client) -> DailyBriefingScheduler:
+        return DailyBriefingScheduler(
+            repository,
+            client,
+            chat_id="12345",
+            compose_pre_market=lambda: "pre text",
+            compose_post_market=lambda: "post text",
+            compose_unresolved_review=lambda: "review text",
+            dry_run=True,
+        )
+
+    def test_run_due_sends_only_jobs_that_are_actually_due(self) -> None:
+        repository = self._repository()
+        schedule_daily_briefing_jobs(
+            repository,
+            next_pre_market_at="2026-08-17T00:00:00Z",
+            next_post_market_at="2026-08-17T06:40:00Z",
+            created_at="2026-08-16T00:00:00Z",
+        )
+        scheduler = self._scheduler(repository, DryRunTelegramClient())
+        results = scheduler.run_due(now="2026-08-17T00:00:00Z")
+        self.assertEqual([r.kind for r in results], ["pre_market"])
+        self.assertEqual(results[0].status, "succeeded")
+
+    def test_run_due_twice_in_the_same_tick_is_idempotent(self) -> None:
+        repository = self._repository()
+        schedule_daily_briefing_jobs(
+            repository,
+            next_pre_market_at="2026-08-17T00:00:00Z",
+            next_post_market_at="2026-08-17T06:40:00Z",
+            created_at="2026-08-16T00:00:00Z",
+        )
+        scheduler = self._scheduler(repository, DryRunTelegramClient())
+        first = scheduler.run_due(now="2026-08-17T00:00:00Z")
+        second = scheduler.run_due(now="2026-08-17T00:00:00Z")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, ())
+
+    def test_daily_job_is_rescheduled_for_the_next_day_not_left_disabled(self) -> None:
+        repository = self._repository()
+        schedule_daily_briefing_jobs(
+            repository,
+            next_pre_market_at="2026-08-17T00:00:00Z",
+            next_post_market_at="2026-08-17T06:40:00Z",
+            created_at="2026-08-16T00:00:00Z",
+        )
+        scheduler = self._scheduler(repository, DryRunTelegramClient())
+        results = scheduler.run_due(now="2026-08-17T00:00:00Z")
+        next_job = repository.get(results[0].rescheduled_job_id)
+        self.assertTrue(next_job.enabled)
+        self.assertEqual(next_job.schedule.next_run_at, "2026-08-18T00:00:00Z")
+
+    def test_service_restart_resumes_from_durable_state_without_double_sending(self) -> None:
+        repository = self._repository()
+        schedule_daily_briefing_jobs(
+            repository,
+            next_pre_market_at="2026-08-17T00:00:00Z",
+            next_post_market_at="2026-08-17T06:40:00Z",
+            created_at="2026-08-16T00:00:00Z",
+        )
+        client = _FakeTelegramClient()
+        first_scheduler = DailyBriefingScheduler(
+            repository,
+            client,
+            chat_id="12345",
+            compose_pre_market=lambda: "pre text",
+            compose_post_market=lambda: "post text",
+            compose_unresolved_review=lambda: "review text",
+            dry_run=False,
+        )
+        first_scheduler.run_due(now="2026-08-17T07:00:00Z")
+        self.assertEqual(len(client.sent), 3)  # pre + post + unresolved_review all due by then
+
+        # Simulate a process restart: brand new scheduler instance, same
+        # durable repository, no in-memory state carried over.
+        second_scheduler = DailyBriefingScheduler(
+            repository,
+            client,
+            chat_id="12345",
+            compose_pre_market=lambda: "pre text",
+            compose_post_market=lambda: "post text",
+            compose_unresolved_review=lambda: "review text",
+            dry_run=False,
+        )
+        second_scheduler.run_due(now="2026-08-17T08:00:00Z")
+        self.assertEqual(len(client.sent), 3)  # nothing new due yet - no duplicate sends
+        second_scheduler.run_due(now="2026-08-18T00:00:00Z")
+        self.assertEqual(len(client.sent), 4)  # only pre-market's next occurrence is due
+
+    def test_a_failing_composer_does_not_block_other_due_jobs(self) -> None:
+        repository = self._repository()
+        schedule_daily_briefing_jobs(
+            repository,
+            next_pre_market_at="2026-08-17T00:00:00Z",
+            next_post_market_at="2026-08-17T00:00:00Z",
+            next_unresolved_review_at="2026-08-17T00:00:00Z",
+            created_at="2026-08-16T00:00:00Z",
+        )
+
+        def _raise() -> str:
+            raise RuntimeError("composer failed")
+
+        scheduler = DailyBriefingScheduler(
+            repository,
+            DryRunTelegramClient(),
+            chat_id="12345",
+            compose_pre_market=_raise,
+            compose_post_market=lambda: "post text",
+            compose_unresolved_review=lambda: "review text",
+            dry_run=True,
+        )
+        results = scheduler.run_due(now="2026-08-17T00:00:00Z")
+        statuses = {r.kind: r.status for r in results}
+        self.assertEqual(statuses["pre_market"], "failed")
+        self.assertEqual(statuses["post_market"], "succeeded")
+        self.assertEqual(statuses["unresolved_review"], "succeeded")
 
 
 if __name__ == "__main__":
