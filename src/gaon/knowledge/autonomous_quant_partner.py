@@ -280,6 +280,7 @@ def autonomous_quant_partner_payload(
         baseline=baseline,
         production_grade=production_grade,
         budget=selected_budget,
+        research=research,
         connection=connection,
     )
     iterations = _research_iterations(
@@ -1896,6 +1897,7 @@ def _adaptive_validation_feedback_execution(
     baseline: Mapping[str, object],
     production_grade: Mapping[str, object],
     budget: ResearchBudget,
+    research: Mapping[str, object] | None = None,
     connection: object | None = None,
 ) -> dict[str, object]:
     failures = _adaptive_failures_from_validation(production_grade)
@@ -2037,23 +2039,15 @@ def _adaptive_validation_feedback_execution(
 
             if candidate is None:
                 hypothesis_driver = _dynamic_hypothesis_driver(
-                    observed_failure,
-                    production_grade,
-                    iterations,
+                    observed_failure, production_grade, iterations
                 )
                 (
-                    candidate,
-                    changed_rules,
-                    semantic_fingerprint,
-                    dynamic_skipped,
-                    hypothesis_family,
-                ) = _select_unique_dynamic_hypothesis_candidate(
-                    starting_candidate,
-                    observed_failure=observed_failure,
-                    iteration=failure_attempt,
-                    known_semantic_fingerprints=known_semantic_fingerprints,
-                    driver=hypothesis_driver,
-                    max_variants=max(1, budget.max_parameter_variants),
+                    candidate, changed_rules, semantic_fingerprint, dynamic_skipped,
+                    hypothesis_family, hypothesis_driver,
+                ) = _select_unique_evolved_hypothesis_candidate(
+                    starting_candidate, observed_failure=observed_failure, iteration=failure_attempt,
+                    known_semantic_fingerprints=known_semantic_fingerprints, base_driver=hypothesis_driver,
+                    research=research, max_variants=max(1, budget.max_parameter_variants),
                 )
                 duplicate_count += len(dynamic_skipped)
                 skipped_semantics = [*skipped_semantics, *dynamic_skipped]
@@ -2253,6 +2247,16 @@ def _adaptive_validation_feedback_execution(
             if item.get("hypothesis_origin") == "dynamic_metric_driven"
             and item.get("actual_execution") is not True
         ),
+        "cross_family_hypotheses_generated": sum(
+            1 for item in iterations
+            if int(_as_dict(item.get("hypothesis_driver")).get("evolution_stage") or 0) > 0
+            and item.get("actual_execution") is True
+        ),
+        "evidence_categories_used": sorted({
+            str(category) for item in iterations
+            for category in _as_list(_as_dict(item.get("hypothesis_driver")).get("evidence_categories"))
+            if category
+        }),
         "uses_existing_backtest_engine": True,
         "common_protocol_required": True,
         "promotion_from_adaptive_feedback_alone": False,
@@ -2619,6 +2623,60 @@ def _dynamic_hypothesis_driver(
     }
 
 
+def _successful_research_evidence_categories(research: Mapping[str, object] | None) -> tuple[str, ...]:
+    states = _as_dict(_as_dict(research).get("provider_states"))
+    return tuple(sorted(str(k) for k, v in states.items() if str(v) == ProviderState.SUCCESS.value))
+
+
+def _evolved_hypothesis_drivers(
+    observed_failure: str, base_driver: Mapping[str, object], *,
+    research: Mapping[str, object] | None,
+) -> tuple[dict[str, object], ...]:
+    evidence = _successful_research_evidence_categories(research)
+    authoritative = any(x in {"academic","official_market","corporate","regulatory"} for x in evidence)
+    sequences = {
+        "out_of_sample_fail": (
+            ("evidence_trend_confirmation_generalization","combine_forward_horizon_with_trend_confirmation"),
+            ("participation_breadth_generalization","broaden_participation_without_redundant_volume_constraint"),
+        ),
+        "walk_forward_fail": (
+            ("structural_filter_simplification","remove_optional_filter_dependency_across_folds"),
+            ("horizon_coupling_stability","couple_entry_and_exit_horizons_across_folds"),
+        ),
+        "cost_fragile": (
+            ("selective_low_turnover_confirmation","increase_selectivity_before_extending_holding_horizon"),
+            ("long_horizon_cost_absorption","reduce_turnover_with_longer_entry_and_exit_horizons"),
+        ),
+    }
+    rows=[]
+    first=dict(base_driver); first.update(evolution_stage=0,evidence_categories=list(evidence),
+        evidence_bias="authoritative_evidence" if authoritative else "validation_only")
+    rows.append(first)
+    for stage,(family,mechanism) in enumerate(sequences.get(observed_failure,()),1):
+        row=dict(base_driver); row.update(family=family,mechanism=mechanism,evolution_stage=stage,
+            evidence_categories=list(evidence),evidence_bias="authoritative_evidence" if authoritative else "validation_only",
+            source="actual_validation_metrics+external_evidence")
+        rows.append(row)
+    return tuple(rows)
+
+
+def _select_unique_evolved_hypothesis_candidate(
+    starting_candidate: object, *, observed_failure: str, iteration: int,
+    known_semantic_fingerprints: set[str], base_driver: Mapping[str, object],
+    research: Mapping[str, object] | None, max_variants: int,
+) -> tuple[object | None, list[str], str | None, list[str], str, dict[str, object]]:
+    skipped=[]; last_driver=dict(base_driver); last_family=str(last_driver.get("family") or "dynamic_bounded_parameter_rebalance")
+    for driver in _evolved_hypothesis_drivers(observed_failure,base_driver,research=research):
+        last_driver=dict(driver); last_family=str(driver.get("family") or last_family)
+        for variant in range(max(1,max_variants)):
+            c,changes,family=_dynamic_hypothesis_candidate(starting_candidate,observed_failure=observed_failure,
+                iteration=iteration,variant=variant,driver=driver)
+            semantic=_strategy_semantic_fingerprint(c)
+            if semantic in known_semantic_fingerprints: skipped.append(semantic); continue
+            return c,changes,semantic,skipped,family,dict(driver)
+    return None,[],None,skipped,last_family,last_driver
+
+
 def _dynamic_hypothesis_candidate(
     strategy: object,
     *,
@@ -2650,8 +2708,41 @@ def _dynamic_hypothesis_candidate(
     stop = float(getattr(exits.get("protective_stop_pct"), "value", -5.0) or -5.0)
     ordinal = max(1, int(iteration)) + max(0, int(variant))
     family = str(driver.get("family") or "dynamic_bounded_parameter_rebalance")
+    evolution_stage = int(driver.get("evolution_stage") or 0)
 
-    if observed_failure == "out_of_sample_fail":
+    if evolution_stage > 0 and observed_failure == "out_of_sample_fail":
+        if evolution_stage == 1:
+            if "ma20_gt_ma60" not in entry:
+                entry["ma20_gt_ma60"] = research_value(True)
+                changes.append("ma20_gt_ma60:added_for_cross_family_generalization")
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 11 + ordinal))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 5 + ordinal, 16)))
+        else:
+            if "volume_gte_ma20" in filters:
+                filters.pop("volume_gte_ma20")
+                changes.append("volume_gte_ma20:removed_for_participation_breadth")
+            set_numeric(entry, "breakout_lookback", max(8, breakout - (1 + ordinal)))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 8 + ordinal, 18)))
+    elif evolution_stage > 0 and observed_failure == "walk_forward_fail":
+        if evolution_stage == 1:
+            if "volume_gte_ma20" in filters:
+                filters.pop("volume_gte_ma20"); changes.append("volume_gte_ma20:removed_for_cross_fold_simplification")
+            if "close_gt_ma20" in entry:
+                entry.pop("close_gt_ma20"); changes.append("close_gt_ma20:removed_for_cross_fold_simplification")
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 5 + ordinal))
+        else:
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 10 + ordinal * 2))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 8 + ordinal * 2, 20)))
+    elif evolution_stage > 0 and observed_failure == "cost_fragile":
+        if evolution_stage == 1:
+            if "ma20_gt_ma60" not in entry:
+                entry["ma20_gt_ma60"] = research_value(True); changes.append("ma20_gt_ma60:added_for_low_turnover_selectivity")
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 18 + ordinal * 2))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 10 + ordinal, 22)))
+        else:
+            set_numeric(entry, "breakout_lookback", min(80, breakout + 25 + ordinal * 2))
+            set_numeric(exits, "channel_exit_lookback", min(80, max(exit_lookback + 18 + ordinal * 2, 30)))
+    elif observed_failure == "out_of_sample_fail":
         return_delta = _safe_float(driver.get("return_delta"))
         mdd_delta = _safe_float(driver.get("mdd_delta"))
         if return_delta < 0 and mdd_delta < 0:
