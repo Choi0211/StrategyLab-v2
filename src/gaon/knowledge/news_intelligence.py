@@ -38,7 +38,11 @@ import hashlib
 import re
 from typing import Mapping
 
-from gaon.research.global_market import infer_market_symbol
+# gaon.research.global_market is imported lazily inside _affected_markets():
+# gaon/research/__init__.py eagerly pulls in a long chain that ends up back
+# at gaon.runtime.llm_tools -> gaon.knowledge.telegram_autonomous_learning,
+# which imports this module at top level - a top-level import here would be
+# circular.
 
 from .conflicts import ConflictStatus
 from .multi_source_research import (
@@ -141,6 +145,8 @@ def _affected_symbols(primary_symbol: str, headline: str) -> tuple[str, ...]:
 
 
 def _affected_markets(symbols: tuple[str, ...]) -> tuple[str, ...]:
+    from gaon.research.global_market import infer_market_symbol
+
     exchanges = {infer_market_symbol(symbol).exchange for symbol in symbols if symbol}
     return tuple(sorted(exchanges))
 
@@ -247,6 +253,162 @@ def production_safe_news_intelligence_items(
 ) -> tuple[NewsIntelligenceItem, ...]:
     """Exclude fixture/deterministic-backed items from a production-facing view."""
     return tuple(item for item in items if item.production_safe)
+
+
+def _claim_json(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def derive_news_intelligence_items_from_report_json(
+    report_json: Mapping[str, object],
+    *,
+    symbol: str,
+    queries: tuple[str, ...],
+    observed_at: str,
+    conflict: ConflictStatus | None = None,
+) -> tuple[NewsIntelligenceItem, ...]:
+    """Same extraction as ``derive_news_intelligence_items``, from JSON.
+
+    The real production pipeline
+    (``gaon.knowledge.telegram_autonomous_learning._run_production_multi_source_research``)
+    already runs ``ProductionNewsRssAdapter`` and serializes its
+    ``ProviderResearchReport`` to JSON as one entry of
+    ``multi_source_research["provider_reports"]``. This accepts that JSON
+    shape directly instead of requiring the caller to reconstruct
+    dataclass instances, while reusing the exact same decision helpers
+    (stance classification, importance scoring, research action) as the
+    dataclass-based path - there is only one place headline-level
+    importance/impact/action logic is decided.
+    """
+    if str(report_json.get("category")) != SourceCategory.NEWS.value:
+        raise ValueError("news intelligence requires a NEWS category provider report")
+    claims = [_claim_json(item) for item in report_json.get("claims", ()) or ()]
+    if not claims:
+        return ()
+    provider = str(report_json.get("provider") or "unknown")
+    report_fixture_backed = bool(report_json.get("fixture_backed", False))
+    hypothesis_conflict = conflict.value if conflict is not None else "not_evaluated"
+    query_terms = _normalized_terms(" ".join(queries))
+    items: list[NewsIntelligenceItem] = []
+    for claim in claims:
+        text = str(claim.get("verbatim_text") or "")
+        rows = _parse_headline_rows(text)
+        if not rows:
+            fallback_title = text.strip().splitlines()[0].strip() if text.strip() else ""
+            rows = ((fallback_title, provider, str(claim.get("published_at") or "")),) if fallback_title else ()
+        for rank, (title, publisher, published) in enumerate(rows):
+            normalized_title = " ".join(title.lower().split())
+            stance = _classify_headline_stance(normalized_title)
+            impact = _STANCE_TO_IMPACT[stance]
+            symbols = _affected_symbols(symbol, title)
+            strategy_relevant = bool(query_terms & _normalized_terms(title)) or (bool(symbol) and symbol in title)
+            items.append(
+                NewsIntelligenceItem(
+                    item_id=_item_id(provider, str(claim.get("source_id") or ""), title, rank),
+                    headline=title,
+                    source=publisher or provider,
+                    published_at=published or None,
+                    observed_at=observed_at,
+                    provider=provider,
+                    locator=str(claim.get("locator") or ""),
+                    content_hash=str(claim.get("content_hash") or ""),
+                    fixture_backed=bool(claim.get("fixture_backed") or report_fixture_backed),
+                    importance_score=_importance_score(stance, rank, hypothesis_conflict),
+                    affected_markets=_affected_markets(symbols),
+                    affected_symbols=symbols,
+                    affected_sectors=(),
+                    impact=impact,
+                    strategy_relevant=bool(strategy_relevant),
+                    hypothesis_conflict=hypothesis_conflict,
+                    research_action=_research_action(impact, hypothesis_conflict, bool(strategy_relevant)),
+                )
+            )
+    return tuple(items)
+
+
+class NewsResearchAction(str, Enum):
+    """What Gaon should do about one news item, distinct from the broader
+    ResearchDirectorAction loop: this is specifically about whether/how a
+    headline should feed into ongoing research, not which validation stage
+    to run next."""
+
+    IGNORE = "ignore"
+    REMEMBER = "remember"
+    MONITOR = "monitor"
+    REVALIDATE = "revalidate"
+    START_COUNTER_HYPOTHESIS = "start_counter_hypothesis"
+
+
+# Deterministic keyword detectors, in the same spirit as
+# production_external_providers._stance: they only recognize explicit
+# textual signals already present in the real headline, they do not infer
+# anything unstated.
+_MACRO_REGIME_KEYWORDS = (
+    "금리", "인플레이션", "경기침체", "환율", "연준", "기준금리", "gdp",
+    "rate hike", "inflation", "recession", "federal reserve", "fed ",
+)
+_COST_LIQUIDITY_KEYWORDS = (
+    "거래정지", "유동성", "거래량 급감", "거래중단", "circuit breaker",
+    "liquidity", "trading halt", "spread widening",
+)
+_MARKET_WIDE_KEYWORDS = (
+    "시장 전체", "전 종목", "시장 붕괴", "규제", "지정학",
+    "market crash", "market-wide", "geopolitical", "regulation",
+)
+
+
+def _matches_any(normalized_headline: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in normalized_headline for keyword in keywords)
+
+
+def decide_news_research_action(
+    item: NewsIntelligenceItem,
+    *,
+    active_symbol: str | None = None,
+) -> NewsResearchAction:
+    """Decide what to do with one news item without over-reacting to noise.
+
+    A news item having been fetched at all is never sufficient reason to
+    re-run research; only items that are directly relevant to the active
+    candidate - by symbol, by an explicit macro/regime signal, by an
+    explicit transaction-cost/liquidity signal, by an explicit market-wide
+    structural-event signal, or by conflicting with the hypothesis under
+    research - are ever escalated. Sector relevance is intentionally not
+    modeled here: no real sector data exists anywhere in this codebase
+    (gaon.knowledge.news_intelligence.NewsIntelligenceItem.affected_sectors
+    is honestly always empty), so claiming sector relevance would be
+    fabricated rather than evidence-based.
+    """
+    normalized_headline = " ".join(item.headline.lower().split())
+    # item.affected_symbols always includes the plan's primary symbol
+    # trivially (the query itself was scoped to it), so it cannot be used
+    # as a relevance signal here - only an explicit textual mention of the
+    # symbol in the headline counts as "directly related".
+    symbol_relevant = bool(active_symbol) and active_symbol in item.headline
+    macro_signal = _matches_any(normalized_headline, _MACRO_REGIME_KEYWORDS)
+    cost_liquidity_signal = _matches_any(normalized_headline, _COST_LIQUIDITY_KEYWORDS)
+    market_wide_signal = _matches_any(normalized_headline, _MARKET_WIDE_KEYWORDS)
+    conflicts_hypothesis = item.hypothesis_conflict == ConflictStatus.UNRESOLVED_CONFLICT.value
+
+    relevant = (
+        symbol_relevant
+        or item.strategy_relevant
+        or macro_signal
+        or cost_liquidity_signal
+        or market_wide_signal
+        or conflicts_hypothesis
+    )
+    if not relevant:
+        return NewsResearchAction.IGNORE
+    if conflicts_hypothesis:
+        return NewsResearchAction.START_COUNTER_HYPOTHESIS
+    if market_wide_signal or cost_liquidity_signal:
+        return NewsResearchAction.REVALIDATE
+    if item.importance_score >= 60 and (symbol_relevant or macro_signal):
+        return NewsResearchAction.REVALIDATE
+    if symbol_relevant or macro_signal:
+        return NewsResearchAction.MONITOR
+    return NewsResearchAction.REMEMBER
 
 
 _IMPACT_LABEL_KO = {

@@ -326,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-research-director-release-check")
     sub.add_parser("gaon-production-daily-briefing-release-check")
     sub.add_parser("gaon-production-research-director-wiring-release-check")
+    sub.add_parser("gaon-production-news-research-integration-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2615,6 +2616,21 @@ def _run(args: argparse.Namespace) -> int:
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-news-research-integration-release-check":
+        from gaon.knowledge.telegram_autonomous_learning import production_news_research_integration_release_check
+
+        payload = production_news_research_integration_release_check()
+        print(
+            "gaon-production-news-research-integration-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"relevant_action={payload['relevant_action']} "
+            f"irrelevant_action={payload['irrelevant_action']} "
+            f"fixture_items_excluded={payload['fixture_items_excluded']} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
             "safety=pass"
         )
 

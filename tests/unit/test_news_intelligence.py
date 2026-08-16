@@ -16,7 +16,10 @@ from gaon.knowledge.multi_source_research import (
     UnifiedDiscoveryResult,
 )
 from gaon.knowledge.news_intelligence import (
+    NewsResearchAction,
+    decide_news_research_action,
     derive_news_intelligence_items,
+    derive_news_intelligence_items_from_report_json,
     production_news_intelligence_release_check,
     production_safe_news_intelligence_items,
     render_news_intelligence_briefing,
@@ -161,6 +164,117 @@ class NewsIntelligenceTests(unittest.TestCase):
         self.assertFalse(payload["strategy_mutated"])
         self.assertFalse(payload["order_executed"])
         self.assertGreater(payload["items"], 0)
+
+
+def _news_report_json(text: str, *, fixture_backed: bool = False) -> dict:
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return {
+        "provider": "production:news:rss",
+        "category": "news",
+        "state": "success",
+        "fixture_backed": fixture_backed,
+        "claims": [
+            {
+                "source_id": "s1",
+                "locator": "https://news.google.com/rss/search?q=redacted",
+                "content_hash": digest,
+                "published_at": None,
+                "fixture_backed": fixture_backed,
+                "verbatim_text": text,
+            }
+        ],
+    }
+
+
+class DeriveFromReportJsonTests(unittest.TestCase):
+    """gaon.knowledge.telegram_autonomous_learning._news_intelligence_summary
+    passes the real ProviderResearchReport.to_json() shape (as produced by
+    the real ProductionNewsRssAdapter inside
+    _run_production_multi_source_research) straight in - this is the JSON
+    entrypoint that path actually uses."""
+
+    def test_extracts_items_from_provider_report_json(self) -> None:
+        text = "Samsung chip demand improves | publisher=Real Wire | published=Fri, 14 Aug 2026 10:00:00 GMT"
+        items = derive_news_intelligence_items_from_report_json(
+            _news_report_json(text), symbol="005930", queries=("Samsung Electronics",), observed_at="2026-08-16T09:00:00Z"
+        )
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].headline, "Samsung chip demand improves")
+        self.assertEqual(items[0].source, "Real Wire")
+        self.assertFalse(items[0].fixture_backed)
+
+    def test_rejects_non_news_category(self) -> None:
+        report = _news_report_json("x")
+        report["category"] = "web"
+        with self.assertRaises(ValueError):
+            derive_news_intelligence_items_from_report_json(report, symbol="005930", queries=(), observed_at="t")
+
+    def test_fixture_backed_report_marks_items_fixture_backed(self) -> None:
+        items = derive_news_intelligence_items_from_report_json(
+            _news_report_json("Samsung chip demand improves | publisher=Wire | published=unknown", fixture_backed=True),
+            symbol="005930",
+            queries=(),
+            observed_at="t",
+        )
+        self.assertTrue(items[0].fixture_backed)
+        self.assertEqual(production_safe_news_intelligence_items(items), ())
+
+
+class DecideNewsResearchActionTests(unittest.TestCase):
+    def _item(self, headline: str, *, hypothesis_conflict: str = "not_evaluated", strategy_relevant: bool = False):
+        items = derive_news_intelligence_items_from_report_json(
+            _news_report_json(f"{headline} | publisher=Wire | published=unknown"),
+            symbol="005930",
+            queries=("Samsung Electronics semiconductor",) if strategy_relevant else (),
+            observed_at="t",
+            conflict=None
+            if hypothesis_conflict == "not_evaluated"
+            else ConflictStatus.UNRESOLVED_CONFLICT,
+        )
+        return items[0]
+
+    def test_irrelevant_headline_is_ignored(self) -> None:
+        item = self._item("Local weather forecast improves this weekend")
+        self.assertEqual(decide_news_research_action(item, active_symbol="005930"), NewsResearchAction.IGNORE)
+
+    def test_explicit_symbol_mention_without_a_strong_signal_is_monitored(self) -> None:
+        item = self._item("005930 to hold annual shareholder meeting next week")
+        self.assertEqual(decide_news_research_action(item, active_symbol="005930"), NewsResearchAction.MONITOR)
+
+    def test_explicit_symbol_mention_with_high_importance_escalates_to_revalidate(self) -> None:
+        item = self._item("005930 shares trade higher on demand recovery")
+        self.assertEqual(decide_news_research_action(item, active_symbol="005930"), NewsResearchAction.REVALIDATE)
+
+    def test_unresolved_hypothesis_conflict_starts_counter_hypothesis(self) -> None:
+        item = self._item("Samsung demand outlook unchanged", hypothesis_conflict="unresolved_conflict")
+        self.assertEqual(item.hypothesis_conflict, "unresolved_conflict")
+        self.assertEqual(
+            decide_news_research_action(item, active_symbol="005930"), NewsResearchAction.START_COUNTER_HYPOTHESIS
+        )
+
+    def test_trading_halt_liquidity_signal_triggers_revalidate(self) -> None:
+        item = self._item("Samsung faces trading halt amid liquidity crunch")
+        self.assertEqual(decide_news_research_action(item, active_symbol="005930"), NewsResearchAction.REVALIDATE)
+
+    def test_market_wide_structural_event_triggers_revalidate(self) -> None:
+        item = self._item("Regulation shakes up market-wide trading rules")
+        self.assertEqual(decide_news_research_action(item, active_symbol="005930"), NewsResearchAction.REVALIDATE)
+
+    def test_macro_regime_signal_without_high_importance_is_monitored(self) -> None:
+        item = self._item("Federal Reserve signals rate hike path unchanged")
+        self.assertEqual(decide_news_research_action(item, active_symbol="005930"), NewsResearchAction.MONITOR)
+
+    def test_weakly_query_relevant_headline_is_remembered_not_escalated(self) -> None:
+        item = self._item("Samsung factory tour draws local visitors", strategy_relevant=True)
+        action = decide_news_research_action(item, active_symbol=None)
+        self.assertIn(action, (NewsResearchAction.REMEMBER, NewsResearchAction.MONITOR))
+
+    def test_fetch_alone_never_implies_escalation_without_a_relevance_signal(self) -> None:
+        # Being fetched at all must never be sufficient; only an explicit
+        # relevance signal (symbol/macro/cost-liquidity/market-wide/conflict)
+        # may escalate past ignore.
+        item = self._item("Unrelated celebrity gossip roundup")
+        self.assertEqual(decide_news_research_action(item, active_symbol="005930"), NewsResearchAction.IGNORE)
 
 
 if __name__ == "__main__":

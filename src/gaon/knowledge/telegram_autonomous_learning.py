@@ -9,6 +9,7 @@ fail-closed here.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -69,8 +70,17 @@ from .multi_source_research import (
     UnifiedDiscoveryResult,
     validation_sample_diagnostics,
 )
+from .news_intelligence import (
+    derive_news_intelligence_items_from_report_json,
+    decide_news_research_action,
+    production_safe_news_intelligence_items,
+)
 from .production_external_providers import production_external_provider_adapters
-from .research_director_bridge import decide_next_research_action, live_execution_fields_from_real_adapter
+from .research_director_bridge import (
+    _CLAIM_STANCE_TO_HYPOTHESIS_CONFLICT,
+    decide_next_research_action,
+    live_execution_fields_from_real_adapter,
+)
 
 
 TELEGRAM_AUTONOMOUS_LEARNING_SCHEMA_VERSION = 2
@@ -141,6 +151,57 @@ def telegram_autonomous_learning_payload(
         steps_used=steps_used,
         max_steps=max_steps,
     )
+
+
+def _news_intelligence_summary(
+    multi_source_research: Mapping[str, object],
+    *,
+    symbol: str,
+    observed_at: str,
+) -> dict[str, object]:
+    """Attach Gaon Final Integration Step 2 news evidence to the real payload.
+
+    Reuses the NEWS-category ProviderResearchReport that
+    _run_production_multi_source_research already produced (via the real
+    ProductionNewsRssAdapter) - no new fetch happens here. A headline only
+    ever reaches ignore/remember/monitor/revalidate/start_counter_hypothesis
+    via gaon.knowledge.news_intelligence.decide_news_research_action, which
+    requires an explicit relevance signal; being fetched at all is never
+    sufficient reason to re-run research.
+    """
+    reports = _as_list(multi_source_research.get("provider_reports"))
+    news_report = next((_as_dict(report) for report in reports if _as_dict(report).get("category") == "news"), None)
+    if news_report is None:
+        return {"schema_version": 1, "items": [], "actions_summary": {}, "conflict_status": "not_evaluated"}
+    plan_queries = _as_dict(_as_dict(multi_source_research.get("research_plan")).get("queries")).get("news") or ()
+    evidence_bundle = _as_dict(multi_source_research.get("evidence_bundle"))
+    conflict_stance = str(evidence_bundle.get("conflict_status") or "")
+    conflict_value = _CLAIM_STANCE_TO_HYPOTHESIS_CONFLICT.get(conflict_stance, "not_evaluated")
+    conflict = ConflictStatus(conflict_value) if conflict_value != "not_evaluated" else None
+    try:
+        items = derive_news_intelligence_items_from_report_json(
+            news_report,
+            symbol=symbol,
+            queries=tuple(str(item) for item in plan_queries),
+            observed_at=observed_at,
+            conflict=conflict,
+        )
+    except ValueError:
+        return {"schema_version": 1, "items": [], "actions_summary": {}, "conflict_status": conflict_value}
+    safe_items = production_safe_news_intelligence_items(items)
+    actions_summary: dict[str, int] = {}
+    item_records = []
+    for item in safe_items:
+        action = decide_news_research_action(item, active_symbol=symbol)
+        actions_summary[action.value] = actions_summary.get(action.value, 0) + 1
+        item_records.append({**item.to_json(), "news_research_action": action.value})
+    return {
+        "schema_version": 1,
+        "items": item_records,
+        "actions_summary": actions_summary,
+        "conflict_status": conflict_value,
+        "fixture_items_excluded": len(items) - len(safe_items),
+    }
 
 
 def production_autonomous_learning_payload_from_baseline(
@@ -272,6 +333,11 @@ def production_autonomous_learning_payload_from_baseline(
     )
     sample_diagnostics = validation_sample_diagnostics(baseline)
     live_execution_fields = live_execution_fields_from_real_adapter()
+    news_intelligence_summary = _news_intelligence_summary(
+        multi_source_research,
+        symbol=symbol,
+        observed_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
     research_director_decision = decide_next_research_action(
         {
             "autonomous_quant_partner": autonomous_quant_partner,
@@ -301,6 +367,7 @@ def production_autonomous_learning_payload_from_baseline(
         "research_director_decision": research_director_decision.to_json(),
         "research_director_steps_used": steps_used,
         "research_director_max_steps": max_steps,
+        "news_intelligence": news_intelligence_summary,
         "autonomous_quant_partner_validation_status": _as_dict(autonomous_quant_partner.get("validation_sufficiency_v2")).get("status"),
         "production_validation_execution_summary": partner_execution_summary,
         "adaptive_validation_feedback": _as_dict(autonomous_quant_partner.get("adaptive_validation_feedback")),
@@ -513,6 +580,100 @@ def autonomous_learning_safe_failure_payload(
         "safety": "pass",
         "error_type": error_type,
         "message": message,
+    }
+
+
+def production_news_research_integration_release_check() -> Mapping[str, object]:
+    """Deterministic release check for Final Integration Program Step 2.
+
+    Proves news evidence is registered on the real Autonomous Learning V2
+    payload with provenance/timestamp, that a relevant headline escalates
+    while an irrelevant one is ignored, and that fixture-backed evidence is
+    never counted as production news.
+    """
+    baseline = _release_baseline_payload(source="real")
+    relevant_text = "Samsung faces trading halt amid liquidity crunch | publisher=Wire | published=Fri, 14 Aug 2026 10:00:00 GMT"
+    irrelevant_text = "Local weather forecast improves this weekend | publisher=Wire | published=unknown"
+
+    def _news_report(text: str, *, fixture_backed: bool = False) -> dict[str, object]:
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return {
+            "provider": "production:news:rss",
+            "category": "news",
+            "state": "success",
+            "fixture_backed": fixture_backed,
+            "claims": [
+                {
+                    "source_id": "release-check-source",
+                    "locator": "https://news.google.com/rss/search?q=redacted",
+                    "content_hash": digest,
+                    "published_at": "Fri, 14 Aug 2026 10:00:00 GMT",
+                    "fixture_backed": fixture_backed,
+                    "verbatim_text": text,
+                }
+            ],
+        }
+
+    def _external(text: str, *, fixture_backed: bool = False) -> dict[str, object]:
+        return {
+            "state": "content_unavailable",
+            "multi_source_research": {
+                "provider_reports": [_news_report(text, fixture_backed=fixture_backed)],
+                "research_plan": {"queries": {"news": ["Samsung Electronics semiconductor cycle"]}},
+                "evidence_bundle": {"evidence_strength": "exploratory", "conflict_status": "insufficient"},
+            },
+        }
+
+    relevant_payload = production_autonomous_learning_payload_from_baseline(
+        "release-check: news research integration",
+        symbol="005930",
+        mode="research",
+        baseline=baseline,
+        external_research=_external(relevant_text),
+    )
+    irrelevant_payload = production_autonomous_learning_payload_from_baseline(
+        "release-check: news research integration",
+        symbol="005930",
+        mode="research",
+        baseline=baseline,
+        external_research=_external(irrelevant_text),
+    )
+    fixture_payload = production_autonomous_learning_payload_from_baseline(
+        "release-check: news research integration",
+        symbol="005930",
+        mode="research",
+        baseline=baseline,
+        external_research=_external(relevant_text, fixture_backed=True),
+    )
+    relevant_news = relevant_payload["autonomous_learning_v2"]["news_intelligence"]
+    irrelevant_news = irrelevant_payload["autonomous_learning_v2"]["news_intelligence"]
+    fixture_news = fixture_payload["autonomous_learning_v2"]["news_intelligence"]
+    relevant_item = relevant_news["items"][0] if relevant_news["items"] else {}
+
+    checks = {
+        "relevant_news_escalates_past_ignore": relevant_news.get("actions_summary", {}).get("ignore") is None
+        and bool(relevant_news["items"]),
+        "irrelevant_news_is_ignored": irrelevant_news.get("actions_summary") == {"ignore": 1},
+        "provenance_preserved": bool(relevant_item.get("locator")) and bool(relevant_item.get("content_hash")),
+        "timestamp_preserved": bool(relevant_item.get("observed_at")) and bool(relevant_item.get("published_at")),
+        "fixture_evidence_never_registered_as_production": fixture_news["items"] == []
+        and fixture_news.get("fixture_items_excluded", 0) == 1,
+        "no_mutation_or_order": all(
+            payload["strategy_mutated"] is False and payload["order_executed"] is False
+            for payload in (relevant_payload, irrelevant_payload, fixture_payload)
+        ),
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"production news research integration release check failed: {failed}")
+    return {
+        "schema_version": 1,
+        "relevant_action": relevant_item.get("news_research_action"),
+        "irrelevant_action": irrelevant_news["items"][0].get("news_research_action") if irrelevant_news["items"] else None,
+        "fixture_items_excluded": fixture_news.get("fixture_items_excluded", 0),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "safety": "pass",
     }
 
 
