@@ -200,6 +200,16 @@ def _strip_symbol_as_strategy_lead_sentence(tool_text: str, *, symbol: str) -> s
     return "\n".join(remaining)
 
 
+# Patch 8.3 production bug fix: these are the read-only tools
+# route_read_only_tool can resolve a message to that ALL resolve their
+# research target from a single symbol pulled out of conversational
+# context (never from a ResearchMission) - the exact tools whose stale-
+# context symbol resolution reproduced the "resumed an old Samsung
+# Electronics session" defect when a market-wide mission's candidate
+# continuation message did not happen to match the deterministic router's
+# multi_symbol_research heuristics either.
+_LEGACY_SINGLE_SYMBOL_RESEARCH_TOOLS = frozenset({"autonomous_learning_research", "autonomous_research_cycle", "research_retest"})
+
 logger = logging.getLogger(__name__)
 
 
@@ -793,13 +803,31 @@ class LLMConversationBrain:
         # autonomous research path, which would resolve to
         # ``context.last_symbols[0]`` (or the "005930" default) and silently
         # narrow a market-wide mission back down to one symbol.
+        #
+        # Patch 8.3 production bug fix: even with a broadened
+        # is_generic_continuation_request, a token-based predicate can never
+        # enumerate every real phrasing. As defense-in-depth, this hook ALSO
+        # takes precedence whenever the deterministic router would
+        # otherwise send this message to one of the LEGACY single-symbol-
+        # shaped research tools (which resolve their target symbol from
+        # stale conversational context, never from the mission) while this
+        # mission already has real persisted candidate work in progress -
+        # that combination is never a coincidence, it is always a
+        # continuation of the active candidate's validation. An explicit
+        # symbol mention (route.symbols) or an excluded conversational
+        # intent still bypasses this entirely, same as the token-based path.
+        candidate_continuation_precedence = (
+            existing_tool in _LEGACY_SINGLE_SYMBOL_RESEARCH_TOOLS
+            and mission is not None
+            and get_active_candidate(mission) is not None
+        )
         if (
             existing_tool != "multi_symbol_research"
             and mission is not None
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
             and not route.symbols
             and route.intent not in _MISSION_HOOK_EXCLUDED_INTENTS
-            and is_generic_continuation_request(request.text)
+            and (is_generic_continuation_request(request.text) or candidate_continuation_precedence)
         ):
             if mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
                 # The target promotion-ready candidate count was already

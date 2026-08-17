@@ -278,6 +278,23 @@ _DIVERSITY_REQUEST_TOKENS: tuple[str, ...] = (
     "새로운방식",
 )
 
+# Patch 8.3 production bug fix: "서로 다른 전략 3개가 준비될 때까지" (real
+# user wording for the promotion-ready TARGET count - "until 3 mutually
+# DISTINCT strategies are ready") contains the bare substring "다른전략",
+# which used to be misread by is_diversity_request as a request to abandon
+# the currently active candidate and rotate to a new one - discarding real
+# in-progress robustness work on every turn that mentioned the target
+# count this way. A "다른 전략/방식/방법/후보/접근" phrase followed by a
+# count is only excluded when the sentence is ALSO framed as a goal to
+# keep working toward ("...때까지" - "until ..."), not a bare digit+개 on
+# its own: "다른 전략 2개 더 찾아봐" (find 2 more DIFFERENT strategies -
+# an immediate rotation request that happens to state a quantity) must
+# still be recognized as diversity/rotation, while "...3개가 준비될
+# 때까지"/"...3개가 나올 때까지" (a target-count GOAL, not an immediate
+# rotation ask) must not be (ULTRAREVIEW fix: an earlier, broader
+# bare-digit exclusion silently suppressed the former).
+_DIVERSITY_TARGET_COUNT_MARKER = re.compile(r"다른(?:전략|방식|방법|후보|접근)\d+개")
+
 
 def is_diversity_request(text: str) -> bool:
     """True for "다른 방식도 찾아봐" style requests to bias the next
@@ -286,7 +303,72 @@ def is_diversity_request(text: str) -> bool:
     normalized = _norm(text)
     if not normalized:
         return False
+    if _DIVERSITY_TARGET_COUNT_MARKER.search(normalized) and "때까지" in normalized:
+        return False
     return _contains_any(normalized, _DIVERSITY_REQUEST_TOKENS)
+
+
+# Patch 8.3 production bug fix (root cause): a real Telegram conversation
+# established a market-wide strategy-centric mission with a promising
+# candidate, then asked to continue its robustness validation with phrasing
+# like "후보 A 계속 검증해줘" / "OOS 검증해줘" / "walk-forward까지
+# 진행해줘". None of these match _GENERIC_CONTINUATION_TOKENS (which only
+# recognizes "계속" paired with "연구"/"해주세요"/"해줘"/"진행", never with
+# "검증", and never a bare validation-stage name on its own) - so
+# gaon.runtime.llm_conversation._try_conversational_mvp's mission-routing-
+# precedence hook never fired, and the message fell through to the legacy
+# single-symbol autonomous-research path, which resolved its target symbol
+# from STALE conversational context (last_symbols[0]) - reproducing the
+# exact "resumed an old Samsung Electronics session" defect. These two
+# token sets close that gap: an explicit reference to a strategy candidate,
+# or a named robustness-validation stage (OOS/walk-forward/regime/
+# transaction-cost/Monte Carlo), paired with a request/continue verb, is
+# unambiguously a request to continue the active strategy candidate's
+# validation - never a reason to invent a new mission scope (same
+# scope-regression-guard-only contract as is_generic_continuation_request).
+_CANDIDATE_REFERENCE_TOKENS: tuple[str, ...] = ("후보",)
+_ROBUSTNESS_STAGE_TOKENS: tuple[str, ...] = (
+    "oos",
+    "outofsample",
+    "워크포워드",
+    "walkforward",
+    "거래비용",
+    "transactioncost",
+    "몬테카를로",
+    "montecarlo",
+    "시장국면",
+    "레짐",
+    "regime",
+    "파라미터민감도",
+    "robustness",
+)
+_CANDIDATE_CONTINUATION_VERB_TOKENS: tuple[str, ...] = (
+    "검증해줘",
+    "검증해주세요",
+    "검증해달라",
+    "검증부탁",
+    "진행해줘",
+    "진행해주세요",
+    "진행해달라",
+    "계속검증",
+    "계속진행",
+    "계속해줘",
+    "계속해주세요",
+)
+
+
+def is_candidate_robustness_continuation_request(text: str) -> bool:
+    """True for "후보 A 계속 검증해줘" / "OOS 검증해줘" / "walk-forward까지
+    진행해줘" style requests to continue the ACTIVE strategy candidate's
+    robustness validation - see the module-level note above for the
+    production defect this closes."""
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    mentions_candidate_or_stage = _contains_any(normalized, _CANDIDATE_REFERENCE_TOKENS) or _contains_any(
+        normalized, _ROBUSTNESS_STAGE_TOKENS
+    )
+    return mentions_candidate_or_stage and _contains_any(normalized, _CANDIDATE_CONTINUATION_VERB_TOKENS)
 
 
 def is_generic_continuation_request(text: str) -> bool:
@@ -317,6 +399,8 @@ def is_generic_continuation_request(text: str) -> bool:
         # "다른 방식도 찾아봐" asks Gaon to keep researching (within the
         # same mission) with a different strategy hypothesis - a request to
         # continue, just biased toward diversity.
+        return True
+    if is_candidate_robustness_continuation_request(text):
         return True
     return _contains_any(normalized, _GENERIC_CONTINUATION_TOKENS)
 
@@ -1199,6 +1283,168 @@ def production_strategy_centric_autonomous_research_release_check() -> Mapping[s
         "bounded_execution_preserved": bounded_execution_preserved,
         "human_promotion_gate_preserved": human_promotion_gate_preserved,
         "legacy_migration_safe": legacy_migration_safe,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_persistent_strategy_candidate_continuation_release_check() -> Mapping[str, object]:
+    """Deterministic, network-free release check for Patch 8.3.
+
+    Exercises the production defect this patch fixes: a real Telegram
+    conversation established a market-wide strategy-centric mission with a
+    promising candidate, then asked to continue that candidate's
+    robustness validation with natural phrasing ("후보 A 계속 검증해줘",
+    "OOS 검증해줘") that a narrower, hand-enumerated continuation-phrase
+    predicate did not recognize - so the message fell through to the
+    legacy single-symbol autonomous-research path, which resolved its
+    target symbol from STALE conversational context instead of the
+    mission's own persisted candidate. Also exercises candidate identity
+    persistence across a restart/reload, cross-symbol evidence, candidate
+    rotation, distinct promotion-ready counting, and the unchanged human
+    promotion gate.
+    """
+    from gaon.knowledge.strategy_candidate import (
+        is_stagnant,
+        mark_stagnant,
+        new_candidate,
+        next_untried_family,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+
+    now1 = "2026-08-17T00:00:00Z"
+    mission = extract_or_update_mission(
+        "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. "
+        "현재 등록되어있는 전략보다 수익면에서나 안전성 면에서 뛰어나야합니다.",
+        existing=None,
+        now=now1,
+    )
+    mission = extract_or_update_mission("국내 주식 전체를 대상으로 연구해주세요", existing=mission, now=now1)
+
+    candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=now1)
+    mission = add_candidate(mission, candidate, now=now1)
+    fingerprint_before = candidate.strategy_fingerprint
+
+    now2 = "2026-08-17T00:01:00Z"
+    progressed = record_breadth_progress(
+        candidate,
+        attempted=15,
+        valid=12,
+        trade_count=340,
+        evidence_symbols=("005930", "000660", "473050"),
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now2,
+    )
+    mission = update_candidate(mission, progressed, now=now2)
+    cross_symbol_identity_preserved = (
+        progressed.strategy_fingerprint == fingerprint_before
+        and progressed.valid_symbols == 12
+        and len(progressed.evidence_symbols) >= 2
+    )
+    strategy_candidate_persisted = (
+        len(mission.candidates) == 1
+        and mission.active_candidate_id == candidate.candidate_id
+        and get_candidate(mission, candidate.candidate_id).evidence_symbols == progressed.evidence_symbols
+    )
+
+    # The exact production defect: these real user phrasings must be
+    # recognized as a mission continuation (never silently ignored, which
+    # is what let a stale single-symbol session resurface in production).
+    real_production_continuation_phrases = (
+        "후보 A 계속 검증해줘",
+        "OOS 검증해줘",
+        "walk-forward까지 진행해줘",
+        "계속 연구해줘",
+        "승격 가능한 전략 3개가 나올 때까지 계속해줘",
+    )
+    stale_symbol_context_blocked = all(
+        is_generic_continuation_request(phrase) for phrase in real_production_continuation_phrases
+    )
+    # "서로 다른 전략 3개" declares the target count's distinctness - it
+    # must never be misread as a request to abandon the active candidate.
+    stale_symbol_context_blocked = stale_symbol_context_blocked and not is_diversity_request(
+        "서로 다른 전략 3개가 준비될 때까지 연구해주세요"
+    )
+
+    now3 = "2026-08-17T00:02:00Z"
+    robustness_progressed = record_robustness_progress(progressed, director_action="collect_more_evidence", terminal=False, now=now3)
+    candidate_fingerprint_preserved = robustness_progressed.strategy_fingerprint == fingerprint_before
+    mission = update_candidate(mission, robustness_progressed, now=now3)
+
+    # Restart/reload: a brand new in-memory reconstruction from the exact
+    # persisted JSON (what a real process restart reloads from) must carry
+    # the active candidate and its accumulated progress forward unchanged.
+    reloaded_mission = ResearchMission.from_json(mission.to_json())
+    reloaded_candidate = get_candidate(reloaded_mission, candidate.candidate_id)
+    restart_persistence = (
+        reloaded_mission.active_candidate_id == candidate.candidate_id
+        and reloaded_candidate is not None
+        and reloaded_candidate.strategy_fingerprint == fingerprint_before
+        and reloaded_candidate.valid_symbols == 12
+        and reloaded_candidate.last_director_action == "collect_more_evidence"
+    )
+
+    now4 = "2026-08-17T00:03:00Z"
+    stagnant_source = robustness_progressed
+    for _ in range(4):
+        stagnant_source = record_robustness_progress(stagnant_source, director_action="collect_more_evidence", terminal=False, now=now4)
+    rotated = mark_stagnant(stagnant_source, now=now4)
+    next_family = next_untried_family((rotated,))
+    candidate_rotation = is_stagnant(stagnant_source) and next_family is not None and next_family != rotated.strategy_family
+
+    now5 = "2026-08-17T00:04:00Z"
+    fp_a, fp_b, fp_c = "fp-continuation-a", "fp-continuation-b", "fp-continuation-c"
+    target_mission = extract_or_update_mission(
+        "승격 요청이 가능한 정도까지 되는 3개의 전략이 나올때까지 연구해주세요", existing=mission, now=now5
+    )
+    counted = record_promotion_candidate(target_mission, strategy_fingerprint=fp_a, candidate_id="KR-ST-101", now=now5)
+    counted = record_promotion_candidate(counted, strategy_fingerprint=fp_a, candidate_id="KR-ST-101", now=now5)  # duplicate, must not double-count
+    below_target_after_duplicate = counted.current_promotion_ready_candidates == 1 and counted.status is MissionStatus.ACTIVE
+    counted = record_promotion_candidate(counted, strategy_fingerprint=fp_b, candidate_id="KR-ST-102", now=now5)
+    counted = record_promotion_candidate(counted, strategy_fingerprint=fp_c, candidate_id="KR-ST-103", now=now5)
+    distinct_promotion_counting = (
+        below_target_after_duplicate
+        and counted.current_promotion_ready_candidates == 3
+        and counted.current_promotion_ready_candidates == distinct_promotion_ready_strategy_count(counted)
+        and counted.status is MissionStatus.AWAITING_HUMAN_APPROVAL
+    )
+    human_promotion_gate_preserved = distinct_promotion_counting
+
+    with_focus = record_focus_symbol(mission, symbol="005930", now=now3)
+    cleared = clear_focus_symbol(with_focus, now=now3)
+    bounded_execution_preserved = with_focus.pending_promotion_symbol == "005930" and cleared.pending_promotion_symbol is None
+
+    checks = {
+        "strategy_candidate_persisted": strategy_candidate_persisted,
+        "candidate_fingerprint_preserved": candidate_fingerprint_preserved,
+        "stale_symbol_context_blocked": stale_symbol_context_blocked,
+        "cross_symbol_identity_preserved": cross_symbol_identity_preserved,
+        "candidate_rotation": candidate_rotation,
+        "distinct_promotion_counting": distinct_promotion_counting,
+        "restart_persistence": restart_persistence,
+        "bounded_execution_preserved": bounded_execution_preserved,
+        "human_promotion_gate_preserved": human_promotion_gate_preserved,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"persistent strategy candidate continuation release check failed: {failed}")
+
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        "strategy_candidate_persisted": strategy_candidate_persisted,
+        "candidate_fingerprint_preserved": candidate_fingerprint_preserved,
+        "stale_symbol_context_blocked": stale_symbol_context_blocked,
+        "cross_symbol_identity_preserved": cross_symbol_identity_preserved,
+        "candidate_rotation": candidate_rotation,
+        "distinct_promotion_counting": distinct_promotion_counting,
+        "restart_persistence": restart_persistence,
+        "bounded_execution_preserved": bounded_execution_preserved,
+        "human_promotion_gate_preserved": human_promotion_gate_preserved,
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,
