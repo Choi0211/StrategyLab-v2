@@ -66,6 +66,7 @@ from gaon.knowledge.research_mission import (
     distinct_promotion_ready_strategy_count,
     extract_or_update_mission,
     get_active_candidate,
+    is_candidate_robustness_continuation_request,
     is_cycle_budget_exhausted,
     is_diversity_request,
     is_generic_continuation_request,
@@ -75,6 +76,7 @@ from gaon.knowledge.research_mission import (
     mission_budget_exhausted_message,
     mission_cycle_request_text,
     mission_status_block,
+    render_mission_candidate_detailed_status,
     next_candidate_sequence,
     next_unexplored_symbols,
     record_blocked,
@@ -821,13 +823,61 @@ class LLMConversationBrain:
             and mission is not None
             and get_active_candidate(mission) is not None
         )
+        # Patch 8.5 production bug fix: once a candidate's breadth
+        # evaluation has already gathered sufficient cross-symbol evidence
+        # (mission.pending_promotion_symbol is set - see
+        # _try_candidate_breadth_cycle), a message that explicitly asks to
+        # continue that candidate's robustness validation (OOS/walk-
+        # forward/cost-stress/regime/etc - is_candidate_robustness_
+        # continuation_request) can coincidentally also trip the
+        # deterministic multi_symbol_research tool heuristic (e.g.
+        # mentioning "cross-symbol" as one of the validation stages to
+        # run) or the STATUS_QUERY intent classifier (e.g. "유지한
+        # 상태에서" - "while KEEPING it [unchanged]" - contains the bare
+        # substring "상태" with no status-query meaning at all). Neither
+        # collision is something a hand-enumerated token list can fully
+        # prevent. When the mission has already reached "ready for
+        # robustness validation" AND the message unambiguously asks to
+        # continue that validation, this precedence signal overrides BOTH
+        # false-positive gates - exactly as candidate_continuation_
+        # precedence above already does for the legacy-single-symbol-tool
+        # case. It never fires for a genuine status query or a genuine
+        # fresh multi-symbol research request, since those never match
+        # is_candidate_robustness_continuation_request's required
+        # candidate/topic-reference-plus-continuation-verb shape.
+        robustness_continuation_precedence = (
+            mission is not None
+            and mission.pending_promotion_symbol is not None
+            and is_candidate_robustness_continuation_request(request.text)
+        )
+        # ULTRAREVIEW note: a bare "후보"+continuation-verb combination
+        # that ALSO happens to be STATUS_QUERY-shaped (e.g. "후보 상태
+        # 계속해주세요") still overrides this exclusion below, same as a
+        # named-stage message - deliberately, NOT narrowed to require
+        # is_named_robustness_stage_request. Narrowing this override was
+        # tried and reverted: without it, such a message does not fall
+        # back to the (safe, bounded) STATUS_QUERY branch as hoped - it
+        # falls through EARLIER, into _try_autonomous_research_conversation
+        # (called unconditionally further down in this same function,
+        # BEFORE the STATUS_QUERY branch is ever reached), reproducing the
+        # exact stale-single-symbol-context defect this patch closes for
+        # the reported production message. Routing this ambiguous edge
+        # case into the real, bounded, mission-aware robustness cycle
+        # (this override's current behavior) is the safer of the two
+        # available outcomes - it never fabricates state, never mutates
+        # anything, and stays bounded to one tool call - even though it
+        # may occasionally spend a cycle a user meant as a free status
+        # read. Fixing the ambiguous case properly requires reordering
+        # _try_conversational_mvp so STATUS_QUERY is handled before
+        # _try_autonomous_research_conversation, which is a larger,
+        # separately-scoped change - see the Patch 8.5 completion report.
         if (
-            existing_tool != "multi_symbol_research"
+            (existing_tool != "multi_symbol_research" or robustness_continuation_precedence)
             and mission is not None
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
             and not route.symbols
-            and route.intent not in _MISSION_HOOK_EXCLUDED_INTENTS
-            and (is_generic_continuation_request(request.text) or candidate_continuation_precedence)
+            and (route.intent not in _MISSION_HOOK_EXCLUDED_INTENTS or robustness_continuation_precedence)
+            and (is_generic_continuation_request(request.text) or candidate_continuation_precedence or robustness_continuation_precedence)
         ):
             if mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
                 # The target promotion-ready candidate count was already
@@ -888,6 +938,17 @@ class LLMConversationBrain:
             ConversationalMVPIntent.RERUN_REQUEST,
             ConversationalMVPIntent.RECOMMENDATION_REQUEST,
             ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
+            # Patch 8.5 fix: this gate used to block the STATUS_QUERY
+            # branch below (mission/candidate status, including the exact
+            # "지금 뭐 연구하고 있어?" example that branch's own docstring
+            # names) from ever being reached, because none of its natural
+            # phrasings happen to contain one of the hand-enumerated
+            # supported tokens above - classify_conversational_route's own
+            # STATUS_TOKENS-based classification, plus
+            # _is_simple_conversational_status_request below, are already
+            # a more precise gate for this intent than the blanket token
+            # list.
+            ConversationalMVPIntent.STATUS_QUERY,
         }:
             return None
         existing_tool = route_read_only_tool(request.text)
@@ -917,11 +978,16 @@ class LLMConversationBrain:
             # from the actual strategy candidate portfolio (Patch 8.2)
             # instead of the generic runtime-status renderer.
             self._remember_mission(request, mission)
-            text = render_candidate_status_summary(
+            summary_text = render_candidate_status_summary(
                 candidate_records(mission),
                 current=distinct_promotion_ready_strategy_count(mission),
                 target=mission.target_promotion_ready_candidates,
             )
+            # Patch 8.5: the detailed per-stage status footer is appended
+            # here (not a replacement) so the existing portfolio-summary
+            # text/tests above are unchanged.
+            detailed_status = render_mission_candidate_detailed_status(mission, get_active_candidate(mission))
+            text = f"{summary_text}\n\n{detailed_status}"
             return text, "conversation_mission_candidate_status", _dedupe((*warnings, "mission candidate status")), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text):
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_status")
@@ -1277,7 +1343,26 @@ class LLMConversationBrain:
         action = str(director.get("action", "unknown"))
         terminal = bool(director.get("terminal"))
 
-        updated_candidate = record_robustness_progress(candidate, director_action=action, terminal=terminal, now=request.received_at)
+        # Patch 8.5: persist the REAL per-stage status this cycle's
+        # EXISTING production_grade_validation output reported (never
+        # fabricated - a stage this cycle did not touch is simply absent
+        # here, and record_robustness_progress leaves any previously
+        # recorded status for it untouched rather than resetting it).
+        partner = _as_dict(learning.get("autonomous_quant_partner"))
+        grade = _as_dict(partner.get("production_grade_validation"))
+        validation_stage_status = {
+            key: str(_as_dict(grade[key]).get("status", "unavailable"))
+            for key in (
+                "multi_symbol_validation", "out_of_sample", "walk_forward",
+                "regime_validation", "parameter_sensitivity", "transaction_cost_stress", "monte_carlo",
+            )
+            if isinstance(grade.get(key), dict)
+        }
+
+        updated_candidate = record_robustness_progress(
+            candidate, director_action=action, terminal=terminal, now=request.received_at,
+            validation_stage_status=validation_stage_status,
+        )
         updated_mission = mission
         identity_unverified = False
         if terminal:

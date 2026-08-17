@@ -175,6 +175,57 @@ class StagnationRotationTests(unittest.TestCase):
         self.assertFalse(is_stagnant(rejected))
 
 
+class ValidationStageStatusPersistenceTests(unittest.TestCase):
+    """Patch 8.5 - per-stage deep-validation status must be honestly
+    persisted (never fabricated) and merged (never silently reset)."""
+
+    def test_new_candidate_has_no_recorded_stage_status(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        self.assertEqual(dict(candidate.validation_stage_status), {})
+
+    def test_stage_status_is_recorded_verbatim(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_robustness_progress(
+            candidate, director_action="collect_more_evidence", terminal=False, now=LATER,
+            validation_stage_status={"out_of_sample": "not_run_missing_oos_backtest", "walk_forward": "not_run_missing_fold_backtests"},
+        )
+        self.assertEqual(candidate.validation_stage_status["out_of_sample"], "not_run_missing_oos_backtest")
+        self.assertEqual(candidate.validation_stage_status["walk_forward"], "not_run_missing_fold_backtests")
+
+    def test_a_later_cycle_touching_only_some_stages_preserves_earlier_ones(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_robustness_progress(
+            candidate, director_action="collect_more_evidence", terminal=False, now=LATER,
+            validation_stage_status={"out_of_sample": "pass"},
+        )
+        candidate = record_robustness_progress(
+            candidate, director_action="run_walk_forward", terminal=False, now=LATER,
+            validation_stage_status={"walk_forward": "pass"},
+        )
+        self.assertEqual(candidate.validation_stage_status["out_of_sample"], "pass")
+        self.assertEqual(candidate.validation_stage_status["walk_forward"], "pass")
+
+    def test_round_trips_through_json(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_robustness_progress(
+            candidate, director_action="collect_more_evidence", terminal=False, now=LATER,
+            validation_stage_status={"out_of_sample": "not_run_missing_oos_backtest"},
+        )
+        from gaon.knowledge.strategy_candidate import StrategyCandidateRecord
+
+        restored = StrategyCandidateRecord.from_json(candidate.to_json())
+        self.assertEqual(dict(restored.validation_stage_status), dict(candidate.validation_stage_status))
+
+    def test_legacy_json_without_the_field_degrades_gracefully(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        legacy_json = candidate.to_json()
+        del legacy_json["validation_stage_status"]
+        from gaon.knowledge.strategy_candidate import StrategyCandidateRecord
+
+        restored = StrategyCandidateRecord.from_json(legacy_json)
+        self.assertEqual(dict(restored.validation_stage_status), {})
+
+
 class RobustnessProgressTests(unittest.TestCase):
     def test_repeated_identical_director_action_counts_as_no_progress(self) -> None:
         candidate = new_candidate("breakout_standard", sequence=1, now=NOW)

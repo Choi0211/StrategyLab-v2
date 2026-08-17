@@ -333,6 +333,8 @@ _ROBUSTNESS_STAGE_TOKENS: tuple[str, ...] = (
     "워크포워드",
     "walkforward",
     "거래비용",
+    "비용스트레스",
+    "슬리피지",
     "transactioncost",
     "몬테카를로",
     "montecarlo",
@@ -341,6 +343,9 @@ _ROBUSTNESS_STAGE_TOKENS: tuple[str, ...] = (
     "regime",
     "파라미터민감도",
     "robustness",
+    "강건성",
+    "검증단계",
+    "다음단계",
 )
 _CANDIDATE_CONTINUATION_VERB_TOKENS: tuple[str, ...] = (
     "검증해줘",
@@ -948,6 +953,73 @@ def _family_label(strategy_family: str | None) -> str:
     return {"short_term_daytrade": "단타", "swing": "스윙", "trend_following": "추세추종"}.get(strategy_family or "", strategy_family or "")
 
 
+# Patch 8.5: (key into StrategyCandidateRecord.validation_stage_status,
+# Korean label) - deliberately the exact set
+# gaon.runtime.llm_conversation._try_candidate_robustness_cycle persists
+# from the EXISTING production_grade_validation output, never invented.
+_ROBUSTNESS_STAGE_DISPLAY: tuple[tuple[str, str], ...] = (
+    ("out_of_sample", "OOS"),
+    ("walk_forward", "walk-forward"),
+    ("transaction_cost_stress", "거래비용/슬리피지 스트레스"),
+    ("regime_validation", "시장 국면별 검증"),
+    ("multi_symbol_validation", "cross-symbol"),
+    ("parameter_sensitivity", "파라미터 민감도"),
+    ("monte_carlo", "Monte Carlo"),
+)
+
+
+def render_mission_candidate_detailed_status(mission: ResearchMission, candidate: "StrategyCandidateRecord | None") -> str:
+    """The detailed Research-Mission-plus-active-candidate status block
+    (Patch 8.5) - shown at the end of a response whenever the user asks
+    for mission or candidate status. Every value comes from real,
+    currently-persisted state; a stage this candidate has never actually
+    run through ``_try_candidate_robustness_cycle`` renders as
+    "not_run" - never guessed as pass/fail, and never silently omitted.
+    """
+    objective_parts = []
+    if mission.improve_return:
+        objective_parts.append("수익 개선")
+    if mission.improve_safety:
+        objective_parts.append("안전성 개선")
+    if mission.baseline_comparison:
+        objective_parts.append("기존 등록 전략 대비 비교")
+    objective_label = ", ".join(objective_parts) if objective_parts else "unspecified"
+
+    lines = [
+        "[Research Mission]",
+        f"- scope: {mission.scope_label}",
+        f"- objective: {objective_label}",
+    ]
+    if candidate is None:
+        lines.append("- active candidate: 없음 (아직 전략 후보가 생성되지 않았습니다)")
+    else:
+        stage_status = dict(candidate.validation_stage_status)
+        breadth_status = (
+            "충분한 표본 확보"
+            if candidate.has_sufficient_universe_evidence
+            else ("진행 중" if candidate.attempted_symbols else "not_run")
+        )
+        lines.extend(
+            [
+                f"- active candidate ID/name: {candidate.candidate_id} ({candidate.hypothesis_summary})",
+                f"- strategy fingerprint: {candidate.strategy_fingerprint[:16]}",
+                f"- candidate stage: {candidate.status.value}",
+                f"- breadth validation 상태: {breadth_status}",
+                f"- cross-symbol validated symbol count: {candidate.valid_symbols}/{candidate.attempted_symbols}",
+                f"- cumulative trade count: {candidate.trade_count}",
+            ]
+        )
+        for key, label in _ROBUSTNESS_STAGE_DISPLAY:
+            lines.append(f"- {label} 상태: {stage_status.get(key, 'not_run')}")
+        lines.append(
+            "- promotion-ready 여부: "
+            + ("예" if candidate.status.value == "promotion_ready" else "아니오")
+        )
+    target_label = str(mission.target_promotion_ready_candidates) if mission.target_promotion_ready_candidates is not None else "미지정"
+    lines.append(f"- promotion-ready candidates: {mission.current_promotion_ready_candidates}/{target_label}")
+    return "\n".join(lines)
+
+
 def mission_budget_exhausted_message(mission: ResearchMission) -> str:
     lines = [
         "영하님, 연구 목표는 계속 유지하고 있습니다.",
@@ -1451,3 +1523,181 @@ def production_persistent_strategy_candidate_continuation_release_check() -> Map
         "approval_bypassed": False,
         "safety": "pass",
     }
+
+
+def production_candidate_breadth_to_robustness_transition_release_check() -> Mapping[str, object]:
+    """Deterministic, network-free release check for Patch 8.5.
+
+    Exercises the production defect this patch fixes: after a market-wide
+    strategy candidate's breadth evaluation gathered sufficient cross-
+    symbol evidence, a real user message explicitly asking to continue
+    that candidate's robustness validation (OOS/walk-forward/cost-stress/
+    regime/cross-symbol/parameter-sensitivity/Monte Carlo) re-ran a fresh
+    breadth cycle instead of ever reaching the robustness/deep-validation
+    path - because the message happened to contain the literal substring
+    "cross-symbol" (tripping the deterministic multi_symbol_research tool
+    heuristic) and the bare substring "상태" inside "유지한 상태에서"
+    ("while KEEPING it unchanged" - tripping the STATUS_QUERY intent
+    classifier), both of which used to bypass the mission-routing-
+    precedence hook entirely. This runs the REAL production stack
+    (LLMConversationBrain -> default_tool_registry -> multi_symbol_research
+    / autonomous_learning_research) through a deterministic, network-free
+    market-data provider (never live network - a release check must not
+    depend on real-time provider availability)."""
+    import sqlite3
+    from unittest.mock import patch as _patch
+
+    from gaon.research.krx_real_pipeline import KRXFixtureMarketDataProvider
+    from gaon.research.real_research import MarketSymbol
+    from gaon.runtime.config import GaonRuntimeConfig
+    from gaon.runtime.llm_conversation import LLMConversationRequest
+    from gaon.runtime.migrations import migrate
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    class _DeterministicUniverseProvider:
+        source = "fixture:release-check-universe"
+        market_agnostic = True
+        _symbols = (
+            ("111111", "KOSPI"), ("222222", "KOSPI"), ("333333", "KOSPI"), ("444444", "KOSPI"), ("555555", "KOSPI"),
+            ("666666", "KOSDAQ"), ("777777", "KOSDAQ"), ("888888", "KOSDAQ"), ("999999", "KOSDAQ"), ("101010", "KOSDAQ"),
+        )
+
+        def __init__(self) -> None:
+            self._fixture = KRXFixtureMarketDataProvider()
+
+        @classmethod
+        def from_env(cls, env=None):
+            return cls()
+
+        def fetch_universe(self, market):
+            return tuple(MarketSymbol(code, code, "KR", exchange) for code, exchange in self._symbols)
+
+        def fetch_bars(self, symbol, *, start_date, end_date, timeframe="daily"):
+            return self._fixture.fetch_bars(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
+
+        def validate_dataset(self, dataset):
+            return self._fixture.validate_dataset(dataset)
+
+    def _baseline(*, trades: int) -> dict[str, object]:
+        return {
+            "dataset": {"metadata": {"source": "real:yahoo-chart", "fixture_backed": False, "rows": 1222, "start_date": "2021-07-25", "end_date": "2026-07-24"}},
+            "quality": {"status": "pass", "blocking_findings": []},
+            "strategy": {"strategy_id": "baseline", "fingerprint": "fp:baseline", "rules": ["breakout"]},
+            "validation": {"symbols": 5, "warmup_bars": 60, "entry_opportunities": 120, "signals": 50},
+            "backtest": {"source": "real", "metrics": {"trade_count": trades, "total_return": 0.12, "mdd": 0.08}},
+            "candidates": [],
+        }
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        migrate(connection)
+        config = GaonRuntimeConfig(mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="release-check-token", telegram_allowed_chat_ids=("100",), approval_signing_secret="release-check-secret", assistant_enabled=False)
+        agent = TelegramConversationAgent(config, connection)
+
+        def _send(update_id: int, text: str):
+            with _patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=_baseline(trades=45)), _patch(
+                "gaon.knowledge.telegram_autonomous_learning._run_production_external_research", return_value={"state": "content_unavailable"},
+            ), _patch(
+                "gaon.research.multi_symbol.build_market_data_provider_from_env", return_value=_DeterministicUniverseProvider(),
+            ):
+                return agent._brain.respond(
+                    LLMConversationRequest(
+                        session_id="telegram:release-check-candidate-robustness-transition", user_ref="release-check", source="telegram",
+                        text=text, received_at=f"2026-08-17T00:{update_id:02d}:00Z", message_id=f"telegram:{update_id}",
+                    )
+                )
+
+        _send(1, "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. 현재 등록되어있는 전략보다 수익면에서 안전성 면에서 뛰어나야합니다.")
+        _send(2, "삼성전자말고 국내 주식 전체를 대상으로 연구해주세요")
+        _send(3, "증거가 충분할 때까지 다양한 방식으로 전략을 연구해주세요")
+
+        mission_before = _mission_for_release_check(agent, "telegram:release-check-candidate-robustness-transition")
+        breadth_ready = mission_before is not None and mission_before.pending_promotion_symbol is not None
+        candidate_before = candidate_records(mission_before)[0] if mission_before is not None and mission_before.candidates else None
+
+        multi_symbol_calls_before = connection.execute("SELECT COUNT(*) FROM llm_tool_audit WHERE tool_name = 'multi_symbol_research'").fetchone()[0]
+
+        turn4 = (
+            "후보 A를 현재 Research Mission의 전략 후보로 유지한 상태에서 다음 검증 단계로 진행해주세요.\n\n"
+            "후보 A의 전략 규칙과 fingerprint는 변경하지 말고,\n"
+            "특정 종목에 맞춰 파라미터를 조정하지 마세요.\n\n"
+            "Out-of-Sample,\nWalk-Forward,\n거래비용 및 슬리피지 스트레스,\n시장 국면별 검증,\ncross-symbol,\n파라미터 민감도,\n가능하면 Monte Carlo 검증까지 진행해주세요."
+        )
+        response4 = _send(4, turn4)
+
+        multi_symbol_calls_after = connection.execute("SELECT COUNT(*) FROM llm_tool_audit WHERE tool_name = 'multi_symbol_research'").fetchone()[0]
+        robustness_calls = connection.execute("SELECT COUNT(*) FROM llm_tool_audit WHERE tool_name = 'autonomous_learning_research'").fetchone()[0]
+        legacy_calls = connection.execute("SELECT COUNT(*) FROM llm_tool_audit WHERE tool_name = 'autonomous_research_cycle'").fetchone()[0]
+
+        mission_after = _mission_for_release_check(agent, "telegram:release-check-candidate-robustness-transition")
+        candidate_after = candidate_records(mission_after)[0] if mission_after is not None and mission_after.candidates else None
+
+        breadth_to_robustness_transition = (
+            breadth_ready
+            and multi_symbol_calls_after == multi_symbol_calls_before
+            and robustness_calls >= 1
+            and legacy_calls == 0
+        )
+        candidate_identity_preserved = (
+            candidate_before is not None
+            and candidate_after is not None
+            and candidate_before.candidate_id == candidate_after.candidate_id
+            and candidate_before.strategy_fingerprint == candidate_after.strategy_fingerprint
+        )
+        mission_scope_preserved = mission_after is not None and mission_after.universe_scope is MissionUniverseScope.MARKET_WIDE
+        no_fabricated_validation_state = "PASS" not in response4.text and "실패했습니다" not in response4.text
+        bounded_execution_preserved = (multi_symbol_calls_after - multi_symbol_calls_before) + robustness_calls <= 1
+
+        status_response = _send(5, "지금 뭐 연구하고 있어?")
+        # The Research Director's terminal decision for this cycle
+        # (collect_more_evidence and keep going, vs reject_candidate and
+        # rotate) is itself real, non-fabricated evidence, not something
+        # this check may assume in advance - either honest outcome must
+        # show the mission block and never a fabricated pass/fail; an
+        # active (non-terminal) candidate must additionally show its own
+        # ID and at least one honest not_run/unavailable stage status.
+        active_candidate_after = get_active_candidate(mission_after) if mission_after is not None else None
+        status_ux_reflects_real_state = "[Research Mission]" in status_response.text and (
+            active_candidate_after is None
+            or (
+                active_candidate_after.candidate_id in status_response.text
+                and any(marker in status_response.text for marker in ("not_run", "unavailable"))
+            )
+        )
+    finally:
+        connection.close()
+
+    checks = {
+        "breadth_to_robustness_transition": breadth_to_robustness_transition,
+        "candidate_identity_preserved": candidate_identity_preserved,
+        "mission_scope_preserved": mission_scope_preserved,
+        "no_fabricated_validation_state": no_fabricated_validation_state,
+        "bounded_execution_preserved": bounded_execution_preserved,
+        "status_ux_reflects_real_state": status_ux_reflects_real_state,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"candidate breadth-to-robustness transition release check failed: {failed}")
+
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        "breadth_to_robustness_transition": breadth_to_robustness_transition,
+        "candidate_identity_preserved": candidate_identity_preserved,
+        "mission_scope_preserved": mission_scope_preserved,
+        "no_fabricated_validation_state": no_fabricated_validation_state,
+        "bounded_execution_preserved": bounded_execution_preserved,
+        "status_ux_reflects_real_state": status_ux_reflects_real_state,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def _mission_for_release_check(agent, session_id: str) -> ResearchMission | None:
+    """Reads the persisted mission back through the agent's own brain
+    (``LLMConversationBrain._mission_for``) - never a shortcut/parallel
+    read path - so this release check exercises the same persistence
+    round-trip production actually relies on."""
+    return agent._brain._mission_for(session_id)
