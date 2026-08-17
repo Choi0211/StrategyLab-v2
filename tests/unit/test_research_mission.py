@@ -21,7 +21,9 @@ from gaon.knowledge.research_mission import (
     extract_or_update_mission,
     get_active_candidate,
     get_candidate,
+    is_candidate_robustness_continuation_request,
     is_cycle_budget_exhausted,
+    is_diversity_request,
     is_generic_continuation_request,
     is_provider_acquisition_blocker,
     mission_awaiting_approval_message,
@@ -168,6 +170,75 @@ class MissionContinuationScopeRegressionTests(unittest.TestCase):
         # symbol name at all must never narrow scope silently.
         updated = extract_or_update_mission("증거가 충분할 때까지 연구해주세요", existing=self.mission, now=LATER)
         self.assertEqual(updated.universe_scope, MissionUniverseScope.MARKET_WIDE)
+
+
+class CandidateRobustnessContinuationTests(unittest.TestCase):
+    """Patch 8.3 production bug fix: "후보 A 계속 검증해줘" / "OOS 검증해줘"
+    / "walk-forward까지 진행해줘" style phrasing must be recognized as a
+    mission continuation, not fall through to the legacy single-symbol
+    autonomous-research path (which resolves its symbol from stale
+    conversational context)."""
+
+    def test_candidate_reference_with_verify_verb_is_a_continuation(self) -> None:
+        for text in (
+            "후보 A 계속 검증해줘",
+            "후보 A를 계속 검증해주세요",
+            "그 후보 검증해줘",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(is_candidate_robustness_continuation_request(text))
+                self.assertTrue(is_generic_continuation_request(text))
+
+    def test_named_robustness_stage_with_verb_is_a_continuation(self) -> None:
+        for text in (
+            "OOS 검증해줘",
+            "walk-forward까지 진행해줘",
+            "거래비용 스트레스 검증해주세요",
+            "시장 국면별 검증 계속 진행해주세요",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(is_candidate_robustness_continuation_request(text))
+                self.assertTrue(is_generic_continuation_request(text))
+
+    def test_bare_candidate_or_topic_mention_without_a_verb_is_not_a_continuation(self) -> None:
+        # "후보" or a robustness-stage name alone (no request/continue verb)
+        # must not be misread as a continuation - e.g. a pure status
+        # question about candidates.
+        for text in ("후보 목록 보여줘", "OOS가 뭐야?"):
+            with self.subTest(text=text):
+                self.assertFalse(is_candidate_robustness_continuation_request(text))
+
+    def test_unrelated_text_is_not_a_continuation(self) -> None:
+        self.assertFalse(is_candidate_robustness_continuation_request("안녕하세요"))
+        self.assertFalse(is_candidate_robustness_continuation_request("삼성전자 주가 얼마야?"))
+
+
+class DiversityRequestTargetCountFalsePositiveTests(unittest.TestCase):
+    """Patch 8.3 production bug fix: "서로 다른 전략 3개가 준비될 때까지"
+    declares the promotion-ready TARGET count's distinctness requirement -
+    it must never be misread as a request to rotate away from the
+    currently active candidate."""
+
+    def test_distinct_target_count_phrasing_is_not_a_diversity_request(self) -> None:
+        for text in (
+            "서로 다른 전략 3개가 준비될 때까지 연구해주세요",
+            "각기 다른 전략 3개가 모두 나올 때까지 연구해주세요",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(is_diversity_request(text))
+
+    def test_genuine_rotation_request_is_unaffected(self) -> None:
+        for text in ("다른 방식도 찾아봐.", "다른 전략으로 시도해줘", "다른 후보를 찾아봐"):
+            with self.subTest(text=text):
+                self.assertTrue(is_diversity_request(text))
+
+    def test_rotation_request_stating_a_quantity_is_still_recognized(self) -> None:
+        # ULTRAREVIEW fix: an earlier, broader exclusion (bare digit+개,
+        # with no "때까지" goal-framing requirement) silently suppressed a
+        # genuine immediate rotation request that happens to state a
+        # quantity - this must still rotate, unlike a target-count GOAL
+        # ("...3개가 준비될 때까지").
+        self.assertTrue(is_diversity_request("다른 전략 2개 더 찾아서 계속 연구해줘"))
 
 
 class MissionBudgetSemanticsTests(unittest.TestCase):
@@ -507,6 +578,27 @@ class StrategyCentricReleaseCheckTests(unittest.TestCase):
         self.assertTrue(result["bounded_execution_preserved"])
         self.assertTrue(result["human_promotion_gate_preserved"])
         self.assertTrue(result["legacy_migration_safe"])
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+
+class PersistentStrategyCandidateContinuationReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_persistent_strategy_candidate_continuation_release_check
+
+        result = production_persistent_strategy_candidate_continuation_release_check()
+        self.assertTrue(result["strategy_candidate_persisted"])
+        self.assertTrue(result["candidate_fingerprint_preserved"])
+        self.assertTrue(result["stale_symbol_context_blocked"])
+        self.assertTrue(result["cross_symbol_identity_preserved"])
+        self.assertTrue(result["candidate_rotation"])
+        self.assertTrue(result["distinct_promotion_counting"])
+        self.assertTrue(result["restart_persistence"])
+        self.assertTrue(result["bounded_execution_preserved"])
+        self.assertTrue(result["human_promotion_gate_preserved"])
         self.assertFalse(result["strategy_mutated"])
         self.assertFalse(result["order_executed"])
         self.assertFalse(result["champion_promoted"])
