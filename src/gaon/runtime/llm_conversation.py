@@ -1101,7 +1101,16 @@ class LLMConversationBrain:
             result = self._execute_mvp_multi_symbol_research(request, batch, request.text, None, None, candidate_spec=candidate.spec_rules)
         else:
             cycle_text = mission_cycle_request_text(mission)
-            result = self._execute_mvp_multi_symbol_research(request, (), cycle_text, None, None, candidate_spec=candidate.spec_rules)
+            # Patch 8.4: bounded avoidance - a symbol this candidate's
+            # breadth evaluation already confirmed unusable in an earlier
+            # cycle (candidate.excluded_symbols, already capped to 8 by
+            # record_breadth_progress) is skipped by this cycle's sampling
+            # instead of spending research budget rediscovering the same
+            # exclusion. Never unbounded: only the already-tracked,
+            # already-capped list is ever passed.
+            result = self._execute_mvp_multi_symbol_research(
+                request, (), cycle_text, None, None, candidate_spec=candidate.spec_rules, avoid_symbols=candidate.excluded_symbols
+            )
 
         if result.status != "success":
             failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
@@ -1636,7 +1645,7 @@ class LLMConversationBrain:
         self._record_tool_result(request.session_id, result, request.received_at)
         return result
 
-    def _execute_mvp_multi_symbol_research(self, request: LLMConversationRequest, symbols: tuple[str, ...], request_text: str, start_date: str | None, end_date: str | None, *, candidate_spec: Mapping[str, object] | None = None):
+    def _execute_mvp_multi_symbol_research(self, request: LLMConversationRequest, symbols: tuple[str, ...], request_text: str, start_date: str | None, end_date: str | None, *, candidate_spec: Mapping[str, object] | None = None, avoid_symbols: tuple[str, ...] = ()):
         arguments: dict[str, object] = {"request_text": request_text, "symbols": symbols, "universe_type": "explicit"}
         if start_date is not None:
             arguments["start_date"] = start_date
@@ -1644,6 +1653,8 @@ class LLMConversationBrain:
             arguments["end_date"] = end_date
         if candidate_spec is not None:
             arguments["candidate_spec"] = dict(candidate_spec)
+        if avoid_symbols:
+            arguments["avoid_symbols"] = list(avoid_symbols)
         result = self._tool_executor.execute(ToolRequest("multi_symbol_research", arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
         return result
