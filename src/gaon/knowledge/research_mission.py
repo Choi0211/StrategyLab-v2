@@ -47,6 +47,7 @@ import re
 from typing import Mapping
 from uuid import uuid4
 
+from gaon.knowledge.strategy_candidate import StrategyCandidateRecord
 
 RESEARCH_MISSION_SCHEMA_VERSION = 1
 
@@ -89,6 +90,9 @@ class ResearchMission:
     updated_at: str
     originating_request: str
     pending_promotion_symbol: str | None = None
+    candidates: tuple[Mapping[str, object], ...] = ()
+    active_candidate_id: str | None = None
+    candidate_sequence: int = 0
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -115,11 +119,50 @@ class ResearchMission:
             "updated_at": self.updated_at,
             "originating_request": self.originating_request,
             "pending_promotion_symbol": self.pending_promotion_symbol,
+            "candidates": [dict(item) for item in self.candidates],
+            "active_candidate_id": self.active_candidate_id,
+            "candidate_sequence": self.candidate_sequence,
         }
 
     @staticmethod
     def from_json(raw: Mapping[str, object]) -> "ResearchMission":
         objective = raw.get("objective") if isinstance(raw.get("objective"), Mapping) else {}
+        raw_candidates = tuple(dict(item) for item in raw.get("candidates", ()) or () if isinstance(item, Mapping))
+        raw_promotion_ready = tuple(dict(item) for item in raw.get("promotion_ready_candidates", ()) if isinstance(item, Mapping))
+        # Patch 8.1 -> 8.2 migration (ULTRAREVIEW High #3 fix): a legacy
+        # Patch 8.1 entry is shaped {"symbol", "run_id"} with no verified
+        # strategy_fingerprint - it cannot be attributed to a distinct
+        # strategy identity and must never count toward (or silently
+        # inflate) the Patch 8.2 distinct-strategy target. Only entries
+        # carrying a real strategy_fingerprint survive; the distinct count
+        # of THOSE fingerprints is the single authoritative source for
+        # current_promotion_ready_candidates, never the raw persisted
+        # number and never raw list length.
+        verified_promotion_ready = tuple(
+            item for item in raw_promotion_ready if str(item.get("strategy_fingerprint") or "").strip()
+        )
+        distinct_verified_fingerprints = {str(item["strategy_fingerprint"]) for item in verified_promotion_ready}
+        # A legacy pending_promotion_symbol predates the Patch 8.2 candidate
+        # portfolio entirely - trusting it for a mission with no persisted
+        # candidates would let a brand-new, zero-evidence candidate skip
+        # straight to deep validation without ever passing the breadth-
+        # sufficiency bar. Only carried forward when a candidate portfolio
+        # already exists to anchor it.
+        raw_pending_symbol = raw.get("pending_promotion_symbol")
+        pending_promotion_symbol = str(raw_pending_symbol) if raw_pending_symbol and raw_candidates else None
+        target_promotion_ready_candidates = int(raw["target_promotion_ready_candidates"]) if raw.get("target_promotion_ready_candidates") is not None else None
+        raw_status = MissionStatus(str(raw.get("status", MissionStatus.ACTIVE.value)))
+        target_reached_by_verified_count = (
+            target_promotion_ready_candidates is not None
+            and len(distinct_verified_fingerprints) >= target_promotion_ready_candidates
+        )
+        if raw_status is MissionStatus.AWAITING_HUMAN_APPROVAL and not target_reached_by_verified_count:
+            # A legacy mission's persisted status may have reached this
+            # state under the old (raw list length) counting rule - only
+            # the distinct verified strategy count may authorize it now.
+            status = MissionStatus.ACTIVE
+        else:
+            status = raw_status
         return ResearchMission(
             mission_id=str(raw["mission_id"]),
             market=str(raw.get("market", "KR")),
@@ -130,17 +173,20 @@ class ResearchMission:
             improve_return=bool(objective.get("improve_return", False)),
             improve_safety=bool(objective.get("improve_safety", False)),
             baseline_comparison=str(objective["baseline_comparison"]) if objective.get("baseline_comparison") else None,
-            target_promotion_ready_candidates=int(raw["target_promotion_ready_candidates"]) if raw.get("target_promotion_ready_candidates") is not None else None,
-            current_promotion_ready_candidates=int(raw.get("current_promotion_ready_candidates", 0) or 0),
-            promotion_ready_candidates=tuple(dict(item) for item in raw.get("promotion_ready_candidates", ()) if isinstance(item, Mapping)),
+            target_promotion_ready_candidates=target_promotion_ready_candidates,
+            current_promotion_ready_candidates=len(distinct_verified_fingerprints),
+            promotion_ready_candidates=verified_promotion_ready,
             explored_symbols=_tuple_of_str(raw.get("explored_symbols")),
-            status=MissionStatus(str(raw.get("status", MissionStatus.ACTIVE.value))),
+            status=status,
             blocked_reason=str(raw["blocked_reason"]) if raw.get("blocked_reason") else None,
             cycles_completed=int(raw.get("cycles_completed", 0) or 0),
             created_at=str(raw.get("created_at", "")),
             updated_at=str(raw.get("updated_at", "")),
             originating_request=str(raw.get("originating_request", "")),
-            pending_promotion_symbol=str(raw["pending_promotion_symbol"]) if raw.get("pending_promotion_symbol") else None,
+            pending_promotion_symbol=pending_promotion_symbol,
+            candidates=raw_candidates,
+            active_candidate_id=str(raw["active_candidate_id"]) if raw.get("active_candidate_id") else None,
+            candidate_sequence=int(raw.get("candidate_sequence", 0) or 0),
         )
 
     @property
@@ -217,6 +263,31 @@ _RESEARCH_VERB_TOKENS: tuple[str, ...] = (
     "연구진행",
 )
 
+# Patch 8.2: "다른 방식도 찾아봐" ("look for a different approach too") asks
+# Gaon to keep researching within the SAME mission but bias the next
+# strategy-hypothesis cycle toward a different candidate family - see
+# gaon.runtime.llm_conversation._try_mission_driven_research_cycle's use of
+# is_diversity_request to force-rotate an active (non-stagnant) candidate.
+_DIVERSITY_REQUEST_TOKENS: tuple[str, ...] = (
+    "다른방식",
+    "다른전략",
+    "다른방법",
+    "다른후보",
+    "다른접근",
+    "새로운전략",
+    "새로운방식",
+)
+
+
+def is_diversity_request(text: str) -> bool:
+    """True for "다른 방식도 찾아봐" style requests to bias the next
+    strategy-hypothesis cycle toward a different candidate family, without
+    abandoning the mission itself."""
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    return _contains_any(normalized, _DIVERSITY_REQUEST_TOKENS)
+
 
 def is_generic_continuation_request(text: str) -> bool:
     """True for phrasing like "증거가 충분할 때까지 연구해주세요" that asks
@@ -241,6 +312,11 @@ def is_generic_continuation_request(text: str) -> bool:
         # broader substring matching on bare "계속" would also fire inside
         # unrelated sentences ("계속 지켜보고 있어요"), so this is an exact
         # match, not a substring one.
+        return True
+    if is_diversity_request(text):
+        # "다른 방식도 찾아봐" asks Gaon to keep researching (within the
+        # same mission) with a different strategy hypothesis - a request to
+        # continue, just biased toward diversity.
         return True
     return _contains_any(normalized, _GENERIC_CONTINUATION_TOKENS)
 
@@ -574,19 +650,44 @@ def record_cycle_result(
 def record_promotion_candidate(
     mission: ResearchMission,
     *,
-    symbol: str,
-    run_id: str,
+    strategy_fingerprint: str,
+    candidate_id: str,
     now: str,
 ) -> ResearchMission:
-    """Records a candidate that the EXISTING PromotionCandidateGate already
-    marked ``requires_human_approval`` (see
+    """Records a DISTINCT STRATEGY (identified by its symbol-independent
+    ``strategy_family_fingerprint``, never by a symbol) that the EXISTING
+    PromotionCandidateGate/Research Director pipeline already marked
+    ``requires_human_approval`` / ``request_human_promotion_review`` (see
     ``telegram_autonomous_learning.production_autonomous_learning_payload_from_baseline``).
-    Never invents promotion-readiness itself."""
-    already_recorded = any(str(item.get("symbol")) == symbol and str(item.get("run_id")) == run_id for item in mission.promotion_ready_candidates)
+    Never invents promotion-readiness itself.
+
+    Patch 8.2: promotion-ready count is the number of DISTINCT strategy
+    fingerprints recorded here, not the number of symbols a strategy was
+    evaluated on - running one candidate across 50 symbols still counts as
+    one entry; a second candidate must have a genuinely different
+    fingerprint (different entry/exit/filter rules) to count as a second.
+
+    ULTRAREVIEW fix: an empty/unverifiable ``strategy_fingerprint`` is
+    silently ignored rather than recorded - callers (see
+    ``llm_conversation._try_candidate_robustness_cycle``) must only ever
+    pass a fingerprint that has been positively confirmed to match what the
+    deep-validation stage actually validated. If identity cannot be
+    verified, this function must not be called with a real value at all,
+    and calling it with an empty one is a safe no-op rather than an error,
+    so a caller-side verification gap can never silently inflate the count.
+    """
+    fingerprint = str(strategy_fingerprint or "").strip()
+    if not fingerprint:
+        return mission
+    already_recorded = any(str(item.get("strategy_fingerprint")) == fingerprint for item in mission.promotion_ready_candidates)
     if already_recorded:
         return mission
-    candidates = (*mission.promotion_ready_candidates, {"symbol": symbol, "run_id": run_id, "detected_at": now})
-    count = len(candidates)
+    candidates = (*mission.promotion_ready_candidates, {"strategy_fingerprint": fingerprint, "candidate_id": candidate_id, "detected_at": now})
+    # The authoritative count is always the number of DISTINCT verified
+    # fingerprints in the resulting list, never its raw length - this is
+    # the single source of truth the AWAITING_HUMAN_APPROVAL transition
+    # below relies on (mirrors distinct_promotion_ready_strategy_count).
+    count = len({str(item.get("strategy_fingerprint")) for item in candidates if item.get("strategy_fingerprint")})
     status = mission.status
     target = mission.target_promotion_ready_candidates
     if target is not None and count >= target:
@@ -601,20 +702,104 @@ def record_promotion_candidate(
 
 
 def record_focus_symbol(mission: ResearchMission, *, symbol: str, now: str) -> ResearchMission:
-    """Marks ``symbol`` (the strongest signal from the most recent
-    multi-symbol coverage cycle) as the next cycle's target for the full
-    single-candidate Research Director pipeline (OOS/walk-forward/regime/
-    cost/Monte Carlo), which is the only pipeline that can actually produce
-    a ``request_human_promotion_review`` decision. This keeps each turn to
-    exactly one bounded tool call - coverage and per-candidate validation
-    alternate across turns instead of both running in the same request."""
-    if symbol in {item.get("symbol") for item in mission.promotion_ready_candidates}:
-        return mission
+    """Marks ``symbol`` (evaluation evidence drawn from the ACTIVE strategy
+    candidate's own validated universe - see ``get_active_candidate``) as
+    the next cycle's target for the single-candidate Research Director
+    pipeline (OOS/walk-forward/regime/cost/Monte Carlo), which is the only
+    pipeline that can actually produce a ``request_human_promotion_review``
+    decision. The symbol is evaluation evidence FOR the active candidate,
+    never a new identity - this keeps each turn to exactly one bounded
+    tool call - coverage and per-candidate validation alternate across
+    turns instead of both running in the same request."""
     return replace(mission, pending_promotion_symbol=symbol, updated_at=now)
 
 
 def clear_focus_symbol(mission: ResearchMission, *, now: str) -> ResearchMission:
     return replace(mission, pending_promotion_symbol=None, updated_at=now)
+
+
+# ---------------------------------------------------------------------------
+# Patch 8.2 - strategy candidate portfolio
+# ---------------------------------------------------------------------------
+#
+# The mission now manages a PORTFOLIO of gaon.knowledge.strategy_candidate.
+# StrategyCandidateRecord entries (JSON-encoded in `candidates`) instead of
+# a single symbol. Symbols remain evaluation evidence recorded ON a
+# candidate (see StrategyCandidateRecord.evidence_symbols/attempted_symbols/
+# valid_symbols) - they are never mission-level identity.
+
+def candidate_records(mission: ResearchMission) -> tuple[StrategyCandidateRecord, ...]:
+    return tuple(StrategyCandidateRecord.from_json(item) for item in mission.candidates)
+
+
+def get_candidate(mission: ResearchMission, candidate_id: str) -> StrategyCandidateRecord | None:
+    for candidate in candidate_records(mission):
+        if candidate.candidate_id == candidate_id:
+            return candidate
+    return None
+
+
+def get_active_candidate(mission: ResearchMission) -> StrategyCandidateRecord | None:
+    if mission.active_candidate_id is None:
+        return None
+    return get_candidate(mission, mission.active_candidate_id)
+
+
+def add_candidate(mission: ResearchMission, candidate: StrategyCandidateRecord, *, now: str) -> ResearchMission:
+    """Appends a newly generated strategy candidate to the mission's
+    portfolio and makes it the active one. Never replaces an existing
+    candidate with the same id (candidate_id is a stable KR-ST-NNN
+    sequence number, generated once per mission via
+    ``next_candidate_sequence``)."""
+    if get_candidate(mission, candidate.candidate_id) is not None:
+        return mission
+    return replace(
+        mission,
+        candidates=(*mission.candidates, candidate.to_json()),
+        active_candidate_id=candidate.candidate_id,
+        candidate_sequence=max(mission.candidate_sequence, _sequence_from_candidate_id(candidate.candidate_id)),
+        updated_at=now,
+    )
+
+
+def update_candidate(mission: ResearchMission, candidate: StrategyCandidateRecord, *, now: str) -> ResearchMission:
+    """Replaces the stored record for ``candidate.candidate_id`` with the
+    given (already-updated) record. No-op if the candidate is not part of
+    this mission's portfolio."""
+    updated = []
+    found = False
+    for item in mission.candidates:
+        if str(item.get("candidate_id")) == candidate.candidate_id:
+            updated.append(candidate.to_json())
+            found = True
+        else:
+            updated.append(item)
+    if not found:
+        return mission
+    return replace(mission, candidates=tuple(updated), updated_at=now)
+
+
+def set_active_candidate(mission: ResearchMission, candidate_id: str | None, *, now: str) -> ResearchMission:
+    return replace(mission, active_candidate_id=candidate_id, updated_at=now)
+
+
+def next_candidate_sequence(mission: ResearchMission) -> int:
+    return mission.candidate_sequence + 1
+
+
+def _sequence_from_candidate_id(candidate_id: str) -> int:
+    try:
+        return int(candidate_id.rsplit("-", 1)[-1])
+    except ValueError:
+        return 0
+
+
+def distinct_promotion_ready_strategy_count(mission: ResearchMission) -> int:
+    """The authoritative promotion-ready count: the number of DISTINCT
+    strategy fingerprints recorded via ``record_promotion_candidate`` -
+    running one candidate across many symbols, or holding many
+    still-exploring candidates, never inflates this number."""
+    return len({str(item.get("strategy_fingerprint")) for item in mission.promotion_ready_candidates if item.get("strategy_fingerprint")})
 
 
 def best_symbol_from_multi_symbol_output(output: Mapping[str, object]) -> str | None:
@@ -737,7 +922,8 @@ def mission_awaiting_approval_message(mission: ResearchMission) -> str:
         "후보 목록:",
     ]
     for item in mission.promotion_ready_candidates:
-        lines.append(f"- {item.get('symbol')} (run_id={item.get('run_id')})")
+        fingerprint = str(item.get("strategy_fingerprint") or "")
+        lines.append(f"- {item.get('candidate_id', '?')} (strategy_fingerprint={fingerprint[:12]})")
     lines.extend(
         [
             "",
@@ -814,10 +1000,10 @@ def production_persistent_research_mission_release_check() -> Mapping[str, objec
     cleared = clear_focus_symbol(with_focus, now=now4)
     bounded_execution_preserved = with_focus.pending_promotion_symbol == "000660" and cleared.pending_promotion_symbol is None
 
-    with_candidate_1 = record_promotion_candidate(cleared, symbol="005930", run_id="run:1", now=now4)
-    with_candidate_2 = record_promotion_candidate(with_candidate_1, symbol="000660", run_id="run:2", now=now4)
+    with_candidate_1 = record_promotion_candidate(cleared, strategy_fingerprint="fp-aaa", candidate_id="KR-ST-001", now=now4)
+    with_candidate_2 = record_promotion_candidate(with_candidate_1, strategy_fingerprint="fp-bbb", candidate_id="KR-ST-002", now=now4)
     below_target_stays_active = with_candidate_2.status is MissionStatus.ACTIVE
-    with_candidate_3 = record_promotion_candidate(with_candidate_2, symbol="005380", run_id="run:3", now=now4)
+    with_candidate_3 = record_promotion_candidate(with_candidate_2, strategy_fingerprint="fp-ccc", candidate_id="KR-ST-003", now=now4)
     human_promotion_gate_preserved = (
         with_candidate_3.current_promotion_ready_candidates == 3
         and with_candidate_3.status is MissionStatus.AWAITING_HUMAN_APPROVAL
@@ -848,6 +1034,171 @@ def production_persistent_research_mission_release_check() -> Mapping[str, objec
         "budget_exhaustion_not_terminal": budget_exhaustion_not_terminal,
         "bounded_execution_preserved": bounded_execution_preserved,
         "human_promotion_gate_preserved": human_promotion_gate_preserved,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_strategy_centric_autonomous_research_release_check() -> Mapping[str, object]:
+    """Deterministic, network-free release check for Patch 8.2.
+
+    Exercises: the strategy candidate as the primary research unit,
+    symbol-independent candidate fingerprints, cross-symbol evidence
+    recording under ONE candidate, the distinct-strategy-fingerprint
+    promotion target, stagnation-driven candidate rotation, and that the
+    mission's baseline-comparison objective and human promotion gate are
+    both preserved unmodified.
+    """
+    from gaon.knowledge.strategy_candidate import (
+        build_candidate_spec,
+        is_stagnant,
+        mark_stagnant,
+        new_candidate,
+        next_untried_family,
+        record_breadth_progress,
+    )
+
+    now1 = "2026-08-17T00:00:00Z"
+    mission = extract_or_update_mission(
+        "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. "
+        "현재 등록되어있는 전략보다 수익면에서나 안전성 면에서 뛰어나야합니다.",
+        existing=None,
+        now=now1,
+    )
+    mission = extract_or_update_mission("국내 주식 전체를 대상으로 연구해주세요", existing=mission, now=now1)
+
+    candidate_a = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=now1)
+    mission = add_candidate(mission, candidate_a, now=now1)
+    strategy_candidate_primary_unit = mission.active_candidate_id == candidate_a.candidate_id and len(mission.candidates) == 1
+
+    spec_a = build_candidate_spec(candidate_a.strategy_family, placeholder_symbol="005930", created_at=now1)
+    spec_b = build_candidate_spec(candidate_a.strategy_family, placeholder_symbol="000660", created_at=now1)
+    candidate_fingerprint_symbol_independent = (
+        spec_a.strategy_family_fingerprint == spec_b.strategy_family_fingerprint == candidate_a.strategy_fingerprint
+    )
+
+    now2 = "2026-08-17T00:01:00Z"
+    progressed = record_breadth_progress(
+        candidate_a,
+        attempted=15,
+        valid=12,
+        trade_count=340,
+        evidence_symbols=("005930", "000660", "473050"),
+        excluded_symbols=("999999", "999998", "999997"),
+        provider_blocked=False,
+        now=now2,
+    )
+    mission = update_candidate(mission, progressed, now=now2)
+    cross_symbol_validation = progressed.attempted_symbols == 15 and progressed.valid_symbols == 12 and len(progressed.evidence_symbols) >= 2
+    symbols_are_evidence_samples = "473050" in progressed.evidence_symbols
+    bounded_execution_preserved = progressed.cycles_completed == 1
+
+    now3 = "2026-08-17T00:02:00Z"
+    mission = extract_or_update_mission(
+        "승격 요청이 가능한 정도까지 되는 3개의 전략이 나올때까지 연구해주세요",
+        existing=mission,
+        now=now3,
+    )
+    mission_scope_preserved = mission.universe_scope is MissionUniverseScope.MARKET_WIDE and mission.market == "KR"
+    baseline_comparison_preserved = mission.baseline_comparison == "registered_strategy" and mission.improve_return and mission.improve_safety
+
+    now4 = "2026-08-17T00:03:00Z"
+    stagnant_source = progressed
+    for _ in range(4):
+        stagnant_source = record_breadth_progress(
+            stagnant_source, attempted=15, valid=12, trade_count=340,
+            evidence_symbols=(), excluded_symbols=(), provider_blocked=False, now=now4,
+        )
+    candidate_actually_stagnant = is_stagnant(stagnant_source)
+    rotated = mark_stagnant(stagnant_source, now=now4)
+    next_family = next_untried_family((rotated,))
+    stagnation_can_rotate_candidate = (
+        candidate_actually_stagnant and next_family is not None and next_family != rotated.strategy_family
+    )
+
+    now5 = "2026-08-17T00:04:00Z"
+    promoted_once = record_promotion_candidate(mission, strategy_fingerprint=candidate_a.strategy_fingerprint, candidate_id=candidate_a.candidate_id, now=now5)
+    promoted_duplicate = record_promotion_candidate(promoted_once, strategy_fingerprint=candidate_a.strategy_fingerprint, candidate_id=candidate_a.candidate_id, now=now5)
+    human_promotion_gate_preserved = (
+        promoted_duplicate.current_promotion_ready_candidates == 1
+        and promoted_duplicate.status is not MissionStatus.AWAITING_HUMAN_APPROVAL
+    )
+
+    # ULTRAREVIEW High #3 fix: a Patch 8.1 mission persisted before Patch
+    # 8.2 existed may carry promotion_ready_candidates shaped
+    # {"symbol", "run_id"} (no strategy_fingerprint) and a stale
+    # pending_promotion_symbol with no candidate portfolio behind it -
+    # loading it must never let those legacy entries count toward the
+    # Patch 8.2 distinct-strategy target, and must never let a fresh
+    # candidate skip breadth validation via the stale pending symbol.
+    legacy_patch_8_1_mission_raw = {
+        "schema_version": 1,
+        "mission_id": "research-mission:legacy-8-1",
+        "market": "KR",
+        "universe_scope": MissionUniverseScope.MARKET_WIDE.value,
+        "symbols": [],
+        "exchanges": ["KOSPI", "KOSDAQ"],
+        "strategy_family": None,
+        "objective": {"improve_return": True, "improve_safety": True, "baseline_comparison": "registered_strategy"},
+        "target_promotion_ready_candidates": 3,
+        "current_promotion_ready_candidates": 3,
+        "promotion_ready_candidates": [
+            {"symbol": "005930", "run_id": "run-1"},
+            {"symbol": "000660", "run_id": "run-2"},
+            {"symbol": "473050", "run_id": "run-3"},
+        ],
+        "explored_symbols": ["005930", "000660", "473050"],
+        "status": MissionStatus.AWAITING_HUMAN_APPROVAL.value,
+        "blocked_reason": None,
+        "cycles_completed": 5,
+        "created_at": now1,
+        "updated_at": now1,
+        "originating_request": "국내 주식 전체를 대상으로 연구해주세요",
+        "pending_promotion_symbol": "005930",
+    }
+    legacy_mission = ResearchMission.from_json(legacy_patch_8_1_mission_raw)
+    legacy_migration_safe = (
+        legacy_mission.current_promotion_ready_candidates == 0
+        and legacy_mission.promotion_ready_candidates == ()
+        and legacy_mission.status is MissionStatus.ACTIVE
+        and legacy_mission.pending_promotion_symbol is None
+        and legacy_mission.market == "KR"
+        and legacy_mission.universe_scope is MissionUniverseScope.MARKET_WIDE
+    )
+
+    checks = {
+        "strategy_candidate_primary_unit": strategy_candidate_primary_unit,
+        "candidate_fingerprint_symbol_independent": candidate_fingerprint_symbol_independent,
+        "cross_symbol_validation": cross_symbol_validation,
+        "distinct_strategy_target_is_three": mission.target_promotion_ready_candidates == 3,
+        "symbols_are_evidence_samples": symbols_are_evidence_samples,
+        "stagnation_can_rotate_candidate": stagnation_can_rotate_candidate,
+        "baseline_comparison_preserved": baseline_comparison_preserved,
+        "mission_scope_preserved": mission_scope_preserved,
+        "bounded_execution_preserved": bounded_execution_preserved,
+        "human_promotion_gate_preserved": human_promotion_gate_preserved,
+        "legacy_migration_safe": legacy_migration_safe,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"strategy-centric autonomous research release check failed: {failed}")
+
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        "strategy_candidate_primary_unit": strategy_candidate_primary_unit,
+        "candidate_fingerprint_symbol_independent": candidate_fingerprint_symbol_independent,
+        "cross_symbol_validation": cross_symbol_validation,
+        "distinct_strategy_target": mission.target_promotion_ready_candidates,
+        "symbols_are_evidence_samples": symbols_are_evidence_samples,
+        "stagnation_can_rotate_candidate": stagnation_can_rotate_candidate,
+        "baseline_comparison_preserved": baseline_comparison_preserved,
+        "mission_scope_preserved": mission_scope_preserved,
+        "bounded_execution_preserved": bounded_execution_preserved,
+        "human_promotion_gate_preserved": human_promotion_gate_preserved,
+        "legacy_migration_safe": legacy_migration_safe,
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,

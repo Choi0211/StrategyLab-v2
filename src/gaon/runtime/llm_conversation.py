@@ -9,7 +9,7 @@ import json
 import logging
 import re
 import sqlite3
-from typing import Protocol
+from typing import Mapping, Protocol
 from uuid import uuid4
 
 from gaon.runtime.assistant_provider import AssistantProvider, AssistantProviderResponse, AssistantRequest, AssistantToolResult, ProviderError, validate_provider_response
@@ -60,23 +60,43 @@ from gaon.knowledge.research_mission import (
     MissionStatus,
     MissionUniverseScope,
     ResearchMission,
-    best_symbol_from_multi_symbol_output,
+    add_candidate,
+    candidate_records,
     clear_focus_symbol,
+    distinct_promotion_ready_strategy_count,
     extract_or_update_mission,
+    get_active_candidate,
     is_cycle_budget_exhausted,
+    is_diversity_request,
     is_generic_continuation_request,
     is_provider_acquisition_blocker,
     mission_awaiting_approval_message,
     mission_blocked_message,
     mission_budget_exhausted_message,
     mission_cycle_request_text,
-    mission_promotion_request_text,
     mission_status_block,
+    next_candidate_sequence,
     next_unexplored_symbols,
     record_blocked,
     record_cycle_result,
     record_focus_symbol,
     record_promotion_candidate,
+    set_active_candidate,
+    update_candidate,
+)
+from gaon.knowledge.strategy_candidate import (
+    StrategyCandidateStatus,
+    is_stagnant,
+    mark_promotion_ready,
+    mark_rejected,
+    mark_stagnant,
+    new_candidate,
+    next_untried_family,
+    record_breadth_progress,
+    record_robustness_progress,
+    render_candidate_block,
+    render_candidate_request_text,
+    render_candidate_status_summary,
 )
 
 CONVERSATION_SCHEMA_VERSION = 1
@@ -136,6 +156,49 @@ _MISSION_HOOK_EXCLUDED_INTENTS = frozenset(
         ConversationalMVPIntent.STATUS_QUERY,
     }
 )
+
+# ULTRAREVIEW High #1 fix: the deep single-symbol validation pipeline
+# (gaon.research.krx_real_pipeline.RealAutonomousResearchPipeline, invoked
+# via the autonomous_learning_research tool) never accepts a
+# CanonicalStrategySpec directly - it always re-parses the request text
+# through UserStrategyParser. A candidate's fingerprint may only be
+# recorded as promotion-ready when that re-parse demonstrably produces the
+# SAME effective strategy rules the candidate's own fingerprint claims -
+# never on trust that the request text was a faithful approximation.
+def _deep_validation_effective_fingerprint(request_text: str, *, symbol: str) -> str:
+    """Reuses the EXACT parser (gaon.research.krx_real_pipeline.
+    UserStrategyParser) the deep-validation pipeline itself uses on
+    ``request_text`` - never a second/parallel implementation - to compute
+    what that pipeline actually validated, so it can be compared against
+    the candidate's own ``strategy_fingerprint`` before recording a
+    promotion-ready strategy."""
+    from gaon.research.krx_real_pipeline import UserStrategyParser
+
+    parsed = UserStrategyParser().parse(request_text, symbol=symbol)
+    return parsed.strategy_family_fingerprint
+
+
+# ULTRAREVIEW High #2 fix: research_grounding._format_autonomous_learning_
+# research_natural's first line names the SYMBOL as if it were the
+# strategy's own identity ("영하님, {symbol} 전략을 다시 연구했습니다.") -
+# correct for a genuine single-symbol mission (that renderer is still used
+# there, unmodified), but wrong once a strategy CANDIDATE, not a symbol, is
+# the mission's primary research object. This strips exactly that one
+# known leading sentence from a candidate-driven response instead of
+# touching the shared renderer.
+_SYMBOL_AS_STRATEGY_LEAD_SENTENCE = "영하님, {symbol} 전략을 다시 연구했습니다."
+
+
+def _strip_symbol_as_strategy_lead_sentence(tool_text: str, *, symbol: str) -> str:
+    lead = _SYMBOL_AS_STRATEGY_LEAD_SENTENCE.format(symbol=symbol)
+    lines = tool_text.split("\n")
+    if not lines or lines[0].strip() != lead:
+        return tool_text
+    remaining = lines[1:]
+    while remaining and not remaining[0].strip():
+        remaining.pop(0)
+    return "\n".join(remaining)
+
 
 logger = logging.getLogger(__name__)
 
@@ -821,6 +884,17 @@ class LLMConversationBrain:
         if route.intent is ConversationalMVPIntent.HELP:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_help")
             return render_help(), "conversation_mvp_help", _dedupe(warnings), references, "deterministic", ()
+        if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text) and mission is not None and mission.candidates:
+            # "지금 뭐 연구하고 있어?" with an active Research Mission answers
+            # from the actual strategy candidate portfolio (Patch 8.2)
+            # instead of the generic runtime-status renderer.
+            self._remember_mission(request, mission)
+            text = render_candidate_status_summary(
+                candidate_records(mission),
+                current=distinct_promotion_ready_strategy_count(mission),
+                target=mission.target_promotion_ready_candidates,
+            )
+            return text, "conversation_mission_candidate_status", _dedupe((*warnings, "mission candidate status")), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text):
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_status")
             return render_status(), "conversation_mvp_status", _dedupe(warnings), references, "deterministic", ()
@@ -913,15 +987,19 @@ class LLMConversationBrain:
         references: tuple[str, ...],
     ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         """Continues an active market-wide / selected-symbols mission with one
-        bounded ``multi_symbol_research`` cycle, instead of ever collapsing a
-        generic continuation message down to a single symbol.
+        bounded research cycle for its ACTIVE STRATEGY CANDIDATE, instead of
+        ever collapsing a generic continuation message down to a single
+        symbol's identity (Patch 8.2: the primary research object is a
+        strategy candidate - see gaon.knowledge.strategy_candidate - a
+        symbol is evaluation evidence recorded ON a candidate, never a
+        candidate's identity).
 
-        Budget exhaustion within this one cycle does not mark the mission
-        complete: the mission stays ``active`` and the next cycle continues
-        from the still-unexplored part of the universe. A hard blocker
-        (provider/data acquisition failure across the whole cycle) is
-        recorded explicitly on the mission rather than being misread as a
-        negative strategy result.
+        Generates the next untried strategy family as a new candidate when
+        none is active. Budget exhaustion within one cycle does not mark
+        the mission complete: the mission stays ``active`` and the next
+        cycle continues. A hard blocker (provider/data acquisition failure
+        across the whole cycle) is recorded explicitly on the mission
+        rather than being misread as a negative strategy result.
         """
         if self._tool_executor is None:
             return None
@@ -930,31 +1008,79 @@ class LLMConversationBrain:
             text = mission_blocked_message(mission)
             return text, "conversation_mission_blocked", _dedupe((*warnings, "mission blocked; safe explanation only")), references, "deterministic", ()
 
-        # Coverage (multi_symbol_research) and per-candidate promotion
-        # validation (the full Research Director pipeline) alternate across
-        # turns rather than both running inside one request: a mission-wide
-        # research_budget_exhausted signal from one still bounds this turn to
-        # a single tool call.
-        if mission.pending_promotion_symbol:
-            return self._try_mission_promotion_cycle(request, mission, warnings, references)
+        active = get_active_candidate(mission)
+        if active is not None and is_diversity_request(request.text):
+            # "다른 방식도 찾아봐": an explicit user request to bias the next
+            # hypothesis cycle toward a different strategy family - treated
+            # the same as natural stagnation-driven rotation (never
+            # discards accumulated candidate history, just stops actively
+            # pursuing this one).
+            stagnant = mark_stagnant(active, now=request.received_at, reason="user_requested_different_strategy_family")
+            mission = update_candidate(mission, stagnant, now=request.received_at)
+            mission = set_active_candidate(mission, None, now=request.received_at)
+            mission = clear_focus_symbol(mission, now=request.received_at)
+            warnings = (*warnings, f"user_requested_diversity_rotation={stagnant.candidate_id}")
+            active = None
 
+        if active is None:
+            family = next_untried_family(candidate_records(mission))
+            if family is None:
+                updated = record_blocked(
+                    mission,
+                    reason="strategy_family_space_exhausted: every supported strategy family has already been tried this mission",
+                    now=request.received_at,
+                )
+                self._remember_mission(request, updated)
+                return (
+                    mission_blocked_message(updated),
+                    "conversation_mission_blocked",
+                    _dedupe((*warnings, "strategy family space exhausted")),
+                    references,
+                    "deterministic",
+                    (),
+                )
+            active = new_candidate(family, sequence=next_candidate_sequence(mission), now=request.received_at)
+            mission = add_candidate(mission, active, now=request.received_at)
+
+        # Cross-symbol breadth evaluation (multi_symbol_research) and deep
+        # single-candidate robustness validation (the full Research
+        # Director pipeline) alternate across turns rather than both
+        # running inside one request: a research_budget_exhausted signal
+        # from either still bounds this turn to a single tool call.
+        if mission.pending_promotion_symbol:
+            return self._try_candidate_robustness_cycle(request, mission, active, warnings, references)
+        return self._try_candidate_breadth_cycle(request, mission, active, warnings, references)
+
+    def _try_candidate_breadth_cycle(
+        self,
+        request: LLMConversationRequest,
+        mission: ResearchMission,
+        candidate,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+        """Evaluates ONE strategy candidate's exact rules
+        (``candidate.spec_rules``, passed through to ``multi_symbol_research``
+        as ``candidate_spec`` - see ``AutonomousMultiSymbolResearchOrchestrator.run``)
+        across the mission's symbol universe - the SAME rules on every
+        symbol, never a different candidate per symbol."""
         if mission.universe_scope is MissionUniverseScope.SELECTED_SYMBOLS:
             batch = next_unexplored_symbols(mission, batch_size=5)
             if not batch:
                 updated = record_blocked(mission, reason="selected_symbol_universe_exhausted", now=request.received_at)
                 self._remember_mission(request, updated)
                 return mission_blocked_message(updated), "conversation_mission_blocked", _dedupe((*warnings, "mission selected-symbol universe exhausted")), references, "deterministic", ()
-            result = self._execute_mvp_multi_symbol_research(request, batch, request.text, None, None)
+            result = self._execute_mvp_multi_symbol_research(request, batch, request.text, None, None, candidate_spec=candidate.spec_rules)
         else:
             cycle_text = mission_cycle_request_text(mission)
-            result = self._execute_mvp_multi_symbol_research(request, (), cycle_text, None, None)
+            result = self._execute_mvp_multi_symbol_research(request, (), cycle_text, None, None, candidate_spec=candidate.spec_rules)
 
         if result.status != "success":
             failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
             updated = record_blocked(mission, reason=f"{failure.stage}:{failure.error_type}", now=request.received_at)
             self._remember_mission(request, updated)
             return (
-                f"{mission_blocked_message(updated)}\n\n({failure.user_message})",
+                f"{render_candidate_block(candidate)}\n\n{mission_blocked_message(updated)}\n\n({failure.user_message})",
                 f"research_failure_{failure.stage}",
                 _dedupe((*warnings, *result.warnings, warning_for_failure(failure))),
                 references,
@@ -963,18 +1089,45 @@ class LLMConversationBrain:
             )
 
         output = result.output
-        researched_symbols = tuple(
-            str(item.get("symbol")) for item in _as_list(output.get("evidence")) if isinstance(item, dict) and item.get("symbol")
-        )
-        updated = record_cycle_result(mission, researched_symbols=researched_symbols, now=request.received_at)
+        evidence_items = [item for item in _as_list(output.get("evidence")) if isinstance(item, dict)]
+        attempted = len(evidence_items)
+        valid_items = [item for item in evidence_items if item.get("eligible")]
+        valid = len(valid_items)
+        trade_count = int(_as_dict(output.get("summary")).get("aggregate_trade_count", 0) or 0)
+        evidence_symbols = tuple(str(item.get("symbol")) for item in valid_items if item.get("symbol"))
+        excluded_symbols = tuple(str(item.get("symbol")) for item in evidence_items if not item.get("eligible") and item.get("symbol"))
         exclusion = _as_dict(output.get("exclusion_diagnostics"))
-        if not researched_symbols and is_provider_acquisition_blocker(exclusion):
+        provider_blocked = is_provider_acquisition_blocker(exclusion)
+
+        updated_candidate = record_breadth_progress(
+            candidate,
+            attempted=attempted,
+            valid=valid,
+            trade_count=trade_count,
+            evidence_symbols=evidence_symbols,
+            excluded_symbols=excluded_symbols,
+            provider_blocked=provider_blocked,
+            now=request.received_at,
+        )
+        updated_mission = record_cycle_result(
+            mission,
+            researched_symbols=tuple(str(item.get("symbol")) for item in evidence_items if item.get("symbol")),
+            now=request.received_at,
+        )
+        updated_mission = update_candidate(updated_mission, updated_candidate, now=request.received_at)
+
+        if attempted and valid == 0 and provider_blocked:
+            # Every sample in this cycle failed for provider/data-
+            # acquisition reasons - a real evidence-acquisition blocker,
+            # not a negative validation result for this strategy. The
+            # candidate is not penalized (provider_blocked=True above), the
+            # mission pauses explicitly instead of silently retrying.
             by_category = _as_dict(exclusion.get("by_category"))
             reason = "provider_acquisition_blocker: " + ",".join(f"{key}={value}" for key, value in sorted(by_category.items()))
-            updated = record_blocked(updated, reason=reason, now=request.received_at)
-            self._remember_mission(request, updated)
+            updated_mission = record_blocked(updated_mission, reason=reason, now=request.received_at)
+            self._remember_mission(request, updated_mission)
             return (
-                mission_blocked_message(updated),
+                f"{render_candidate_block(updated_candidate)}\n\n{mission_blocked_message(updated_mission)}",
                 "conversation_mission_blocked",
                 _dedupe((*warnings, "provider acquisition blocker; not a negative strategy result")),
                 _dedupe((*references, "tool:multi_symbol_research")),
@@ -982,19 +1135,22 @@ class LLMConversationBrain:
                 ("multi_symbol_research",),
             )
 
-        best_symbol = best_symbol_from_multi_symbol_output(output)
-        if best_symbol:
-            updated = record_focus_symbol(updated, symbol=best_symbol, now=request.received_at)
-        self._remember_mission(request, updated)
+        if is_stagnant(updated_candidate):
+            return self._rotate_stagnant_candidate(request, updated_mission, updated_candidate, warnings, references, tool_calls=("multi_symbol_research",))
+
+        if updated_candidate.has_sufficient_universe_evidence and updated_candidate.evidence_symbols:
+            updated_mission = record_focus_symbol(updated_mission, symbol=updated_candidate.evidence_symbols[0], now=request.received_at)
+
+        self._remember_mission(request, updated_mission)
         self._remember_mvp_context(request, ConversationalMVPIntent.COMPARE_SYMBOLS, self._payloads_from_multi_symbol_result(output), request.text)
 
+        candidate_text = render_candidate_block(updated_candidate)
         # A within-one-call adaptive-sampling budget exhaustion is a cycle
         # checkpoint, never mission completion: the mission stays active and
-        # the caller is told plainly that the NEXT cycle continues from the
-        # still-unexplored part of the universe, instead of the opaque
-        # generic tool-safety fallback message.
+        # the caller is told plainly that the mission continues, instead of
+        # the opaque generic tool-safety fallback message.
         if is_cycle_budget_exhausted(output):
-            text = f"{_format_tool_response('multi_symbol_research', output, request.text)}\n\n{mission_budget_exhausted_message(updated)}"
+            text = f"{candidate_text}\n\n{_format_tool_response('multi_symbol_research', output, request.text)}\n\n{mission_budget_exhausted_message(updated_mission)}"
             return (
                 text,
                 "conversation_mission_cycle_budget_exhausted",
@@ -1004,46 +1160,46 @@ class LLMConversationBrain:
                 ("multi_symbol_research",),
             )
 
-        text = _format_tool_response("multi_symbol_research", output, request.text)
-        text = f"{text}\n\n{mission_status_block(updated)}"
+        text = f"{candidate_text}\n\n{_format_tool_response('multi_symbol_research', output, request.text)}\n\n{mission_status_block(updated_mission)}"
         return (
             text,
             "conversation_mission_driven_multi_symbol_research",
-            _dedupe((*warnings, "mission-driven scope preserved", f"mission_scope={updated.universe_scope.value}")),
+            _dedupe((*warnings, "mission-driven scope preserved", f"mission_scope={updated_mission.universe_scope.value}", f"active_candidate={updated_candidate.candidate_id}")),
             _dedupe((*references, "tool:multi_symbol_research")),
             "deterministic",
             ("multi_symbol_research",),
         )
 
-    def _try_mission_promotion_cycle(
+    def _try_candidate_robustness_cycle(
         self,
         request: LLMConversationRequest,
         mission: ResearchMission,
+        candidate,
         warnings: tuple[str, ...],
         references: tuple[str, ...],
     ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         """Runs the EXISTING single-candidate Autonomous Learning V2 /
         Research Director pipeline (OOS/walk-forward/regime/cost/Monte Carlo)
-        against the symbol the last coverage cycle flagged as strongest, and
-        only records a promotion-ready candidate when that real pipeline's
-        already-wired ``research_director_decision`` says
+        using a symbol drawn from THIS candidate's own validated evidence
+        (``candidate.evidence_symbols``) as the evaluation sample, and only
+        records a promotion-ready STRATEGY (keyed by
+        ``candidate.strategy_fingerprint``, never by the symbol) when that
+        real pipeline's already-wired ``research_director_decision`` says
         ``request_human_promotion_review`` - this never invents or weakens
         promotion readiness, it only reads the existing gate's verdict.
 
         Reuses the SAME cross-turn budget mechanism the existing single-
         symbol Autonomous Learning V2 continuation path already uses
-        (``_autonomous_learning_v2_steps_used``): as long as this mission
-        keeps validating the same candidate symbol turn over turn,
-        ``steps_used`` carries forward instead of resetting to 0 every call,
-        so the Research Director can actually advance through its stages
-        (OOS -> walk-forward -> regime -> cost -> Monte Carlo) instead of
-        restarting from scratch each cycle - without that, the mission could
-        never converge on a promotion-ready candidate. The candidate symbol
-        is only released back to universe coverage once the Director reaches
-        a terminal decision for it (promotion review, rejection, or its own
-        budget exhaustion) - not after every single call - while each turn
-        still makes exactly one bounded tool call, so this cannot loop
-        unboundedly within a single request.
+        (``_autonomous_learning_v2_steps_used``): as long as this candidate
+        keeps being validated turn over turn, ``steps_used`` carries
+        forward instead of resetting to 0 every call, so the Research
+        Director can actually advance through its stages instead of
+        restarting from scratch - without that, the mission could never
+        converge on a promotion-ready candidate. The evaluation symbol is
+        only released (and the candidate's status re-evaluated) once the
+        Director reaches a terminal decision for it - not after every
+        single call - while each turn still makes exactly one bounded tool
+        call, so this cannot loop unboundedly within a single request.
         """
         symbol = str(mission.pending_promotion_symbol)
         context = self._mvp_context_for(request.session_id)
@@ -1054,7 +1210,7 @@ class LLMConversationBrain:
         )
         mode = "continue" if continuing_same_candidate else "research"
         steps_used = _autonomous_learning_v2_steps_used(context, mode)
-        request_text = mission_promotion_request_text(mission, symbol)
+        request_text = render_candidate_request_text(candidate, symbol)
         result = self._tool_executor.execute(
             ToolRequest(
                 "autonomous_learning_research",
@@ -1069,7 +1225,7 @@ class LLMConversationBrain:
             cleared = clear_focus_symbol(mission, now=request.received_at)
             self._remember_mission(request, cleared)
             return (
-                f"{failure.user_message}\n\n{mission_status_block(cleared)}",
+                f"{render_candidate_block(candidate)}\n\n{failure.user_message}\n\n{mission_status_block(cleared)}",
                 f"research_failure_{failure.stage}",
                 _dedupe((*warnings, *result.warnings, warning_for_failure(failure))),
                 references,
@@ -1077,32 +1233,115 @@ class LLMConversationBrain:
                 ("autonomous_learning_research",),
             )
         output = result.output
-        text = _format_tool_response("autonomous_learning_research", output, request.text)
-        self._remember_autonomous_learning_v2_context(request, output, text)
+        tool_text = _format_tool_response("autonomous_learning_research", output, request.text)
+        self._remember_autonomous_learning_v2_context(request, output, tool_text)
         learning = _as_dict(output.get("autonomous_learning_v2"))
         director = _as_dict(learning.get("research_director_decision"))
-        candidate_ctx = _as_dict(learning.get("promotion_candidate_context"))
-        if bool(director.get("terminal")):
-            updated = clear_focus_symbol(mission, now=request.received_at)
-            if str(director.get("action")) == "request_human_promotion_review":
-                candidate_id = str(candidate_ctx.get("candidate_id") or f"{symbol}:{output.get('run_id', 'unknown')}")
-                updated = record_promotion_candidate(updated, symbol=symbol, run_id=candidate_id, now=request.received_at)
+        action = str(director.get("action", "unknown"))
+        terminal = bool(director.get("terminal"))
+
+        updated_candidate = record_robustness_progress(candidate, director_action=action, terminal=terminal, now=request.received_at)
+        updated_mission = mission
+        identity_unverified = False
+        if terminal:
+            updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
+            if action == "request_human_promotion_review":
+                # ULTRAREVIEW High #1 fix: before recording a promotion-
+                # ready strategy, confirm the deep-validation stage
+                # actually validated THIS candidate's exact effective
+                # rules - never the candidate's aspirational fingerprint on
+                # trust alone. If it cannot be verified, the candidate is
+                # not counted as promotion-ready.
+                validated_fingerprint = _deep_validation_effective_fingerprint(request_text, symbol=symbol)
+                if validated_fingerprint == candidate.strategy_fingerprint:
+                    updated_mission = record_promotion_candidate(
+                        updated_mission,
+                        strategy_fingerprint=candidate.strategy_fingerprint,
+                        candidate_id=candidate.candidate_id,
+                        now=request.received_at,
+                    )
+                    updated_candidate = mark_promotion_ready(updated_candidate, now=request.received_at)
+                    updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
+                else:
+                    identity_unverified = True
+            elif action == "reject_candidate":
+                updated_candidate = mark_rejected(updated_candidate, reason="research_director_rejected_candidate", now=request.received_at)
+                updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
+            # Other terminal actions (e.g. hold/research_budget_exhausted)
+            # neither promote nor reject the candidate - it stays the
+            # active candidate and the next cycle may pick a fresh
+            # representative symbol from its evidence, or - once
+            # is_stagnant fires below - rotate to a new strategy.
+        updated_mission = update_candidate(updated_mission, updated_candidate, now=request.received_at)
+
+        if is_stagnant(updated_candidate):
+            return self._rotate_stagnant_candidate(request, updated_mission, updated_candidate, warnings, references, tool_calls=("autonomous_learning_research",), extra_warnings=result.warnings)
+
+        self._remember_mission(request, updated_mission)
+        candidate_text = render_candidate_block(updated_candidate)
+        if updated_mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
+            text = f"{candidate_text}\n\n{mission_awaiting_approval_message(updated_mission)}"
+        elif updated_candidate.status is StrategyCandidateStatus.REJECTED:
+            text = f"{candidate_text}\n\n영하님, {updated_candidate.candidate_id} 전략은 검증 결과 기각되어 다음 사이클에서 다른 전략 후보로 전환합니다.\n\n{mission_status_block(updated_mission)}"
         else:
-            # Not yet terminal: keep validating the SAME candidate next turn
-            # so steps_used keeps advancing instead of resetting.
-            updated = mission
-        self._remember_mission(request, updated)
-        if updated.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
-            text = mission_awaiting_approval_message(updated)
-        else:
-            text = f"{text}\n\n{mission_status_block(updated)}"
+            # ULTRAREVIEW High #2 fix: never present the SYMBOL as the
+            # strategy's own identity in a candidate-driven mission
+            # response - the candidate block above already carries that
+            # identity; the symbol below is reported as evidence.
+            trimmed_tool_text = _strip_symbol_as_strategy_lead_sentence(tool_text, symbol=symbol)
+            lead_sentence = (
+                f"영하님, {updated_candidate.candidate_id} 전략 후보의 정밀 검증을 계속했습니다. "
+                f"이번 검증 표본 종목: {symbol}."
+            )
+            text = f"{candidate_text}\n\n{lead_sentence}\n\n{trimmed_tool_text}\n\n{mission_status_block(updated_mission)}"
+        result_warnings = (*warnings, *result.warnings, f"research_director_action={action}")
+        if identity_unverified:
+            result_warnings = (*result_warnings, f"candidate_identity_unverified={updated_candidate.candidate_id}")
         return (
             text,
             "conversation_mission_driven_promotion_cycle",
-            _dedupe((*warnings, *result.warnings, f"research_director_action={director.get('action', 'unknown')}")),
+            _dedupe(result_warnings),
             _dedupe((*references, "tool:autonomous_learning_research")),
             "deterministic",
             ("autonomous_learning_research",),
+        )
+
+    def _rotate_stagnant_candidate(
+        self,
+        request: LLMConversationRequest,
+        mission: ResearchMission,
+        candidate,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+        *,
+        tool_calls: tuple[str, ...],
+        extra_warnings: tuple[str, ...] = (),
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+        """A candidate that made no measurable progress across
+        ``STRATEGY_CANDIDATE_STAGNATION_THRESHOLD`` bounded cycles (never
+        counting provider/data-acquisition-blocked cycles - see
+        ``record_breadth_progress``) is marked stagnant and released as the
+        active candidate, so the NEXT continuation generates a genuinely
+        different strategy hypothesis instead of endlessly re-researching
+        one candidate (or, as production showed, one symbol)."""
+        stagnant = mark_stagnant(candidate, now=request.received_at)
+        updated_mission = update_candidate(mission, stagnant, now=request.received_at)
+        updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
+        updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
+        self._remember_mission(request, updated_mission)
+        text = (
+            f"{render_candidate_block(stagnant)}\n\n"
+            f"영하님, {stagnant.candidate_id} 전략은 여러 사이클 동안 뚜렷한 진전이 없어 "
+            "다음 연구 사이클에서는 다른 전략 후보로 전환하겠습니다.\n\n"
+            f"{mission_status_block(updated_mission)}"
+        )
+        return (
+            text,
+            "conversation_mission_candidate_stagnant",
+            _dedupe((*warnings, *extra_warnings, f"candidate_stagnant={stagnant.candidate_id}")),
+            references,
+            "deterministic",
+            tool_calls,
         )
 
     def _try_autonomous_research_conversation(self, request: LLMConversationRequest, route, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
@@ -1369,12 +1608,14 @@ class LLMConversationBrain:
         self._record_tool_result(request.session_id, result, request.received_at)
         return result
 
-    def _execute_mvp_multi_symbol_research(self, request: LLMConversationRequest, symbols: tuple[str, ...], request_text: str, start_date: str | None, end_date: str | None):
+    def _execute_mvp_multi_symbol_research(self, request: LLMConversationRequest, symbols: tuple[str, ...], request_text: str, start_date: str | None, end_date: str | None, *, candidate_spec: Mapping[str, object] | None = None):
         arguments: dict[str, object] = {"request_text": request_text, "symbols": symbols, "universe_type": "explicit"}
         if start_date is not None:
             arguments["start_date"] = start_date
         if end_date is not None:
             arguments["end_date"] = end_date
+        if candidate_spec is not None:
+            arguments["candidate_spec"] = dict(candidate_spec)
         result = self._tool_executor.execute(ToolRequest("multi_symbol_research", arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
         return result

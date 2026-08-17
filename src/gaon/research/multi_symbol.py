@@ -22,10 +22,12 @@ from gaon.research.krx_real_pipeline import (
     BacktestExecutionAssumptionSet,
     CanonicalStrategySpec,
     EvidenceBasedStrategyCritic,
+    FieldProvenance,
     ImprovementCandidate,
     ImprovementCandidateGenerator,
     KRXDatasetBuilder,
     KRXHistoricalDataProvider,
+    ProvenancedValue,
     RealBacktestResult,
     RealMarketDataUnavailable,
     RuleBasedBacktestEngine,
@@ -98,6 +100,32 @@ PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT = """가온아 아래 5개 종목의 실제
 마지막에는 sample confidence, concentration 판단, generalization 판단, 최종 recommendation을 구조화된 실제 연구 결과만 기준으로 알려줘.
 
 검증되지 않은 숫자나 조건은 만들지 말고 자동 주문, Champion 자동 승격, 승인 없는 config 변경은 하지 마."""
+
+
+def _strategy_from_candidate_spec(candidate_spec: Mapping[str, object], *, symbol: str, created_at: str) -> CanonicalStrategySpec:
+    """Reconstructs a CanonicalStrategySpec from the JSON-safe rules-only
+    shape ``gaon.knowledge.strategy_candidate.spec_rules_to_json`` produces
+    (``{"entry": {...}, "exit": {...}, "filters": {...}}``, each value in
+    ``ProvenancedValue.to_json()`` shape). Patch 8.2: lets a mission-driven
+    research cycle evaluate ONE strategy candidate's exact rules across a
+    symbol universe, instead of ``UserStrategyParser`` re-parsing (and
+    potentially re-interpreting) free text on every call."""
+
+    def _field(raw: Mapping[str, object]) -> ProvenancedValue:
+        return ProvenancedValue(raw["value"], FieldProvenance(str(raw.get("provenance", FieldProvenance.RESEARCH_CANDIDATE.value))))
+
+    entry = {key: _field(value) for key, value in dict(candidate_spec.get("entry") or {}).items()}
+    exit_rules = {key: _field(value) for key, value in dict(candidate_spec.get("exit") or {}).items()}
+    filters = {key: _field(value) for key, value in dict(candidate_spec.get("filters") or {}).items()}
+    return CanonicalStrategySpec(
+        spec_id=f"candidate-spec:{_sha(dict(candidate_spec))[:16]}",
+        symbol=symbol.upper(),
+        entry=entry,
+        exit=exit_rules,
+        filters=filters,
+        source_text="strategy-candidate:multi-symbol-evaluation",
+        created_at=created_at,
+    )
 
 
 class UniverseType(str, Enum):
@@ -579,6 +607,7 @@ class AutonomousMultiSymbolResearchOrchestrator:
         end_date: str = "2026-07-24",
         run_id: str | None = None,
         generated_at: str | None = None,
+        candidate_spec: Mapping[str, object] | None = None,
     ) -> MultiSymbolResearchRun:
         at=generated_at or utc_now()
         rid=run_id or f"multi-symbol-research:{uuid4().hex}"
@@ -624,7 +653,11 @@ class AutonomousMultiSymbolResearchOrchestrator:
         universe=KRXResearchUniverseResolver().resolve(symbols,universe_type=universe_type,universe_result=universe_result,created_at=at,market_scope=market_scope,candidate_count=selection.candidate_count if selection else None,provenance=selection.source if selection else None,coverage_mode=selection.coverage_mode if selection else None)
         if not universe.symbols:
             raise RealMarketDataUnavailable("real_data_unavailable: universe has no symbols")
-        strategy = UserStrategyParser().parse(request_text or DEFAULT_REQUEST_TEXT, symbol=universe.symbols[0], created_at=at)
+        strategy = (
+            _strategy_from_candidate_spec(candidate_spec, symbol=universe.symbols[0], created_at=at)
+            if candidate_spec is not None
+            else UserStrategyParser().parse(request_text or DEFAULT_REQUEST_TEXT, symbol=universe.symbols[0], created_at=at)
+        )
         assumptions = default_execution_assumptions()
         evidence: list[SymbolResearchEvidence] = []
         self._dataset_cache = {}
@@ -969,8 +1002,8 @@ def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tu
     return "\n".join(lines)
 
 
-def multi_symbol_research_payload(connection: sqlite3.Connection, request_text: str, *, symbols: tuple[str, ...] | None = None, universe_type: str = "explicit", start_date: str = "2021-07-25", end_date: str = "2026-07-24") -> dict[str, object]:
-    run = AutonomousMultiSymbolResearchOrchestrator(connection, build_market_data_provider_from_env(os.environ)).run(request_text, symbols=symbols, universe_type=universe_type, start_date=start_date, end_date=end_date)
+def multi_symbol_research_payload(connection: sqlite3.Connection, request_text: str, *, symbols: tuple[str, ...] | None = None, universe_type: str = "explicit", start_date: str = "2021-07-25", end_date: str = "2026-07-24", candidate_spec: Mapping[str, object] | None = None) -> dict[str, object]:
+    run = AutonomousMultiSymbolResearchOrchestrator(connection, build_market_data_provider_from_env(os.environ)).run(request_text, symbols=symbols, universe_type=universe_type, start_date=start_date, end_date=end_date, candidate_spec=candidate_spec)
     return run.to_json()
 
 
