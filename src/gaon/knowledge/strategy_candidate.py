@@ -75,6 +75,12 @@ ABSOLUTE_CANDIDATE_CYCLE_CAP = 12
 MIN_VALID_SYMBOLS_FOR_UNIVERSE_EVIDENCE = 5
 MIN_VALID_SYMBOL_RATIO_FOR_UNIVERSE_EVIDENCE = 0.3
 
+# Patch 8.6: bounded rotation memory of symbols already used as a ROBUSTNESS
+# (deep single-symbol OOS/walk-forward/regime/cost/Monte Carlo) evaluation
+# sample under one candidate's fingerprint - same cap as breadth's
+# evidence_symbols (see record_breadth_progress) for consistency.
+ROBUSTNESS_EVIDENCE_SYMBOL_CAP = 8
+
 
 class StrategyCandidateStatus(str, Enum):
     EXPLORING = "exploring"
@@ -286,6 +292,19 @@ class StrategyCandidateRecord:
     # robustness validation) must be rendered as "not_run"/"unavailable",
     # never guessed as pass/fail.
     validation_stage_status: Mapping[str, str] = field(default_factory=dict)
+    # Patch 8.6: cross-symbol ROBUSTNESS evidence tracking - distinct from
+    # evidence_symbols (breadth's cross-symbol validation pool, the SOURCE
+    # this rotates through). Real production defect this closes: the deep
+    # single-symbol validation pipeline only ever deepened ONE symbol via
+    # cross-turn steps_used, with no memory of which symbols had already
+    # been used as a robustness sample - a market-wide mission could never
+    # actually validate the same strategy fingerprint against multiple
+    # symbols at the robustness stage. See next_robustness_evidence_symbol
+    # and gaon.runtime.llm_conversation._try_candidate_robustness_cycle.
+    robustness_evidence_symbols: tuple[str, ...] = field(default_factory=tuple)
+    robustness_attempt_count: int = 0
+    last_validation_symbol: str | None = None
+    last_validation_reference: str | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -311,6 +330,10 @@ class StrategyCandidateRecord:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "validation_stage_status": dict(self.validation_stage_status),
+            "robustness_evidence_symbols": list(self.robustness_evidence_symbols),
+            "robustness_attempt_count": self.robustness_attempt_count,
+            "last_validation_symbol": self.last_validation_symbol,
+            "last_validation_reference": self.last_validation_reference,
         }
 
     @staticmethod
@@ -339,6 +362,10 @@ class StrategyCandidateRecord:
             validation_stage_status={
                 str(key): str(value) for key, value in dict(raw.get("validation_stage_status") or {}).items()
             },
+            robustness_evidence_symbols=tuple(str(item) for item in raw.get("robustness_evidence_symbols", ()) or ()),
+            robustness_attempt_count=int(raw.get("robustness_attempt_count", 0) or 0),
+            last_validation_symbol=str(raw["last_validation_symbol"]) if raw.get("last_validation_symbol") else None,
+            last_validation_reference=str(raw["last_validation_reference"]) if raw.get("last_validation_reference") else None,
         )
 
     @property
@@ -441,6 +468,8 @@ def record_robustness_progress(
     terminal: bool,
     now: str,
     validation_stage_status: Mapping[str, str] | None = None,
+    symbol: str | None = None,
+    reference: str | None = None,
 ) -> StrategyCandidateRecord:
     """Records one deep (single-symbol-anchored OOS/walk-forward/regime/
     cost/Monte Carlo) robustness cycle's outcome - the symbol used to run
@@ -452,13 +481,33 @@ def record_robustness_progress(
     key-by-key into the candidate's persisted per-stage status - a stage
     absent from this call's status (e.g. a cycle that only advanced OOS)
     leaves any PREVIOUSLY recorded status for other stages untouched,
-    rather than resetting them to unknown."""
+    rather than resetting them to unknown.
+
+    ``symbol`` (Patch 8.6), when given, is the real evaluation sample this
+    cycle used - it is recorded (bounded, de-duplicated) into
+    ``robustness_evidence_symbols`` and ``last_validation_symbol`` so a
+    later terminal, non-promoting, non-rejecting decision (e.g. hold) can
+    rotate to a DIFFERENT, not-yet-tried evidence symbol via
+    ``next_robustness_evidence_symbol`` instead of losing its place or
+    repeating the same symbol. Left ``None`` (e.g. when the caller could
+    not verify this cycle actually validated the candidate's own effective
+    rules) leaves this candidate's evidence-symbol memory untouched, so an
+    unverified cycle is never counted as robustness evidence."""
     progressed = director_action != candidate.last_director_action
     cycles_without_progress = 0 if progressed else candidate.cycles_without_progress + 1
     status = candidate.status if terminal else StrategyCandidateStatus.ROBUSTNESS
     merged_stage_status = dict(candidate.validation_stage_status)
     if validation_stage_status:
         merged_stage_status.update({str(key): str(value) for key, value in validation_stage_status.items()})
+    robustness_evidence_symbols = candidate.robustness_evidence_symbols
+    robustness_attempt_count = candidate.robustness_attempt_count
+    last_validation_symbol = candidate.last_validation_symbol
+    if symbol:
+        robustness_evidence_symbols = tuple(
+            dict.fromkeys((*candidate.robustness_evidence_symbols, symbol))
+        )[:ROBUSTNESS_EVIDENCE_SYMBOL_CAP]
+        robustness_attempt_count = candidate.robustness_attempt_count + 1
+        last_validation_symbol = symbol
     return replace(
         candidate,
         last_director_action=director_action,
@@ -466,8 +515,33 @@ def record_robustness_progress(
         cycles_without_progress=cycles_without_progress,
         status=status,
         validation_stage_status=merged_stage_status,
+        robustness_evidence_symbols=robustness_evidence_symbols,
+        robustness_attempt_count=robustness_attempt_count,
+        last_validation_symbol=last_validation_symbol,
+        last_validation_reference=reference if reference is not None else candidate.last_validation_reference,
         updated_at=now,
     )
+
+
+def next_robustness_evidence_symbol(candidate: StrategyCandidateRecord, *, exclude: str | None = None) -> str | None:
+    """Picks the next symbol from this candidate's own BREADTH-validated
+    evidence pool (``evidence_symbols``) that has not yet been used as a
+    ROBUSTNESS (deep single-symbol) evaluation sample, so a market-wide
+    robustness mission actually progresses across multiple symbols under
+    the SAME strategy_fingerprint (Patch 8.6) instead of only ever
+    deepening one. ``exclude`` additionally skips the symbol just used this
+    cycle even if it has not yet been persisted into
+    ``robustness_evidence_symbols`` (e.g. because this cycle's identity
+    could not be verified). Returns ``None`` once every known evidence
+    symbol has already been tried - callers should then fall back to
+    gathering more breadth evidence rather than repeating a symbol."""
+    tried = set(candidate.robustness_evidence_symbols)
+    if exclude:
+        tried.add(exclude)
+    for symbol in candidate.evidence_symbols:
+        if symbol not in tried:
+            return symbol
+    return None
 
 
 def is_stagnant(candidate: StrategyCandidateRecord) -> bool:

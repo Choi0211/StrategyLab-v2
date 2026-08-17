@@ -47,7 +47,7 @@ import re
 from typing import Mapping
 from uuid import uuid4
 
-from gaon.knowledge.strategy_candidate import StrategyCandidateRecord
+from gaon.knowledge.strategy_candidate import StrategyCandidateRecord, StrategyCandidateStatus
 
 RESEARCH_MISSION_SCHEMA_VERSION = 1
 
@@ -1020,6 +1020,48 @@ def render_mission_candidate_detailed_status(mission: ResearchMission, candidate
     return "\n".join(lines)
 
 
+def render_robustness_cycle_response(candidate: StrategyCandidateRecord, mission: ResearchMission, *, symbol: str) -> str:
+    """Patch 8.6: the candidate-centric response for one robustness/deep-
+    validation evidence cycle. Real production defect this closes: a
+    market-wide mission's robustness response reading like "078935
+    전략을 다시 연구했습니다" (making the SYMBOL the strategy's own
+    identity) instead of naming the strategy candidate and reporting the
+    symbol as one evidence sample among several. Every value is read from
+    real, currently-persisted candidate/mission state - a validation stage
+    this candidate has never actually run renders as "not_run", never
+    guessed as pass/fail. The fingerprint shown is a short display form
+    only (see StrategyCandidateRecord.strategy_fingerprint for the full
+    canonical value used for all internal identity comparisons)."""
+    stage_status = dict(candidate.validation_stage_status)
+    lines = [
+        f"[전략 후보 {candidate.candidate_id}]",
+        f"전략: {candidate.hypothesis_summary}",
+        f"fingerprint: {candidate.strategy_fingerprint[:16]}",
+        "",
+        "이번 robustness evidence:",
+        f"- symbol={symbol}",
+        "- 역할=evidence sample",
+        "",
+        "[강건성 상태]",
+    ]
+    for key, label in _ROBUSTNESS_STAGE_DISPLAY:
+        lines.append(f"- {label}: {stage_status.get(key, 'not_run')}")
+    lines.extend(
+        [
+            "",
+            "[Research Mission]",
+            f"- scope: {mission.scope_label}",
+            f"- active candidate: {candidate.candidate_id}",
+            f"- fingerprint: {candidate.strategy_fingerprint[:16]}",
+            f"- cumulative validated symbols: {candidate.valid_symbols}",
+            f"- cumulative trades: {candidate.trade_count}",
+            f"- promotion-ready: {'true' if candidate.status is StrategyCandidateStatus.PROMOTION_READY else 'false'}",
+            f"- promotion-ready strategies: {mission.progress_label}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def mission_budget_exhausted_message(mission: ResearchMission) -> str:
     lines = [
         "영하님, 연구 목표는 계속 유지하고 있습니다.",
@@ -1701,3 +1743,243 @@ def _mission_for_release_check(agent, session_id: str) -> ResearchMission | None
     read path - so this release check exercises the same persistence
     round-trip production actually relies on."""
     return agent._brain._mission_for(session_id)
+
+
+def production_candidate_multi_symbol_robustness_release_check() -> Mapping[str, object]:
+    """Deterministic, network-free release check for Patch 8.6.
+
+    Exercises the production defect this patch fixes: once a candidate
+    reached the robustness stage, real production Telegram testing showed
+    the response missing the active StrategyCandidate ID, fingerprint, and
+    per-stage validation status entirely (a bare symbol-and-adequacy-status
+    reply) - and, at the code level, the ONLY reachable robustness path
+    deepened a single evaluation symbol forever, with a HOLD (or any other
+    non-promoting, non-rejecting terminal Research Director decision)
+    unconditionally clearing ``mission.pending_promotion_symbol`` and
+    silently dropping the candidate's robustness-continuation eligibility
+    on the very next turn.
+
+    Runs the REAL production stack (LLMConversationBrain ->
+    default_tool_registry -> multi_symbol_research /
+    autonomous_learning_research) through a deterministic, network-free
+    market-data provider. The Research Director's own terminal decision is
+    forced to HOLD for exactly one call (via
+    ``gaon.knowledge.telegram_autonomous_learning.decide_next_research_action``
+    - the same real bridge function production uses, never a second
+    decision path) purely to make the HOLD-triggered rotation
+    deterministically reachable without needing dozens of real turns to
+    exhaust the conversational step budget; every other call runs the real,
+    unforced Director decision."""
+    import sqlite3
+    from unittest.mock import patch as _patch
+
+    from gaon.research.krx_real_pipeline import KRXFixtureMarketDataProvider
+    from gaon.research.real_research import MarketSymbol
+    from gaon.runtime.config import GaonRuntimeConfig
+    from gaon.runtime.llm_conversation import LLMConversationRequest
+    from gaon.runtime.migrations import migrate
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    class _DeterministicUniverseProvider:
+        source = "fixture:release-check-universe-86"
+        market_agnostic = True
+        _symbols = (
+            ("111111", "KOSPI"), ("222222", "KOSPI"), ("333333", "KOSPI"), ("444444", "KOSPI"), ("555555", "KOSPI"),
+            ("666666", "KOSDAQ"), ("777777", "KOSDAQ"), ("888888", "KOSDAQ"), ("999999", "KOSDAQ"), ("101010", "KOSDAQ"),
+        )
+
+        def __init__(self) -> None:
+            self._fixture = KRXFixtureMarketDataProvider()
+
+        @classmethod
+        def from_env(cls, env=None):
+            return cls()
+
+        def fetch_universe(self, market):
+            return tuple(MarketSymbol(code, code, "KR", exchange) for code, exchange in self._symbols)
+
+        def fetch_bars(self, symbol, *, start_date, end_date, timeframe="daily"):
+            return self._fixture.fetch_bars(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
+
+        def validate_dataset(self, dataset):
+            return self._fixture.validate_dataset(dataset)
+
+    def _baseline(*, trades: int) -> dict[str, object]:
+        return {
+            "dataset": {"metadata": {"source": "real:yahoo-chart", "fixture_backed": False, "rows": 1222, "start_date": "2021-07-25", "end_date": "2026-07-24"}},
+            "quality": {"status": "pass", "blocking_findings": []},
+            "strategy": {"strategy_id": "baseline", "fingerprint": "fp:baseline", "rules": ["breakout"]},
+            "validation": {"symbols": 5, "warmup_bars": 60, "entry_opportunities": 120, "signals": 50},
+            "backtest": {"source": "real", "metrics": {"trade_count": trades, "total_return": 0.12, "mdd": 0.08}},
+            "candidates": [],
+        }
+
+    session_id = "telegram:release-check-candidate-multi-symbol-robustness"
+    from gaon.runtime.llm_tools import SQLiteToolAuditRepository
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        migrate(connection)
+        config = GaonRuntimeConfig(mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="release-check-token", telegram_allowed_chat_ids=("100",), approval_signing_secret="release-check-secret", assistant_enabled=False)
+        agent = TelegramConversationAgent(config, connection)
+        tool_audit = SQLiteToolAuditRepository(connection)
+
+        def _send(update_id: int, text: str, *, force_hold: bool = False):
+            from contextlib import ExitStack
+
+            with ExitStack() as stack:
+                stack.enter_context(_patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=_baseline(trades=45)))
+                stack.enter_context(_patch("gaon.knowledge.telegram_autonomous_learning._run_production_external_research", return_value={"state": "content_unavailable"}))
+                stack.enter_context(_patch("gaon.research.multi_symbol.build_market_data_provider_from_env", return_value=_DeterministicUniverseProvider()))
+                if force_hold:
+                    from gaon.research.research_director import ResearchDirectorAction, ResearchDirectorDecision
+
+                    forced = ResearchDirectorDecision(ResearchDirectorAction.HOLD, "release-check-forced-hold", (), True, "release_check_forced_hold")
+                    stack.enter_context(_patch("gaon.knowledge.telegram_autonomous_learning.decide_next_research_action", return_value=forced))
+                return agent._brain.respond(
+                    LLMConversationRequest(
+                        session_id=session_id, user_ref="release-check", source="telegram",
+                        text=text, received_at=f"2026-08-17T00:{update_id:02d}:00Z", message_id=f"telegram:{update_id}",
+                    )
+                )
+
+        def _tool_call_count() -> int:
+            return sum(
+                len(tool_audit.list(tool_name=name))
+                for name in ("multi_symbol_research", "autonomous_learning_research", "autonomous_research_cycle")
+            )
+
+        _send(1, "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. 현재 등록되어있는 전략보다 수익면에서 안전성 면에서 뛰어나야합니다.")
+        _send(2, "삼성전자말고 국내 주식 전체를 대상으로 연구해주세요")
+        _send(3, "증거가 충분할 때까지 다양한 방식으로 전략을 연구해주세요")
+
+        mission_breadth = _mission_for_release_check(agent, session_id)
+        candidate_primary_identity = mission_breadth is not None and mission_breadth.pending_promotion_symbol is not None and bool(mission_breadth.candidates)
+
+        turn4 = (
+            "후보 A를 현재 전략 후보로 유지하고 다음 강건성 검증 단계로 진행해주세요.\n"
+            "동일한 strategy fingerprint를 유지한 채 OOS, walk-forward,\n"
+            "거래비용 및 슬리피지 스트레스, 시장 국면별 검증을 계속해주세요.\n"
+            "특정 종목에 맞춰 전략을 변경하지 마세요."
+        )
+        # Turn 4 forces the Director's decision to HOLD (terminal, non-
+        # promoting, non-rejecting) - the real, unforced Director decision
+        # for this deliberately thin fixture is data-dependent (it may
+        # legitimately reject on the very first cycle, as
+        # production_candidate_breadth_to_robustness_transition_release_check
+        # already accounts for) and is exercised separately by that Patch
+        # 8.5 release check; forcing HOLD here keeps THIS check focused and
+        # deterministic on what Patch 8.6 actually changes - the candidate-
+        # centric response shape and the HOLD-triggered evidence-symbol
+        # rotation - via the same real bridge function production uses.
+        before_calls = _tool_call_count()
+        response4 = _send(4, turn4, force_hold=True)
+        bounded_turn4 = (_tool_call_count() - before_calls) <= 1
+
+        mission4 = _mission_for_release_check(agent, session_id)
+        candidate4 = candidate_records(mission4)[0] if mission4 is not None and mission4.candidates else None
+        symbol_turn4 = mission_breadth.pending_promotion_symbol if mission_breadth is not None else None
+
+        symbols_are_evidence_samples = (
+            candidate4 is not None
+            and "역할=evidence sample" in response4.text
+            and f"[전략 후보 {candidate4.candidate_id}]" in response4.text
+        )
+
+        # Force the terminal decision to HOLD for exactly one call, so the
+        # rotation this patch adds (next_robustness_evidence_symbol) is
+        # deterministically reachable without dozens of real turns.
+        before_calls = _tool_call_count()
+        response5 = _send(5, "다음 검증 단계로 진행해주세요", force_hold=True)
+        bounded_turn5 = (_tool_call_count() - before_calls) <= 1
+
+        mission5 = _mission_for_release_check(agent, session_id)
+        candidate5 = candidate_records(mission5)[0] if mission5 is not None and mission5.candidates else None
+        rotated_symbol = mission5.pending_promotion_symbol if mission5 is not None else None
+
+        before_calls = _tool_call_count()
+        response6 = _send(6, "다음 검증 단계로 진행해주세요")
+        bounded_turn6 = (_tool_call_count() - before_calls) <= 1
+        symbol_turn6_arg = None
+        audits = tool_audit.list(tool_name="autonomous_learning_research")
+        if audits:
+            symbol_turn6_arg = audits[-1].request.get("arguments", {}).get("symbol")
+
+        mission6 = _mission_for_release_check(agent, session_id)
+        candidate6 = candidate_records(mission6)[0] if mission6 is not None and mission6.candidates else None
+
+        candidate_primary_identity = candidate_primary_identity and (
+            candidate4 is not None
+            and candidate5 is not None
+            and candidate6 is not None
+            and candidate4.candidate_id == candidate5.candidate_id == candidate6.candidate_id
+        )
+        fingerprint_preserved_across_symbols = (
+            candidate4 is not None
+            and candidate5 is not None
+            and candidate6 is not None
+            and candidate4.strategy_fingerprint == candidate5.strategy_fingerprint == candidate6.strategy_fingerprint
+            and rotated_symbol is not None
+            and rotated_symbol != symbol_turn4
+            and symbol_turn6_arg == rotated_symbol
+        )
+        robustness_status_accumulates = (
+            candidate4 is not None
+            and candidate6 is not None
+            and bool(candidate4.validation_stage_status)
+            and set(candidate4.validation_stage_status).issubset(set(candidate6.validation_stage_status))
+        )
+        stage_status_final = dict(candidate6.validation_stage_status) if candidate6 is not None else {}
+        oos_state_grounded = "out_of_sample" in stage_status_final
+        walk_forward_state_grounded = "walk_forward" in stage_status_final
+        cost_stress_state_grounded = "transaction_cost_stress" in stage_status_final
+        regime_state_grounded = "regime_validation" in stage_status_final
+
+        restarted_agent = TelegramConversationAgent(config, connection)
+        reloaded_mission = _mission_for_release_check(restarted_agent, session_id)
+        reloaded_candidate = candidate_records(reloaded_mission)[0] if reloaded_mission is not None and reloaded_mission.candidates else None
+        restart_persistence = (
+            reloaded_candidate is not None
+            and candidate6 is not None
+            and reloaded_candidate.candidate_id == candidate6.candidate_id
+            and reloaded_candidate.strategy_fingerprint == candidate6.strategy_fingerprint
+            and dict(reloaded_candidate.validation_stage_status) == dict(candidate6.validation_stage_status)
+            and reloaded_candidate.robustness_evidence_symbols == candidate6.robustness_evidence_symbols
+        )
+
+        before_calls = _tool_call_count()
+        status_response = _send(7, "지금 뭐 연구하고 있어?")
+        status_query_read_only = _tool_call_count() == before_calls and "[Research Mission]" in status_response.text
+
+        distinct_promotion_gate_preserved = mission6 is not None and mission6.current_promotion_ready_candidates == 0
+        bounded_execution_preserved = bounded_turn4 and bounded_turn5 and bounded_turn6
+    finally:
+        connection.close()
+
+    checks = {
+        "candidate_primary_identity": candidate_primary_identity,
+        "fingerprint_preserved_across_symbols": fingerprint_preserved_across_symbols,
+        "symbols_are_evidence_samples": symbols_are_evidence_samples,
+        "robustness_status_accumulates": robustness_status_accumulates,
+        "oos_state_grounded": oos_state_grounded,
+        "walk_forward_state_grounded": walk_forward_state_grounded,
+        "cost_stress_state_grounded": cost_stress_state_grounded,
+        "regime_state_grounded": regime_state_grounded,
+        "restart_persistence": restart_persistence,
+        "status_query_read_only": status_query_read_only,
+        "distinct_promotion_gate_preserved": distinct_promotion_gate_preserved,
+        "bounded_execution_preserved": bounded_execution_preserved,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"candidate multi-symbol robustness release check failed: {failed}")
+
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }

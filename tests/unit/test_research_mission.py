@@ -306,6 +306,61 @@ class MissionCandidateDetailedStatusRenderingTests(unittest.TestCase):
         self.assertIn("not_run_missing_oos_backtest", text)
 
 
+class RobustnessCycleResponseRenderingTests(unittest.TestCase):
+    """Patch 8.6 - the candidate-centric robustness-evidence-cycle response
+    (real production defect this closes: a market-wide mission's robustness
+    response naming the evaluation SYMBOL as the strategy's own identity,
+    e.g. "078935 전략을 다시 연구했습니다.", instead of the strategy
+    candidate). Every value must come from real persisted state."""
+
+    def setUp(self) -> None:
+        from gaon.knowledge.research_mission import render_robustness_cycle_response
+
+        self.render = render_robustness_cycle_response
+        self.mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 수익과 안전성을 개선하는 단타 전략을 연구해주세요", existing=None, now=NOW
+        )
+        self.candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(self.mission), now=NOW)
+        self.mission = add_candidate(self.mission, self.candidate, now=NOW)
+
+    def test_candidate_identity_and_evidence_symbol_role_are_both_shown(self) -> None:
+        text = self.render(self.candidate, self.mission, symbol="078935")
+        self.assertIn(f"[전략 후보 {self.candidate.candidate_id}]", text)
+        self.assertIn(self.candidate.strategy_fingerprint[:16], text)
+        self.assertIn("symbol=078935", text)
+        self.assertIn("역할=evidence sample", text)
+        # Never the "SYMBOL 전략을 다시 연구했습니다" shape this patch closes.
+        self.assertNotIn("078935 전략을 다시 연구했습니다", text)
+
+    def test_never_run_stages_render_as_not_run_never_fabricated(self) -> None:
+        text = self.render(self.candidate, self.mission, symbol="078935")
+        self.assertIn("[강건성 상태]", text)
+        self.assertIn("not_run", text)
+        self.assertNotIn("PASS", text)
+
+    def test_recorded_stage_status_is_shown_verbatim(self) -> None:
+        from gaon.knowledge.strategy_candidate import record_robustness_progress
+
+        candidate = record_robustness_progress(
+            self.candidate, director_action="collect_more_evidence", terminal=False, now=NOW,
+            validation_stage_status={"out_of_sample": "not_run_missing_oos_backtest"}, symbol="078935",
+        )
+        text = self.render(candidate, self.mission, symbol="078935")
+        self.assertIn("not_run_missing_oos_backtest", text)
+
+    def test_mission_footer_shows_real_cumulative_state(self) -> None:
+        candidate = record_breadth_progress(
+            self.candidate, attempted=10, valid=7, trade_count=42,
+            evidence_symbols=("078935", "005380"), excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        text = self.render(candidate, self.mission, symbol="078935")
+        self.assertIn("[Research Mission]", text)
+        self.assertIn(f"active candidate: {candidate.candidate_id}", text)
+        self.assertIn("cumulative validated symbols: 7", text)
+        self.assertIn("cumulative trades: 42", text)
+        self.assertIn("promotion-ready: false", text)
+
+
 class MissionBudgetSemanticsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.mission = extract_or_update_mission(
