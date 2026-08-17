@@ -333,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
     sub.add_parser("gaon-production-strategy-centric-autonomous-research-release-check")
     sub.add_parser("gaon-production-persistent-strategy-candidate-continuation-release-check")
+    sub.add_parser("gaon-production-kr-multi-symbol-data-acquisition-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2688,6 +2689,33 @@ def _run(args: argparse.Namespace) -> int:
             f"restart_persistence={str(payload['restart_persistence']).lower()} "
             f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
             f"human_promotion_gate_preserved={str(payload['human_promotion_gate_preserved']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-kr-multi-symbol-data-acquisition-release-check":
+        from gaon.research.multi_symbol import production_kr_multi_symbol_data_acquisition_release_check
+
+        store = RuntimeStateStore(":memory:")
+        try:
+            payload = production_kr_multi_symbol_data_acquisition_release_check(store._connection)
+        finally:
+            store.close()
+        print(
+            "gaon-production-kr-multi-symbol-data-acquisition-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"acquisition_funnel_structured={str(payload['acquisition_funnel_structured']).lower()} "
+            f"exclusion_reason_evidence_backed={str(payload['exclusion_reason_evidence_backed']).lower()} "
+            f"provider_failure_not_misclassified_as_data_quality_failure={str(payload['provider_failure_not_misclassified_as_data_quality_failure']).lower()} "
+            f"timeout_not_misclassified_as_data_quality_failure={str(payload['timeout_not_misclassified_as_data_quality_failure']).lower()} "
+            f"insufficient_history_not_misclassified_as_provider_failure={str(payload['insufficient_history_not_misclassified_as_provider_failure']).lower()} "
+            f"research_eligible_only_passed_to_strategy_validation={str(payload['research_eligible_only_passed_to_strategy_validation']).lower()} "
+            f"bounded_retry_cap_preserved={str(payload['bounded_retry_cap_preserved']).lower()} "
+            f"mission_scope_unchanged={str(payload['mission_scope_unchanged']).lower()} "
+            f"candidate_fingerprint_unchanged={str(payload['candidate_fingerprint_unchanged']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "

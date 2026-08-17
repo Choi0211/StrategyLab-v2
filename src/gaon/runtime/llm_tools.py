@@ -329,7 +329,7 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         lambda args: research_retest_history_payload(connection, run_id=str(args["run_id"]) if "run_id" in args else None, limit=int(args.get("limit", 20))),
     )
     registry.register(
-        ToolDefinition("multi_symbol_research", "Run read-only multi-symbol KRX real research with explicit universe provenance.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbols", "universe_type", "start_date", "end_date", "candidate_spec")),
+        ToolDefinition("multi_symbol_research", "Run read-only multi-symbol KRX real research with explicit universe provenance.", ToolRiskLevel.READ_ONLY, required_args=("request_text",), allowed_args=("symbols", "universe_type", "start_date", "end_date", "candidate_spec", "avoid_symbols")),
         lambda args: multi_symbol_research_payload(
             connection,
             str(args["request_text"]),
@@ -338,6 +338,7 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
             start_date=str(args.get("start_date", "2021-07-25")),
             end_date=str(args.get("end_date", "2026-07-24")),
             candidate_spec=args.get("candidate_spec") if isinstance(args.get("candidate_spec"), dict) else None,
+            avoid_symbols=_symbols_arg(args.get("avoid_symbols")) or (),
         ),
     )
     registry.register(

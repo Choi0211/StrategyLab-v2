@@ -397,7 +397,18 @@ def research_sample_size(env: Mapping[str,str] | None=None) -> int:
     except ValueError: value=DEFAULT_RESEARCH_SAMPLE_SIZE
     return max(1,min(MAX_RESEARCH_SAMPLE_SIZE,value))
 
-def select_bounded_universe(candidates: tuple[MarketSymbol,...], scope: MarketScope, *, requested_size: int, seed: str, source: str) -> MarketUniverseSelection:
+def select_bounded_universe(candidates: tuple[MarketSymbol,...], scope: MarketScope, *, requested_size: int, seed: str, source: str, avoid_symbols: frozenset[str] = frozenset()) -> MarketUniverseSelection:
+    # Patch 8.4: ``avoid_symbols`` (bounded - callers pass an already-capped
+    # set, e.g. a strategy candidate's tracked excluded_symbols) lets a
+    # NEW research cycle skip symbols a PRIOR cycle already confirmed
+    # unusable, instead of spending research budget re-discovering the
+    # same exclusion. Falls back to the full candidate pool if excluding
+    # them would leave nothing to sample from - never raises just because
+    # every candidate happens to be on the avoid list.
+    avoid={str(item).upper() for item in avoid_symbols}
+    filtered=tuple(x for x in candidates if x.symbol.upper() not in avoid)
+    if filtered:
+        candidates=filtered
     unique={(x.exchange.upper(),x.symbol.upper()):x for x in candidates if not scope.exchanges or x.exchange.upper() in set(scope.exchanges)}
     rows=tuple(unique.values())
     if not rows: raise RealMarketDataUnavailable("real_data_unavailable: market universe contains no eligible stock symbols")
