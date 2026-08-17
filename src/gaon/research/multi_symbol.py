@@ -14,7 +14,7 @@ from enum import Enum
 import json
 import os
 import sqlite3
-from typing import Protocol
+from typing import Mapping, Protocol
 from uuid import uuid4
 
 from gaon.research.autonomous_retest import _ReleaseCheckBacktestRunner, _ReleaseCheckProvider
@@ -300,6 +300,104 @@ class CandidateGeneralization:
         }
 
 
+_EXCLUSION_CATEGORY_QUALITY_CODES: Mapping[str, str] = {
+    "insufficient_lookback": "insufficient_bars",
+    "duplicate_bars": "data_quality_failure",
+    "invalid_ohlc": "data_quality_failure",
+    "symbol_mismatch": "data_quality_failure",
+    "negative_volume": "data_quality_failure",
+    "timestamp_ordering": "data_quality_failure",
+    "abnormal_volume": "data_quality_failure",
+}
+
+# AutonomousMultiSymbolResearchOrchestrator._symbol_evidence attaches this
+# sentinel finding code to ANY exception raised while fetching/building a
+# symbol's dataset (see multi_symbol.py's `except Exception as exc:` handler) -
+# it marks WHERE the failure happened (the acquisition path, before any real
+# DataQualityEngine finding was ever produced), it is not itself a data-quality
+# finding, and must never be classified as one. The real cause has to be read
+# from `blocked_reason` (the actual exception class name and message).
+_ACQUISITION_EXCEPTION_FINDING_CODE = "provider_failure"
+
+
+def _classify_exclusion_reason(item: "SymbolResearchEvidence") -> str:
+    """Classifies why a symbol was excluded from a multi-symbol research run.
+
+    Acquisition-side failures (provider fetch failures, timeouts, symbol
+    resolution failures - anything that happened before a dataset was ever
+    quality-validated) are classified from ``blocked_reason``, the actual
+    exception class/message the pipeline recorded, and are always checked
+    ahead of - and kept separate from - real DataQualityEngine findings in
+    ``blocking_findings``. A symbol that failed to fetch is never reported as
+    a data-quality problem. Unclassifiable failures fall back to "other"
+    rather than guessing.
+    """
+    if item.eligible:
+        return "eligible"
+    quality_codes = {
+        str(finding.get("code", ""))
+        for finding in item.blocking_findings
+        if str(finding.get("code", "")) != _ACQUISITION_EXCEPTION_FINDING_CODE
+    }
+    if quality_codes:
+        for code in quality_codes:
+            if code in _EXCLUSION_CATEGORY_QUALITY_CODES:
+                return _EXCLUSION_CATEGORY_QUALITY_CODES[code]
+        return "data_quality_failure"
+    return _classify_acquisition_failure(item.blocked_reason)
+
+
+def _classify_acquisition_failure(blocked_reason: str | None) -> str:
+    """Classifies a symbol that failed before reaching data-quality
+    validation, from the exception class name/message the pipeline actually
+    recorded. Only names a specific cause the message evidence supports;
+    falls back to "other" rather than inventing one."""
+    reason = (blocked_reason or "").casefold()
+    if not reason:
+        return "other"
+    if "timeout" in reason:
+        return "timeout"
+    if "kis" in reason and ("mismatch" in reason or "master" in reason):
+        return "kis_master_mismatch"
+    if "unsupported" in reason:
+        return "unsupported_security"
+    if any(token in reason for token in ("symbol not found", "symbol resolution", "unresolved symbol", "unknown symbol", "no symbols")):
+        return "symbol_resolution_failure"
+    if any(
+        token in reason
+        for token in (
+            "realmarketdataunavailable",
+            "connectionerror",
+            "urlerror",
+            "httperror",
+            "no bars",
+            "no usable bars",
+            "fetch",
+            "network",
+            "connection",
+        )
+    ):
+        return "provider_fetch_failure"
+    return "other"
+
+
+def _exclusion_diagnostics(evidence: tuple["SymbolResearchEvidence", ...]) -> dict[str, object]:
+    excluded = tuple(item for item in evidence if not item.eligible)
+    by_category: dict[str, int] = {}
+    for item in excluded:
+        category = _classify_exclusion_reason(item)
+        by_category[category] = by_category.get(category, 0) + 1
+    provider_categories = {"provider_fetch_failure", "timeout", "kis_master_mismatch", "symbol_resolution_failure"}
+    provider_related = sum(count for category, count in by_category.items() if category in provider_categories)
+    return {
+        "schema_version": MULTI_SYMBOL_SCHEMA_VERSION,
+        "total_excluded": len(excluded),
+        "by_category": by_category,
+        "provider_related_excluded": provider_related,
+        "excluded_symbols": [item.symbol for item in excluded],
+    }
+
+
 @dataclass(frozen=True)
 class MultiSymbolResearchRun:
     run_id: str
@@ -314,6 +412,7 @@ class MultiSymbolResearchRun:
     korean_report: str
     generated_at: str
     adaptive_sampling: dict[str, object] | None = None
+    exclusion_diagnostics: dict[str, object] | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -330,6 +429,7 @@ class MultiSymbolResearchRun:
             "korean_report": self.korean_report,
             "generated_at": self.generated_at,
             "adaptive_sampling": dict(self.adaptive_sampling or {}),
+            "exclusion_diagnostics": dict(self.exclusion_diagnostics or _exclusion_diagnostics(self.evidence)),
             "automatic_order": False,
             "automatic_champion_promotion": False,
             "automatic_config_apply": False,
@@ -615,7 +715,8 @@ class AutonomousMultiSymbolResearchOrchestrator:
             at,
         )
         report = render_multi_symbol_report(request, tuple(evidence), summary, generalization, recommendation, adaptive_sampling=adaptive_sampling)
-        run = MultiSymbolResearchRun(rid, request, strategy, assumptions, tuple(evidence), candidate_results, summary, generalization, recommendation, report, at, adaptive_sampling=adaptive_sampling)
+        exclusion_diagnostics = _exclusion_diagnostics(tuple(evidence))
+        run = MultiSymbolResearchRun(rid, request, strategy, assumptions, tuple(evidence), candidate_results, summary, generalization, recommendation, report, at, adaptive_sampling=adaptive_sampling, exclusion_diagnostics=exclusion_diagnostics)
         if self._connection is not None:
             SQLiteMultiSymbolResearchRepository(self._connection).add_run(run)
         return run
@@ -820,6 +921,14 @@ def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tu
         f"- 총 거래 표본: {summary.aggregate_trade_count}회",
         f"- 연구 신뢰도: {confidence}",
     ]
+    exclusion = _exclusion_diagnostics(evidence)
+    by_category = exclusion.get("by_category") or {}
+    if isinstance(by_category, dict) and by_category:
+        lines.extend(["", "[제외 사유]"])
+        for category, count in sorted(by_category.items()):
+            lines.append(f"- {category}: {count}종목")
+        if exclusion.get("provider_related_excluded") and exclusion["provider_related_excluded"] == exclusion.get("total_excluded"):
+            lines.append("- 제외 사유가 모두 데이터 제공자/조회 문제이며, 전략 자체의 실패로 판단하지 않습니다.")
     if sampling:
         lines.extend(["","[표본 확장]",
             f"- 연구 라운드: {sampling.get('sampling_rounds',1)}회",
