@@ -139,6 +139,38 @@ class CanonicalStrategySpec:
     def fingerprint(self) -> str:
         return _sha(self.to_json(include_fingerprint=False))
 
+    @property
+    def strategy_family_fingerprint(self) -> str:
+        """A STRATEGY-RULES-ONLY identity fingerprint.
+
+        Deliberately excludes ``symbol``, ``spec_id``, ``source_text``, and
+        ``created_at`` - only ``entry``/``exit``/``filters`` (the actual
+        backtest-engine-interpretable rules) determine identity. The same
+        rules evaluated against 005930 vs 000660 vs any other symbol carry
+        the SAME strategy identity; running one candidate across a universe
+        of symbols must never be mistaken for many different strategies.
+
+        Hashes each field's ``.value`` only, never ``.provenance`` - a spec
+        built directly from a strategy-family template (provenance
+        ``research_candidate``) and a spec parsed from free text (provenance
+        ``user_provided``/``default``) that assign the IDENTICAL rule VALUES
+        must produce the IDENTICAL strategy identity. Provenance describes
+        where a value came from, not what the strategy actually does, and
+        must never make two otherwise-identical strategies look distinct
+        (Patch 8.2 ULTRAREVIEW fix).
+
+        This is deliberately separate from ``.fingerprint`` (which includes
+        symbol/spec_id/created_at and is used for per-run dataset/backtest/
+        window-fingerprint matching elsewhere) - existing callers of
+        ``.fingerprint`` are unaffected by this addition (Patch 8.2).
+        """
+        payload = {
+            "entry": {key: value.value for key, value in sorted(self.entry.items())},
+            "exit": {key: value.value for key, value in sorted(self.exit.items())},
+            "filters": {key: value.value for key, value in sorted(self.filters.items())},
+        }
+        return _sha(payload)
+
     def to_json(self, *, include_fingerprint: bool = True) -> dict[str, object]:
         payload = {
             "schema_version": KRX_REAL_PIPELINE_SCHEMA_VERSION,

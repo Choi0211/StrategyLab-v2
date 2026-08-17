@@ -95,5 +95,60 @@ def _request(text: str) -> LLMConversationRequest:
     )
 
 
+class SymbolAsStrategyLeadSentenceStrippingTests(unittest.TestCase):
+    """ULTRAREVIEW High #2 fix: a candidate-driven mission response must
+    never present the SYMBOL as the strategy's own identity."""
+
+    def test_the_known_leading_sentence_is_removed(self) -> None:
+        from gaon.runtime.llm_conversation import _strip_symbol_as_strategy_lead_sentence
+
+        tool_text = "영하님, 473050 전략을 다시 연구했습니다.\n\n검증 결과 요약입니다."
+        stripped = _strip_symbol_as_strategy_lead_sentence(tool_text, symbol="473050")
+        self.assertNotIn("473050 전략을 다시 연구했습니다", stripped)
+        self.assertIn("검증 결과 요약입니다", stripped)
+
+    def test_text_without_the_leading_sentence_is_untouched(self) -> None:
+        from gaon.runtime.llm_conversation import _strip_symbol_as_strategy_lead_sentence
+
+        tool_text = "영하님, 승격 후보 상세 정보를 알려드립니다.\n\n검증 결과 요약입니다."
+        self.assertEqual(_strip_symbol_as_strategy_lead_sentence(tool_text, symbol="473050"), tool_text)
+
+    def test_a_different_symbols_lead_sentence_is_not_mistakenly_stripped(self) -> None:
+        from gaon.runtime.llm_conversation import _strip_symbol_as_strategy_lead_sentence
+
+        tool_text = "영하님, 005930 전략을 다시 연구했습니다.\n\n검증 결과 요약입니다."
+        stripped = _strip_symbol_as_strategy_lead_sentence(tool_text, symbol="473050")
+        self.assertEqual(stripped, tool_text)
+
+
+class DeepValidationEffectiveFingerprintTests(unittest.TestCase):
+    """ULTRAREVIEW High #1 fix: promotion-ready recording must verify what
+    the deep-validation pipeline actually validated, using the exact same
+    parser it uses internally."""
+
+    def test_matches_the_candidates_own_fingerprint_for_a_faithful_round_trip(self) -> None:
+        from gaon.knowledge.strategy_candidate import new_candidate, render_candidate_request_text
+        from gaon.runtime.llm_conversation import _deep_validation_effective_fingerprint
+
+        candidate = new_candidate("breakout_trend_confirmed", sequence=1, now="2026-08-17T00:00:00Z")
+        request_text = render_candidate_request_text(candidate, "473050")
+        validated = _deep_validation_effective_fingerprint(request_text, symbol="473050")
+        self.assertEqual(validated, candidate.strategy_fingerprint)
+
+    def test_a_lossy_text_approximation_is_detected_as_a_mismatch(self) -> None:
+        from gaon.runtime.llm_conversation import _deep_validation_effective_fingerprint
+
+        # Text that would have collapsed a trend-confirmed candidate into a
+        # plain breakout under the OLD parser triggers - proves the
+        # verification actually catches a real mismatch rather than always
+        # trivially matching.
+        from gaon.knowledge.strategy_candidate import new_candidate
+
+        candidate = new_candidate("breakout_trend_confirmed", sequence=1, now="2026-08-17T00:00:00Z")
+        approximate_text = "473050 20일 고가 돌파 손절 -5% 10일 저점 이탈 청산"
+        validated = _deep_validation_effective_fingerprint(approximate_text, symbol="473050")
+        self.assertNotEqual(validated, candidate.strategy_fingerprint)
+
+
 if __name__ == "__main__":
     unittest.main()

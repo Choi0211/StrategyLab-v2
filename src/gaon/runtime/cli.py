@@ -331,6 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-daily-briefing-scheduler-release-check")
     sub.add_parser("gaon-production-daily-briefing-runtime-wiring-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
+    sub.add_parser("gaon-production-strategy-centric-autonomous-research-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2638,6 +2639,31 @@ def _run(args: argparse.Namespace) -> int:
             f"budget_exhaustion_not_terminal={str(payload['budget_exhaustion_not_terminal']).lower()} "
             f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
             f"human_promotion_gate_preserved={str(payload['human_promotion_gate_preserved']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-strategy-centric-autonomous-research-release-check":
+        from gaon.knowledge.research_mission import production_strategy_centric_autonomous_research_release_check
+
+        payload = production_strategy_centric_autonomous_research_release_check()
+        print(
+            "gaon-production-strategy-centric-autonomous-research-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"strategy_candidate_primary_unit={str(payload['strategy_candidate_primary_unit']).lower()} "
+            f"candidate_fingerprint_symbol_independent={str(payload['candidate_fingerprint_symbol_independent']).lower()} "
+            f"cross_symbol_validation={str(payload['cross_symbol_validation']).lower()} "
+            f"distinct_strategy_target={payload['distinct_strategy_target']} "
+            f"symbols_are_evidence_samples={str(payload['symbols_are_evidence_samples']).lower()} "
+            f"stagnation_can_rotate_candidate={str(payload['stagnation_can_rotate_candidate']).lower()} "
+            f"baseline_comparison_preserved={str(payload['baseline_comparison_preserved']).lower()} "
+            f"mission_scope_preserved={str(payload['mission_scope_preserved']).lower()} "
+            f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
+            f"human_promotion_gate_preserved={str(payload['human_promotion_gate_preserved']).lower()} "
+            f"legacy_migration_safe={str(payload['legacy_migration_safe']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "
