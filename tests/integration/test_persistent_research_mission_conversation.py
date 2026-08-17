@@ -144,6 +144,19 @@ class _DeterministicKRUniverseProvider:
         return self._fixture.validate_dataset(dataset)
 
 
+# Routes the OLD single-symbol continuation path used before Patch 8.1's
+# scope-regression guard - a mission-driven turn must never record one of
+# these, since they sit behind _resolve_autonomous_symbol's 005930 fallback.
+_OLD_SINGLE_SYMBOL_CONTINUATION_ROUTES = frozenset(
+    {
+        "conversation_autonomous_learning_v2",
+        "conversation_autonomous_research_cycle",
+        "conversation_autonomous_continuation",
+        "conversation_autonomous_critique",
+    }
+)
+
+
 class PersistentResearchMissionConversationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.store = RuntimeStateStore(":memory:")
@@ -181,6 +194,22 @@ class PersistentResearchMissionConversationTests(unittest.TestCase):
             tool_name="autonomous_research_cycle"
         )
 
+    def _latest_route(self) -> str:
+        # ULTRAREVIEW false-positive repair: the ground truth for "which
+        # code path actually handled this turn" is the route recorded on
+        # the stored assistant message, not an inference from mission
+        # fields that can be trivially empty either way (e.g. `symbols`
+        # is always () for a market_wide mission whether or not the
+        # regression is present). The user's own message is also stored,
+        # with route="input" and the same created_at timestamp as the
+        # assistant's reply, so this must filter by role rather than
+        # assume ordering - a tied created_at can sort either message
+        # first.
+        messages = self.store.conversations.list_messages("telegram:100", limit=5)
+        assistant_messages = [message for message in messages if message.role == "assistant"]
+        self.assertTrue(assistant_messages, "no assistant conversation message recorded")
+        return assistant_messages[-1].route
+
     def test_real_conversation_preserves_market_wide_scope_across_generic_continuations(self) -> None:
         # Turn 1: original goal statement. Objective + strategy family are
         # captured; the exact starting scope (which the original defect
@@ -196,8 +225,21 @@ class PersistentResearchMissionConversationTests(unittest.TestCase):
         self.assertTrue(mission_after_turn1.improve_safety)
         self.assertEqual(mission_after_turn1.strategy_family, "short_term_daytrade")
 
-        # Turn 2: explicit market-wide scope, real production dispatch.
+        # Turn 2: explicit market-wide scope declaration. With
+        # assistant_enabled=False (this harness's deterministic-testing
+        # convention, matching test_gaon_end_to_end_conversation.py), a
+        # FRESH explicit multi-symbol request is only dispatched to a real
+        # tool by the LLM-provider path (_try_authoritative_research_tool),
+        # which is unreachable here - so this turn makes zero tool calls.
+        # What IS proven here, and is the thing this turn exists to prove,
+        # is that the mission's scope fields are established from the text
+        # alone (extract_or_update_mission), independent of whether a tool
+        # actually ran - turns 3/5/6 below are what prove real dispatch.
+        multi_symbol_before_turn2 = len(self._multi_symbol_audits())
+        single_symbol_before_turn2 = len(self._single_symbol_audits())
         self._send(2, "삼성전자말고 국내 주식 전체를 대상으로 연구해주세요")
+        self.assertEqual(len(self._multi_symbol_audits()), multi_symbol_before_turn2)
+        self.assertEqual(len(self._single_symbol_audits()), single_symbol_before_turn2)
         mission_after_turn2 = self._mission()
         self.assertEqual(mission_after_turn2.universe_scope, MissionUniverseScope.MARKET_WIDE)
         self.assertEqual(mission_after_turn2.market, "KR")
@@ -206,13 +248,24 @@ class PersistentResearchMissionConversationTests(unittest.TestCase):
         multi_symbol_after_turn2 = len(self._multi_symbol_audits())
 
         # Turn 3: THE BUG - a generic continuation phrase with no explicit
-        # scope must NOT regress to single-symbol / 005930 research.
+        # scope must NOT regress to single-symbol / 005930 research. The
+        # ground-truth check is the actual route the conversation brain
+        # recorded for this turn (see _latest_route): it must be one of the
+        # NEW mission-driven routes, and specifically must NOT be the OLD
+        # single-symbol continuation route
+        # (conversation_autonomous_learning_v2 / _autonomous_research_cycle)
+        # that _resolve_autonomous_symbol's 005930 fallback lives behind -
+        # checking `"005930" not in mission.symbols` alone would be vacuous,
+        # since a market_wide mission's `symbols` tuple is always empty by
+        # construction whether or not the regression is present.
         single_symbol_before_turn3 = len(self._single_symbol_audits())
         turn3 = self._send(3, "증거가 충분할 때까지 다양한 방식으로 전략을 연구해주세요")
         mission_after_turn3 = self._mission()
         self.assertEqual(mission_after_turn3.universe_scope, MissionUniverseScope.MARKET_WIDE, "scope must not regress")
         self.assertEqual(mission_after_turn3.market, "KR")
-        self.assertNotIn("005930", mission_after_turn3.symbols)
+        route_turn3 = self._latest_route()
+        self.assertTrue(route_turn3.startswith("conversation_mission_"), f"unexpected route for turn 3: {route_turn3}")
+        self.assertNotIn(route_turn3, _OLD_SINGLE_SYMBOL_CONTINUATION_ROUTES)
         self.assertGreater(len(self._multi_symbol_audits()), multi_symbol_after_turn2, "continuation must dispatch a real multi-symbol cycle")
         self.assertEqual(len(self._single_symbol_audits()), single_symbol_before_turn3, "continuation must not silently fall back to single-symbol research")
         self.assertTrue(turn3.strip())
@@ -230,6 +283,9 @@ class PersistentResearchMissionConversationTests(unittest.TestCase):
         mission_after_turn4 = self._mission()
         self.assertEqual(mission_after_turn4.target_promotion_ready_candidates, 3)
         self.assertEqual(mission_after_turn4.universe_scope, MissionUniverseScope.MARKET_WIDE)
+        route_turn4 = self._latest_route()
+        self.assertTrue(route_turn4.startswith("conversation_mission_"), f"unexpected route for turn 4: {route_turn4}")
+        self.assertNotIn(route_turn4, _OLD_SINGLE_SYMBOL_CONTINUATION_ROUTES)
         self.assertGreater(len(self._multi_symbol_audits()) + len(self._single_symbol_audits()), real_work_before_turn4)
 
         # Turn 5: another bare continuation - target and scope both persist.
@@ -237,7 +293,9 @@ class PersistentResearchMissionConversationTests(unittest.TestCase):
         mission_after_turn5 = self._mission()
         self.assertEqual(mission_after_turn5.target_promotion_ready_candidates, 3)
         self.assertEqual(mission_after_turn5.universe_scope, MissionUniverseScope.MARKET_WIDE)
-        self.assertNotIn("005930", mission_after_turn5.symbols)
+        route_turn5 = self._latest_route()
+        self.assertTrue(route_turn5.startswith("conversation_mission_"), f"unexpected route for turn 5: {route_turn5}")
+        self.assertNotIn(route_turn5, _OLD_SINGLE_SYMBOL_CONTINUATION_ROUTES)
 
         # Turn 6: the exact phrase that produced the opaque safety-gate
         # message in production. It must now produce a real, mission-aware
@@ -251,11 +309,33 @@ class PersistentResearchMissionConversationTests(unittest.TestCase):
         self.assertEqual(mission_final.market, "KR")
         self.assertIn("KOSPI", mission_final.exchanges)
         self.assertIn("KOSDAQ", mission_final.exchanges)
-        self.assertNotIn("005930", mission_final.symbols)
+        route_turn6 = self._latest_route()
+        self.assertTrue(route_turn6.startswith("conversation_mission_"), f"unexpected route for turn 6: {route_turn6}")
+        self.assertNotIn(route_turn6, _OLD_SINGLE_SYMBOL_CONTINUATION_ROUTES)
 
         # Mission lineage is stable: every turn from 2 onward updated the
         # SAME mission_id, never silently replaced it.
         self.assertEqual(mission_after_turn2.mission_id, mission_final.mission_id)
+
+        # H2 regression: whenever the SAME candidate symbol is validated
+        # across consecutive promotion cycles (turns 4-6 keep re-entering
+        # _try_mission_promotion_cycle for the same pending_promotion_symbol
+        # as long as the Director has not reached a terminal decision),
+        # steps_used must carry forward instead of resetting to 0 every
+        # turn - otherwise the Research Director can never advance through
+        # its validation stages and the mission can never converge.
+        steps_used_sequence = [
+            int(audit.request["arguments"].get("steps_used", 0)) for audit in self._single_symbol_audits()
+        ]
+        if len(steps_used_sequence) >= 2:
+            self.assertEqual(
+                steps_used_sequence,
+                sorted(steps_used_sequence),
+                f"steps_used must be non-decreasing across mission promotion cycles, got {steps_used_sequence}",
+            )
+            self.assertGreater(
+                steps_used_sequence[-1], 0, "steps_used must have advanced past 0 on a later promotion cycle"
+            )
 
         # Bounded execution: each mission-driven turn made a small, bounded
         # number of tool calls (never more than a couple), not an unbounded
@@ -270,14 +350,42 @@ class PersistentResearchMissionConversationTests(unittest.TestCase):
         mission = self._mission()
         self.assertEqual(mission.universe_scope, MissionUniverseScope.MARKET_WIDE)
 
+        # ULTRAREVIEW false-positive repair: llm_conversation.py does
+        # `from gaon.knowledge.research_mission import ... is_cycle_budget_exhausted`,
+        # which binds the name into llm_conversation's OWN module namespace
+        # at import time - patching the source module's attribute (as the
+        # original version of this test did) does not affect that already-
+        # bound reference and is silently inert. The correct patch target
+        # is where the name is actually looked up from at call time.
         with patch(
-            "gaon.knowledge.research_mission.is_cycle_budget_exhausted", return_value=True
-        ):
+            "gaon.runtime.llm_conversation.is_cycle_budget_exhausted", return_value=True
+        ) as mocked:
             turn2 = self._send(2, "증거가 충분할 때까지 연구해주세요")
+        self.assertTrue(mocked.called, "the patched budget-exhaustion signal was never consulted - this mock is not load-bearing")
         self.assertIn("종료되지 않았습니다", turn2)
         mission_after = self._mission()
         self.assertEqual(mission_after.status, MissionStatus.ACTIVE)
         self.assertNotEqual(mission_after.status, MissionStatus.COMPLETED)
+
+    def test_explain_follow_up_with_active_mission_makes_no_research_tool_call(self) -> None:
+        # H3 regression: "이어서 설명해주세요" (please continue *explaining*)
+        # must never be hijacked into a research cycle just because it
+        # shares a word with a real continuation phrase.
+        self._send(1, "국내 주식 전체를 대상으로 단타 전략을 연구해주세요")
+        self._send(2, "증거가 충분할 때까지 연구해주세요")
+        multi_symbol_before = len(self._multi_symbol_audits())
+        single_symbol_before = len(self._single_symbol_audits())
+        self._send(3, "이어서 설명해주세요")
+        self.assertEqual(len(self._multi_symbol_audits()), multi_symbol_before)
+        self.assertEqual(len(self._single_symbol_audits()), single_symbol_before)
+
+    def test_generic_continuation_with_active_mission_makes_a_research_tool_call(self) -> None:
+        # H3 regression, positive case: a genuine continuation phrase must
+        # still dispatch real mission-driven work.
+        self._send(1, "국내 주식 전체를 대상으로 단타 전략을 연구해주세요")
+        real_work_before = len(self._multi_symbol_audits()) + len(self._single_symbol_audits())
+        self._send(2, "계속 연구해주세요")
+        self.assertGreater(len(self._multi_symbol_audits()) + len(self._single_symbol_audits()), real_work_before)
 
     def test_no_order_promotion_or_mutation_across_the_whole_conversation(self) -> None:
         self._send(1, "국내 주식 전체를 대상으로 단타 전략을 연구해주세요")

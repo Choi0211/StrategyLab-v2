@@ -177,6 +177,11 @@ def _contains_any(value: str, tokens: tuple[str, ...]) -> bool:
 # Continuation / research-intent detection
 # ---------------------------------------------------------------------------
 
+# ULTRAREVIEW H3 fix: bare "이어서" and "승격가능"/"승격가능한" used to match
+# ANY message containing those substrings, including ordinary explain/show
+# follow-ups ("이어서 설명해주세요", "승격 가능한 후보 보여줘") that have
+# nothing to do with continuing research. Every token below requires the
+# actual research-continuation phrase, not just a loosely related word.
 _GENERIC_CONTINUATION_TOKENS: tuple[str, ...] = (
     "계속연구",
     "계속해서연구",
@@ -187,17 +192,19 @@ _GENERIC_CONTINUATION_TOKENS: tuple[str, ...] = (
     "충분한증거",
     "멈추지말고",
     "포기하지말고",
-    "승격가능한",
-    "승격가능",
     "승격요청이가능",
     "승격할수있는",
     "더연구",
     "이어서연구",
-    "이어서",
+    "이어서진행",
+    "이어서계속",
     "끝까지연구",
     "계속진행",
     "계속진행해",
     "나올때까지",
+    "다음연구사이클",
+    "다음사이클진행",
+    "다음단계연구",
 )
 
 _RESEARCH_VERB_TOKENS: tuple[str, ...] = (
@@ -218,10 +225,23 @@ def is_generic_continuation_request(text: str) -> bool:
     This is a scope-regression *guard* predicate only - callers must never
     use a positive match here to invent a new mission scope, only to decide
     whether an *existing* mission's scope should be preserved untouched.
+    Callers with access to the conversational route/intent classifier
+    (``gaon.runtime.conversational_mvp.classify_conversational_route``)
+    MUST additionally check that the message was not already recognized as
+    an explain/detail/risk/recommendation/rerun/timeframe/status follow-up
+    before treating a match here as a mission continuation - this predicate
+    alone only judges the presence of a research-continuation phrase, not
+    the full conversational intent.
     """
     normalized = _norm(text)
     if not normalized:
         return False
+    if normalized == "계속":
+        # A message that is *only* "계속" ("continue") and nothing else -
+        # broader substring matching on bare "계속" would also fire inside
+        # unrelated sentences ("계속 지켜보고 있어요"), so this is an exact
+        # match, not a substring one.
+        return True
     return _contains_any(normalized, _GENERIC_CONTINUATION_TOKENS)
 
 
@@ -250,16 +270,21 @@ _TARGET_COUNT_UNIT_TOKENS: tuple[str, ...] = ("전략", "후보", "종목", "can
 
 
 def _extract_target_count(text: str) -> int | None:
+    """Extracts a target promotion-ready candidate count like "3개" from
+    ``text``. Explicitly excludes duration phrases such as "3개월"
+    (3 months), "3개년" (3 years) or "3개당" (per 3 units) - "개" immediately
+    followed by 월/년/당 is a unit-of-time/rate suffix, never a candidate
+    count, and must never be misread as one."""
     normalized = _norm(text)
     if not normalized:
         return None
     if not _contains_any(normalized, _TARGET_COUNT_UNIT_TOKENS + ("개",)):
         return None
-    digit_match = re.search(r"(\d{1,2})개", normalized)
+    digit_match = re.search(r"(\d{1,2})개(?!월|년|당)", normalized)
     if digit_match:
         return int(digit_match.group(1))
     for word, value in _KOREAN_DIGIT_WORDS.items():
-        if f"{word}개" in normalized:
+        if re.search(rf"{word}개(?!월|년|당)", normalized):
             return value
     return None
 
@@ -388,6 +413,16 @@ def extract_or_update_mission(
         universe_scope = MissionUniverseScope.SELECTED_SYMBOLS
         symbols = explicit_symbols
         mission_exchanges = existing.exchanges if existing is not None else DEFAULT_KR_EXCHANGES
+    elif len(explicit_symbols) == 1 and not continuation:
+        # Explicit single-symbol override (e.g. "삼성전자만 다시 연구해"):
+        # the user named exactly one symbol and this is NOT a generic
+        # continuation phrase, so it is treated as a real scope declaration
+        # and narrows even an existing broader mission down to that symbol -
+        # the scope-regression guard below only ever applies when the turn
+        # itself carries no explicit scope signal.
+        universe_scope = MissionUniverseScope.SINGLE_SYMBOL
+        symbols = explicit_symbols
+        mission_exchanges = existing.exchanges if existing is not None else DEFAULT_KR_EXCHANGES
     elif existing is not None:
         # Scope-regression guard: nothing in this turn redefines scope, so
         # the mission's established universe_scope/symbols/exchanges carry
@@ -469,20 +504,48 @@ def next_unexplored_symbols(mission: ResearchMission, *, batch_size: int = 5) ->
 
 
 def mission_cycle_request_text(mission: ResearchMission, request_text: str | None = None) -> str:
-    """Builds request text for the next bounded research cycle that keeps
-    ``resolve_market_scope`` matching the mission's established scope (KR +
-    universe-requested tokens) every cycle, while varying deterministically
-    per cycle so ``multi_symbol_research``'s existing seeded universe
-    selection samples a different slice of the market each time instead of
-    repeating the same symbols."""
+    """Builds request text for the next bounded market-wide/multi-symbol
+    coverage cycle that keeps ``resolve_market_scope`` matching the
+    mission's established scope (KR + universe-requested tokens) every
+    cycle, while varying deterministically per cycle so
+    ``multi_symbol_research``'s existing seeded universe selection samples a
+    different slice of the market each time instead of repeating the same
+    symbols.
+
+    This text is only ever consumed by ``multi_symbol_research`` (universe
+    selection/strategy parsing), which never sends it to an external
+    provider - it must NOT be reused as the ``request_text`` for
+    ``autonomous_learning_research``/external-research tool calls (see
+    ``mission_promotion_request_text``), since those forward it verbatim as
+    an outbound search query and the cycle marker below is internal
+    control metadata, not a real query.
+    """
     if mission.universe_scope is MissionUniverseScope.MARKET_WIDE:
         exchanges_label = "코스피 코스닥" if set(mission.exchanges) >= {"KOSPI", "KOSDAQ"} else "/".join(mission.exchanges)
         family_label = {"short_term_daytrade": "단타", "swing": "스윙", "trend_following": "추세추종"}.get(mission.strategy_family or "", "")
         return (
             f"국내 주식 {exchanges_label} 전체를 대상으로 {family_label} 전략을 연구해줘 "
-            f"(research-mission:{mission.mission_id}:cycle:{mission.cycles_completed + 1})"
+            f"({mission.mission_id}:cycle:{mission.cycles_completed + 1})"
         )
     return request_text or mission.originating_request
+
+
+def mission_promotion_request_text(mission: ResearchMission, symbol: str) -> str:
+    """Builds a clean, human-readable request text for validating ONE
+    candidate symbol through the single-candidate Autonomous Learning V2 /
+    Research Director pipeline.
+
+    Deliberately excludes internal control metadata (mission_id, cycle
+    counters) that ``mission_cycle_request_text`` embeds for market-wide
+    universe-sampling purposes: this text is forwarded verbatim as the
+    external-research search query for every configured provider category
+    (see ``telegram_autonomous_learning.py``'s multi-source research
+    queries), so it must read as a real research request a human could have
+    typed, not as internal bookkeeping.
+    """
+    family_label = {"short_term_daytrade": "단타", "swing": "스윙", "trend_following": "추세추종"}.get(mission.strategy_family or "", "")
+    family_phrase = f"{family_label} " if family_label else ""
+    return f"{symbol} {family_phrase}전략을 처음부터 다시 연구해줘. 외부 자료와 실제 시장 데이터를 사용해."
 
 
 def record_cycle_result(
@@ -637,10 +700,19 @@ def mission_budget_exhausted_message(mission: ResearchMission) -> str:
             "같은 요청 안에서 추가 실행은 안전하게 중단했습니다.",
             "",
             "연구 Mission은 종료되지 않았습니다.",
-            "다음 연구 사이클에서는 아직 검증하지 않은 종목/전략 후보부터",
-            "이어갈 수 있습니다.",
         ]
     )
+    # This specific "아직 검증하지 않은 종목부터 이어간다" claim is only
+    # actually true for selected_symbols missions, which track
+    # explored_symbols and pick unexplored ones next
+    # (next_unexplored_symbols). Market-wide missions do not currently
+    # exclude already-explored symbols from the next sample, so they get a
+    # truthful, non-specific continuation statement instead of a promise
+    # this code cannot keep.
+    if mission.universe_scope is MissionUniverseScope.SELECTED_SYMBOLS:
+        lines.extend(["다음 연구 사이클에서는 아직 검증하지 않은 종목부터 이어갈 수 있습니다."])
+    else:
+        lines.extend(["다음 연구 사이클에서 계속 진행하겠습니다."])
     return "\n".join(lines)
 
 

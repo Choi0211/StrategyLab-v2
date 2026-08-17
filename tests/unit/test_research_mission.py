@@ -121,6 +121,11 @@ class MissionContinuationScopeRegressionTests(unittest.TestCase):
                 self.assertTrue(is_generic_continuation_request(text))
 
     def test_generic_continuation_never_regresses_to_single_symbol(self) -> None:
+        # ULTRAREVIEW false-positive repair: market_wide missions always
+        # carry an empty `symbols` tuple by construction, so asserting
+        # `"005930" not in updated.symbols` would trivially pass even if the
+        # regression fully reappeared - the only non-vacuous check is on
+        # `universe_scope`/`market` themselves, which is what this asserts.
         for text in (
             "증거가 충분할때까지 다양한방식으로 전략을 연구해주세요",
             "증거가 충분할 때까지 멈추지 말고 연구해주세요",
@@ -131,15 +136,28 @@ class MissionContinuationScopeRegressionTests(unittest.TestCase):
                 self.assertEqual(updated.universe_scope, MissionUniverseScope.MARKET_WIDE)
                 self.assertEqual(updated.market, "KR")
                 self.assertNotEqual(updated.universe_scope, MissionUniverseScope.SINGLE_SYMBOL)
-                self.assertNotIn("005930", updated.symbols)
 
-    def test_explicit_single_symbol_override_is_still_possible(self) -> None:
-        # The user explicitly narrows scope by naming two-or-more symbols
-        # is out of scope here; a single bare mention alone is intentionally
-        # NOT enough to override an active broader mission (only a mission
-        # replacement flow, not covered by this guard, should do that) - the
-        # guard's job is to make sure a *generic* continuation phrase never
-        # does it silently.
+    def test_generic_continuation_phrase_does_not_override_scope_even_with_a_symbol_name(self) -> None:
+        # H3 fix: continuation-preservation takes priority over a symbol
+        # mention when the message is ALSO a generic continuation phrase.
+        updated = extract_or_update_mission(
+            "삼성전자 관련해서 계속 연구해주세요", existing=self.mission, now=LATER
+        )
+        self.assertEqual(updated.universe_scope, MissionUniverseScope.MARKET_WIDE)
+
+    def test_explicit_single_symbol_override_actually_narrows_the_mission(self) -> None:
+        # ULTRAREVIEW false-positive repair: this test previously asserted
+        # the OPPOSITE of its own name (that scope stayed market_wide). A
+        # real explicit single-symbol directive - naming exactly one symbol,
+        # with NO generic-continuation phrasing - must actually narrow an
+        # existing broader mission down to that symbol.
+        updated = extract_or_update_mission("삼성전자만 다시 연구해", existing=self.mission, now=LATER)
+        self.assertEqual(updated.universe_scope, MissionUniverseScope.SINGLE_SYMBOL)
+        self.assertEqual(updated.symbols, ("005930",))
+
+    def test_bare_generic_continuation_without_any_symbol_keeps_scope(self) -> None:
+        # The guard's core job: a *generic* continuation phrase with no
+        # symbol name at all must never narrow scope silently.
         updated = extract_or_update_mission("증거가 충분할 때까지 연구해주세요", existing=self.mission, now=LATER)
         self.assertEqual(updated.universe_scope, MissionUniverseScope.MARKET_WIDE)
 

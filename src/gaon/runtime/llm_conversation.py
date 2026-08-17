@@ -70,6 +70,7 @@ from gaon.knowledge.research_mission import (
     mission_blocked_message,
     mission_budget_exhausted_message,
     mission_cycle_request_text,
+    mission_promotion_request_text,
     mission_status_block,
     next_unexplored_symbols,
     record_blocked,
@@ -106,6 +107,33 @@ _AUTONOMOUS_CONTEXT_KINDS = frozenset(
         "autonomous_learning_v2",
         "autonomous_learning_memory_summary",
         "autonomous_critique",
+    }
+)
+
+# ULTRAREVIEW H3 fix: the Research Mission continuation hook must defer to
+# the existing conversational intent classifier whenever it already
+# recognized this message as an explain/detail/risk/recommendation/rerun/
+# timeframe/status follow-up about a PRIOR result, rather than deciding
+# purely from continuation-phrase keyword matching - otherwise a message
+# like "이어서 설명해주세요" (please continue *explaining*) can be
+# misread as "continue researching" merely because it shares a word with a
+# real continuation phrase.
+_MISSION_HOOK_EXCLUDED_INTENTS = frozenset(
+    {
+        ConversationalMVPIntent.GREETING,
+        ConversationalMVPIntent.HELP,
+        ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
+        ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT,
+        ConversationalMVPIntent.PROFESSIONAL_EXPLANATION,
+        ConversationalMVPIntent.SHOW_DETAILS,
+        ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION,
+        ConversationalMVPIntent.RISK_QUESTION,
+        ConversationalMVPIntent.STRATEGY_QUESTION,
+        ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST,
+        ConversationalMVPIntent.RERUN_REQUEST,
+        ConversationalMVPIntent.RECOMMENDATION_REQUEST,
+        ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
+        ConversationalMVPIntent.STATUS_QUERY,
     }
 )
 
@@ -561,18 +589,23 @@ class LLMConversationBrain:
     def _format_multi_tool_response_for_session(self, results: tuple[AssistantToolResult, ...], request: LLMConversationRequest) -> str:
         """Same rendering as ``_format_multi_tool_response``, except that when
         every tool call in this turn failed (the opaque "safety validation"
-        fallback), an active Research Mission's status is surfaced instead -
-        the safety gate that blocked every call is unchanged, only the
-        explanation improves."""
+        fallback), the explanation is grounded in the actual structured
+        failure evidence each result carries (see
+        ``_classify_multi_tool_failure``) instead of asserting a specific
+        cause - such as budget exhaustion - the evidence does not establish.
+        If a mission is active, its status is appended for context, never as
+        the stated cause of the failure. The safety gate that blocked every
+        call is unchanged; only the explanation improves."""
         text = _format_multi_tool_response(results)
         if text != _OPAQUE_TOOL_SAFETY_FALLBACK_TEXT:
             return text
+        explanation = _classify_multi_tool_failure(results)
         mission = self._mission_for(request.session_id)
         if mission is None:
-            return text
+            return explanation
         if mission.status is MissionStatus.BLOCKED:
             return mission_blocked_message(mission)
-        return mission_budget_exhausted_message(mission)
+        return f"{explanation}\n\n{mission_status_block(mission)}\n\n연구 Mission은 종료되지 않았습니다, 영하님."
 
     def _execute_provider_tool_calls(self, provider: AssistantProvider, request: LLMConversationRequest, intent: Intent, provider_response, warnings: tuple[str, ...], references: tuple[str, ...], tools) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         assert self._tool_executor is not None
@@ -702,6 +735,7 @@ class LLMConversationBrain:
             and mission is not None
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
             and not route.symbols
+            and route.intent not in _MISSION_HOOK_EXCLUDED_INTENTS
             and is_generic_continuation_request(request.text)
         ):
             if mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
@@ -994,14 +1028,37 @@ class LLMConversationBrain:
         only records a promotion-ready candidate when that real pipeline's
         already-wired ``research_director_decision`` says
         ``request_human_promotion_review`` - this never invents or weakens
-        promotion readiness, it only reads the existing gate's verdict."""
+        promotion readiness, it only reads the existing gate's verdict.
+
+        Reuses the SAME cross-turn budget mechanism the existing single-
+        symbol Autonomous Learning V2 continuation path already uses
+        (``_autonomous_learning_v2_steps_used``): as long as this mission
+        keeps validating the same candidate symbol turn over turn,
+        ``steps_used`` carries forward instead of resetting to 0 every call,
+        so the Research Director can actually advance through its stages
+        (OOS -> walk-forward -> regime -> cost -> Monte Carlo) instead of
+        restarting from scratch each cycle - without that, the mission could
+        never converge on a promotion-ready candidate. The candidate symbol
+        is only released back to universe coverage once the Director reaches
+        a terminal decision for it (promotion review, rejection, or its own
+        budget exhaustion) - not after every single call - while each turn
+        still makes exactly one bounded tool call, so this cannot loop
+        unboundedly within a single request.
+        """
         symbol = str(mission.pending_promotion_symbol)
-        cleared = clear_focus_symbol(mission, now=request.received_at)
-        request_text = mission_cycle_request_text(mission, request.text)
+        context = self._mvp_context_for(request.session_id)
+        continuing_same_candidate = (
+            context is not None
+            and context.last_result_kind == "autonomous_learning_v2"
+            and tuple(context.last_symbols) == (symbol,)
+        )
+        mode = "continue" if continuing_same_candidate else "research"
+        steps_used = _autonomous_learning_v2_steps_used(context, mode)
+        request_text = mission_promotion_request_text(mission, symbol)
         result = self._tool_executor.execute(
             ToolRequest(
                 "autonomous_learning_research",
-                {"request_text": request_text, "symbol": symbol, "mode": "research", "steps_used": 0},
+                {"request_text": request_text, "symbol": symbol, "mode": mode, "steps_used": steps_used},
                 request.user_ref,
                 request.received_at,
             )
@@ -1009,6 +1066,7 @@ class LLMConversationBrain:
         self._record_tool_result(request.session_id, result, request.received_at)
         if result.status != "success":
             failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
+            cleared = clear_focus_symbol(mission, now=request.received_at)
             self._remember_mission(request, cleared)
             return (
                 f"{failure.user_message}\n\n{mission_status_block(cleared)}",
@@ -1024,10 +1082,15 @@ class LLMConversationBrain:
         learning = _as_dict(output.get("autonomous_learning_v2"))
         director = _as_dict(learning.get("research_director_decision"))
         candidate_ctx = _as_dict(learning.get("promotion_candidate_context"))
-        updated = cleared
-        if str(director.get("action")) == "request_human_promotion_review":
-            candidate_id = str(candidate_ctx.get("candidate_id") or f"{symbol}:{output.get('run_id', 'unknown')}")
-            updated = record_promotion_candidate(updated, symbol=symbol, run_id=candidate_id, now=request.received_at)
+        if bool(director.get("terminal")):
+            updated = clear_focus_symbol(mission, now=request.received_at)
+            if str(director.get("action")) == "request_human_promotion_review":
+                candidate_id = str(candidate_ctx.get("candidate_id") or f"{symbol}:{output.get('run_id', 'unknown')}")
+                updated = record_promotion_candidate(updated, symbol=symbol, run_id=candidate_id, now=request.received_at)
+        else:
+            # Not yet terminal: keep validating the SAME candidate next turn
+            # so steps_used keeps advancing instead of resetting.
+            updated = mission
         self._remember_mission(request, updated)
         if updated.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
             text = mission_awaiting_approval_message(updated)
@@ -2914,6 +2977,51 @@ def _format_multi_tool_response(results: tuple[AssistantToolResult, ...]) -> str
     if successful:
         return f"요청하신 읽기 전용 도구 결과를 확인했습니다, 영하님.\n실행 도구: {', '.join(successful)}"
     return _OPAQUE_TOOL_SAFETY_FALLBACK_TEXT
+
+
+_UNCLEAR_TOOL_FAILURE_TEXT = (
+    "영하님, 이번 연구 사이클을 더 진행하지 못했습니다.\n"
+    "연구 목표는 유지됩니다.\n"
+    "상세 원인은 현재 실행 결과만으로 확정할 수 없습니다."
+)
+
+_POLICY_DENIAL_TEXT = "영하님, 이번 요청의 도구 호출은 안전 정책에 의해 제한되었습니다. 연구 목표는 유지됩니다."
+_TIMEOUT_TEXT = "영하님, 도구 응답이 지연되어 이번 연구 사이클을 완료하지 못했습니다. 연구 목표는 유지됩니다."
+
+
+def _classify_multi_tool_failure(results: tuple[AssistantToolResult, ...]) -> str:
+    """Classifies why every tool call in a turn failed, from the structured
+    failure evidence each result actually carries, and returns a safe,
+    truthful explanation - never a specific cause the evidence does not
+    support.
+
+    Reuses the existing research-failure classifier (``classify_tool_failure``)
+    rather than inventing new causes, and never interpolates raw exception
+    messages/paths/tokens into the returned text - only pre-written, vetted
+    Korean sentences. Falls back to an honest "cause unclear" message when
+    the failed results disagree on cause or carry no specific signal (e.g.
+    a generic internal/tool error).
+    """
+    explanations: set[str] = set()
+    for result in results:
+        output = result.result.get("output")
+        output = output if isinstance(output, dict) else {}
+        error_type = str(output.get("error_type", ""))
+        message = str(output.get("message", ""))
+        normalized = f"{error_type} {message}".casefold()
+        if error_type == "ToolSecurityError":
+            explanations.add(_POLICY_DENIAL_TEXT)
+        elif "timeout" in normalized:
+            explanations.add(_TIMEOUT_TEXT)
+        else:
+            failure = classify_tool_failure(error_type, message)
+            if failure.stage in {"market_data", "quality"}:
+                explanations.add(failure.user_message)
+            else:
+                explanations.add(_UNCLEAR_TOOL_FAILURE_TEXT)
+    if len(explanations) == 1:
+        return explanations.pop()
+    return _UNCLEAR_TOOL_FAILURE_TEXT
 
 
 def _format_tool_result_response(result: AssistantToolResult) -> str | None:

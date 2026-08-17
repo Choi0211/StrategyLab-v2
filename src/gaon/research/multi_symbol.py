@@ -310,40 +310,74 @@ _EXCLUSION_CATEGORY_QUALITY_CODES: Mapping[str, str] = {
     "abnormal_volume": "data_quality_failure",
 }
 
+# AutonomousMultiSymbolResearchOrchestrator._symbol_evidence attaches this
+# sentinel finding code to ANY exception raised while fetching/building a
+# symbol's dataset (see multi_symbol.py's `except Exception as exc:` handler) -
+# it marks WHERE the failure happened (the acquisition path, before any real
+# DataQualityEngine finding was ever produced), it is not itself a data-quality
+# finding, and must never be classified as one. The real cause has to be read
+# from `blocked_reason` (the actual exception class name and message).
+_ACQUISITION_EXCEPTION_FINDING_CODE = "provider_failure"
+
 
 def _classify_exclusion_reason(item: "SymbolResearchEvidence") -> str:
     """Classifies why a symbol was excluded from a multi-symbol research run.
 
-    Only distinguishes categories the pipeline actually exposes evidence
-    for (the exception class raised, or the specific blocking data-quality
-    finding code) - unclassifiable failures fall back to "other" rather than
-    guessing.
+    Acquisition-side failures (provider fetch failures, timeouts, symbol
+    resolution failures - anything that happened before a dataset was ever
+    quality-validated) are classified from ``blocked_reason``, the actual
+    exception class/message the pipeline recorded, and are always checked
+    ahead of - and kept separate from - real DataQualityEngine findings in
+    ``blocking_findings``. A symbol that failed to fetch is never reported as
+    a data-quality problem. Unclassifiable failures fall back to "other"
+    rather than guessing.
     """
     if item.eligible:
         return "eligible"
-    reason = (item.blocked_reason or "").casefold()
-    if item.blocking_findings:
-        codes = {str(finding.get("code", "")) for finding in item.blocking_findings}
-        for code in codes:
+    quality_codes = {
+        str(finding.get("code", ""))
+        for finding in item.blocking_findings
+        if str(finding.get("code", "")) != _ACQUISITION_EXCEPTION_FINDING_CODE
+    }
+    if quality_codes:
+        for code in quality_codes:
             if code in _EXCLUSION_CATEGORY_QUALITY_CODES:
                 return _EXCLUSION_CATEGORY_QUALITY_CODES[code]
         return "data_quality_failure"
+    return _classify_acquisition_failure(item.blocked_reason)
+
+
+def _classify_acquisition_failure(blocked_reason: str | None) -> str:
+    """Classifies a symbol that failed before reaching data-quality
+    validation, from the exception class name/message the pipeline actually
+    recorded. Only names a specific cause the message evidence supports;
+    falls back to "other" rather than inventing one."""
+    reason = (blocked_reason or "").casefold()
+    if not reason:
+        return "other"
     if "timeout" in reason:
         return "timeout"
     if "kis" in reason and ("mismatch" in reason or "master" in reason):
         return "kis_master_mismatch"
-    if "yahoo" in reason and "mapping" in reason:
-        return "yahoo_mapping_failure"
-    if "delist" in reason or "suspend" in reason:
-        return "suspended_delisted"
     if "unsupported" in reason:
         return "unsupported_security"
-    if "symbol" in reason and ("not found" in reason or "resolution" in reason or "unresolved" in reason or "unknown symbol" in reason):
+    if any(token in reason for token in ("symbol not found", "symbol resolution", "unresolved symbol", "unknown symbol", "no symbols")):
         return "symbol_resolution_failure"
-    if "realmarketdataunavailable" in reason or "no bars" in reason or "no usable bars" in reason or "fetch" in reason:
+    if any(
+        token in reason
+        for token in (
+            "realmarketdataunavailable",
+            "connectionerror",
+            "urlerror",
+            "httperror",
+            "no bars",
+            "no usable bars",
+            "fetch",
+            "network",
+            "connection",
+        )
+    ):
         return "provider_fetch_failure"
-    if reason:
-        return "other"
     return "other"
 
 
@@ -353,7 +387,7 @@ def _exclusion_diagnostics(evidence: tuple["SymbolResearchEvidence", ...]) -> di
     for item in excluded:
         category = _classify_exclusion_reason(item)
         by_category[category] = by_category.get(category, 0) + 1
-    provider_categories = {"provider_fetch_failure", "timeout", "kis_master_mismatch", "yahoo_mapping_failure", "symbol_resolution_failure"}
+    provider_categories = {"provider_fetch_failure", "timeout", "kis_master_mismatch", "symbol_resolution_failure"}
     provider_related = sum(count for category, count in by_category.items() if category in provider_categories)
     return {
         "schema_version": MULTI_SYMBOL_SCHEMA_VERSION,

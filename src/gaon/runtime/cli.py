@@ -330,6 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-daily-briefing-telegram-delivery-release-check")
     sub.add_parser("gaon-production-daily-briefing-scheduler-release-check")
     sub.add_parser("gaon-production-daily-briefing-runtime-wiring-release-check")
+    sub.add_parser("gaon-production-persistent-research-mission-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2619,6 +2620,28 @@ def _run(args: argparse.Namespace) -> int:
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-persistent-research-mission-release-check":
+        from gaon.knowledge.research_mission import production_persistent_research_mission_release_check
+
+        payload = production_persistent_research_mission_release_check()
+        print(
+            "gaon-production-persistent-research-mission-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"mission_created={str(payload['mission_created']).lower()} "
+            f"market_scope_preserved={str(payload['market_scope_preserved']).lower()} "
+            f"market_wide_scope_preserved={str(payload['market_wide_scope_preserved']).lower()} "
+            f"target_candidates={payload['target_candidates']} "
+            f"scope_regression_blocked={str(payload['scope_regression_blocked']).lower()} "
+            f"budget_exhaustion_not_terminal={str(payload['budget_exhaustion_not_terminal']).lower()} "
+            f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
+            f"human_promotion_gate_preserved={str(payload['human_promotion_gate_preserved']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
             "safety=pass"
         )
 
