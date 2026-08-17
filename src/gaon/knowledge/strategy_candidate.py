@@ -30,7 +30,7 @@ Safety invariants (unchanged from Patch 8.0/8.1):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Mapping
 from uuid import uuid4
@@ -277,6 +277,15 @@ class StrategyCandidateRecord:
     promotion_ready_at: str | None
     created_at: str
     updated_at: str
+    # Patch 8.5: honest, per-stage deep-validation status, read verbatim
+    # from the EXISTING Autonomous Learning V2 / Research Director
+    # production_grade_validation output (see
+    # gaon.runtime.llm_conversation._try_candidate_robustness_cycle) -
+    # never fabricated. A key absent from this mapping (or the whole
+    # mapping being empty, e.g. for a candidate that has never entered
+    # robustness validation) must be rendered as "not_run"/"unavailable",
+    # never guessed as pass/fail.
+    validation_stage_status: Mapping[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -301,6 +310,7 @@ class StrategyCandidateRecord:
             "promotion_ready_at": self.promotion_ready_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "validation_stage_status": dict(self.validation_stage_status),
         }
 
     @staticmethod
@@ -326,6 +336,9 @@ class StrategyCandidateRecord:
             promotion_ready_at=str(raw["promotion_ready_at"]) if raw.get("promotion_ready_at") else None,
             created_at=str(raw.get("created_at", "")),
             updated_at=str(raw.get("updated_at", "")),
+            validation_stage_status={
+                str(key): str(value) for key, value in dict(raw.get("validation_stage_status") or {}).items()
+            },
         )
 
     @property
@@ -427,21 +440,32 @@ def record_robustness_progress(
     director_action: str,
     terminal: bool,
     now: str,
+    validation_stage_status: Mapping[str, str] | None = None,
 ) -> StrategyCandidateRecord:
     """Records one deep (single-symbol-anchored OOS/walk-forward/regime/
     cost/Monte Carlo) robustness cycle's outcome - the symbol used to run
     this cycle is evidence FOR this candidate, not a new identity; callers
     are responsible for choosing that symbol from the candidate's own
-    validated evidence set."""
+    validated evidence set.
+
+    ``validation_stage_status`` (Patch 8.5), when given, is merged
+    key-by-key into the candidate's persisted per-stage status - a stage
+    absent from this call's status (e.g. a cycle that only advanced OOS)
+    leaves any PREVIOUSLY recorded status for other stages untouched,
+    rather than resetting them to unknown."""
     progressed = director_action != candidate.last_director_action
     cycles_without_progress = 0 if progressed else candidate.cycles_without_progress + 1
     status = candidate.status if terminal else StrategyCandidateStatus.ROBUSTNESS
+    merged_stage_status = dict(candidate.validation_stage_status)
+    if validation_stage_status:
+        merged_stage_status.update({str(key): str(value) for key, value in validation_stage_status.items()})
     return replace(
         candidate,
         last_director_action=director_action,
         cycles_completed=candidate.cycles_completed + 1,
         cycles_without_progress=cycles_without_progress,
         status=status,
+        validation_stage_status=merged_stage_status,
         updated_at=now,
     )
 

@@ -334,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-strategy-centric-autonomous-research-release-check")
     sub.add_parser("gaon-production-persistent-strategy-candidate-continuation-release-check")
     sub.add_parser("gaon-production-kr-multi-symbol-data-acquisition-release-check")
+    sub.add_parser("gaon-production-candidate-breadth-to-robustness-transition-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2716,6 +2717,26 @@ def _run(args: argparse.Namespace) -> int:
             f"bounded_retry_cap_preserved={str(payload['bounded_retry_cap_preserved']).lower()} "
             f"mission_scope_unchanged={str(payload['mission_scope_unchanged']).lower()} "
             f"candidate_fingerprint_unchanged={str(payload['candidate_fingerprint_unchanged']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-candidate-breadth-to-robustness-transition-release-check":
+        from gaon.knowledge.research_mission import production_candidate_breadth_to_robustness_transition_release_check
+
+        payload = production_candidate_breadth_to_robustness_transition_release_check()
+        print(
+            "gaon-production-candidate-breadth-to-robustness-transition-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"breadth_to_robustness_transition={str(payload['breadth_to_robustness_transition']).lower()} "
+            f"candidate_identity_preserved={str(payload['candidate_identity_preserved']).lower()} "
+            f"mission_scope_preserved={str(payload['mission_scope_preserved']).lower()} "
+            f"no_fabricated_validation_state={str(payload['no_fabricated_validation_state']).lower()} "
+            f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
+            f"status_ux_reflects_real_state={str(payload['status_ux_reflects_real_state']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "

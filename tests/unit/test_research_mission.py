@@ -29,6 +29,7 @@ from gaon.knowledge.research_mission import (
     mission_awaiting_approval_message,
     mission_blocked_message,
     mission_budget_exhausted_message,
+    render_mission_candidate_detailed_status,
     next_candidate_sequence,
     next_unexplored_symbols,
     record_blocked,
@@ -200,6 +201,25 @@ class CandidateRobustnessContinuationTests(unittest.TestCase):
                 self.assertTrue(is_candidate_robustness_continuation_request(text))
                 self.assertTrue(is_generic_continuation_request(text))
 
+    def test_patch_8_5_exact_requested_phrases_are_all_continuations(self) -> None:
+        # The exact phrase list from the Patch 8.5 production incident
+        # report - each of these previously either matched no continuation
+        # predicate at all, or matched one that a false-positive tool/
+        # intent classifier collision could still defeat (see
+        # test_candidate_breadth_to_robustness_transition.py for the full
+        # end-to-end reproduction).
+        for text in (
+            "OOS 검증해주세요",
+            "walk-forward 검증해주세요",
+            "비용 스트레스 검증해주세요",
+            "시장 국면별 검증해주세요",
+            "강건성 검증 계속해주세요",
+            "다음 검증 단계로 진행해주세요",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(is_candidate_robustness_continuation_request(text))
+                self.assertTrue(is_generic_continuation_request(text))
+
     def test_bare_candidate_or_topic_mention_without_a_verb_is_not_a_continuation(self) -> None:
         # "후보" or a robustness-stage name alone (no request/continue verb)
         # must not be misread as a continuation - e.g. a pure status
@@ -239,6 +259,51 @@ class DiversityRequestTargetCountFalsePositiveTests(unittest.TestCase):
         # quantity - this must still rotate, unlike a target-count GOAL
         # ("...3개가 준비될 때까지").
         self.assertTrue(is_diversity_request("다른 전략 2개 더 찾아서 계속 연구해줘"))
+
+
+class MissionCandidateDetailedStatusRenderingTests(unittest.TestCase):
+    """Patch 8.5 - the detailed Research Mission + candidate status footer
+    must be built only from real persisted state, never fabricated."""
+
+    def test_no_active_candidate_is_rendered_honestly(self) -> None:
+        mission = extract_or_update_mission("국내 주식 전체를 대상으로 연구해주세요", existing=None, now=NOW)
+        text = render_mission_candidate_detailed_status(mission, None)
+        self.assertIn("active candidate: 없음", text)
+        self.assertIn("promotion-ready candidates:", text)
+
+    def test_active_candidate_shows_real_fingerprint_and_stage(self) -> None:
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 수익과 안전성을 개선하는 단타 전략을 연구해주세요", existing=None, now=NOW
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=NOW)
+        mission = add_candidate(mission, candidate, now=NOW)
+        text = render_mission_candidate_detailed_status(mission, candidate)
+        self.assertIn(candidate.candidate_id, text)
+        self.assertIn(candidate.strategy_fingerprint[:16], text)
+        self.assertIn("candidate stage:", text)
+        self.assertIn("promotion-ready candidates:", text)
+
+    def test_never_run_robustness_stages_are_not_run_never_fabricated_pass(self) -> None:
+        mission = extract_or_update_mission("국내 주식 전체를 대상으로 연구해주세요", existing=None, now=NOW)
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        mission = add_candidate(mission, candidate, now=NOW)
+        text = render_mission_candidate_detailed_status(mission, candidate)
+        self.assertIn("not_run", text)
+        self.assertNotIn("PASS", text)
+        self.assertNotIn("pass", text.replace("candidates:", "").replace("passed", ""))
+
+    def test_recorded_validation_stage_status_is_shown_verbatim(self) -> None:
+        mission = extract_or_update_mission("국내 주식 전체를 대상으로 연구해주세요", existing=None, now=NOW)
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        from gaon.knowledge.strategy_candidate import record_robustness_progress
+
+        candidate = record_robustness_progress(
+            candidate, director_action="collect_more_evidence", terminal=False, now=NOW,
+            validation_stage_status={"out_of_sample": "not_run_missing_oos_backtest"},
+        )
+        mission = add_candidate(mission, candidate, now=NOW)
+        text = render_mission_candidate_detailed_status(mission, candidate)
+        self.assertIn("not_run_missing_oos_backtest", text)
 
 
 class MissionBudgetSemanticsTests(unittest.TestCase):
@@ -604,6 +669,31 @@ class PersistentStrategyCandidateContinuationReleaseCheckTests(unittest.TestCase
         self.assertFalse(result["champion_promoted"])
         self.assertFalse(result["approval_bypassed"])
         self.assertEqual(result["safety"], "pass")
+
+
+class CandidateBreadthToRobustnessTransitionReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_candidate_breadth_to_robustness_transition_release_check
+
+        result = production_candidate_breadth_to_robustness_transition_release_check()
+        self.assertTrue(result["breadth_to_robustness_transition"])
+        self.assertTrue(result["candidate_identity_preserved"])
+        self.assertTrue(result["mission_scope_preserved"])
+        self.assertTrue(result["no_fabricated_validation_state"])
+        self.assertTrue(result["bounded_execution_preserved"])
+        self.assertTrue(result["status_ux_reflects_real_state"])
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_candidate_breadth_to_robustness_transition_release_check
+
+        first = production_candidate_breadth_to_robustness_transition_release_check()
+        second = production_candidate_breadth_to_robustness_transition_release_check()
+        self.assertEqual(dict(first), dict(second))
 
 
 if __name__ == "__main__":
