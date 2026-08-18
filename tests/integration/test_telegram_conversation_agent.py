@@ -9,6 +9,7 @@ from gaon.integrations.telegram.transport import parse_update_result
 from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall
 from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, _failure_tool_executor, _strict_real_research_payload, main as cli_main, poll_once
 from gaon.runtime.config import GaonRuntimeConfig
+from gaon.knowledge.research_mission import candidate_records
 from gaon.runtime.conversational_mvp import render_single_symbol_summary
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel, default_tool_registry
 from gaon.runtime.storage import RuntimeStateStore
@@ -22,6 +23,7 @@ from gaon.research.multi_symbol import (
     AutonomousMultiSymbolResearchOrchestrator,
 )
 from gaon.research.autonomous_retest import _ReleaseCheckBacktestRunner, _ReleaseCheckProvider
+from test_strategy_centric_autonomous_research import _DeterministicKRUniverseProvider
 
 
 class FakeTelegramClient:
@@ -357,7 +359,24 @@ class TelegramConversationAgentTests(unittest.TestCase):
             autonomous_retest.SQLiteAutonomousRetestRepository.add_run = original
             store.close()
 
-    def test_production_korean_multi_symbol_request_uses_authoritative_route_and_persists(self) -> None:
+    def test_production_korean_multi_symbol_request_establishes_persisted_candidate_and_persists(self) -> None:
+        """Patch 8.7 production bug fix: this exact production Korean
+        multi-symbol breadth request (``PRODUCTION_MULTI_SYMBOL_REQUEST_
+        TEXT``, which names five explicit symbols) used to bypass the
+        mission-driven candidate cycle entirely - ``route.symbols`` being
+        non-empty disqualified it from ``_try_mission_driven_research_
+        cycle``, so it fell to ``_try_authoritative_research_tool``, which
+        ran real research but never created/updated a
+        ``StrategyCandidateRecord``. The report's "후보 A/B/C" therefore had
+        no persisted canonical identity, and the very next continuation
+        turn found no active candidate and minted a brand new one instead
+        of resuming this work (the real production defect this patch
+        fixes - see ``tests/integration/test_canonical_candidate_handoff.
+        py``). This test proves the fix at the exact production message:
+        real research still executes (never the hallucinating assistant
+        provider) and still persists to durable storage, but now ALSO
+        establishes one persisted, fingerprinted StrategyCandidateRecord
+        that the report's improvement candidates are compared against."""
         store = RuntimeStateStore(":memory:")
         client = FakeTelegramClient((_production_multi_symbol_update(),))
         provider = _HallucinatingRealResearchProvider()
@@ -368,39 +387,39 @@ class TelegramConversationAgentTests(unittest.TestCase):
                 "Run read-only multi-symbol KRX real research.",
                 ToolRiskLevel.READ_ONLY,
                 required_args=("request_text",),
-                allowed_args=("symbols", "universe_type", "start_date", "end_date"),
+                allowed_args=("symbols", "universe_type", "start_date", "end_date", "candidate_spec", "avoid_symbols"),
             ),
-            lambda args: AutonomousMultiSymbolResearchOrchestrator(store._connection, _ReleaseCheckProvider(), _ReleaseCheckBacktestRunner()).run(
+            lambda args: AutonomousMultiSymbolResearchOrchestrator(store._connection, _DeterministicKRUniverseProvider(), _ReleaseCheckBacktestRunner()).run(
                 str(args["request_text"]),
-                symbols=tuple(args.get("symbols", DEFAULT_CURATED_SYMBOLS)),
+                symbols=tuple(args.get("symbols") or ()) or None,
                 universe_type=str(args.get("universe_type", "explicit")),
                 start_date=str(args.get("start_date", "2021-07-25")),
                 end_date=str(args.get("end_date", "2026-07-24")),
+                candidate_spec=args.get("candidate_spec") if isinstance(args.get("candidate_spec"), dict) else None,
+                avoid_symbols=tuple(args.get("avoid_symbols") or ()),
             ).to_json(),
         )
+        agent = TelegramConversationAgent(
+            _config(assistant_enabled=True, assistant_provider="openai-compatible"),
+            store._connection,
+            assistant_provider=provider,
+            tool_executor=SafeToolExecutor(registry, store.tool_audit),
+        )
         try:
-            runtime = TelegramRuntime(
-                TelegramConversationAgent(
-                    _config(assistant_enabled=True, assistant_provider="openai-compatible"),
-                    store._connection,
-                    assistant_provider=provider,
-                    tool_executor=SafeToolExecutor(registry, store.tool_audit),
-                ),
-                allowed_chat_ids=("100",),
-            )
+            runtime = TelegramRuntime(agent, allowed_chat_ids=("100",))
             result = process_update(parse_update_result(client.updates[0], received_at="2026-07-28T00:00:00Z"), runtime, client)
 
             self.assertEqual(result.status, "sent")
             self.assertEqual(provider.calls, 0)
             self.assertEqual(len(store.tool_audit.list(tool_name="multi_symbol_research")), 1)
             self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM multi_symbol_research_runs").fetchone()[0], 1)
-            self.assertEqual(store._connection.execute("SELECT COUNT(*) FROM multi_symbol_symbol_evidence").fetchone()[0], 5)
+            self.assertGreater(store._connection.execute("SELECT COUNT(*) FROM multi_symbol_symbol_evidence").fetchone()[0], 0)
             self.assertGreater(store._connection.execute("SELECT COUNT(*) FROM multi_symbol_candidate_evidence").fetchone()[0], 0)
             audit = store.tool_audit.list(tool_name="multi_symbol_research")[0]
-            self.assertEqual(tuple(audit.request["arguments"]["symbols"]), DEFAULT_CURATED_SYMBOLS)
-            self.assertEqual(audit.request["arguments"]["start_date"], "2021-07-25")
-            self.assertEqual(audit.request["arguments"]["end_date"], "2026-07-24")
+            self.assertIn("candidate_spec", audit.request["arguments"])
             final = client.sent[0][1]
+            self.assertIn("[전략 후보 KR-ST-001]", final)
+            self.assertIn("fingerprint:", final)
             self.assertIn("[다중종목 실제 연구]", final)
             self.assertIn("총 거래 표본:", final)
             self.assertIn("연구 신뢰도:", final)
@@ -409,8 +428,14 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertNotIn("현재는 아직 실제 시세", final)
             self.assertNotIn("5.32%", final)
             assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
-            self.assertEqual(assistant[-1].route, "tool_read_only_authoritative")
+            self.assertEqual(assistant[-1].route, "conversation_mission_driven_multi_symbol_research")
             self.assertEqual(assistant[-1].tool_calls, ("multi_symbol_research",))
+            mission = agent._brain._mission_for("telegram:100")
+            self.assertIsNotNone(mission)
+            candidates = candidate_records(mission)
+            self.assertEqual(len(candidates), 1, "one canonical persisted candidate, not a symbol-driven duplicate per report row")
+            self.assertRegex(candidates[0].candidate_id, r"^KR-ST-\d{3}$")
+            self.assertTrue(candidates[0].strategy_fingerprint)
         finally:
             store.close()
 

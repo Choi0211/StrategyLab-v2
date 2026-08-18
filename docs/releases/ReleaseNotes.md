@@ -3,6 +3,49 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Patch 8.7 Canonical Breadth Candidate -> Persistent StrategyCandidate Identity Handoff
+
+Real VPS Telegram production acceptance testing showed that a genuine
+cross-symbol breadth research request naturally names several real symbols
+(production's own worked example lists five tickers and asks to compare
+"후보 A/B/C"). The mission-routing-precedence hook in
+`LLMConversationBrain._try_conversational_mvp` read those named symbols as
+"narrow research down to one explicit symbol" and disqualified the message
+from the mission-driven candidate cycle entirely, so it executed through
+the disconnected `_try_authoritative_research_tool` route instead - real
+research, but with no persisted `StrategyCandidateRecord`/fingerprint at
+all. The very next plain continuation ("계속 연구해주세요") then found no
+active candidate and minted a brand new one, silently discarding the
+breadth work just done. A second, independent gap: a robustness-
+continuation-shaped message that also happened to classify as a status
+query could only override that misclassification once the candidate had
+already reached `mission.pending_promotion_symbol` - a candidate still in
+its breadth stage had no override at all.
+
+Two or more explicit symbols under an active, non-single-symbol mission,
+already classified as a `multi_symbol_research`-shaped request, are now
+treated as evidence FOR the mission's own active candidate (never a
+narrowing single-symbol override, and never a reason to re-parse free-text
+rules) - reusing the existing candidate/spec/breadth-cycle machinery from
+Patch 8.2-8.6 rather than a second research engine. The robustness-
+continuation precedence override no longer requires the candidate to have
+already reached `pending_promotion_symbol`; it now fires whenever an
+active candidate exists and the message references continuing it,
+regardless of which stage - breadth or robustness - it is currently in.
+The report's "후보 A/B/C" improvement-candidate rows remain purely
+presentation-only labels: exactly one canonical, fingerprinted
+`StrategyCandidateRecord` is ever persisted per active strategy, and the
+breadth-cycle candidate block now also displays its short fingerprint.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-canonical-candidate-handoff-release-check
+```
+
+Schema remains v36. No strategy mutation, order execution, Champion
+auto-promotion, or approval bypass introduced.
+
 ## Patch 8.0 Final Production Runtime Wiring
 
 The production `GaonRuntimeService` tick now composes both Telegram polling and

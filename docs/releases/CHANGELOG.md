@@ -1,5 +1,29 @@
 # Changelog
 
+## Patch 8.7 Canonical Breadth Candidate -> Persistent StrategyCandidate Identity Handoff
+
+- Fixed a real VPS Telegram production defect: an explicit-symbol,
+  cross-symbol breadth research request (naming several tickers and asking
+  to compare "후보 A/B/C") bypassed the mission-driven strategy-candidate
+  cycle entirely, executing through the disconnected authoritative-tool
+  route with no persisted `StrategyCandidateRecord`/fingerprint at all - so
+  the next continuation turn silently minted a new candidate instead of
+  resuming the one already in progress.
+- Two or more explicit symbols under an active, non-single-symbol mission
+  are now treated as breadth evidence FOR the mission's active candidate
+  instead of a narrowing single-symbol override, reusing the existing
+  candidate/spec/breadth-cycle machinery (no second research engine).
+- Widened the robustness-continuation routing precedence so it fires
+  whenever an active candidate exists and the message references
+  continuing it, regardless of whether that candidate is currently in its
+  breadth or robustness stage (previously required breadth to have already
+  reached `pending_promotion_symbol`).
+- The breadth-cycle candidate block now also displays the candidate's
+  short strategy fingerprint, matching the robustness-cycle response.
+- Added `gaon-production-canonical-candidate-handoff-release-check`.
+- Preserved schema v36 and all no-order/no-mutation/no-auto-promotion
+  safety boundaries.
+
 ## Patch 8.0 Final Production Runtime Wiring
 
 - Wired the existing Daily Briefing durable scheduler into the production
