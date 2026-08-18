@@ -825,10 +825,64 @@ class LLMConversationBrain:
         # fresh multi-symbol research request, since those never match
         # is_candidate_robustness_continuation_request's required
         # candidate/topic-reference-plus-continuation-verb shape.
+        # Patch 8.7 production bug fix (root cause): the check above used to
+        # require ``mission.pending_promotion_symbol is not None`` - i.e. the
+        # active candidate had ALREADY reached "ready for robustness"
+        # before this override could ever fire. Real production showed a
+        # persisted candidate can legitimately still be in its BREADTH
+        # stage (not yet promotion-eligible) when the user asks to
+        # "continue the current active candidate's validation" - that
+        # message still unambiguously names the active candidate (or a
+        # robustness-stage keyword) plus a continuation verb, and must
+        # still resolve to THAT candidate (continuing whichever stage -
+        # breadth or robustness - it is actually in; see
+        # ``_try_mission_driven_research_cycle``'s own
+        # ``mission.pending_promotion_symbol`` dispatch, which already
+        # picks the right stage) rather than falling through to a
+        # mission-unaware raw tool call that never touches candidate
+        # bookkeeping at all. Narrowed instead to require only that a
+        # candidate actually exists to continue - same "an active
+        # candidate must already exist" gate ``candidate_continuation_
+        # precedence`` above already uses for the legacy-single-symbol-tool
+        # case - so this still never fires for a genuine fresh request
+        # before any candidate has been created.
         robustness_continuation_precedence = (
             mission is not None
-            and mission.pending_promotion_symbol is not None
+            and get_active_candidate(mission) is not None
             and is_candidate_robustness_continuation_request(request.text)
+        )
+        # Patch 8.7 production bug fix (root cause): a genuine cross-symbol
+        # BREADTH research request naturally names several real symbols
+        # (production's own worked example -
+        # ``gaon.research.multi_symbol.PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT``
+        # - lists all five target tickers). ``classify_conversational_route``
+        # then returns those tickers as ``route.symbols`` - which the
+        # ``not route.symbols`` guard below (correctly) reads as "the user
+        # named ONE explicit symbol to narrow research down to" for
+        # messages like "삼성전자만 연구해줘". For a genuine multi-symbol
+        # breadth request this reads backwards: it disqualified the message
+        # from ever reaching the mission-driven candidate cycle, so the
+        # request fell through to ``_try_authoritative_research_tool``,
+        # which executes the raw ``multi_symbol_research`` tool directly -
+        # never creating or updating a ``StrategyCandidateRecord``. The
+        # resulting report's "후보 A/B/C" (see
+        # ``gaon.research.krx_real_pipeline.ImprovementCandidateGenerator``)
+        # therefore had no persisted canonical identity, and the NEXT plain
+        # continuation ("계속 연구해주세요", now with no symbols so it DID
+        # pass the old gate) found no active candidate and minted a new one
+        # (KR-ST-002) - silently discarding the breadth work just done.
+        # Two or more explicit symbols under an active, non-single-symbol
+        # mission, already classified as a ``multi_symbol_research``-shaped
+        # request, is never a narrowing override - it is evidence FOR the
+        # mission's own candidate, exactly like an unnamed generic breadth
+        # continuation. Excludes ``COMPARE_SYMBOLS`` (a deliberate, bounded
+        # same-assumption comparison of exactly the named symbols - see
+        # ``ConversationalMVPIntent.COMPARE_SYMBOLS`` handling further
+        # below) so that request keeps its own, separate path.
+        multi_symbol_breadth_request = (
+            existing_tool == "multi_symbol_research"
+            and len(route.symbols) >= 2
+            and route.intent is not ConversationalMVPIntent.COMPARE_SYMBOLS
         )
         # ULTRAREVIEW note: a bare "후보"+continuation-verb combination
         # that ALSO happens to be STATUS_QUERY-shaped (e.g. "후보 상태
@@ -852,12 +906,12 @@ class LLMConversationBrain:
         # _try_autonomous_research_conversation, which is a larger,
         # separately-scoped change - see the Patch 8.5 completion report.
         if (
-            (existing_tool != "multi_symbol_research" or robustness_continuation_precedence)
+            (existing_tool != "multi_symbol_research" or robustness_continuation_precedence or multi_symbol_breadth_request)
             and mission is not None
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
-            and not route.symbols
-            and (route.intent not in _MISSION_HOOK_EXCLUDED_INTENTS or robustness_continuation_precedence)
-            and (is_generic_continuation_request(request.text) or candidate_continuation_precedence or robustness_continuation_precedence)
+            and (not route.symbols or multi_symbol_breadth_request)
+            and (route.intent not in _MISSION_HOOK_EXCLUDED_INTENTS or robustness_continuation_precedence or multi_symbol_breadth_request)
+            and (is_generic_continuation_request(request.text) or candidate_continuation_precedence or robustness_continuation_precedence or multi_symbol_breadth_request)
         ):
             if mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
                 # The target promotion-ready candidate count was already

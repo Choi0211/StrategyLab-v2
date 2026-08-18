@@ -1983,3 +1983,264 @@ def production_candidate_multi_symbol_robustness_release_check() -> Mapping[str,
         "approval_bypassed": False,
         "safety": "pass",
     }
+
+
+def production_canonical_candidate_handoff_release_check() -> Mapping[str, object]:
+    """Deterministic, network-free release check for Patch 8.7.
+
+    Real production defect this closes: a genuine cross-symbol BREADTH
+    research request naturally names several real symbols (see
+    ``gaon.research.multi_symbol.PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT`` -
+    production's own worked example lists all five target tickers AND asks
+    to compare "후보 A/B/C"). ``classify_conversational_route`` then returns
+    those tickers as ``route.symbols``, which the mission-routing-
+    precedence hook in ``LLMConversationBrain._try_conversational_mvp``
+    used to read as "the user named ONE explicit symbol to narrow research
+    down to" - disqualifying the message from the mission-driven candidate
+    cycle entirely. The request fell through to
+    ``_try_authoritative_research_tool``, which ran real research directly
+    - never creating or updating a ``StrategyCandidateRecord``. The
+    report's "후보 A/B/C" (``gaon.research.krx_real_pipeline.
+    ImprovementCandidateGenerator``) therefore had no persisted canonical
+    identity, and the NEXT plain continuation ("계속 연구해주세요") found no
+    active candidate and minted a brand new one (KR-ST-002) - silently
+    discarding the breadth work just done, exactly as real VPS Telegram
+    production acceptance testing showed. A second, independent gap
+    compounded this: even once a candidate existed, a robustness-
+    continuation-shaped message that also happened to classify as
+    STATUS_QUERY (a real, observed collision - e.g. "...유지한 채..."
+    contains the bare substring "상태") could only override that
+    misclassification once the candidate had ALREADY reached
+    ``mission.pending_promotion_symbol`` - a candidate still in its breadth
+    stage had no override at all.
+
+    Runs the REAL production stack (LLMConversationBrain ->
+    default_tool_registry -> multi_symbol_research /
+    autonomous_learning_research) through a deterministic, network-free
+    market-data provider - same convention as
+    ``production_candidate_multi_symbol_robustness_release_check`` above.
+    The Research Director's own terminal decision is forced to HOLD for
+    two calls (via the same real
+    ``gaon.knowledge.telegram_autonomous_learning.decide_next_research_
+    action`` bridge production uses, never a second decision path) purely
+    to make the second, DIFFERENT robustness evidence symbol
+    deterministically reachable without needing dozens of real turns."""
+    import sqlite3
+    from unittest.mock import patch as _patch
+
+    from gaon.research.krx_real_pipeline import KRXFixtureMarketDataProvider
+    from gaon.research.multi_symbol import PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT
+    from gaon.research.real_research import MarketSymbol
+    from gaon.runtime.config import GaonRuntimeConfig
+    from gaon.runtime.llm_conversation import LLMConversationRequest
+    from gaon.runtime.llm_tools import SQLiteToolAuditRepository
+    from gaon.runtime.migrations import migrate
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    class _DeterministicUniverseProvider:
+        source = "fixture:release-check-universe-87"
+        market_agnostic = True
+        _symbols = (
+            ("111111", "KOSPI"), ("222222", "KOSPI"), ("333333", "KOSPI"), ("444444", "KOSPI"), ("555555", "KOSPI"),
+            ("666666", "KOSDAQ"), ("777777", "KOSDAQ"), ("888888", "KOSDAQ"), ("999999", "KOSDAQ"), ("101010", "KOSDAQ"),
+        )
+
+        def __init__(self) -> None:
+            self._fixture = KRXFixtureMarketDataProvider()
+
+        @classmethod
+        def from_env(cls, env=None):
+            return cls()
+
+        def fetch_universe(self, market):
+            return tuple(MarketSymbol(code, code, "KR", exchange) for code, exchange in self._symbols)
+
+        def fetch_bars(self, symbol, *, start_date, end_date, timeframe="daily"):
+            return self._fixture.fetch_bars(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
+
+        def validate_dataset(self, dataset):
+            return self._fixture.validate_dataset(dataset)
+
+    def _baseline(*, trades: int) -> dict[str, object]:
+        return {
+            "dataset": {"metadata": {"source": "real:yahoo-chart", "fixture_backed": False, "rows": 1222, "start_date": "2021-07-25", "end_date": "2026-07-24"}},
+            "quality": {"status": "pass", "blocking_findings": []},
+            "strategy": {"strategy_id": "baseline", "fingerprint": "fp:baseline", "rules": ["breakout"]},
+            "validation": {"symbols": 5, "warmup_bars": 60, "entry_opportunities": 120, "signals": 50},
+            "backtest": {"source": "real", "metrics": {"trade_count": trades, "total_return": 0.12, "mdd": 0.08}},
+            "candidates": [],
+        }
+
+    session_id = "telegram:release-check-canonical-candidate-handoff"
+    ambiguous_session_id = "telegram:release-check-canonical-candidate-handoff-ambiguous"
+    connection = sqlite3.connect(":memory:")
+    try:
+        migrate(connection)
+        config = GaonRuntimeConfig(mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="release-check-token", telegram_allowed_chat_ids=("100",), approval_signing_secret="release-check-secret", assistant_enabled=False)
+        agent = TelegramConversationAgent(config, connection)
+        tool_audit = SQLiteToolAuditRepository(connection)
+
+        def _send(session: str, update_id: int, text: str, *, force_hold: bool = False):
+            from contextlib import ExitStack
+
+            with ExitStack() as stack:
+                stack.enter_context(_patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=_baseline(trades=45)))
+                stack.enter_context(_patch("gaon.knowledge.telegram_autonomous_learning._run_production_external_research", return_value={"state": "content_unavailable"}))
+                stack.enter_context(_patch("gaon.research.multi_symbol.build_market_data_provider_from_env", return_value=_DeterministicUniverseProvider()))
+                if force_hold:
+                    from gaon.research.research_director import ResearchDirectorAction, ResearchDirectorDecision
+
+                    forced = ResearchDirectorDecision(ResearchDirectorAction.HOLD, "release-check-forced-hold", (), True, "release_check_forced_hold")
+                    stack.enter_context(_patch("gaon.knowledge.telegram_autonomous_learning.decide_next_research_action", return_value=forced))
+                return agent._brain.respond(
+                    LLMConversationRequest(
+                        session_id=session, user_ref="release-check", source="telegram",
+                        text=text, received_at=f"2026-08-18T00:{update_id:02d}:00Z", message_id=f"telegram:{session}:{update_id}",
+                    )
+                )
+
+        def _tool_call_count() -> int:
+            return sum(
+                len(tool_audit.list(tool_name=name))
+                for name in ("multi_symbol_research", "autonomous_learning_research", "autonomous_research_cycle")
+            )
+
+        # Turn 1: the exact production-shaped explicit-symbol breadth
+        # request (names five tickers AND asks to compare "후보 A/B/C").
+        before = _tool_call_count()
+        response1 = _send(session_id, 1, PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT)
+        bounded_turn1 = (_tool_call_count() - before) <= 1
+
+        mission1 = _mission_for_release_check(agent, session_id)
+        candidates1 = candidate_records(mission1) if mission1 is not None else ()
+        candidate1 = candidates1[0] if candidates1 else None
+        fingerprint1 = candidate1.strategy_fingerprint if candidate1 is not None else None
+        report_candidate_canonicalized = (
+            len(candidates1) == 1
+            and candidate1 is not None
+            and bool(candidate1.strategy_fingerprint)
+            and f"[전략 후보 {candidate1.candidate_id}]" in response1.text
+        )
+        # The report's "후보 A/B/C" mutation-candidate rows are presentation
+        # labels ONLY - proven by exactly one canonical persisted candidate
+        # existing despite several such labels appearing in the same
+        # response text.
+        report_label_not_identity = len(candidates1) == 1 and ("후보 A" in response1.text or "후보 B" in response1.text or "후보 C" in response1.text)
+        breadth_to_persisted_candidate = report_candidate_canonicalized
+
+        # Turn 2: the exact real production robustness-continuation
+        # phrasing (mixed English/Korean, references the active candidate
+        # and "강건성" without ever saying the literal word "후보").
+        turn2_text = (
+            "현재 active strategy candidate의 검증을 계속해주세요. "
+            "동일한 candidate ID와 strategy fingerprint를 유지하면서, "
+            "아직 강건성 검증에 사용하지 않은 다른 국내 종목을 evidence sample로 "
+            "선택해서 검증해주세요. 이전 종목의 검증 상태를 유지한 채 새 evidence를 누적해주세요."
+        )
+        before = _tool_call_count()
+        response2 = _send(session_id, 2, turn2_text, force_hold=True)
+        bounded_turn2 = (_tool_call_count() - before) <= 1
+
+        mission2 = _mission_for_release_check(agent, session_id)
+        candidate2 = candidate_records(mission2)[0] if mission2 is not None and mission2.candidates else None
+        robustness_uses_same_candidate = candidate1 is not None and candidate2 is not None and candidate1.candidate_id == candidate2.candidate_id
+        canonical_fingerprint_preserved = candidate2 is not None and candidate2.strategy_fingerprint == fingerprint1
+
+        # Turn 3: a plain generic continuation must not rotate away from
+        # this candidate while its robustness work is still pending.
+        before = _tool_call_count()
+        _send(session_id, 3, "계속 연구해주세요", force_hold=True)
+        bounded_turn3 = (_tool_call_count() - before) <= 1
+
+        mission3 = _mission_for_release_check(agent, session_id)
+        candidate3 = candidate_records(mission3)[0] if mission3 is not None and mission3.candidates else None
+        pending_candidate_not_prematurely_rotated = (
+            candidate2 is not None
+            and candidate3 is not None
+            and candidate3.candidate_id == candidate2.candidate_id
+            and candidate3.strategy_fingerprint == fingerprint1
+            and candidate3.status is not StrategyCandidateStatus.STAGNANT
+        )
+
+        # Turn 4: one more continuation - forced HOLD again so the second
+        # robustness evidence symbol this patch's accumulation depends on
+        # is deterministically reached.
+        before = _tool_call_count()
+        _send(session_id, 4, "다음 검증 단계로 진행해주세요", force_hold=True)
+        bounded_turn4 = (_tool_call_count() - before) <= 1
+
+        mission4 = _mission_for_release_check(agent, session_id)
+        candidate4 = candidate_records(mission4)[0] if mission4 is not None and mission4.candidates else None
+        multi_symbol_robustness_accumulates = (
+            candidate4 is not None
+            and candidate4.robustness_attempt_count >= 2
+            and len(set(candidate4.robustness_evidence_symbols)) >= 2
+        )
+        pending_candidate_not_prematurely_rotated = pending_candidate_not_prematurely_rotated and (
+            candidate4 is not None and candidate4.candidate_id == candidate2.candidate_id
+        )
+
+        # Restart: a brand new agent instance over the SAME durable
+        # connection must read back the identical candidate/fingerprint/
+        # evidence-symbol mapping.
+        restarted_agent = TelegramConversationAgent(config, connection)
+        reloaded_mission = _mission_for_release_check(restarted_agent, session_id)
+        reloaded_candidate = candidate_records(reloaded_mission)[0] if reloaded_mission is not None and reloaded_mission.candidates else None
+        restart_mapping_persists = (
+            reloaded_candidate is not None
+            and candidate4 is not None
+            and reloaded_candidate.candidate_id == candidate4.candidate_id
+            and reloaded_candidate.strategy_fingerprint == candidate4.strategy_fingerprint
+            and reloaded_candidate.robustness_evidence_symbols == candidate4.robustness_evidence_symbols
+        )
+
+        # Status query: read-only, no tool execution, reports the actual
+        # canonical candidate.
+        before = _tool_call_count()
+        status_response = _send(session_id, 5, "현재 후보 상태 보여줘")
+        status_query_read_only = (
+            _tool_call_count() == before
+            and candidate4 is not None
+            and candidate4.candidate_id in status_response.text
+        )
+
+        distinct_promotion_gate_preserved = mission4 is not None and mission4.current_promotion_ready_candidates == 0
+        bounded_execution_preserved = bounded_turn1 and bounded_turn2 and bounded_turn3 and bounded_turn4
+
+        # Ambiguous reference, no mission/candidate ever established in
+        # this session: "후보 A 계속 검증해줘" alone must never fabricate a
+        # candidate identity to satisfy the reference.
+        _send(ambiguous_session_id, 1, "후보 A 계속 검증해줘")
+        ambiguous_mission = agent._brain._mission_for(ambiguous_session_id)
+        ambiguous_candidates = candidate_records(ambiguous_mission) if ambiguous_mission is not None else ()
+        ambiguous_candidate_fails_closed = len(ambiguous_candidates) == 0
+    finally:
+        connection.close()
+
+    checks = {
+        "report_candidate_canonicalized": report_candidate_canonicalized,
+        "canonical_fingerprint_preserved": canonical_fingerprint_preserved,
+        "report_label_not_identity": report_label_not_identity,
+        "breadth_to_persisted_candidate": breadth_to_persisted_candidate,
+        "robustness_uses_same_candidate": robustness_uses_same_candidate,
+        "pending_candidate_not_prematurely_rotated": pending_candidate_not_prematurely_rotated,
+        "multi_symbol_robustness_accumulates": multi_symbol_robustness_accumulates,
+        "restart_mapping_persists": restart_mapping_persists,
+        "status_query_read_only": status_query_read_only,
+        "ambiguous_candidate_fails_closed": ambiguous_candidate_fails_closed,
+        "distinct_promotion_gate_preserved": distinct_promotion_gate_preserved,
+        "bounded_execution_preserved": bounded_execution_preserved,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"canonical candidate handoff release check failed: {failed}")
+
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }

@@ -583,6 +583,7 @@ def render_candidate_block(candidate: StrategyCandidateRecord) -> str:
     lines = [
         f"[전략 후보 {candidate.candidate_id}]",
         f"전략: {candidate.hypothesis_summary}",
+        f"fingerprint: {candidate.strategy_fingerprint[:16]}",
     ]
     if candidate.attempted_symbols:
         lines.append(f"검증 표본: 유효 {candidate.valid_symbols}종목 / 시도 {candidate.attempted_symbols}종목")

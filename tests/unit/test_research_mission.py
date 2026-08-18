@@ -751,5 +751,36 @@ class CandidateBreadthToRobustnessTransitionReleaseCheckTests(unittest.TestCase)
         self.assertEqual(dict(first), dict(second))
 
 
+class CanonicalCandidateHandoffReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_canonical_candidate_handoff_release_check
+
+        result = production_canonical_candidate_handoff_release_check()
+        self.assertTrue(result["report_candidate_canonicalized"])
+        self.assertTrue(result["canonical_fingerprint_preserved"])
+        self.assertTrue(result["report_label_not_identity"])
+        self.assertTrue(result["breadth_to_persisted_candidate"])
+        self.assertTrue(result["robustness_uses_same_candidate"])
+        self.assertTrue(result["pending_candidate_not_prematurely_rotated"])
+        self.assertTrue(result["multi_symbol_robustness_accumulates"])
+        self.assertTrue(result["restart_mapping_persists"])
+        self.assertTrue(result["status_query_read_only"])
+        self.assertTrue(result["ambiguous_candidate_fails_closed"])
+        self.assertTrue(result["distinct_promotion_gate_preserved"])
+        self.assertTrue(result["bounded_execution_preserved"])
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_canonical_candidate_handoff_release_check
+
+        first = production_canonical_candidate_handoff_release_check()
+        second = production_canonical_candidate_handoff_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
 if __name__ == "__main__":
     unittest.main()
