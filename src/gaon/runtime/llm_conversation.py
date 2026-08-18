@@ -70,12 +70,15 @@ from gaon.knowledge.research_mission import (
     is_cycle_budget_exhausted,
     is_diversity_request,
     is_generic_continuation_request,
+    is_mission_candidate_read_request,
     is_provider_acquisition_blocker,
     mission_awaiting_approval_message,
     mission_blocked_message,
     mission_budget_exhausted_message,
+    mission_candidate_read_focus,
     mission_cycle_request_text,
     mission_status_block,
+    render_candidate_score_status,
     render_mission_candidate_detailed_status,
     next_candidate_sequence,
     next_unexplored_symbols,
@@ -101,6 +104,7 @@ from gaon.knowledge.strategy_candidate import (
     render_candidate_block,
     render_candidate_request_text,
     render_candidate_status_summary,
+    render_candidate_strategy_explanation,
 )
 
 CONVERSATION_SCHEMA_VERSION = 1
@@ -932,6 +936,41 @@ class LLMConversationBrain:
                 if mission_result is not None:
                     return mission_result
 
+        # Patch 8.8 production bug fix: a read-only question about the
+        # ACTIVE mission/candidate itself ("현재 활성 후보의 fingerprint와
+        # 지금까지 검증한 종목 수, 누적 거래 수를 알려주세요", "현재 단타
+        # 전략을 설명해주세요", "현재 단타 전략은 몇 점인가요?") never
+        # matched the continuation-precedence block above (correctly - it
+        # is not a continuation request) and had no other mission-aware
+        # route, so it fell through into reasoning-followup/autonomous-
+        # research machinery that only ever reads the per-session
+        # ConversationalMVPContext - a single most-recent-tool-result
+        # cache, completely independent of the mission's own persisted
+        # candidate progress. Real production reproduced a validated-
+        # symbols/cumulative-trades regression from 5/25 back down to 0
+        # this way. ``is_mission_candidate_read_request`` explicitly
+        # excludes anything already shaped like a continuation/execution
+        # request, so this can never intercept a genuine "continue
+        # validating the current candidate" message - those are already
+        # handled (and returned from) by the block directly above.
+        active_candidate = get_active_candidate(mission) if mission is not None else None
+        if (
+            mission is not None
+            and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
+            and active_candidate is not None
+            and is_mission_candidate_read_request(request.text)
+        ):
+            self._remember_mission(request, mission)
+            text = self._render_mission_candidate_read_response(request.text, mission, active_candidate)
+            return (
+                text,
+                "conversation_mission_candidate_read",
+                _dedupe((*warnings, "mission-aware canonical candidate read model; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
+
         if (
             existing_tool == "multi_symbol_research"
             and not (
@@ -1106,6 +1145,27 @@ class LLMConversationBrain:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_unknown")
             return render_unknown(route.symbols), "conversation_mvp_unknown", _dedupe(warnings), references, "deterministic", ()
         return None
+
+    @staticmethod
+    def _render_mission_candidate_read_response(text: str, mission: ResearchMission, candidate: "StrategyCandidateRecord") -> str:
+        """Patch 8.8: canonical, evidence-bound answer for a read-only
+        mission/candidate question - the active ``StrategyCandidateRecord``
+        and its owning ``ResearchMission`` are the ONLY source read here,
+        never ``ConversationalMVPContext.last_payloads``/
+        ``last_structured_results`` (which may be stale or describe an
+        unrelated earlier single-symbol run)."""
+        focus = mission_candidate_read_focus(text)
+        if focus == "score":
+            return render_candidate_score_status(mission, candidate)
+        if focus == "explain":
+            return f"{render_candidate_strategy_explanation(candidate)}\n\n{render_mission_candidate_detailed_status(mission, candidate)}"
+        summary = render_candidate_status_summary(
+            candidate_records(mission),
+            current=distinct_promotion_ready_strategy_count(mission),
+            target=mission.target_promotion_ready_candidates,
+        )
+        detailed = render_mission_candidate_detailed_status(mission, candidate)
+        return f"{summary}\n\n{detailed}"
 
     def _try_mission_driven_research_cycle(
         self,

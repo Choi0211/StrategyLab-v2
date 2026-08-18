@@ -410,6 +410,101 @@ def is_generic_continuation_request(text: str) -> bool:
     return _contains_any(normalized, _GENERIC_CONTINUATION_TOKENS)
 
 
+# Patch 8.8 production bug fix: real VPS Telegram production acceptance
+# testing showed a read-only question about the ACTIVE mission/candidate's
+# own identity, fingerprint, accumulated cross-symbol evidence, promotion-
+# readiness, strategy rules, or score (e.g. "현재 활성 후보의 fingerprint와
+# 지금까지 검증한 종목 수, 누적 거래 수를 알려주세요") was never recognized
+# as belonging to the canonical Research Mission / active
+# StrategyCandidateRecord read model at all - see the Patch 8.8 completion
+# report. Lacking any dedicated route, it fell through into reasoning-
+# followup/autonomous-research machinery that answers from
+# ConversationalMVPContext (a per-session cache of the single most recent
+# tool result, entirely independent of the mission's own persisted
+# candidate progress), so the answer could regress to stale or zero
+# evidence even though the candidate's real cumulative progress had not
+# changed - production reproduced a validated-symbols/cumulative-trades
+# regression from 5/25 back down to 0 this way.
+#
+# This predicate is intentionally READ-only: it explicitly excludes any
+# text already recognized as a continuation/execution request (see
+# ``is_generic_continuation_request`` above, which itself covers
+# ``is_candidate_robustness_continuation_request``) so a genuine "continue
+# validating the current candidate" message is never reclassified as a
+# read query - mission-driven research continuation keeps its own,
+# unchanged precedence.
+_MISSION_CANDIDATE_READ_SUBJECT_TOKENS: tuple[str, ...] = (
+    "활성후보",
+    "현재후보",
+    "후보상태",
+    "후보id",
+    "후보아이디",
+    "fingerprint",
+    "핑거프린트",
+    "검증한종목",
+    "검증된종목",
+    "누적거래",
+    "거래수",
+    "promotionready",
+    "승격준비",
+    "승격여부",
+    "몇점",
+    "점수",
+    "어떤전략",
+    "무슨전략",
+    "연구중인전략",
+    "연구중인",
+    "현재전략",
+    "단타전략",
+)
+_MISSION_CANDIDATE_READ_QUERY_TOKENS: tuple[str, ...] = (
+    "알려줘",
+    "알려주세요",
+    "설명해주세요",
+    "설명해줘",
+    "보여줘",
+    "보여주세요",
+    "인가요",
+    "인가",
+    "뭐야",
+    "뭔가요",
+    "나요",
+    "가요",
+    "습니까",
+)
+
+
+def is_mission_candidate_read_request(text: str) -> bool:
+    """True for a read-only question about the active mission/candidate's
+    own identity, fingerprint, accumulated evidence, promotion-readiness,
+    strategy rules, or score - see the module note above. False for
+    anything already shaped like a continuation/execution request, so this
+    never overrides ``is_generic_continuation_request``/
+    ``is_candidate_robustness_continuation_request``."""
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    if is_generic_continuation_request(text):
+        return False
+    if not _contains_any(normalized, _MISSION_CANDIDATE_READ_SUBJECT_TOKENS):
+        return False
+    return "?" in text or _contains_any(normalized, _MISSION_CANDIDATE_READ_QUERY_TOKENS)
+
+
+def mission_candidate_read_focus(text: str) -> str:
+    """Which canonical read-model rendering ``is_mission_candidate_read_
+    request`` should use for this text: "score" (an explicit score/point
+    question - never fabricates a numeric score), "explain" (asks to
+    explain/describe the current strategy's own rules), or "status"
+    (identity/fingerprint/progress numbers - the default)."""
+    normalized = _norm(text)
+    if _contains_any(normalized, ("몇점", "점수")):
+        return "score"
+    if _contains_any(normalized, ("설명해주세요", "설명해줘", "설명해줄")):
+        return "explain"
+    return "status"
+
+
 def _mentions_research_verb(normalized: str) -> bool:
     return _contains_any(normalized, _RESEARCH_VERB_TOKENS) or "연구" in normalized
 
@@ -1017,6 +1112,25 @@ def render_mission_candidate_detailed_status(mission: ResearchMission, candidate
         )
     target_label = str(mission.target_promotion_ready_candidates) if mission.target_promotion_ready_candidates is not None else "미지정"
     lines.append(f"- promotion-ready candidates: {mission.current_promotion_ready_candidates}/{target_label}")
+    return "\n".join(lines)
+
+
+def render_candidate_score_status(mission: ResearchMission, candidate: "StrategyCandidateRecord | None") -> str:
+    """Patch 8.8: answers a "몇 점인가요?" style question about the active
+    candidate without ever fabricating a numeric score - no deterministic,
+    tested scoring contract exists yet (see the Patch 8.8 completion
+    report). Always reports ``score_status=insufficient_evidence`` plus
+    every real evidence figure already tracked for the active candidate
+    (via ``render_mission_candidate_detailed_status``), so the answer stays
+    evidence-bound instead of re-running research or guessing a number."""
+    lines = [
+        "[전략 점수]",
+        "- score_status=insufficient_evidence",
+        "- 현재는 신뢰할 수 있는 숫자 점수를 산정할 deterministic scoring 기준이 없어, 영하님께 임의의 점수를 알려드릴 수 없습니다.",
+        "- 대신 지금까지 확보된 실제 검증 수치를 보여드립니다.",
+        "",
+        render_mission_candidate_detailed_status(mission, candidate),
+    ]
     return "\n".join(lines)
 
 
@@ -2234,6 +2348,265 @@ def production_canonical_candidate_handoff_release_check() -> Mapping[str, objec
     if not all(checks.values()):
         failed = ",".join(name for name, ok in checks.items() if not ok)
         raise RuntimeError(f"canonical candidate handoff release check failed: {failed}")
+
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_canonical_research_read_model_release_check() -> Mapping[str, object]:
+    """Deterministic, network-free release check for Patch 8.8.
+
+    Real production defect this closes: real VPS Telegram production
+    acceptance testing showed that once an active, non-single-symbol
+    ``ResearchMission`` had a real ``StrategyCandidateRecord`` in progress
+    (validated symbols / cumulative trades already accumulated), read-only
+    questions about that candidate ("현재 연구 중인 단타 전략과 활성 후보를
+    설명해주세요", "현재 활성 후보의 fingerprint와 지금까지 검증한 종목 수,
+    누적 거래 수를 알려주세요", "현재 단타 전략은 몇 점 정도인가요?", "현재
+    단타 전략을 설명해주세요") had no dedicated mission-aware route at all.
+    They fell through into legacy/reasoning-followup machinery that either
+    answered from stale ``ConversationalMVPContext`` (a per-session cache of
+    the single most recent tool result, independent of the mission's own
+    persisted candidate progress) or executed a brand-new Autonomous
+    Learning V2 research cycle despite being phrased as a pure status
+    question - reproducing a validated-symbols/cumulative-trades regression
+    from real evidence back down to stale or zero values (see the Patch 8.8
+    completion report for the exact reproduction).
+
+    Runs the REAL production stack (LLMConversationBrain ->
+    default_tool_registry -> multi_symbol_research /
+    autonomous_learning_research) through a deterministic, network-free
+    market-data provider - same convention as
+    ``production_canonical_candidate_handoff_release_check`` above. Turn 1
+    deliberately starts as a single-symbol request (establishing a STALE
+    ``autonomous_learning_v2`` conversational context) before turn 2
+    broadens the mission to market-wide - reproducing the exact real
+    production shape where a stale single-symbol context and a market-wide
+    mission with an active candidate coexist in the same session."""
+    import sqlite3
+    from unittest.mock import patch as _patch
+
+    from gaon.research.krx_real_pipeline import KRXFixtureMarketDataProvider
+    from gaon.research.real_research import MarketSymbol
+    from gaon.runtime.config import GaonRuntimeConfig
+    from gaon.runtime.llm_conversation import LLMConversationRequest
+    from gaon.runtime.llm_tools import SQLiteToolAuditRepository
+    from gaon.runtime.migrations import migrate
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    class _DeterministicUniverseProvider:
+        source = "fixture:release-check-universe-88"
+        market_agnostic = True
+        _symbols = (
+            ("111111", "KOSPI"), ("222222", "KOSPI"), ("333333", "KOSPI"), ("444444", "KOSPI"), ("555555", "KOSPI"),
+            ("666666", "KOSDAQ"), ("777777", "KOSDAQ"), ("888888", "KOSDAQ"), ("999999", "KOSDAQ"), ("101010", "KOSDAQ"),
+        )
+
+        def __init__(self) -> None:
+            self._fixture = KRXFixtureMarketDataProvider()
+
+        @classmethod
+        def from_env(cls, env=None):
+            return cls()
+
+        def fetch_universe(self, market):
+            return tuple(MarketSymbol(code, code, "KR", exchange) for code, exchange in self._symbols)
+
+        def fetch_bars(self, symbol, *, start_date, end_date, timeframe="daily"):
+            return self._fixture.fetch_bars(symbol, start_date=start_date, end_date=end_date, timeframe=timeframe)
+
+        def validate_dataset(self, dataset):
+            return self._fixture.validate_dataset(dataset)
+
+    def _baseline(*, trades: int) -> dict[str, object]:
+        return {
+            "dataset": {"metadata": {"source": "real:yahoo-chart", "fixture_backed": False, "rows": 1222, "start_date": "2021-07-25", "end_date": "2026-07-24"}},
+            "quality": {"status": "pass", "blocking_findings": []},
+            "strategy": {"strategy_id": "baseline", "fingerprint": "fp:baseline", "rules": ["breakout"]},
+            "validation": {"symbols": 5, "warmup_bars": 60, "entry_opportunities": 120, "signals": 50},
+            "backtest": {"source": "real", "metrics": {"trade_count": trades, "total_return": 0.12, "mdd": 0.08}},
+            "candidates": [],
+        }
+
+    session_id = "telegram:release-check-canonical-research-read-model"
+    connection = sqlite3.connect(":memory:")
+    try:
+        migrate(connection)
+        config = GaonRuntimeConfig(mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="release-check-token", telegram_allowed_chat_ids=("100",), approval_signing_secret="release-check-secret", assistant_enabled=False)
+        agent = TelegramConversationAgent(config, connection)
+        tool_audit = SQLiteToolAuditRepository(connection)
+
+        def _send(update_id: int, text: str, *, force_hold: bool = False):
+            from contextlib import ExitStack
+
+            with ExitStack() as stack:
+                stack.enter_context(_patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=_baseline(trades=45)))
+                stack.enter_context(_patch("gaon.knowledge.telegram_autonomous_learning._run_production_external_research", return_value={"state": "content_unavailable"}))
+                stack.enter_context(_patch("gaon.research.multi_symbol.build_market_data_provider_from_env", return_value=_DeterministicUniverseProvider()))
+                if force_hold:
+                    from gaon.research.research_director import ResearchDirectorAction, ResearchDirectorDecision
+
+                    forced = ResearchDirectorDecision(ResearchDirectorAction.HOLD, "release-check-forced-hold", (), True, "release_check_forced_hold")
+                    stack.enter_context(_patch("gaon.knowledge.telegram_autonomous_learning.decide_next_research_action", return_value=forced))
+                return agent._brain.respond(
+                    LLMConversationRequest(
+                        session_id=session_id, user_ref="release-check", source="telegram",
+                        text=text, received_at=f"2026-08-18T00:{update_id:02d}:00Z", message_id=f"telegram:{session_id}:{update_id}",
+                    )
+                )
+
+        def _tool_call_count() -> int:
+            return sum(
+                len(tool_audit.list(tool_name=name))
+                for name in ("multi_symbol_research", "autonomous_learning_research", "autonomous_research_cycle")
+            )
+
+        # Turn 1: a plain single-symbol opening request - establishes a
+        # STALE autonomous_learning_v2 ConversationalMVPContext (production's
+        # real starting shape) before the mission ever broadens.
+        _send(1, "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. 현재 등록되어있는 전략보다 수익면에서 안전성 면에서 뛰어나야합니다.")
+        # Turn 2: broadens to a market-wide mission.
+        _send(2, "삼성전자말고 국내 주식 전체를 대상으로 연구해주세요")
+        # Turn 3: generic continuation drives the breadth cycle to
+        # sufficient cross-symbol evidence.
+        _send(3, "증거가 충분할 때까지 다양한 방식으로 전략을 연구해주세요")
+
+        mission3 = _mission_for_release_check(agent, session_id)
+        canonical_mission_precedence = mission3 is not None and mission3.universe_scope is MissionUniverseScope.MARKET_WIDE
+        candidate3 = candidate_records(mission3)[0] if mission3 is not None and mission3.candidates else None
+
+        # Turn 4: continue the candidate's own robustness validation - the
+        # real, unchanged Patch 8.7 continuation path. HOLD is forced (same
+        # real Research Director bridge production uses, never a second
+        # decision path - see production_canonical_candidate_handoff_
+        # release_check above) purely so this candidate deterministically
+        # stays active through the robustness stage instead of the real
+        # Director legitimately rejecting it outright on this thin fixture.
+        before = _tool_call_count()
+        _send(4, "후보를 유지한 채 강건성 검증을 계속해주세요", force_hold=True)
+        research_continuation_still_executes = _tool_call_count() > before
+
+        mission4 = _mission_for_release_check(agent, session_id)
+        candidate4 = candidate_records(mission4)[0] if mission4 is not None and mission4.candidates else None
+        same_candidate_after_continuation = (
+            candidate3 is not None
+            and candidate4 is not None
+            and candidate4.candidate_id == candidate3.candidate_id
+            and candidate4.strategy_fingerprint == candidate3.strategy_fingerprint
+        )
+        baseline_valid_symbols = candidate4.valid_symbols if candidate4 is not None else 0
+        baseline_trade_count = candidate4.trade_count if candidate4 is not None else 0
+
+        # Turn 5: "현재 연구 중인 단타 전략과 활성 후보를 설명해주세요" - the
+        # exact real production message that used to answer from legacy
+        # V5/champion state instead of the canonical mission/candidate.
+        before = _tool_call_count()
+        response5 = _send(5, "현재 연구 중인 단타 전략과 활성 후보를 설명해주세요.")
+        turn5_no_new_tool_calls = _tool_call_count() == before
+        legacy_v5_state_isolated = not any(
+            token in response5.text for token in ("v5-challenger-backtest", "champion_status", "promotion_approval", "챔피언")
+        )
+        strategy_explanation_uses_active_candidate = (
+            candidate4 is not None
+            and candidate4.candidate_id in response5.text
+            and candidate4.strategy_fingerprint[:16] in response5.text
+        )
+
+        # Turn 6: identity/fingerprint/progress read-only question.
+        before = _tool_call_count()
+        response6 = _send(6, "현재 활성 후보의 fingerprint와 지금까지 검증한 종목 수, 누적 거래 수를 알려주세요.")
+        candidate_status_read_only = _tool_call_count() == before
+        mission6 = _mission_for_release_check(agent, session_id)
+        candidate6 = candidate_records(mission6)[0] if mission6 is not None and mission6.candidates else None
+        candidate_fingerprint_preserved = (
+            candidate6 is not None
+            and candidate4 is not None
+            and candidate6.strategy_fingerprint == candidate4.strategy_fingerprint
+            and candidate6.strategy_fingerprint[:16] in response6.text
+        )
+        candidate_progress_read_only = (
+            candidate6 is not None
+            and candidate6.valid_symbols >= baseline_valid_symbols
+            and candidate6.trade_count >= baseline_trade_count
+            and str(candidate6.valid_symbols) in response6.text
+            and str(candidate6.trade_count) in response6.text
+        )
+
+        # Turn 7: continue robustness again - must still be the SAME
+        # candidate after every read-only question above.
+        before = _tool_call_count()
+        _send(7, "현재 후보를 그대로 유지한 채 강건성 검증을 계속해주세요.", force_hold=True)
+        research_continuation_still_executes = research_continuation_still_executes and _tool_call_count() > before
+        mission7 = _mission_for_release_check(agent, session_id)
+        candidate7 = candidate_records(mission7)[0] if mission7 is not None and mission7.candidates else None
+        same_candidate_after_continuation = (
+            same_candidate_after_continuation
+            and candidate7 is not None
+            and candidate7.candidate_id == candidate4.candidate_id
+            and candidate7.strategy_fingerprint == candidate4.strategy_fingerprint
+        )
+
+        # Turn 8: "몇 점인가요?" - must never fabricate a numeric score or
+        # re-run research, and must show the real evidence figures.
+        before = _tool_call_count()
+        response8 = _send(
+            8,
+            "현재 단타 전략은 몇 점 정도인가요? 점수를 산정할 근거가 부족하면 부족하다고 말하고, "
+            "현재 확보된 실제 검증 수치를 함께 보여주세요.",
+        )
+        strategy_score_read_only = _tool_call_count() == before
+        score_evidence_bound = (
+            "score_status=insufficient_evidence" in response8.text
+            and candidate7 is not None
+            and str(candidate7.valid_symbols) in response8.text
+            and str(candidate7.trade_count) in response8.text
+            and not re.search(r"\b\d{1,3}\s*(점|/100|/ 100)", response8.text)
+        )
+
+        # Turn 9: "현재 단타 전략을 설명해주세요" - the exact production
+        # regression turn (stale single-symbol trade_count=0 explanation
+        # instead of the canonical, non-zero candidate progress).
+        before = _tool_call_count()
+        response9 = _send(9, "현재 단타 전략을 설명해주세요.")
+        turn9_no_new_tool_calls = _tool_call_count() == before
+        mission9 = _mission_for_release_check(agent, session_id)
+        candidate9 = candidate_records(mission9)[0] if mission9 is not None and mission9.candidates else None
+        stale_context_regression_blocked = (
+            candidate9 is not None
+            and candidate9.candidate_id in response9.text
+            and candidate9.valid_symbols >= baseline_valid_symbols
+            and candidate9.trade_count >= baseline_trade_count
+            and "거래 표본: 0회" not in response9.text
+            and "계산 불가" not in response9.text
+        )
+
+        candidate_status_read_only = candidate_status_read_only and turn5_no_new_tool_calls and turn9_no_new_tool_calls
+    finally:
+        connection.close()
+
+    checks = {
+        "canonical_mission_precedence": canonical_mission_precedence,
+        "candidate_status_read_only": candidate_status_read_only,
+        "candidate_fingerprint_preserved": candidate_fingerprint_preserved,
+        "candidate_progress_read_only": candidate_progress_read_only,
+        "strategy_explanation_uses_active_candidate": strategy_explanation_uses_active_candidate,
+        "strategy_score_read_only": strategy_score_read_only,
+        "score_evidence_bound": score_evidence_bound,
+        "stale_context_regression_blocked": stale_context_regression_blocked,
+        "legacy_v5_state_isolated": legacy_v5_state_isolated,
+        "research_continuation_still_executes": research_continuation_still_executes,
+        "same_candidate_after_continuation": same_candidate_after_continuation,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"canonical research read model release check failed: {failed}")
 
     return {
         "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,

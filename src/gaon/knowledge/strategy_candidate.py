@@ -607,3 +607,69 @@ def render_candidate_status_summary(candidates: tuple[StrategyCandidateRecord, .
     target_label = str(target) if target is not None else "미지정"
     lines.append(f"승격 준비 후보는 현재 {current}/{target_label}입니다.")
     return "\n".join(lines)
+
+
+# Patch 8.8: human-readable entry/filter/exit descriptions for the rule
+# keys ``build_candidate_spec``'s templates actually produce (see
+# STRATEGY_FAMILY_TEMPLATES above). A key not listed here still renders
+# (as "{key}={value}") rather than being silently dropped - this module
+# never guesses a description for a rule it does not recognize.
+_ENTRY_RULE_LABELS: Mapping[str, str] = {
+    "breakout_lookback": "{value}일 신고가 돌파 시 진입",
+}
+_EXIT_RULE_LABELS: Mapping[str, str] = {
+    "protective_stop_pct": "진입가 대비 {value}% 손절",
+    "channel_exit_lookback": "{value}일 채널 저점 이탈 시 청산",
+}
+_FILTER_RULE_LABELS: Mapping[str, str] = {
+    "close_gt_ma20": "종가가 MA20 위에 있어야 진입 (추세 필터)",
+    "ma20_gt_ma60": "MA20이 MA60보다 높아야 진입 (장기 추세 필터)",
+    "volume_gte_ma20": "거래량이 20일 평균 거래량 이상이어야 진입",
+}
+
+
+def _describe_rule_section(rules: Mapping[str, object], labels: Mapping[str, str]) -> list[str]:
+    lines: list[str] = []
+    for key in sorted(rules):
+        raw = rules[key]
+        value = raw.get("value") if isinstance(raw, Mapping) else raw
+        if value is False or value is None:
+            continue
+        label = labels.get(key)
+        if label is None:
+            lines.append(f"- {key}={value}")
+        elif "{value}" in label:
+            lines.append(f"- {label.format(value=value)}")
+        else:
+            lines.append(f"- {label}")
+    return lines
+
+
+def render_candidate_strategy_explanation(candidate: StrategyCandidateRecord) -> str:
+    """Human-readable entry/filter/exit explanation of ``candidate``'s own
+    ``spec_rules`` ONLY (Patch 8.8 production bug fix) - never a stale
+    single-symbol backtest result, never a rule this candidate does not
+    actually have. Answers "현재 단타 전략을 설명해주세요" while a mission-
+    tracked candidate is active, from the same canonical rules
+    ``multi_symbol_research`` evaluates this candidate against."""
+    rules = candidate.spec_rules or {}
+    entry = rules.get("entry") or {}
+    exit_rules = rules.get("exit") or {}
+    filters = rules.get("filters") or {}
+    lines = [
+        f"[전략 후보 {candidate.candidate_id}]",
+        f"전략 계열: {candidate.hypothesis_summary} ({candidate.strategy_family})",
+        f"fingerprint: {candidate.strategy_fingerprint[:16]}",
+        "",
+        "[진입 조건]",
+        *(_describe_rule_section(entry, _ENTRY_RULE_LABELS) or ["- (기록된 진입 규칙 없음)"]),
+    ]
+    filter_lines = _describe_rule_section(filters, _FILTER_RULE_LABELS)
+    if filter_lines:
+        lines.append("")
+        lines.append("[필터 조건]")
+        lines.extend(filter_lines)
+    lines.append("")
+    lines.append("[청산 조건]")
+    lines.extend(_describe_rule_section(exit_rules, _EXIT_RULE_LABELS) or ["- (기록된 청산 규칙 없음)"])
+    return "\n".join(lines)

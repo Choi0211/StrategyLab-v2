@@ -3,6 +3,66 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Patch 8.8 Canonical Research Mission Read Model & Conversational State Consistency
+
+Real VPS Telegram production acceptance testing (after Patch 8.7 shipped and
+its own release check passed) showed a separate state/routing defect. Once
+an active, non-single-symbol Research Mission had a real
+`StrategyCandidateRecord` in progress (cross-symbol validated evidence and
+cumulative trades already accumulated), read-only questions about that
+candidate had no dedicated route at all:
+
+- "현재 연구 중인 단타 전략과 활성 후보를 설명해주세요" answered from
+  legacy V5/Champion pipeline state instead of the canonical Research
+  Mission / active candidate.
+- "현재 활성 후보의 fingerprint와 지금까지 검증한 종목 수, 누적 거래 수를
+  알려주세요" - a read-only question - silently executed a brand-new
+  Autonomous Learning V2 research cycle and answered from a STALE,
+  unrelated single-symbol result.
+- "현재 단타 전략은 몇 점 정도인가요?" also re-executed research instead of
+  answering from real evidence (or admitting it could not).
+- "현재 단타 전략을 설명해주세요" answered from a stale single-symbol
+  context ("거래 표본: 0회", "계산 불가") even though the active
+  candidate's own real cumulative evidence was non-zero - a real production
+  validated-symbols/cumulative-trades regression from 5/25 down to a stale
+  0.
+
+Root cause: none of these messages were ever recognized as a read-only
+question about the ACTIVE mission/candidate itself. Lacking a route, they
+fell through into legacy/reasoning-followup machinery keyed off
+`ConversationalMVPContext` - a per-session cache of the single most recent
+tool result, entirely independent of the mission's own persisted candidate
+progress.
+
+`is_mission_candidate_read_request`/`mission_candidate_read_focus`
+(`gaon.knowledge.research_mission`) now recognize this class of question -
+identity/fingerprint/progress, "설명해주세요" strategy explanation, and
+"몇 점인가요?" score - and answer directly from the active
+`StrategyCandidateRecord`/`ResearchMission`, with zero new research tool
+calls. The gate explicitly excludes anything already shaped like a
+continuation/execution request (reusing the existing
+`is_generic_continuation_request`/`is_candidate_robustness_continuation_
+request` predicates), so the real Patch 8.7 mission-driven research
+continuation is completely unaffected - a genuine "keep validating the
+current candidate" message still executes the real, bounded research
+cycle. "설명해주세요" now renders the candidate's own real entry/filter/
+exit rules (`render_candidate_strategy_explanation`); a score question
+always reports `score_status=insufficient_evidence` plus the real evidence
+already tracked for the candidate (`render_candidate_score_status`) -
+no deterministic, tested numeric scoring contract exists yet, so no score
+is ever fabricated.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-canonical-research-read-model-release-check
+```
+
+Schema remains v36 - no migration was needed; this patch only adds pure
+read-model functions and a routing precedence gate over existing persisted
+state. No strategy mutation, order execution, Champion auto-promotion, or
+approval bypass introduced.
+
 ## Patch 8.7 Canonical Breadth Candidate -> Persistent StrategyCandidate Identity Handoff
 
 Real VPS Telegram production acceptance testing showed that a genuine

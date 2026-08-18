@@ -1,5 +1,50 @@
 # Changelog
 
+## Patch 8.8 Canonical Research Mission Read Model & Conversational State Consistency
+
+- Fixed a real VPS Telegram production defect: once an active,
+  non-single-symbol Research Mission had a real `StrategyCandidateRecord`
+  in progress, read-only questions about that candidate ("현재 연구 중인
+  단타 전략과 활성 후보를 설명해주세요", "현재 활성 후보의 fingerprint와
+  지금까지 검증한 종목 수, 누적 거래 수를 알려주세요", "현재 단타 전략은
+  몇 점 정도인가요?", "현재 단타 전략을 설명해주세요") had no dedicated
+  mission-aware route, so they fell through into legacy/reasoning-followup
+  machinery that answered from legacy V5/Champion state or a STALE,
+  unrelated `ConversationalMVPContext` single-symbol result - reproducing a
+  validated-symbols/cumulative-trades regression from real evidence down to
+  stale or zero values, and in one case silently re-executing a full
+  Autonomous Learning V2 research cycle for what was a pure status question.
+- Added `is_mission_candidate_read_request`/`mission_candidate_read_focus`
+  (`gaon.knowledge.research_mission`): a read-only precedence gate that
+  fires whenever an active, non-single-symbol mission has an active
+  candidate and the message is not already a continuation/execution
+  request - never overriding the existing Patch 8.7 mission-driven
+  continuation path.
+- Identity/fingerprint/progress questions now answer from the active
+  `StrategyCandidateRecord`/`ResearchMission` (candidate status summary +
+  detailed status), never from stale conversational context or legacy V5
+  pipeline state.
+- "설명해주세요" (describe the current strategy) now renders the active
+  candidate's own real entry/filter/exit rules
+  (`render_candidate_strategy_explanation` in
+  `gaon.knowledge.strategy_candidate`) plus its real validation progress -
+  never a stale single-symbol backtest result.
+- "몇 점인가요?" (score) now always reports
+  `score_status=insufficient_evidence` plus the real evidence figures
+  already tracked for the candidate (`render_candidate_score_status`) -
+  never a fabricated numeric score, and never re-executes research.
+- Added `gaon-production-canonical-research-read-model-release-check` and a
+  6-turn integration acceptance test replaying the real production turn
+  sequence.
+- Schema unchanged (v36) - no migration was needed; this patch only adds
+  pure read-model functions and a routing precedence gate over existing
+  persisted state.
+- Full unit and integration suites pass, `scripts/verify_release.py`
+  passes, `git diff --check` is clean. Independent fresh review found no
+  Critical/High findings.
+- Safety unchanged: no strategy mutation, no order execution, no Champion
+  auto-promotion, no approval bypass anywhere in this change.
+
 ## Patch 8.7 Canonical Breadth Candidate -> Persistent StrategyCandidate Identity Handoff
 
 - Fixed a real VPS Telegram production defect: an explicit-symbol,

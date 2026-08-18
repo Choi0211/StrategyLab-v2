@@ -782,5 +782,35 @@ class CanonicalCandidateHandoffReleaseCheckTests(unittest.TestCase):
         self.assertEqual(dict(first), dict(second))
 
 
+class CanonicalResearchReadModelReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_canonical_research_read_model_release_check
+
+        result = production_canonical_research_read_model_release_check()
+        self.assertTrue(result["canonical_mission_precedence"])
+        self.assertTrue(result["candidate_status_read_only"])
+        self.assertTrue(result["candidate_fingerprint_preserved"])
+        self.assertTrue(result["candidate_progress_read_only"])
+        self.assertTrue(result["strategy_explanation_uses_active_candidate"])
+        self.assertTrue(result["strategy_score_read_only"])
+        self.assertTrue(result["score_evidence_bound"])
+        self.assertTrue(result["stale_context_regression_blocked"])
+        self.assertTrue(result["legacy_v5_state_isolated"])
+        self.assertTrue(result["research_continuation_still_executes"])
+        self.assertTrue(result["same_candidate_after_continuation"])
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_canonical_research_read_model_release_check
+
+        first = production_canonical_research_read_model_release_check()
+        second = production_canonical_research_read_model_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
 if __name__ == "__main__":
     unittest.main()
