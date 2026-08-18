@@ -95,32 +95,6 @@ def _request(text: str) -> LLMConversationRequest:
     )
 
 
-class SymbolAsStrategyLeadSentenceStrippingTests(unittest.TestCase):
-    """ULTRAREVIEW High #2 fix: a candidate-driven mission response must
-    never present the SYMBOL as the strategy's own identity."""
-
-    def test_the_known_leading_sentence_is_removed(self) -> None:
-        from gaon.runtime.llm_conversation import _strip_symbol_as_strategy_lead_sentence
-
-        tool_text = "영하님, 473050 전략을 다시 연구했습니다.\n\n검증 결과 요약입니다."
-        stripped = _strip_symbol_as_strategy_lead_sentence(tool_text, symbol="473050")
-        self.assertNotIn("473050 전략을 다시 연구했습니다", stripped)
-        self.assertIn("검증 결과 요약입니다", stripped)
-
-    def test_text_without_the_leading_sentence_is_untouched(self) -> None:
-        from gaon.runtime.llm_conversation import _strip_symbol_as_strategy_lead_sentence
-
-        tool_text = "영하님, 승격 후보 상세 정보를 알려드립니다.\n\n검증 결과 요약입니다."
-        self.assertEqual(_strip_symbol_as_strategy_lead_sentence(tool_text, symbol="473050"), tool_text)
-
-    def test_a_different_symbols_lead_sentence_is_not_mistakenly_stripped(self) -> None:
-        from gaon.runtime.llm_conversation import _strip_symbol_as_strategy_lead_sentence
-
-        tool_text = "영하님, 005930 전략을 다시 연구했습니다.\n\n검증 결과 요약입니다."
-        stripped = _strip_symbol_as_strategy_lead_sentence(tool_text, symbol="473050")
-        self.assertEqual(stripped, tool_text)
-
-
 class DeepValidationEffectiveFingerprintTests(unittest.TestCase):
     """ULTRAREVIEW High #1 fix: promotion-ready recording must verify what
     the deep-validation pipeline actually validated, using the exact same

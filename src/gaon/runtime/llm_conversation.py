@@ -83,6 +83,7 @@ from gaon.knowledge.research_mission import (
     record_cycle_result,
     record_focus_symbol,
     record_promotion_candidate,
+    render_robustness_cycle_response,
     set_active_candidate,
     update_candidate,
 )
@@ -93,6 +94,7 @@ from gaon.knowledge.strategy_candidate import (
     mark_rejected,
     mark_stagnant,
     new_candidate,
+    next_robustness_evidence_symbol,
     next_untried_family,
     record_breadth_progress,
     record_robustness_progress,
@@ -178,28 +180,6 @@ def _deep_validation_effective_fingerprint(request_text: str, *, symbol: str) ->
 
     parsed = UserStrategyParser().parse(request_text, symbol=symbol)
     return parsed.strategy_family_fingerprint
-
-
-# ULTRAREVIEW High #2 fix: research_grounding._format_autonomous_learning_
-# research_natural's first line names the SYMBOL as if it were the
-# strategy's own identity ("영하님, {symbol} 전략을 다시 연구했습니다.") -
-# correct for a genuine single-symbol mission (that renderer is still used
-# there, unmodified), but wrong once a strategy CANDIDATE, not a symbol, is
-# the mission's primary research object. This strips exactly that one
-# known leading sentence from a candidate-driven response instead of
-# touching the shared renderer.
-_SYMBOL_AS_STRATEGY_LEAD_SENTENCE = "영하님, {symbol} 전략을 다시 연구했습니다."
-
-
-def _strip_symbol_as_strategy_lead_sentence(tool_text: str, *, symbol: str) -> str:
-    lead = _SYMBOL_AS_STRATEGY_LEAD_SENTENCE.format(symbol=symbol)
-    lines = tool_text.split("\n")
-    if not lines or lines[0].strip() != lead:
-        return tool_text
-    remaining = lines[1:]
-    while remaining and not remaining[0].strip():
-        remaining.pop(0)
-    return "\n".join(remaining)
 
 
 # Patch 8.3 production bug fix: these are the read-only tools
@@ -1242,7 +1222,18 @@ class LLMConversationBrain:
             return self._rotate_stagnant_candidate(request, updated_mission, updated_candidate, warnings, references, tool_calls=("multi_symbol_research",))
 
         if updated_candidate.has_sufficient_universe_evidence and updated_candidate.evidence_symbols:
-            updated_mission = record_focus_symbol(updated_mission, symbol=updated_candidate.evidence_symbols[0], now=request.received_at)
+            # Patch 8.6 independent-review fix: evidence_symbols[0] never
+            # changes once populated (new entries are always appended after
+            # older ones - see record_breadth_progress), so re-entering
+            # robustness from breadth used to always re-select the FIRST
+            # evidence symbol even after next_robustness_evidence_symbol had
+            # already rotated through it (and others) in prior robustness
+            # cycles - silently re-testing an already-tested symbol instead
+            # of actually widening cross-symbol coverage. Prefer the next
+            # untried evidence symbol; only fall back to evidence_symbols[0]
+            # once every known evidence symbol has already been used.
+            next_symbol = next_robustness_evidence_symbol(updated_candidate) or updated_candidate.evidence_symbols[0]
+            updated_mission = record_focus_symbol(updated_mission, symbol=next_symbol, now=request.received_at)
 
         self._remember_mission(request, updated_mission)
         self._remember_mvp_context(request, ConversationalMVPIntent.COMPARE_SYMBOLS, self._payloads_from_multi_symbol_result(output), request.text)
@@ -1359,23 +1350,26 @@ class LLMConversationBrain:
             if isinstance(grade.get(key), dict)
         }
 
+        # Patch 8.6 requirement 4: verify identity on EVERY cycle, not only
+        # the promotion-triggering one - see ULTRAREVIEW High #1's original
+        # comment below, which this generalizes. A cycle whose deep-
+        # validation pipeline ended up validating a DIFFERENT effective
+        # rule set than this candidate's own fingerprint must never be
+        # counted as this candidate's robustness evidence.
+        validated_fingerprint = _deep_validation_effective_fingerprint(request_text, symbol=symbol)
+        identity_verified = validated_fingerprint == candidate.strategy_fingerprint
+        identity_unverified = not identity_verified
+
         updated_candidate = record_robustness_progress(
             candidate, director_action=action, terminal=terminal, now=request.received_at,
-            validation_stage_status=validation_stage_status,
+            validation_stage_status=validation_stage_status if identity_verified else None,
+            symbol=symbol if identity_verified else None,
         )
         updated_mission = mission
-        identity_unverified = False
         if terminal:
-            updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
             if action == "request_human_promotion_review":
-                # ULTRAREVIEW High #1 fix: before recording a promotion-
-                # ready strategy, confirm the deep-validation stage
-                # actually validated THIS candidate's exact effective
-                # rules - never the candidate's aspirational fingerprint on
-                # trust alone. If it cannot be verified, the candidate is
-                # not counted as promotion-ready.
-                validated_fingerprint = _deep_validation_effective_fingerprint(request_text, symbol=symbol)
-                if validated_fingerprint == candidate.strategy_fingerprint:
+                updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
+                if identity_verified:
                     updated_mission = record_promotion_candidate(
                         updated_mission,
                         strategy_fingerprint=candidate.strategy_fingerprint,
@@ -1384,16 +1378,35 @@ class LLMConversationBrain:
                     )
                     updated_candidate = mark_promotion_ready(updated_candidate, now=request.received_at)
                     updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
-                else:
-                    identity_unverified = True
             elif action == "reject_candidate":
                 updated_candidate = mark_rejected(updated_candidate, reason="research_director_rejected_candidate", now=request.received_at)
+                updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
                 updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
-            # Other terminal actions (e.g. hold/research_budget_exhausted)
-            # neither promote nor reject the candidate - it stays the
-            # active candidate and the next cycle may pick a fresh
-            # representative symbol from its evidence, or - once
-            # is_stagnant fires below - rotate to a new strategy.
+            else:
+                # Patch 8.6 root cause: a HOLD (or any other non-promoting,
+                # non-rejecting terminal Research Director decision, e.g.
+                # research_budget_exhausted) used to unconditionally clear
+                # mission.pending_promotion_symbol here while leaving the
+                # candidate active - the candidate stayed "active" but the
+                # NEXT turn lost robustness_continuation_precedence
+                # eligibility (it requires pending_promotion_symbol to be
+                # set), silently falling back to a fresh breadth cycle or,
+                # worse, the legacy mission-unaware conversational path.
+                # Instead: rotate to a DIFFERENT, not-yet-tried evidence
+                # symbol from this candidate's own breadth-validated pool
+                # (next_robustness_evidence_symbol already excludes the
+                # symbol this cycle just used via updated_candidate's
+                # robustness_evidence_symbols) so the SAME strategy
+                # fingerprint keeps accumulating robustness evidence across
+                # multiple symbols. Only once every known evidence symbol
+                # has already been tried does this fall back to clearing
+                # the focus symbol, returning the mission to a breadth
+                # cycle to gather MORE evidence symbols to rotate through.
+                next_symbol = next_robustness_evidence_symbol(updated_candidate, exclude=symbol)
+                if next_symbol is not None:
+                    updated_mission = record_focus_symbol(updated_mission, symbol=next_symbol, now=request.received_at)
+                else:
+                    updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
         updated_mission = update_candidate(updated_mission, updated_candidate, now=request.received_at)
 
         if is_stagnant(updated_candidate):
@@ -1406,16 +1419,26 @@ class LLMConversationBrain:
         elif updated_candidate.status is StrategyCandidateStatus.REJECTED:
             text = f"{candidate_text}\n\n영하님, {updated_candidate.candidate_id} 전략은 검증 결과 기각되어 다음 사이클에서 다른 전략 후보로 전환합니다.\n\n{mission_status_block(updated_mission)}"
         else:
-            # ULTRAREVIEW High #2 fix: never present the SYMBOL as the
-            # strategy's own identity in a candidate-driven mission
-            # response - the candidate block above already carries that
-            # identity; the symbol below is reported as evidence.
-            trimmed_tool_text = _strip_symbol_as_strategy_lead_sentence(tool_text, symbol=symbol)
-            lead_sentence = (
-                f"영하님, {updated_candidate.candidate_id} 전략 후보의 정밀 검증을 계속했습니다. "
-                f"이번 검증 표본 종목: {symbol}."
-            )
-            text = f"{candidate_text}\n\n{lead_sentence}\n\n{trimmed_tool_text}\n\n{mission_status_block(updated_mission)}"
+            # ULTRAREVIEW High #2 fix (Patch 8.6: superseded by the
+            # candidate-centric structured response below, which never
+            # names the symbol as the strategy's own identity either - the
+            # candidate block already carries that identity, the symbol is
+            # reported only as an evidence sample). Deliberately does NOT
+            # append the full raw tool_text diagnostic dump: every field a
+            # user actually asked about (per-stage status, cumulative
+            # evidence, promotion-ready count) is already in this
+            # structured block, and appending the much longer raw dump
+            # pushed real responses past Telegram's message-length split
+            # threshold, splitting one logical answer across two Telegram
+            # messages.
+            text = render_robustness_cycle_response(updated_candidate, updated_mission, symbol=symbol)
+            if identity_unverified:
+                # Patch 8.6 independent-review fix: the symbol above is
+                # genuinely the one this cycle evaluated, but its evidence
+                # was withheld from the candidate's recorded state (see
+                # identity_verified above) - say so explicitly instead of
+                # letting the user believe it silently counted.
+                text = f"{text}\n\n[참고] 이번 검증은 후보의 등록된 규칙과 일치가 확인되지 않아 강건성 증거로 반영하지 않았습니다."
         result_warnings = (*warnings, *result.warnings, f"research_director_action={action}")
         if identity_unverified:
             result_warnings = (*result_warnings, f"candidate_identity_unverified={updated_candidate.candidate_id}")

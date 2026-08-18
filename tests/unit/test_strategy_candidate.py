@@ -226,6 +226,156 @@ class ValidationStageStatusPersistenceTests(unittest.TestCase):
         self.assertEqual(dict(restored.validation_stage_status), {})
 
 
+class CrossSymbolRobustnessEvidenceTests(unittest.TestCase):
+    """Patch 8.6: a market-wide mission's robustness stage must accumulate
+    evidence across MULTIPLE symbols under one strategy_fingerprint - never
+    silently deepen (or lose track of) a single symbol forever."""
+
+    def test_new_candidate_has_no_robustness_evidence(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        self.assertEqual(candidate.robustness_evidence_symbols, ())
+        self.assertEqual(candidate.robustness_attempt_count, 0)
+        self.assertIsNone(candidate.last_validation_symbol)
+
+    def test_symbol_is_recorded_into_robustness_evidence_symbols(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_robustness_progress(
+            candidate, director_action="collect_more_evidence", terminal=False, now=LATER, symbol="000660",
+        )
+        self.assertEqual(candidate.robustness_evidence_symbols, ("000660",))
+        self.assertEqual(candidate.robustness_attempt_count, 1)
+        self.assertEqual(candidate.last_validation_symbol, "000660")
+
+    def test_repeated_symbol_is_not_duplicated(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=LATER, symbol="000660")
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=LATER, symbol="000660")
+        self.assertEqual(candidate.robustness_evidence_symbols, ("000660",))
+        self.assertEqual(candidate.robustness_attempt_count, 2)
+
+    def test_robustness_evidence_symbols_are_bounded(self) -> None:
+        from gaon.knowledge.strategy_candidate import ROBUSTNESS_EVIDENCE_SYMBOL_CAP
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        for index in range(ROBUSTNESS_EVIDENCE_SYMBOL_CAP + 5):
+            candidate = record_robustness_progress(
+                candidate, director_action="hold", terminal=True, now=LATER, symbol=f"{100000 + index}",
+            )
+        self.assertLessEqual(len(candidate.robustness_evidence_symbols), ROBUSTNESS_EVIDENCE_SYMBOL_CAP)
+
+    def test_no_symbol_leaves_evidence_memory_untouched(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=LATER, symbol="000660")
+        before = candidate.robustness_evidence_symbols
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=LATER, symbol=None)
+        self.assertEqual(candidate.robustness_evidence_symbols, before)
+        self.assertEqual(candidate.robustness_attempt_count, 1)
+        self.assertEqual(candidate.last_validation_symbol, "000660")
+
+    def test_round_trips_through_json(self) -> None:
+        from gaon.knowledge.strategy_candidate import StrategyCandidateRecord
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=LATER, symbol="000660")
+        restored = StrategyCandidateRecord.from_json(candidate.to_json())
+        self.assertEqual(restored.robustness_evidence_symbols, candidate.robustness_evidence_symbols)
+        self.assertEqual(restored.robustness_attempt_count, candidate.robustness_attempt_count)
+        self.assertEqual(restored.last_validation_symbol, candidate.last_validation_symbol)
+
+    def test_legacy_json_without_the_fields_degrades_gracefully(self) -> None:
+        from gaon.knowledge.strategy_candidate import StrategyCandidateRecord
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        legacy_json = candidate.to_json()
+        for key in ("robustness_evidence_symbols", "robustness_attempt_count", "last_validation_symbol", "last_validation_reference"):
+            del legacy_json[key]
+        restored = StrategyCandidateRecord.from_json(legacy_json)
+        self.assertEqual(restored.robustness_evidence_symbols, ())
+        self.assertEqual(restored.robustness_attempt_count, 0)
+        self.assertIsNone(restored.last_validation_symbol)
+
+
+class NextRobustnessEvidenceSymbolTests(unittest.TestCase):
+    """Patch 8.6: the pure symbol-rotation policy used by
+    ``gaon.runtime.llm_conversation._try_candidate_robustness_cycle`` when a
+    HOLD (or any other non-promoting, non-rejecting terminal Research
+    Director decision) is reached for the current evaluation symbol."""
+
+    def test_picks_first_untried_breadth_evidence_symbol(self) -> None:
+        from gaon.knowledge.strategy_candidate import next_robustness_evidence_symbol
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=3, valid=3, trade_count=3,
+            evidence_symbols=("000660", "005380", "051910"), excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        self.assertEqual(next_robustness_evidence_symbol(candidate), "000660")
+
+    def test_skips_symbols_already_used_for_robustness(self) -> None:
+        from gaon.knowledge.strategy_candidate import next_robustness_evidence_symbol
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=3, valid=3, trade_count=3,
+            evidence_symbols=("000660", "005380", "051910"), excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=NOW, symbol="000660")
+        self.assertEqual(next_robustness_evidence_symbol(candidate), "005380")
+
+    def test_exclude_parameter_skips_the_current_cycle_symbol_too(self) -> None:
+        from gaon.knowledge.strategy_candidate import next_robustness_evidence_symbol
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=2, valid=2, trade_count=2,
+            evidence_symbols=("000660", "005380"), excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        # symbol=None means this cycle's evidence was never recorded (e.g.
+        # an unverified fingerprint) - exclude= must still prevent an
+        # immediate re-pick of the SAME symbol just evaluated.
+        self.assertEqual(next_robustness_evidence_symbol(candidate, exclude="000660"), "005380")
+
+    def test_returns_none_once_every_evidence_symbol_is_exhausted(self) -> None:
+        from gaon.knowledge.strategy_candidate import next_robustness_evidence_symbol
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=2, valid=2, trade_count=2,
+            evidence_symbols=("000660", "005380"), excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=NOW, symbol="000660")
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=NOW, symbol="005380")
+        self.assertIsNone(next_robustness_evidence_symbol(candidate))
+
+    def test_breadth_reentry_selection_prefers_an_untried_symbol_over_evidence_symbols_zero(self) -> None:
+        """Independent-review fix: gaon.runtime.llm_conversation.
+        _try_candidate_robustness_cycle's breadth->robustness re-entry point
+        computes ``next_robustness_evidence_symbol(candidate) or
+        candidate.evidence_symbols[0]`` - this proves that expression
+        actually prefers a fresh symbol once evidence_symbols[0] has already
+        been robustness-tested, rather than silently re-selecting it forever
+        (evidence_symbols[0] never changes once populated - see
+        record_breadth_progress)."""
+        from gaon.knowledge.strategy_candidate import next_robustness_evidence_symbol
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=3, valid=3, trade_count=3,
+            evidence_symbols=("000660", "005380", "051910"), excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=NOW, symbol="000660")
+        selection = next_robustness_evidence_symbol(candidate) or candidate.evidence_symbols[0]
+        self.assertEqual(selection, "005380")
+
+        # Once every evidence symbol has been robustness-tested, the
+        # fallback correctly picks something (never crashes / returns None)
+        # rather than leaving the mission with no focus symbol at all.
+        for symbol in ("005380", "051910"):
+            candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=NOW, symbol=symbol)
+        selection = next_robustness_evidence_symbol(candidate) or candidate.evidence_symbols[0]
+        self.assertEqual(selection, "000660")
+
+
 class RobustnessProgressTests(unittest.TestCase):
     def test_repeated_identical_director_action_counts_as_no_progress(self) -> None:
         candidate = new_candidate("breakout_standard", sequence=1, now=NOW)

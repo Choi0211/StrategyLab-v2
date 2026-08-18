@@ -259,7 +259,7 @@ RESULT_RECALL_TOKENS = (
     "what was the result",
     "research result",
 )
-STATUS_TOKENS = ("상태", "status", "정상", "하고 있어")
+STATUS_TOKENS = ("상태", "status", "정상", "하고 있어", "어디까지")
 PROFESSIONAL_TOKENS = ("전문적으로", "전문가처럼", "전문 설명", "professional", "technical")
 INVESTMENT_DECISION_TOKENS = ("지금 사도", "매수해도", "사도 돼", "사야", "팔아야", "매도해야", "buy now", "should buy", "sell now")
 RISK_TOKENS = ("위험", "리스크", "손실", "mdd", "낙폭", "risk", "drawdown")

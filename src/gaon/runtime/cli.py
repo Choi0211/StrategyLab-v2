@@ -335,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-persistent-strategy-candidate-continuation-release-check")
     sub.add_parser("gaon-production-kr-multi-symbol-data-acquisition-release-check")
     sub.add_parser("gaon-production-candidate-breadth-to-robustness-transition-release-check")
+    sub.add_parser("gaon-production-candidate-multi-symbol-robustness-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2737,6 +2738,32 @@ def _run(args: argparse.Namespace) -> int:
             f"no_fabricated_validation_state={str(payload['no_fabricated_validation_state']).lower()} "
             f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
             f"status_ux_reflects_real_state={str(payload['status_ux_reflects_real_state']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-candidate-multi-symbol-robustness-release-check":
+        from gaon.knowledge.research_mission import production_candidate_multi_symbol_robustness_release_check
+
+        payload = production_candidate_multi_symbol_robustness_release_check()
+        print(
+            "gaon-production-candidate-multi-symbol-robustness-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"candidate_primary_identity={str(payload['candidate_primary_identity']).lower()} "
+            f"fingerprint_preserved_across_symbols={str(payload['fingerprint_preserved_across_symbols']).lower()} "
+            f"symbols_are_evidence_samples={str(payload['symbols_are_evidence_samples']).lower()} "
+            f"robustness_status_accumulates={str(payload['robustness_status_accumulates']).lower()} "
+            f"oos_state_grounded={str(payload['oos_state_grounded']).lower()} "
+            f"walk_forward_state_grounded={str(payload['walk_forward_state_grounded']).lower()} "
+            f"cost_stress_state_grounded={str(payload['cost_stress_state_grounded']).lower()} "
+            f"regime_state_grounded={str(payload['regime_state_grounded']).lower()} "
+            f"restart_persistence={str(payload['restart_persistence']).lower()} "
+            f"status_query_read_only={str(payload['status_query_read_only']).lower()} "
+            f"distinct_promotion_gate_preserved={str(payload['distinct_promotion_gate_preserved']).lower()} "
+            f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "
