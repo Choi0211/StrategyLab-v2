@@ -3,6 +3,37 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix: Research Director Planned Action -> Executor Handoff
+
+Patch 8.9/PR #148 added a blocker-driven read model that can identify the
+next bounded research action from persisted `StrategyCandidateRecord`
+state. This hotfix wires that planned action into the actual Telegram
+executor path. A continuation where the active candidate has
+`regime_validation=partial` now passes `planned_action=RUN_REGIME` to
+`autonomous_learning_research`, records the resulting stage transition, and
+recomputes the next action from updated state. It no longer leaves the
+planner output as a footer-only recommendation.
+
+The robustness progress model is also stricter: a changed Research
+Director action label alone is not evidence progress. Progress requires a
+new evidence symbol, a changed validation dimension/status, or a terminal
+promotion/rejection. Exact same action/evidence/dimension replay therefore
+counts toward no-progress/stagnation, while the same symbol can still
+advance a different validation dimension such as `RUN_WALK_FORWARD`.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-research-action-execution-handoff-release-check
+```
+
+The check proves `RUN_REGIME` is consumed as execution input, duplicate
+replay is blocked, dimension-aware evidence identity is preserved, next
+action is recomputed after execution, and PR #148 completion behavior stays
+intact. Schema remains v36. Safety is unchanged: no live trading,
+broker/KIS order, Champion auto-promotion, approval bypass, or unapproved
+strategy mutation.
+
 ## Autonomous Research Completion - Blocker-Driven Progression
 
 This patch completes the remaining mission-driven autonomous research loop

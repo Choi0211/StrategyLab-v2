@@ -339,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-canonical-candidate-handoff-release-check")
     sub.add_parser("gaon-production-canonical-research-read-model-release-check")
     sub.add_parser("gaon-production-autonomous-research-completion-release-check")
+    sub.add_parser("gaon-production-research-action-execution-handoff-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2861,6 +2862,16 @@ def _run(args: argparse.Namespace) -> int:
             f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
             "safety=pass"
         )
+
+    elif args.command == "gaon-production-research-action-execution-handoff-release-check":
+        from gaon.knowledge.research_mission import production_research_action_execution_handoff_release_check
+
+        payload = production_research_action_execution_handoff_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-research-action-execution-handoff-release-check: PASS {details}")
 
     elif args.command == "gaon-production-news-research-integration-release-check":
         from gaon.knowledge.telegram_autonomous_learning import production_news_research_integration_release_check

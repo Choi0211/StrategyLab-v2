@@ -867,5 +867,44 @@ class AutonomousResearchCompletionReleaseCheckTests(unittest.TestCase):
         self.assertEqual(dict(first), dict(second))
 
 
+class ResearchActionExecutionHandoffReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_research_action_execution_handoff_release_check
+
+        result = production_research_action_execution_handoff_release_check()
+        for key in (
+            "planned_action_consumed",
+            "run_regime_actually_executes",
+            "action_not_presentation_only",
+            "identical_action_replay_blocked",
+            "dimension_aware_evidence_identity",
+            "retest_requires_reason",
+            "actual_progress_semantics",
+            "next_action_recomputed",
+            "resolved_blocker_not_repeated",
+            "no_progress_counts_toward_stagnation",
+            "bounded_execution_preserved",
+            "patch87_handoff_preserved",
+            "patch88_read_model_preserved",
+            "autonomous_completion_preserved",
+        ):
+            self.assertTrue(result[key], key)
+        self.assertEqual(result["turn1_action"], "RUN_REGIME")
+        self.assertEqual(result["turn2_action_executed"], "RUN_REGIME")
+        self.assertNotEqual(result["turn3_next_action"], "RUN_REGIME")
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_research_action_execution_handoff_release_check
+
+        first = production_research_action_execution_handoff_release_check()
+        second = production_research_action_execution_handoff_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1446,6 +1446,25 @@ class LLMConversationBrain:
         single call - while each turn still makes exactly one bounded tool
         call, so this cannot loop unboundedly within a single request.
         """
+        planned_action, planned_reason = next_blocker_driven_research_action(candidate)
+        if planned_action == "EXPAND_SAMPLE":
+            widened = clear_focus_symbol(mission, now=request.received_at)
+            return self._try_candidate_breadth_cycle(
+                request,
+                widened,
+                candidate,
+                _dedupe((*warnings, f"planned_action_consumed={planned_action}", f"planned_action_reason={planned_reason}")),
+                references,
+            )
+        if planned_action == "ROTATE_CANDIDATE":
+            return self._rotate_stagnant_candidate(
+                request,
+                mission,
+                candidate,
+                _dedupe((*warnings, f"planned_action_consumed={planned_action}", f"planned_action_reason={planned_reason}")),
+                references,
+                tool_calls=(),
+            )
         symbol = str(mission.pending_promotion_symbol)
         context = self._mvp_context_for(request.session_id)
         continuing_same_candidate = (
@@ -1459,7 +1478,14 @@ class LLMConversationBrain:
         result = self._tool_executor.execute(
             ToolRequest(
                 "autonomous_learning_research",
-                {"request_text": request_text, "symbol": symbol, "mode": mode, "steps_used": steps_used},
+                {
+                    "request_text": request_text,
+                    "symbol": symbol,
+                    "mode": mode,
+                    "steps_used": steps_used,
+                    "planned_action": planned_action,
+                    "planned_action_reason": planned_reason,
+                },
                 request.user_ref,
                 request.received_at,
             )
@@ -1500,6 +1526,26 @@ class LLMConversationBrain:
             )
             if isinstance(grade.get(key), dict)
         }
+        planned_stage_key = _validation_stage_key_for_planned_action(planned_action)
+        planned_stage_before = (
+            str(candidate.validation_stage_status.get(planned_stage_key, "not_run"))
+            if planned_stage_key
+            else ""
+        )
+        planned_stage_after = (
+            str(validation_stage_status.get(planned_stage_key, planned_stage_before))
+            if planned_stage_key
+            else ""
+        )
+        planned_stage_executed = bool(planned_stage_key and planned_stage_key in validation_stage_status)
+        planned_action_progress = bool(planned_stage_key and planned_stage_after != planned_stage_before)
+        evidence_reference = _planned_action_evidence_reference(
+            planned_action,
+            symbol=symbol,
+            stage_key=planned_stage_key,
+            stage_status=planned_stage_after,
+        )
+        identical_action_replay = bool(evidence_reference and evidence_reference == candidate.last_validation_reference)
 
         # Patch 8.6 requirement 4: verify identity on EVERY cycle, not only
         # the promotion-triggering one - see ULTRAREVIEW High #1's original
@@ -1515,6 +1561,7 @@ class LLMConversationBrain:
             candidate, director_action=action, terminal=terminal, now=request.received_at,
             validation_stage_status=validation_stage_status if identity_verified else None,
             symbol=symbol if identity_verified else None,
+            reference=evidence_reference if identity_verified else None,
         )
         updated_mission = mission
         if terminal:
@@ -1559,6 +1606,7 @@ class LLMConversationBrain:
                 else:
                     updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
         updated_mission = update_candidate(updated_mission, updated_candidate, now=request.received_at)
+        next_action, next_reason = next_blocker_driven_research_action(updated_candidate)
 
         if is_stagnant(updated_candidate):
             return self._rotate_stagnant_candidate(request, updated_mission, updated_candidate, warnings, references, tool_calls=("autonomous_learning_research",), extra_warnings=result.warnings)
@@ -1584,7 +1632,15 @@ class LLMConversationBrain:
             # threshold, splitting one logical answer across two Telegram
             # messages.
             text = render_robustness_cycle_response(updated_candidate, updated_mission, symbol=symbol)
-            text = f"{text}\n\n[다음 연구 우선순위]\n- action={next_action}\n- reason={next_reason}"
+            text = (
+                f"{text}\n\n[실행된 연구 action]\n"
+                f"- action_executed={planned_action}\n"
+                f"- reason={planned_reason}\n"
+                f"- validation_dimension={planned_stage_key or 'not_applicable'}\n"
+                f"- action_progress={'true' if planned_action_progress else 'false'}\n"
+                f"- next_action={next_action}\n"
+                f"- next_reason={next_reason}"
+            )
             if identity_unverified:
                 # Patch 8.6 independent-review fix: the symbol above is
                 # genuinely the one this cycle evaluated, but its evidence
@@ -1592,7 +1648,20 @@ class LLMConversationBrain:
                 # identity_verified above) - say so explicitly instead of
                 # letting the user believe it silently counted.
                 text = f"{text}\n\n[참고] 이번 검증은 후보의 등록된 규칙과 일치가 확인되지 않아 강건성 증거로 반영하지 않았습니다."
-        result_warnings = (*warnings, *result.warnings, f"research_director_action={action}", f"next_research_action={next_action}", f"next_research_reason={next_reason}")
+        result_warnings = (
+            *warnings,
+            *result.warnings,
+            f"planned_action_consumed={planned_action}",
+            f"action_executed={planned_action}",
+            f"planned_action_reason={planned_reason}",
+            f"planned_action_stage={planned_stage_key or 'none'}",
+            f"planned_action_stage_executed={str(planned_stage_executed).lower()}",
+            f"planned_action_progress={str(planned_action_progress).lower()}",
+            f"identical_action_replay={str(identical_action_replay).lower()}",
+            f"next_research_action={next_action}",
+            f"next_research_reason={next_reason}",
+            f"research_director_action={action}",
+        )
         if identity_unverified:
             result_warnings = (*result_warnings, f"candidate_identity_unverified={updated_candidate.candidate_id}")
         return (
@@ -3056,6 +3125,30 @@ def _autonomous_learning_v2_steps_used(context: "ConversationalMVPContext | None
     payload = _as_dict(context.last_detail_payload.get("autonomous_learning_v2"))
     previous = int(payload.get("research_director_steps_used", 0) or 0)
     return previous + 1
+
+
+_PLANNED_ACTION_STAGE_KEYS: Mapping[str, str] = {
+    "RUN_OOS": "out_of_sample",
+    "RUN_WALK_FORWARD": "walk_forward",
+    "RUN_REGIME": "regime_validation",
+    "RUN_COST_STRESS": "transaction_cost_stress",
+    "RUN_SENSITIVITY": "parameter_sensitivity",
+    "RUN_MONTE_CARLO": "monte_carlo",
+}
+
+
+def _validation_stage_key_for_planned_action(action: str) -> str | None:
+    return _PLANNED_ACTION_STAGE_KEYS.get(action)
+
+
+def _planned_action_evidence_reference(
+    action: str,
+    *,
+    symbol: str,
+    stage_key: str | None,
+    stage_status: str,
+) -> str:
+    return "|".join((f"action={action}", f"symbol={symbol}", f"stage={stage_key or 'none'}", f"status={stage_status}"))
 
 
 def _autonomous_learning_execution_text(

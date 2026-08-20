@@ -123,6 +123,8 @@ def telegram_autonomous_learning_payload(
     storage_root: str | None = None,
     steps_used: int = 0,
     max_steps: int = 8,
+    planned_action: str | None = None,
+    planned_action_reason: str | None = None,
 ) -> Mapping[str, object]:
     """Run the production Autonomous Learning V2 route behind Telegram."""
 
@@ -150,6 +152,8 @@ def telegram_autonomous_learning_payload(
         connection=connection,
         steps_used=steps_used,
         max_steps=max_steps,
+        planned_action=planned_action,
+        planned_action_reason=planned_action_reason,
     )
 
 
@@ -214,6 +218,8 @@ def production_autonomous_learning_payload_from_baseline(
     connection: sqlite3.Connection | None = None,
     steps_used: int = 0,
     max_steps: int = 8,
+    planned_action: str | None = None,
+    planned_action_reason: str | None = None,
 ) -> Mapping[str, object]:
     """Build a production payload from authoritative real-research output.
 
@@ -367,6 +373,11 @@ def production_autonomous_learning_payload_from_baseline(
         "research_director_decision": research_director_decision.to_json(),
         "research_director_steps_used": steps_used,
         "research_director_max_steps": max_steps,
+        "planned_action_execution": {
+            "planned_action": planned_action,
+            "planned_action_reason": planned_action_reason,
+            "dispatched": bool(planned_action),
+        },
         "news_intelligence": news_intelligence_summary,
         "autonomous_quant_partner_validation_status": _as_dict(autonomous_quant_partner.get("validation_sufficiency_v2")).get("status"),
         "production_validation_execution_summary": partner_execution_summary,
@@ -435,6 +446,7 @@ def production_autonomous_learning_payload_from_baseline(
         "request_text": request_text,
         "baseline": dict(baseline),
         "autonomous_learning_v2": learning,
+        "planned_action_execution": learning["planned_action_execution"],
         "selected_orchestration": "autonomous_learning_v2",
         "source": metadata.get("source") or baseline_backtest.get("source") or "unknown",
         "fixture_backed": baseline_fixture,
