@@ -1,5 +1,24 @@
 # Changelog
 
+## Hotfix: Research Director Planned Action -> Executor Handoff
+
+- Merged the Patch 8.9 planner/action read model into the Telegram
+  executor path: `next_blocker_driven_research_action()` is now consumed
+  as an execution argument for `autonomous_learning_research`, not merely
+  rendered as presentation text.
+- Added planned-action lineage for `RUN_REGIME`, `RUN_WALK_FORWARD`, OOS,
+  cost stress, sensitivity, and Monte Carlo continuation cycles.
+- Changed robustness progress semantics so Research Director action-label
+  churn alone cannot reset stagnation; progress requires new evidence,
+  a changed validation-stage status, or a terminal promotion/rejection.
+- Preserved PR #148 blocker-driven progression, duplicate evidence
+  blocking, candidate rotation, distinct promotion-ready counting,
+  bounded execution, provider honesty, Patch 8.7 handoff, and Patch 8.8
+  canonical read-model behavior.
+- Added `gaon-production-research-action-execution-handoff-release-check`.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, or strategy mutation added.
+
 ## Autonomous Research Completion - Blocker-Driven Progression
 
 - Added evidence-bound candidate progress signatures and blocker read-model

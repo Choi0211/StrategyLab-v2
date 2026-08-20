@@ -57,11 +57,9 @@ STRATEGY_CANDIDATE_SCHEMA_VERSION = 1
 STAGNATION_CYCLE_THRESHOLD = 3
 
 # ULTRAREVIEW medium-issue fix: cycles_without_progress alone could in
-# principle be reset indefinitely by a Research Director oscillating
-# between two different actions every cycle (each change counts as
-# "progress" - see record_robustness_progress). This is a hard, absolute
-# ceiling on top of that: independent of any progress signal, a candidate
-# that has run this many total cycles without reaching a terminal
+# principle be reset indefinitely by spurious non-evidence changes. This is
+# a hard, absolute ceiling on top of that: independent of any progress
+# signal, a candidate that has run this many total cycles without reaching a terminal
 # promotion/rejection decision is stagnant and must rotate. Generous enough
 # to never cut off a genuinely converging candidate under the bounded
 # per-turn execution model (one cycle per Telegram turn).
@@ -80,7 +78,6 @@ MIN_VALID_SYMBOL_RATIO_FOR_UNIVERSE_EVIDENCE = 0.3
 # sample under one candidate's fingerprint - same cap as breadth's
 # evidence_symbols (see record_breadth_progress) for consistency.
 ROBUSTNESS_EVIDENCE_SYMBOL_CAP = 8
-
 PROMOTION_MIN_TRADE_SAMPLE = 30
 
 PASS_LIKE_STAGE_STATUSES = frozenset(
@@ -92,7 +89,6 @@ PASS_LIKE_STAGE_STATUSES = frozenset(
         "sufficient",
     }
 )
-
 
 class StrategyCandidateStatus(str, Enum):
     EXPLORING = "exploring"
@@ -582,6 +578,11 @@ def candidate_progress_signature(candidate: StrategyCandidateRecord) -> tuple[ob
 
 
 def candidate_remaining_blockers(candidate: StrategyCandidateRecord) -> tuple[str, ...]:
+    """Returns unresolved candidate blockers from persisted authoritative state.
+
+    This is deliberately a read model over StrategyCandidateRecord. It never
+    runs validation, fabricates a stage, or treats presentation text as state.
+    """
     blockers: list[str] = []
     if not candidate.has_sufficient_universe_evidence:
         blockers.append("multi_symbol_sample")
@@ -590,8 +591,8 @@ def candidate_remaining_blockers(candidate: StrategyCandidateRecord) -> tuple[st
     stage_status = dict(candidate.validation_stage_status)
     required_stages = (
         "out_of_sample",
-        "walk_forward",
         "regime_validation",
+        "walk_forward",
         "parameter_sensitivity",
         "transaction_cost_stress",
     )
@@ -609,9 +610,11 @@ def candidate_remaining_blockers(candidate: StrategyCandidateRecord) -> tuple[st
 
 
 def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> tuple[str, str]:
-    """Selects the next bounded continuation action from persisted state.
-    This is a small read-model over the existing candidate machinery, not a
-    second research engine."""
+    """Selects the next bounded execution action from persisted blockers.
+
+    The returned action must be consumed by the next continuation executor;
+    callers should not render it as advisory-only presentation text.
+    """
     if candidate.status is StrategyCandidateStatus.PROMOTION_READY:
         return "REQUEST_HUMAN_APPROVAL", "candidate_already_promotion_ready"
     if candidate.status in (StrategyCandidateStatus.REJECTED, StrategyCandidateStatus.STAGNANT):
@@ -622,12 +625,14 @@ def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> t
         return "EXPAND_SAMPLE", "need_new_independent_evidence_symbols"
     if "out_of_sample" in blockers:
         return "RUN_OOS", "out_of_sample_blocker"
+    if "regime_validation" in blockers:
+        return "RUN_REGIME", "regime_blocker"
+    if "walk_forward" in blockers:
+        return "RUN_WALK_FORWARD", "walk_forward_blocker"
     if "transaction_cost_stress" in blockers:
         return "RUN_COST_STRESS", "transaction_cost_blocker"
     if "parameter_sensitivity" in blockers:
         return "RUN_SENSITIVITY", "parameter_sensitivity_blocker"
-    if "regime_validation" in blockers:
-        return "RUN_REGIME", "regime_blocker"
     if "monte_carlo_waiting_for_primary_sample" in blockers:
         return "EXPAND_SAMPLE", "monte_carlo_waiting_for_primary_sample"
     if "monte_carlo" in blockers:

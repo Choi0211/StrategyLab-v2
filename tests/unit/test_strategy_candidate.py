@@ -23,6 +23,7 @@ from gaon.knowledge.strategy_candidate import (
     mark_rejected,
     mark_stagnant,
     new_candidate,
+    next_blocker_driven_research_action,
     next_untried_family,
     record_breadth_progress,
     record_robustness_progress,
@@ -410,9 +411,70 @@ class RobustnessProgressTests(unittest.TestCase):
         self.assertEqual(duplicate.robustness_evidence_symbols, ("000660",))
         self.assertEqual(duplicate.cycles_without_progress, 1)
 
-    def test_blocker_driven_action_expands_before_monte_carlo_when_sample_is_small(self) -> None:
-        from gaon.knowledge.strategy_candidate import next_blocker_driven_research_action
+    def test_same_symbol_new_dimension_counts_as_progress(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=5, valid=5, trade_count=81,
+            evidence_symbols=("286940", "005930", "000660", "005380", "035420"),
+            excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="RUN_REGIME",
+            terminal=False,
+            validation_stage_status={"regime_validation": "pass"},
+            symbol="286940",
+            reference="action=RUN_REGIME|symbol=286940|stage=regime_validation|status=pass",
+            now=LATER,
+        )
+        replay = record_robustness_progress(
+            candidate,
+            director_action="RUN_REGIME",
+            terminal=False,
+            validation_stage_status={"regime_validation": "pass"},
+            symbol="286940",
+            reference="action=RUN_REGIME|symbol=286940|stage=regime_validation|status=pass",
+            now=LATER,
+        )
+        next_dimension = record_robustness_progress(
+            replay,
+            director_action="RUN_WALK_FORWARD",
+            terminal=False,
+            validation_stage_status={"walk_forward": "pass"},
+            symbol="286940",
+            reference="action=RUN_WALK_FORWARD|symbol=286940|stage=walk_forward|status=pass",
+            now=LATER,
+        )
+        self.assertGreater(replay.cycles_without_progress, candidate.cycles_without_progress)
+        self.assertEqual(next_dimension.cycles_without_progress, 0)
 
+    def test_blocker_driven_action_prefers_unresolved_regime(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=5, valid=5, trade_count=81,
+            evidence_symbols=("286940", "005930", "000660", "005380", "035420"),
+            excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="collect_more_evidence",
+            terminal=False,
+            validation_stage_status={
+                "out_of_sample": "pass",
+                "walk_forward": "partial",
+                "regime_validation": "partial",
+                "parameter_sensitivity": "stable",
+                "transaction_cost_stress": "cost_stable",
+                "monte_carlo": "not_run_insufficient_primary_sample",
+            },
+            symbol="286940",
+            now=LATER,
+        )
+        action, reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual(action, "RUN_REGIME")
+        self.assertEqual(reason, "regime_blocker")
+
+    def test_blocker_driven_action_expands_before_monte_carlo_when_sample_is_small(self) -> None:
         candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
         candidate = record_breadth_progress(
             candidate, attempted=5, valid=5, trade_count=25,

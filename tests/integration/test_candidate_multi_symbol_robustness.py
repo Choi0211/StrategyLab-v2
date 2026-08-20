@@ -65,9 +65,18 @@ from unittest.mock import patch
 
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import parse_update_result
-from gaon.knowledge.research_mission import MissionUniverseScope, candidate_records
+from gaon.knowledge.research_mission import (
+    DEFAULT_KR_EXCHANGES,
+    MissionStatus,
+    MissionUniverseScope,
+    ResearchMission,
+    candidate_records,
+    record_focus_symbol,
+)
 from gaon.knowledge.strategy_candidate import StrategyCandidateStatus
+from gaon.knowledge.strategy_candidate import new_candidate, record_breadth_progress, record_robustness_progress
 from gaon.research.research_director import ResearchDirectorAction, ResearchDirectorDecision
+from gaon.runtime.llm_conversation import LLMConversationRequest
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
 
@@ -125,6 +134,127 @@ class CandidateMultiSymbolRobustnessTests(unittest.TestCase):
 
     def _research_tool_call_count(self) -> int:
         return sum(len(self._audits(name)) for name in _RESEARCH_TOOL_NAMES)
+
+    def _seed_regime_blocked_candidate(self) -> None:
+        now = "2026-08-21T00:00:00Z"
+        candidate = new_candidate("breakout_volume_confirmed", sequence=3, now=now)
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=81,
+            evidence_symbols=("286940", "005930", "000660", "005380", "035420"),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=now,
+        )
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="collect_more_evidence",
+            terminal=False,
+            validation_stage_status={
+                "out_of_sample": "pass",
+                "walk_forward": "partial",
+                "regime_validation": "partial",
+                "transaction_cost_stress": "cost_stable",
+                "parameter_sensitivity": "stable",
+                "multi_symbol_validation": "multi_symbol_partial",
+                "monte_carlo": "not_run_insufficient_primary_sample",
+            },
+            symbol="286940",
+            reference="action=CONTINUE_ROBUSTNESS|symbol=286940|stage=none|status=partial",
+            now=now,
+        )
+        mission = ResearchMission(
+            mission_id="research-mission:test-action-handoff",
+            market="KR",
+            universe_scope=MissionUniverseScope.MARKET_WIDE,
+            symbols=(),
+            exchanges=DEFAULT_KR_EXCHANGES,
+            strategy_family="short_term_daytrade",
+            improve_return=True,
+            improve_safety=True,
+            baseline_comparison="registered_strategy",
+            target_promotion_ready_candidates=3,
+            current_promotion_ready_candidates=0,
+            promotion_ready_candidates=(),
+            explored_symbols=(),
+            status=MissionStatus.ACTIVE,
+            blocked_reason=None,
+            cycles_completed=1,
+            created_at=now,
+            updated_at=now,
+            originating_request="release-check",
+            candidates=(candidate.to_json(),),
+            active_candidate_id=candidate.candidate_id,
+        )
+        mission = record_focus_symbol(mission, symbol="286940", now=now)
+        seed = LLMConversationRequest("telegram:100", "telegram:100", "telegram", "seed", now, "seed:mission")
+        self.agent._brain._remember_mission(seed, mission)
+
+    def _action_payload(self, *, planned_action: str | None, planned_action_reason: str | None, symbol: str) -> dict[str, object]:
+        status_by_action = {
+            "RUN_REGIME": {"regime_validation": {"status": "pass", "executed": True}},
+            "RUN_WALK_FORWARD": {"walk_forward": {"status": "pass", "executed": True}},
+        }
+        grade = {
+            "multi_symbol_validation": {"status": "multi_symbol_partial", "executed": True},
+            "out_of_sample": {"status": "pass", "executed": True},
+            "walk_forward": {"status": "partial", "executed": True},
+            "regime_validation": {"status": "partial", "executed": True},
+            "transaction_cost_stress": {"status": "cost_stable", "executed": True},
+            "parameter_sensitivity": {"status": "stable", "executed": True},
+            "monte_carlo": {"status": "not_run_insufficient_primary_sample", "executed": False},
+        }
+        grade.update(status_by_action.get(str(planned_action), {}))
+        return {
+            "schema_version": 2,
+            "tool": "autonomous_learning_research",
+            "mode": "continue",
+            "symbol": symbol,
+            "request_text": "release-check",
+            "autonomous_learning_v2": {
+                "research_director_decision": {"action": "hold", "reason": "bounded continuation", "terminal": False},
+                "research_director_steps_used": 1,
+                "planned_action_execution": {
+                    "planned_action": planned_action,
+                    "planned_action_reason": planned_action_reason,
+                    "dispatched": bool(planned_action),
+                },
+                "autonomous_quant_partner": {"production_grade_validation": grade},
+                "promotion_candidate_context": {"candidate_id": "candidate:test", "candidate_fingerprint": "fp:test"},
+            },
+            "planned_action_execution": {
+                "planned_action": planned_action,
+                "planned_action_reason": planned_action_reason,
+                "dispatched": bool(planned_action),
+            },
+            "strategy_mutated": False,
+            "order_executed": False,
+            "automatic_champion_promotion": False,
+            "broker_order_called": False,
+            "kis_order_called": False,
+            "safety": "pass",
+        }
+
+    def test_planned_run_regime_is_consumed_by_next_continuation(self) -> None:
+        self._send(1, "안녕하세요 가온")
+        self._seed_regime_blocked_candidate()
+
+        def fake_learning(_connection, request_text, *, symbol="005930", mode="research", storage_root=None, steps_used=0, max_steps=8, planned_action=None, planned_action_reason=None):
+            return self._action_payload(planned_action=planned_action, planned_action_reason=planned_action_reason, symbol=symbol)
+
+        with patch("gaon.runtime.llm_tools.telegram_autonomous_learning_payload", side_effect=fake_learning):
+            turn2 = self._send(2, "연구를 계속해주세요")
+            audits = self._audits("autonomous_learning_research")
+            self.assertEqual(audits[-1].request["arguments"].get("planned_action"), "RUN_REGIME")
+            self.assertIn("action_executed=RUN_REGIME", turn2)
+            self.assertIn("action_progress=true", turn2)
+
+            turn3 = self._send(3, "연구를 계속해주세요")
+            audits = self._audits("autonomous_learning_research")
+            self.assertEqual(audits[-1].request["arguments"].get("planned_action"), "RUN_WALK_FORWARD")
+            self.assertNotIn("action_executed=RUN_REGIME", turn3)
 
     def _establish_ready_candidate(self):
         self._send(

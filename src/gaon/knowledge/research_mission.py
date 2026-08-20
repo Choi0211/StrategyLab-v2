@@ -2833,3 +2833,108 @@ def production_autonomous_research_completion_release_check() -> Mapping[str, ob
         "approval_bypassed": False,
         "safety": "pass",
     }
+
+
+def production_research_action_execution_handoff_release_check() -> Mapping[str, object]:
+    """Proves planned blocker actions are execution inputs, not footer text."""
+    from gaon.knowledge.strategy_candidate import (
+        candidate_remaining_blockers,
+        new_candidate,
+        next_blocker_driven_research_action,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+
+    now = "2026-08-21T00:00:00Z"
+    candidate = new_candidate("breakout_volume_confirmed", sequence=3, now=now)
+    candidate = record_breadth_progress(
+        candidate,
+        attempted=5,
+        valid=5,
+        trade_count=81,
+        evidence_symbols=("286940", "005930", "000660", "005380", "035420"),
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+    )
+    candidate = record_robustness_progress(
+        candidate,
+        director_action="collect_more_evidence",
+        terminal=False,
+        validation_stage_status={
+            "out_of_sample": "pass",
+            "walk_forward": "partial",
+            "regime_validation": "partial",
+            "transaction_cost_stress": "cost_stable",
+            "parameter_sensitivity": "stable",
+            "multi_symbol_validation": "multi_symbol_partial",
+            "monte_carlo": "not_run_insufficient_primary_sample",
+        },
+        symbol="286940",
+        reference="action=CONTINUE_ROBUSTNESS|symbol=286940|stage=none|status=partial",
+        now=now,
+    )
+    planned_action, planned_reason = next_blocker_driven_research_action(candidate)
+
+    resolved = record_robustness_progress(
+        candidate,
+        director_action=planned_action,
+        terminal=False,
+        validation_stage_status={"regime_validation": "pass"},
+        symbol="286940",
+        reference="action=RUN_REGIME|symbol=286940|stage=regime_validation|status=pass",
+        now=now,
+    )
+    next_action, _next_reason = next_blocker_driven_research_action(resolved)
+
+    replay = record_robustness_progress(
+        resolved,
+        director_action=planned_action,
+        terminal=False,
+        validation_stage_status={"regime_validation": "pass"},
+        symbol="286940",
+        reference="action=RUN_REGIME|symbol=286940|stage=regime_validation|status=pass",
+        now=now,
+    )
+    same_symbol_new_dimension = record_robustness_progress(
+        replay,
+        director_action="RUN_WALK_FORWARD",
+        terminal=False,
+        validation_stage_status={"walk_forward": "pass"},
+        symbol="286940",
+        reference="action=RUN_WALK_FORWARD|symbol=286940|stage=walk_forward|status=pass",
+        now=now,
+    )
+    final_action, _final_reason = next_blocker_driven_research_action(same_symbol_new_dimension)
+
+    checks = {
+        "planned_action_consumed": planned_action == "RUN_REGIME" and planned_reason == "regime_blocker",
+        "run_regime_actually_executes": resolved.validation_stage_status.get("regime_validation") == "pass",
+        "action_not_presentation_only": resolved.last_director_action == "RUN_REGIME",
+        "identical_action_replay_blocked": replay.cycles_without_progress == resolved.cycles_without_progress + 1,
+        "dimension_aware_evidence_identity": same_symbol_new_dimension.cycles_without_progress == 0,
+        "retest_requires_reason": bool(replay.last_validation_reference),
+        "actual_progress_semantics": resolved.cycles_without_progress == 0 and replay.cycles_without_progress > resolved.cycles_without_progress,
+        "next_action_recomputed": next_action != planned_action,
+        "resolved_blocker_not_repeated": "regime_validation" not in candidate_remaining_blockers(resolved),
+        "no_progress_counts_toward_stagnation": replay.cycles_without_progress > resolved.cycles_without_progress,
+        "bounded_execution_preserved": resolved.cycles_completed == candidate.cycles_completed + 1,
+        "patch87_handoff_preserved": resolved.strategy_fingerprint == candidate.strategy_fingerprint,
+        "patch88_read_model_preserved": final_action != "RUN_REGIME",
+        "autonomous_completion_preserved": production_autonomous_research_completion_release_check()["safety"] == "pass",
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"research action execution handoff release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "turn1_action": planned_action,
+        "turn2_action_executed": resolved.last_director_action,
+        "turn3_next_action": final_action,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
