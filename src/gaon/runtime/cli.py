@@ -337,6 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-candidate-breadth-to-robustness-transition-release-check")
     sub.add_parser("gaon-production-candidate-multi-symbol-robustness-release-check")
     sub.add_parser("gaon-production-canonical-candidate-handoff-release-check")
+    sub.add_parser("gaon-production-canonical-research-read-model-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2791,6 +2792,31 @@ def _run(args: argparse.Namespace) -> int:
             f"ambiguous_candidate_fails_closed={str(payload['ambiguous_candidate_fails_closed']).lower()} "
             f"distinct_promotion_gate_preserved={str(payload['distinct_promotion_gate_preserved']).lower()} "
             f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-canonical-research-read-model-release-check":
+        from gaon.knowledge.research_mission import production_canonical_research_read_model_release_check
+
+        payload = production_canonical_research_read_model_release_check()
+        print(
+            "gaon-production-canonical-research-read-model-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"canonical_mission_precedence={str(payload['canonical_mission_precedence']).lower()} "
+            f"candidate_status_read_only={str(payload['candidate_status_read_only']).lower()} "
+            f"candidate_fingerprint_preserved={str(payload['candidate_fingerprint_preserved']).lower()} "
+            f"candidate_progress_read_only={str(payload['candidate_progress_read_only']).lower()} "
+            f"strategy_explanation_uses_active_candidate={str(payload['strategy_explanation_uses_active_candidate']).lower()} "
+            f"strategy_score_read_only={str(payload['strategy_score_read_only']).lower()} "
+            f"score_evidence_bound={str(payload['score_evidence_bound']).lower()} "
+            f"stale_context_regression_blocked={str(payload['stale_context_regression_blocked']).lower()} "
+            f"legacy_v5_state_isolated={str(payload['legacy_v5_state_isolated']).lower()} "
+            f"research_continuation_still_executes={str(payload['research_continuation_still_executes']).lower()} "
+            f"same_candidate_after_continuation={str(payload['same_candidate_after_continuation']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "

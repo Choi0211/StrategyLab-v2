@@ -80,6 +80,16 @@ class MissionExtractionTests(unittest.TestCase):
         self.assertIn("005930", mission.symbols)
         self.assertIn("000660", mission.symbols)
 
+    def test_explicit_multi_symbol_krx_data_request_stays_selected_scope_without_market_wide_scope(self) -> None:
+        mission = extract_or_update_mission(
+            "아래 5개 종목의 실제 KRX 데이터를 사용해서 여러 종목에서 검증해줘. "
+            "005930 삼성전자 000660 SK하이닉스 005380 현대차 035420 NAVER 051910 LG화학",
+            existing=None,
+            now=NOW,
+        )
+        self.assertEqual(mission.universe_scope, MissionUniverseScope.SELECTED_SYMBOLS)
+        self.assertEqual(mission.symbols, ("005930", "000660", "005380", "035420", "051910"))
+
 
 class MissionUpdateTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -779,6 +789,36 @@ class CanonicalCandidateHandoffReleaseCheckTests(unittest.TestCase):
 
         first = production_canonical_candidate_handoff_release_check()
         second = production_canonical_candidate_handoff_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
+class CanonicalResearchReadModelReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_canonical_research_read_model_release_check
+
+        result = production_canonical_research_read_model_release_check()
+        self.assertTrue(result["canonical_mission_precedence"])
+        self.assertTrue(result["candidate_status_read_only"])
+        self.assertTrue(result["candidate_fingerprint_preserved"])
+        self.assertTrue(result["candidate_progress_read_only"])
+        self.assertTrue(result["strategy_explanation_uses_active_candidate"])
+        self.assertTrue(result["strategy_score_read_only"])
+        self.assertTrue(result["score_evidence_bound"])
+        self.assertTrue(result["stale_context_regression_blocked"])
+        self.assertTrue(result["legacy_v5_state_isolated"])
+        self.assertTrue(result["research_continuation_still_executes"])
+        self.assertTrue(result["same_candidate_after_continuation"])
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_canonical_research_read_model_release_check
+
+        first = production_canonical_research_read_model_release_check()
+        second = production_canonical_research_read_model_release_check()
         self.assertEqual(dict(first), dict(second))
 
 

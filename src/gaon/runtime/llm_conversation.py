@@ -70,12 +70,15 @@ from gaon.knowledge.research_mission import (
     is_cycle_budget_exhausted,
     is_diversity_request,
     is_generic_continuation_request,
+    is_mission_candidate_read_request,
     is_provider_acquisition_blocker,
     mission_awaiting_approval_message,
     mission_blocked_message,
     mission_budget_exhausted_message,
+    mission_candidate_read_focus,
     mission_cycle_request_text,
     mission_status_block,
+    render_candidate_score_status,
     render_mission_candidate_detailed_status,
     next_candidate_sequence,
     next_unexplored_symbols,
@@ -101,6 +104,7 @@ from gaon.knowledge.strategy_candidate import (
     render_candidate_block,
     render_candidate_request_text,
     render_candidate_status_summary,
+    render_candidate_strategy_explanation,
 )
 
 CONVERSATION_SCHEMA_VERSION = 1
@@ -928,9 +932,50 @@ class LLMConversationBrain:
                     (),
                 )
             if mission.status in (MissionStatus.ACTIVE, MissionStatus.BLOCKED):
-                mission_result = self._try_mission_driven_research_cycle(request, mission, warnings, references)
+                mission_result = self._try_mission_driven_research_cycle(
+                    request,
+                    mission,
+                    warnings,
+                    references,
+                    preferred_breadth_symbols=tuple(symbol.symbol for symbol in route.symbols) if multi_symbol_breadth_request else (),
+                )
                 if mission_result is not None:
                     return mission_result
+
+        # Patch 8.8 production bug fix: a read-only question about the
+        # ACTIVE mission/candidate itself ("현재 활성 후보의 fingerprint와
+        # 지금까지 검증한 종목 수, 누적 거래 수를 알려주세요", "현재 단타
+        # 전략을 설명해주세요", "현재 단타 전략은 몇 점인가요?") never
+        # matched the continuation-precedence block above (correctly - it
+        # is not a continuation request) and had no other mission-aware
+        # route, so it fell through into reasoning-followup/autonomous-
+        # research machinery that only ever reads the per-session
+        # ConversationalMVPContext - a single most-recent-tool-result
+        # cache, completely independent of the mission's own persisted
+        # candidate progress. Real production reproduced a validated-
+        # symbols/cumulative-trades regression from 5/25 back down to 0
+        # this way. ``is_mission_candidate_read_request`` explicitly
+        # excludes anything already shaped like a continuation/execution
+        # request, so this can never intercept a genuine "continue
+        # validating the current candidate" message - those are already
+        # handled (and returned from) by the block directly above.
+        active_candidate = get_active_candidate(mission) if mission is not None else None
+        if (
+            mission is not None
+            and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
+            and active_candidate is not None
+            and is_mission_candidate_read_request(request.text)
+        ):
+            self._remember_mission(request, mission)
+            text = self._render_mission_candidate_read_response(request.text, mission, active_candidate)
+            return (
+                text,
+                "conversation_mission_candidate_read",
+                _dedupe((*warnings, "mission-aware canonical candidate read model; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
 
         if (
             existing_tool == "multi_symbol_research"
@@ -1107,12 +1152,35 @@ class LLMConversationBrain:
             return render_unknown(route.symbols), "conversation_mvp_unknown", _dedupe(warnings), references, "deterministic", ()
         return None
 
+    @staticmethod
+    def _render_mission_candidate_read_response(text: str, mission: ResearchMission, candidate: "StrategyCandidateRecord") -> str:
+        """Patch 8.8: canonical, evidence-bound answer for a read-only
+        mission/candidate question - the active ``StrategyCandidateRecord``
+        and its owning ``ResearchMission`` are the ONLY source read here,
+        never ``ConversationalMVPContext.last_payloads``/
+        ``last_structured_results`` (which may be stale or describe an
+        unrelated earlier single-symbol run)."""
+        focus = mission_candidate_read_focus(text)
+        if focus == "score":
+            return render_candidate_score_status(mission, candidate)
+        if focus == "explain":
+            return f"{render_candidate_strategy_explanation(candidate)}\n\n{render_mission_candidate_detailed_status(mission, candidate)}"
+        summary = render_candidate_status_summary(
+            candidate_records(mission),
+            current=distinct_promotion_ready_strategy_count(mission),
+            target=mission.target_promotion_ready_candidates,
+        )
+        detailed = render_mission_candidate_detailed_status(mission, candidate)
+        return f"{summary}\n\n{detailed}"
+
     def _try_mission_driven_research_cycle(
         self,
         request: LLMConversationRequest,
         mission: ResearchMission,
         warnings: tuple[str, ...],
         references: tuple[str, ...],
+        *,
+        preferred_breadth_symbols: tuple[str, ...] = (),
     ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         """Continues an active market-wide / selected-symbols mission with one
         bounded research cycle for its ACTIVE STRATEGY CANDIDATE, instead of
@@ -1177,7 +1245,14 @@ class LLMConversationBrain:
         # from either still bounds this turn to a single tool call.
         if mission.pending_promotion_symbol:
             return self._try_candidate_robustness_cycle(request, mission, active, warnings, references)
-        return self._try_candidate_breadth_cycle(request, mission, active, warnings, references)
+        return self._try_candidate_breadth_cycle(
+            request,
+            mission,
+            active,
+            warnings,
+            references,
+            preferred_symbols=preferred_breadth_symbols,
+        )
 
     def _try_candidate_breadth_cycle(
         self,
@@ -1186,13 +1261,24 @@ class LLMConversationBrain:
         candidate,
         warnings: tuple[str, ...],
         references: tuple[str, ...],
+        *,
+        preferred_symbols: tuple[str, ...] = (),
     ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         """Evaluates ONE strategy candidate's exact rules
         (``candidate.spec_rules``, passed through to ``multi_symbol_research``
         as ``candidate_spec`` - see ``AutonomousMultiSymbolResearchOrchestrator.run``)
         across the mission's symbol universe - the SAME rules on every
         symbol, never a different candidate per symbol."""
-        if mission.universe_scope is MissionUniverseScope.SELECTED_SYMBOLS:
+        if preferred_symbols:
+            result = self._execute_mvp_multi_symbol_research(
+                request,
+                preferred_symbols[:5],
+                request.text,
+                None,
+                None,
+                candidate_spec=candidate.spec_rules,
+            )
+        elif mission.universe_scope is MissionUniverseScope.SELECTED_SYMBOLS:
             batch = next_unexplored_symbols(mission, batch_size=5)
             if not batch:
                 updated = record_blocked(mission, reason="selected_symbol_universe_exhausted", now=request.received_at)
