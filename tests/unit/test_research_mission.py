@@ -80,6 +80,16 @@ class MissionExtractionTests(unittest.TestCase):
         self.assertIn("005930", mission.symbols)
         self.assertIn("000660", mission.symbols)
 
+    def test_explicit_multi_symbol_krx_data_request_stays_selected_scope_without_market_wide_scope(self) -> None:
+        mission = extract_or_update_mission(
+            "아래 5개 종목의 실제 KRX 데이터를 사용해서 여러 종목에서 검증해줘. "
+            "005930 삼성전자 000660 SK하이닉스 005380 현대차 035420 NAVER 051910 LG화학",
+            existing=None,
+            now=NOW,
+        )
+        self.assertEqual(mission.universe_scope, MissionUniverseScope.SELECTED_SYMBOLS)
+        self.assertEqual(mission.symbols, ("005930", "000660", "005380", "035420", "051910"))
+
 
 class MissionUpdateTests(unittest.TestCase):
     def setUp(self) -> None:

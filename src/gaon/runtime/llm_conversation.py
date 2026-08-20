@@ -932,7 +932,13 @@ class LLMConversationBrain:
                     (),
                 )
             if mission.status in (MissionStatus.ACTIVE, MissionStatus.BLOCKED):
-                mission_result = self._try_mission_driven_research_cycle(request, mission, warnings, references)
+                mission_result = self._try_mission_driven_research_cycle(
+                    request,
+                    mission,
+                    warnings,
+                    references,
+                    preferred_breadth_symbols=tuple(symbol.symbol for symbol in route.symbols) if multi_symbol_breadth_request else (),
+                )
                 if mission_result is not None:
                     return mission_result
 
@@ -1173,6 +1179,8 @@ class LLMConversationBrain:
         mission: ResearchMission,
         warnings: tuple[str, ...],
         references: tuple[str, ...],
+        *,
+        preferred_breadth_symbols: tuple[str, ...] = (),
     ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         """Continues an active market-wide / selected-symbols mission with one
         bounded research cycle for its ACTIVE STRATEGY CANDIDATE, instead of
@@ -1237,7 +1245,14 @@ class LLMConversationBrain:
         # from either still bounds this turn to a single tool call.
         if mission.pending_promotion_symbol:
             return self._try_candidate_robustness_cycle(request, mission, active, warnings, references)
-        return self._try_candidate_breadth_cycle(request, mission, active, warnings, references)
+        return self._try_candidate_breadth_cycle(
+            request,
+            mission,
+            active,
+            warnings,
+            references,
+            preferred_symbols=preferred_breadth_symbols,
+        )
 
     def _try_candidate_breadth_cycle(
         self,
@@ -1246,13 +1261,24 @@ class LLMConversationBrain:
         candidate,
         warnings: tuple[str, ...],
         references: tuple[str, ...],
+        *,
+        preferred_symbols: tuple[str, ...] = (),
     ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         """Evaluates ONE strategy candidate's exact rules
         (``candidate.spec_rules``, passed through to ``multi_symbol_research``
         as ``candidate_spec`` - see ``AutonomousMultiSymbolResearchOrchestrator.run``)
         across the mission's symbol universe - the SAME rules on every
         symbol, never a different candidate per symbol."""
-        if mission.universe_scope is MissionUniverseScope.SELECTED_SYMBOLS:
+        if preferred_symbols:
+            result = self._execute_mvp_multi_symbol_research(
+                request,
+                preferred_symbols[:5],
+                request.text,
+                None,
+                None,
+                candidate_spec=candidate.spec_rules,
+            )
+        elif mission.universe_scope is MissionUniverseScope.SELECTED_SYMBOLS:
             batch = next_unexplored_symbols(mission, batch_size=5)
             if not batch:
                 updated = record_blocked(mission, reason="selected_symbol_universe_exhausted", now=request.received_at)
