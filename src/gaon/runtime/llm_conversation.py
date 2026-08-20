@@ -97,6 +97,7 @@ from gaon.knowledge.strategy_candidate import (
     mark_rejected,
     mark_stagnant,
     new_candidate,
+    next_blocker_driven_research_action,
     next_robustness_evidence_symbol,
     next_untried_family,
     record_breadth_progress,
@@ -1287,15 +1288,23 @@ class LLMConversationBrain:
             result = self._execute_mvp_multi_symbol_research(request, batch, request.text, None, None, candidate_spec=candidate.spec_rules)
         else:
             cycle_text = mission_cycle_request_text(mission)
-            # Patch 8.4: bounded avoidance - a symbol this candidate's
-            # breadth evaluation already confirmed unusable in an earlier
-            # cycle (candidate.excluded_symbols, already capped to 8 by
-            # record_breadth_progress) is skipped by this cycle's sampling
-            # instead of spending research budget rediscovering the same
-            # exclusion. Never unbounded: only the already-tracked,
-            # already-capped list is ever passed.
+            # Bounded avoidance: do not spend the next continuation turn on
+            # evidence already counted for this same candidate unless a
+            # caller supplies an explicit retest reason. This keeps
+            # blocker-driven progression from endlessly rediscovering the
+            # same symbol set while preserving the existing capped storage
+            # model.
+            avoid_symbols = tuple(
+                dict.fromkeys(
+                    (
+                        *candidate.excluded_symbols,
+                        *candidate.evidence_symbols,
+                        *candidate.robustness_evidence_symbols,
+                    )
+                )
+            )
             result = self._execute_mvp_multi_symbol_research(
-                request, (), cycle_text, None, None, candidate_spec=candidate.spec_rules, avoid_symbols=candidate.excluded_symbols
+                request, (), cycle_text, None, None, candidate_spec=candidate.spec_rules, avoid_symbols=avoid_symbols
             )
 
         if result.status != "success":
@@ -1370,10 +1379,12 @@ class LLMConversationBrain:
             # already rotated through it (and others) in prior robustness
             # cycles - silently re-testing an already-tested symbol instead
             # of actually widening cross-symbol coverage. Prefer the next
-            # untried evidence symbol; only fall back to evidence_symbols[0]
-            # once every known evidence symbol has already been used.
-            next_symbol = next_robustness_evidence_symbol(updated_candidate) or updated_candidate.evidence_symbols[0]
-            updated_mission = record_focus_symbol(updated_mission, symbol=next_symbol, now=request.received_at)
+            # untried evidence symbol. If none remains, keep the focus
+            # clear so the next bounded turn expands the breadth sample
+            # instead of re-counting old evidence as new progress.
+            next_symbol = next_robustness_evidence_symbol(updated_candidate)
+            if next_symbol is not None:
+                updated_mission = record_focus_symbol(updated_mission, symbol=next_symbol, now=request.received_at)
 
         self._remember_mission(request, updated_mission)
         self._remember_mvp_context(request, ConversationalMVPIntent.COMPARE_SYMBOLS, self._payloads_from_multi_symbol_result(output), request.text)
@@ -1553,6 +1564,7 @@ class LLMConversationBrain:
             return self._rotate_stagnant_candidate(request, updated_mission, updated_candidate, warnings, references, tool_calls=("autonomous_learning_research",), extra_warnings=result.warnings)
 
         self._remember_mission(request, updated_mission)
+        next_action, next_reason = next_blocker_driven_research_action(updated_candidate)
         candidate_text = render_candidate_block(updated_candidate)
         if updated_mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
             text = f"{candidate_text}\n\n{mission_awaiting_approval_message(updated_mission)}"
@@ -1572,6 +1584,7 @@ class LLMConversationBrain:
             # threshold, splitting one logical answer across two Telegram
             # messages.
             text = render_robustness_cycle_response(updated_candidate, updated_mission, symbol=symbol)
+            text = f"{text}\n\n[다음 연구 우선순위]\n- action={next_action}\n- reason={next_reason}"
             if identity_unverified:
                 # Patch 8.6 independent-review fix: the symbol above is
                 # genuinely the one this cycle evaluated, but its evidence
@@ -1579,7 +1592,7 @@ class LLMConversationBrain:
                 # identity_verified above) - say so explicitly instead of
                 # letting the user believe it silently counted.
                 text = f"{text}\n\n[참고] 이번 검증은 후보의 등록된 규칙과 일치가 확인되지 않아 강건성 증거로 반영하지 않았습니다."
-        result_warnings = (*warnings, *result.warnings, f"research_director_action={action}")
+        result_warnings = (*warnings, *result.warnings, f"research_director_action={action}", f"next_research_action={next_action}", f"next_research_reason={next_reason}")
         if identity_unverified:
             result_warnings = (*result_warnings, f"candidate_identity_unverified={updated_candidate.candidate_id}")
         return (

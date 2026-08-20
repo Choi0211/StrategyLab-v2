@@ -3,6 +3,37 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Autonomous Research Completion - Blocker-Driven Progression
+
+This patch completes the remaining mission-driven autonomous research loop
+without adding a second research engine. Production acceptance after Patch
+8.8 showed that a continuation turn could execute while the visible
+candidate state stayed unchanged: the same evidence sample could be reused
+and cumulative validated-symbol/trade counts did not progress.
+
+The candidate state model now distinguishes real progress from action
+churn. New helper read models compute remaining blockers and the next
+bounded research action from persisted `StrategyCandidateRecord` evidence:
+sample breadth, robustness evidence symbols, validation stage status,
+trade count, and terminal candidate state. The conversation path no longer
+falls back to the first known evidence symbol once all known robustness
+symbols have been used. It clears focus so the next "계속 연구해주세요"
+turn expands breadth evidence instead of re-counting old evidence.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-autonomous-research-completion-release-check
+```
+
+The check proves duplicate evidence is blocked, passed validation stages
+are not repeated as blockers, candidate stagnation and rotation remain
+available, three distinct promotion-ready fingerprints move the mission to
+human approval, and Patch 8.7/8.8 handoff/read-model behavior is preserved.
+
+Schema remains v36. Safety is unchanged: no live trading, broker/KIS order,
+Champion auto-promotion, approval bypass, or unapproved strategy mutation.
+
 ## Patch 8.8 Canonical Research Mission Read Model & Conversational State Consistency
 
 Real VPS Telegram production acceptance testing (after Patch 8.7 shipped and
