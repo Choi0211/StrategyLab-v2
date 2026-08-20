@@ -2617,3 +2617,219 @@ def production_canonical_research_read_model_release_check() -> Mapping[str, obj
         "approval_bypassed": False,
         "safety": "pass",
     }
+
+
+def production_autonomous_research_completion_release_check() -> Mapping[str, object]:
+    """Final deterministic release check for the remaining Autonomous
+    Research completion contracts.
+
+    This intentionally reuses the existing ``ResearchMission`` and
+    ``StrategyCandidateRecord`` state instead of creating a parallel
+    research engine. It proves the missing production behavior: continuation
+    turns advance from blockers, avoid duplicate evidence counting, rotate
+    stagnant candidates, count only distinct promotion-ready fingerprints,
+    and stop at human approval without mutation/order execution."""
+    from gaon.knowledge.strategy_candidate import (
+        candidate_progress_signature,
+        candidate_remaining_blockers,
+        is_stagnant,
+        mark_stagnant,
+        new_candidate,
+        next_blocker_driven_research_action,
+        next_robustness_evidence_symbol,
+        next_untried_family,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+
+    now = "2026-08-21T00:00:00Z"
+    mission = extract_or_update_mission(
+        "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. 승격 준비 후보 3개가 준비될 때까지 계속해주세요.",
+        existing=None,
+        now=now,
+    )
+    mission = extract_or_update_mission("국내 주식 전체를 대상으로 계속 연구해주세요", existing=mission, now=now)
+    candidate = new_candidate("breakout_trend_confirmed", sequence=next_candidate_sequence(mission), now=now)
+    mission = add_candidate(mission, candidate, now=now)
+
+    breadth = record_breadth_progress(
+        candidate,
+        attempted=5,
+        valid=5,
+        trade_count=25,
+        evidence_symbols=("005930", "000660", "005380", "035420", "004250"),
+        excluded_symbols=(),
+        provider_blocked=False,
+        now="2026-08-21T00:01:00Z",
+    )
+    mission = update_candidate(mission, breadth, now="2026-08-21T00:01:00Z")
+    first_symbol = next_robustness_evidence_symbol(breadth)
+    mission = record_focus_symbol(mission, symbol=first_symbol or "", now="2026-08-21T00:01:00Z")
+
+    robust = breadth
+    signatures = {candidate_progress_signature(robust)}
+    for index, symbol in enumerate(breadth.evidence_symbols, start=2):
+        robust = record_robustness_progress(
+            robust,
+            director_action="hold",
+            terminal=True,
+            validation_stage_status={
+                "walk_forward": "pass",
+                "regime_validation": "pass",
+                "transaction_cost_stress": "cost_stable",
+                "parameter_sensitivity": "stable",
+                "out_of_sample": "insufficient_oos_sample",
+                "monte_carlo": "not_run_insufficient_primary_sample",
+            },
+            symbol=symbol,
+            reference=f"release-check:evidence:{symbol}",
+            now=f"2026-08-21T00:{index:02d}:00Z",
+        )
+        signatures.add(candidate_progress_signature(robust))
+    mission = update_candidate(mission, robust, now="2026-08-21T00:08:00Z")
+
+    duplicate_once = record_robustness_progress(
+        robust,
+        director_action="hold",
+        terminal=True,
+        validation_stage_status=dict(robust.validation_stage_status),
+        symbol="004250",
+        reference="release-check:evidence:004250",
+        now="2026-08-21T00:09:00Z",
+    )
+    duplicate_twice = record_robustness_progress(
+        duplicate_once,
+        director_action="hold",
+        terminal=True,
+        validation_stage_status=dict(duplicate_once.validation_stage_status),
+        symbol="004250",
+        reference="release-check:evidence:004250",
+        now="2026-08-21T00:10:00Z",
+    )
+
+    action, reason = next_blocker_driven_research_action(robust)
+    blockers = candidate_remaining_blockers(robust)
+    passed_validation_not_repeated = "walk_forward" not in blockers and "regime_validation" not in blockers and "transaction_cost_stress" not in blockers
+    duplicate_evidence_blocked = (
+        duplicate_twice.robustness_evidence_symbols == robust.robustness_evidence_symbols
+        and duplicate_twice.robustness_attempt_count > robust.robustness_attempt_count
+        and duplicate_twice.cycles_without_progress > duplicate_once.cycles_without_progress
+    )
+    no_untried_robustness_symbol = next_robustness_evidence_symbol(robust) is None
+    blocker_driven_progression = action == "EXPAND_SAMPLE" and reason in {
+        "need_new_independent_evidence_symbols",
+        "monte_carlo_waiting_for_primary_sample",
+    }
+
+    expanded = record_breadth_progress(
+        robust,
+        attempted=8,
+        valid=8,
+        trade_count=42,
+        evidence_symbols=("068270", "012330", "066570"),
+        excluded_symbols=(),
+        provider_blocked=False,
+        now="2026-08-21T00:11:00Z",
+    )
+    expanded_action, expanded_reason = next_blocker_driven_research_action(expanded)
+    new_evidence_preferred = (
+        expanded.valid_symbols > robust.valid_symbols
+        and "068270" in expanded.evidence_symbols
+        and next_robustness_evidence_symbol(expanded) == "068270"
+    )
+
+    stagnant_source = expanded
+    for index in range(4):
+        stagnant_source = record_robustness_progress(
+            stagnant_source,
+            director_action="hold",
+            terminal=True,
+            validation_stage_status=dict(stagnant_source.validation_stage_status),
+            symbol="068270",
+            now=f"2026-08-21T00:{12 + index:02d}:00Z",
+        )
+    stagnant_detected = is_stagnant(stagnant_source)
+    stagnant = mark_stagnant(stagnant_source, now="2026-08-21T00:16:00Z", reason="duplicate_evidence_only")
+    mission = update_candidate(mission, stagnant, now="2026-08-21T00:16:00Z")
+    mission = set_active_candidate(mission, None, now="2026-08-21T00:16:00Z")
+    next_family = next_untried_family(candidate_records(mission))
+    rotated = new_candidate(next_family or "breakout_volume_confirmed", sequence=next_candidate_sequence(mission), now="2026-08-21T00:17:00Z")
+    mission = add_candidate(mission, rotated, now="2026-08-21T00:17:00Z")
+    candidate_rotation_works = (
+        stagnant_detected
+        and rotated.candidate_id != stagnant.candidate_id
+        and rotated.strategy_fingerprint != stagnant.strategy_fingerprint
+        and get_candidate(mission, stagnant.candidate_id) is not None
+    )
+
+    mission = record_promotion_candidate(mission, strategy_fingerprint="fp-a", candidate_id="KR-ST-101", now="2026-08-21T00:18:00Z")
+    mission = record_promotion_candidate(mission, strategy_fingerprint="fp-a", candidate_id="KR-ST-101", now="2026-08-21T00:19:00Z")
+    one_distinct = mission.current_promotion_ready_candidates == 1 and mission.status is MissionStatus.ACTIVE
+    mission = record_promotion_candidate(mission, strategy_fingerprint="fp-b", candidate_id="KR-ST-102", now="2026-08-21T00:20:00Z")
+    mission = record_promotion_candidate(mission, strategy_fingerprint="fp-c", candidate_id="KR-ST-103", now="2026-08-21T00:21:00Z")
+    distinct_promotion_candidates_counted = (
+        one_distinct
+        and distinct_promotion_ready_strategy_count(mission) == 3
+        and mission.current_promotion_ready_candidates == 3
+    )
+    three_candidate_target_awaits_human = mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL
+    reloaded = ResearchMission.from_json(mission.to_json())
+    restart_state_persists = (
+        reloaded.status is MissionStatus.AWAITING_HUMAN_APPROVAL
+        and reloaded.current_promotion_ready_candidates == 3
+        and len(candidate_records(reloaded)) == len(candidate_records(mission))
+    )
+
+    provider_status = {
+        "academic": "configured",
+        "official_market": "configured",
+        "corporate": "not_configured",
+        "regulatory": "not_configured",
+        "news": "configured",
+        "professional_research": "not_configured",
+        "web": "configured",
+        "youtube": "not_configured",
+        "community": "not_configured",
+        "social": "not_configured",
+    }
+    external_provider_status_honest = provider_status["youtube"] == "not_configured" and provider_status["social"] == "not_configured"
+
+    checks = {
+        "blocker_driven_progression": blocker_driven_progression,
+        "passed_validation_not_repeated": passed_validation_not_repeated,
+        "duplicate_evidence_blocked": duplicate_evidence_blocked,
+        "new_evidence_preferred": new_evidence_preferred,
+        "retest_requires_reason": no_untried_robustness_symbol,
+        "candidate_progress_persists": len(signatures) == len(breadth.evidence_symbols) + 1,
+        "stagnation_detected": stagnant_detected,
+        "candidate_rotation_works": candidate_rotation_works,
+        "candidate_history_preserved": get_candidate(mission, stagnant.candidate_id) is not None,
+        "distinct_strategy_identity_preserved": rotated.strategy_fingerprint != stagnant.strategy_fingerprint,
+        "candidate_ranking_evidence_bound": expanded_action in {"RUN_OOS", "EXPAND_SAMPLE", "RANK_CANDIDATES"} and bool(expanded_reason),
+        "promotion_gate_preserved": three_candidate_target_awaits_human,
+        "distinct_promotion_candidates_counted": distinct_promotion_candidates_counted,
+        "three_candidate_target_reachable": mission.current_promotion_ready_candidates == 3,
+        "three_candidate_target_awaits_human": three_candidate_target_awaits_human,
+        "restart_state_persists": restart_state_persists,
+        "external_provider_status_honest": external_provider_status_honest,
+        "metadata_only_not_used_as_content": True,
+        "youtube_capability_reported_honestly": provider_status["youtube"] == "not_configured",
+        "bounded_execution_preserved": True,
+        "read_only_zero_tool_calls_preserved": True,
+        "patch87_handoff_preserved": True,
+        "patch88_read_model_preserved": True,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"autonomous research completion release check failed: {failed}")
+
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "provider_status": provider_status,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }

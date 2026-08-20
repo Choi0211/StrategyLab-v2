@@ -2,6 +2,29 @@
 
 Status: Passed
 
+## Autonomous Research Completion - Blocker-Driven Progression
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_strategy_candidate tests.unit.test_research_mission -q`: PASS, 113 tests
+  - `python -m unittest tests.unit.test_strategy_candidate.NextRobustnessEvidenceSymbolTests tests.unit.test_strategy_candidate.RobustnessProgressTests -q`: PASS, 9 tests
+  - `python -m unittest tests.unit.test_research_mission.AutonomousResearchCompletionReleaseCheckTests -q`: PASS, 2 tests
+  - `python -m gaon.runtime.cli gaon-production-autonomous-research-completion-release-check`: PASS
+  - `python -m unittest tests.integration.test_canonical_candidate_handoff tests.integration.test_canonical_research_read_model -q`: PASS, 4 tests
+  - `python -m py_compile src\gaon\knowledge\strategy_candidate.py src\gaon\knowledge\research_mission.py src\gaon\runtime\llm_conversation.py src\gaon\runtime\cli.py`: PASS
+  - `python -m gaon.runtime.cli gaon-production-canonical-candidate-handoff-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-canonical-research-read-model-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1156 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 256 tests
+  - `python scripts\verify_release.py`: STARTED twice; second run was interrupted after more than 9 minutes with no output. The script's component checks were run separately and passed.
+  - `python -m gaon.runtime.cli v5-status --db :memory:`: PASS
+  - Required release file existence list from `scripts\verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS, whitespace clean; Windows line-ending warnings only
+- Production Telegram/provider verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass.
+
 ## Patch 8.0 Final Production Runtime Wiring
 
 - Targeted local verification:

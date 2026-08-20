@@ -338,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-candidate-multi-symbol-robustness-release-check")
     sub.add_parser("gaon-production-canonical-candidate-handoff-release-check")
     sub.add_parser("gaon-production-canonical-research-read-model-release-check")
+    sub.add_parser("gaon-production-autonomous-research-completion-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2817,6 +2818,43 @@ def _run(args: argparse.Namespace) -> int:
             f"legacy_v5_state_isolated={str(payload['legacy_v5_state_isolated']).lower()} "
             f"research_continuation_still_executes={str(payload['research_continuation_still_executes']).lower()} "
             f"same_candidate_after_continuation={str(payload['same_candidate_after_continuation']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-autonomous-research-completion-release-check":
+        from gaon.knowledge.research_mission import production_autonomous_research_completion_release_check
+
+        payload = production_autonomous_research_completion_release_check()
+        print(
+            "gaon-production-autonomous-research-completion-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"blocker_driven_progression={str(payload['blocker_driven_progression']).lower()} "
+            f"passed_validation_not_repeated={str(payload['passed_validation_not_repeated']).lower()} "
+            f"duplicate_evidence_blocked={str(payload['duplicate_evidence_blocked']).lower()} "
+            f"new_evidence_preferred={str(payload['new_evidence_preferred']).lower()} "
+            f"retest_requires_reason={str(payload['retest_requires_reason']).lower()} "
+            f"candidate_progress_persists={str(payload['candidate_progress_persists']).lower()} "
+            f"stagnation_detected={str(payload['stagnation_detected']).lower()} "
+            f"candidate_rotation_works={str(payload['candidate_rotation_works']).lower()} "
+            f"candidate_history_preserved={str(payload['candidate_history_preserved']).lower()} "
+            f"distinct_strategy_identity_preserved={str(payload['distinct_strategy_identity_preserved']).lower()} "
+            f"candidate_ranking_evidence_bound={str(payload['candidate_ranking_evidence_bound']).lower()} "
+            f"promotion_gate_preserved={str(payload['promotion_gate_preserved']).lower()} "
+            f"distinct_promotion_candidates_counted={str(payload['distinct_promotion_candidates_counted']).lower()} "
+            f"three_candidate_target_reachable={str(payload['three_candidate_target_reachable']).lower()} "
+            f"three_candidate_target_awaits_human={str(payload['three_candidate_target_awaits_human']).lower()} "
+            f"restart_state_persists={str(payload['restart_state_persists']).lower()} "
+            f"external_provider_status_honest={str(payload['external_provider_status_honest']).lower()} "
+            f"metadata_only_not_used_as_content={str(payload['metadata_only_not_used_as_content']).lower()} "
+            f"youtube_capability_reported_honestly={str(payload['youtube_capability_reported_honestly']).lower()} "
+            f"bounded_execution_preserved={str(payload['bounded_execution_preserved']).lower()} "
+            f"read_only_zero_tool_calls_preserved={str(payload['read_only_zero_tool_calls_preserved']).lower()} "
+            f"patch87_handoff_preserved={str(payload['patch87_handoff_preserved']).lower()} "
+            f"patch88_read_model_preserved={str(payload['patch88_read_model_preserved']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "

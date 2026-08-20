@@ -822,5 +822,50 @@ class CanonicalResearchReadModelReleaseCheckTests(unittest.TestCase):
         self.assertEqual(dict(first), dict(second))
 
 
+class AutonomousResearchCompletionReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_autonomous_research_completion_release_check
+
+        result = production_autonomous_research_completion_release_check()
+        for key in (
+            "blocker_driven_progression",
+            "passed_validation_not_repeated",
+            "duplicate_evidence_blocked",
+            "new_evidence_preferred",
+            "retest_requires_reason",
+            "candidate_progress_persists",
+            "stagnation_detected",
+            "candidate_rotation_works",
+            "candidate_history_preserved",
+            "distinct_strategy_identity_preserved",
+            "candidate_ranking_evidence_bound",
+            "promotion_gate_preserved",
+            "distinct_promotion_candidates_counted",
+            "three_candidate_target_reachable",
+            "three_candidate_target_awaits_human",
+            "restart_state_persists",
+            "external_provider_status_honest",
+            "metadata_only_not_used_as_content",
+            "youtube_capability_reported_honestly",
+            "bounded_execution_preserved",
+            "read_only_zero_tool_calls_preserved",
+            "patch87_handoff_preserved",
+            "patch88_read_model_preserved",
+        ):
+            self.assertTrue(result[key], key)
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_autonomous_research_completion_release_check
+
+        first = production_autonomous_research_completion_release_check()
+        second = production_autonomous_research_completion_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
 if __name__ == "__main__":
     unittest.main()

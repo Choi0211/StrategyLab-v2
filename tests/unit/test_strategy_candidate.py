@@ -347,15 +347,11 @@ class NextRobustnessEvidenceSymbolTests(unittest.TestCase):
         candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=NOW, symbol="005380")
         self.assertIsNone(next_robustness_evidence_symbol(candidate))
 
-    def test_breadth_reentry_selection_prefers_an_untried_symbol_over_evidence_symbols_zero(self) -> None:
-        """Independent-review fix: gaon.runtime.llm_conversation.
-        _try_candidate_robustness_cycle's breadth->robustness re-entry point
-        computes ``next_robustness_evidence_symbol(candidate) or
-        candidate.evidence_symbols[0]`` - this proves that expression
-        actually prefers a fresh symbol once evidence_symbols[0] has already
-        been robustness-tested, rather than silently re-selecting it forever
-        (evidence_symbols[0] never changes once populated - see
-        record_breadth_progress)."""
+    def test_breadth_reentry_selection_exhaustion_requires_sample_expansion(self) -> None:
+        """Completion fix: production must not fall back to
+        ``evidence_symbols[0]`` after every known evidence symbol has
+        already been robustness-tested. Exhaustion returns None so the
+        mission can expand breadth evidence on the next bounded turn."""
         from gaon.knowledge.strategy_candidate import next_robustness_evidence_symbol
 
         candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
@@ -364,16 +360,12 @@ class NextRobustnessEvidenceSymbolTests(unittest.TestCase):
             evidence_symbols=("000660", "005380", "051910"), excluded_symbols=(), provider_blocked=False, now=NOW,
         )
         candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=NOW, symbol="000660")
-        selection = next_robustness_evidence_symbol(candidate) or candidate.evidence_symbols[0]
+        selection = next_robustness_evidence_symbol(candidate)
         self.assertEqual(selection, "005380")
 
-        # Once every evidence symbol has been robustness-tested, the
-        # fallback correctly picks something (never crashes / returns None)
-        # rather than leaving the mission with no focus symbol at all.
         for symbol in ("005380", "051910"):
             candidate = record_robustness_progress(candidate, director_action="hold", terminal=True, now=NOW, symbol=symbol)
-        selection = next_robustness_evidence_symbol(candidate) or candidate.evidence_symbols[0]
-        self.assertEqual(selection, "000660")
+        self.assertIsNone(next_robustness_evidence_symbol(candidate))
 
 
 class RobustnessProgressTests(unittest.TestCase):
@@ -386,11 +378,66 @@ class RobustnessProgressTests(unittest.TestCase):
             candidate = record_robustness_progress(candidate, director_action="collect_more_evidence", terminal=False, now=LATER)
         self.assertTrue(is_stagnant(candidate))
 
-    def test_advancing_director_action_resets_progress(self) -> None:
+    def test_advancing_director_action_alone_is_not_progress(self) -> None:
         candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
         candidate = record_robustness_progress(candidate, director_action="collect_more_evidence", terminal=False, now=LATER)
         candidate = record_robustness_progress(candidate, director_action="run_oos", terminal=False, now=LATER)
+        self.assertEqual(candidate.cycles_without_progress, 2)
+
+    def test_new_symbol_and_stage_status_are_progress(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=2, valid=2, trade_count=20,
+            evidence_symbols=("000660", "005380"), excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="hold",
+            terminal=True,
+            validation_stage_status={"walk_forward": "pass"},
+            symbol="000660",
+            now=LATER,
+        )
         self.assertEqual(candidate.cycles_without_progress, 0)
+        duplicate = record_robustness_progress(
+            candidate,
+            director_action="hold",
+            terminal=True,
+            validation_stage_status={"walk_forward": "pass"},
+            symbol="000660",
+            now=LATER,
+        )
+        self.assertEqual(duplicate.robustness_evidence_symbols, ("000660",))
+        self.assertEqual(duplicate.cycles_without_progress, 1)
+
+    def test_blocker_driven_action_expands_before_monte_carlo_when_sample_is_small(self) -> None:
+        from gaon.knowledge.strategy_candidate import next_blocker_driven_research_action
+
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=5, valid=5, trade_count=25,
+            evidence_symbols=("005930", "000660", "005380", "035420", "004250"),
+            excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        for symbol in candidate.evidence_symbols:
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="hold",
+                terminal=True,
+                validation_stage_status={
+                    "walk_forward": "pass",
+                    "regime_validation": "pass",
+                    "transaction_cost_stress": "cost_stable",
+                    "parameter_sensitivity": "stable",
+                    "out_of_sample": "insufficient_oos_sample",
+                    "monte_carlo": "not_run_insufficient_primary_sample",
+                },
+                symbol=symbol,
+                now=LATER,
+            )
+        action, reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual(action, "EXPAND_SAMPLE")
+        self.assertIn(reason, {"need_new_independent_evidence_symbols", "monte_carlo_waiting_for_primary_sample"})
 
 
 class UniverseEvidenceSufficiencyTests(unittest.TestCase):

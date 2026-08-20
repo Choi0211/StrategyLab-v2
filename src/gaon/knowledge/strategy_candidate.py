@@ -81,6 +81,18 @@ MIN_VALID_SYMBOL_RATIO_FOR_UNIVERSE_EVIDENCE = 0.3
 # evidence_symbols (see record_breadth_progress) for consistency.
 ROBUSTNESS_EVIDENCE_SYMBOL_CAP = 8
 
+PROMOTION_MIN_TRADE_SAMPLE = 30
+
+PASS_LIKE_STAGE_STATUSES = frozenset(
+    {
+        "pass",
+        "stable",
+        "cost_stable",
+        "acceptable",
+        "sufficient",
+    }
+)
+
 
 class StrategyCandidateStatus(str, Enum):
     EXPLORING = "exploring"
@@ -493,7 +505,15 @@ def record_robustness_progress(
     not verify this cycle actually validated the candidate's own effective
     rules) leaves this candidate's evidence-symbol memory untouched, so an
     unverified cycle is never counted as robustness evidence."""
-    progressed = director_action != candidate.last_director_action
+    new_symbol = bool(symbol and symbol not in candidate.robustness_evidence_symbols)
+    stage_changed = False
+    if validation_stage_status:
+        stage_changed = any(
+            str(candidate.validation_stage_status.get(str(key), "")) != str(value)
+            for key, value in validation_stage_status.items()
+        )
+    terminal_progress = terminal and director_action in {"request_human_promotion_review", "reject_candidate"}
+    progressed = new_symbol or stage_changed or terminal_progress
     cycles_without_progress = 0 if progressed else candidate.cycles_without_progress + 1
     status = candidate.status if terminal else StrategyCandidateStatus.ROBUSTNESS
     merged_stage_status = dict(candidate.validation_stage_status)
@@ -542,6 +562,77 @@ def next_robustness_evidence_symbol(candidate: StrategyCandidateRecord, *, exclu
         if symbol not in tried:
             return symbol
     return None
+
+
+def candidate_progress_signature(candidate: StrategyCandidateRecord) -> tuple[object, ...]:
+    """Deterministic, evidence-bound signature for meaningful candidate
+    progress. A Research Director action label changing is not enough:
+    progression requires new independent evidence, more samples, a changed
+    validation stage, or a real terminal decision."""
+    return (
+        candidate.status.value,
+        candidate.valid_symbols,
+        candidate.trade_count,
+        tuple(candidate.evidence_symbols),
+        tuple(candidate.robustness_evidence_symbols),
+        tuple(sorted((str(key), str(value)) for key, value in candidate.validation_stage_status.items())),
+        candidate.promotion_ready_at or "",
+        candidate.rejected_reason or "",
+    )
+
+
+def candidate_remaining_blockers(candidate: StrategyCandidateRecord) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if not candidate.has_sufficient_universe_evidence:
+        blockers.append("multi_symbol_sample")
+    if candidate.trade_count < PROMOTION_MIN_TRADE_SAMPLE:
+        blockers.append("minimum_trade_sample")
+    stage_status = dict(candidate.validation_stage_status)
+    required_stages = (
+        "out_of_sample",
+        "walk_forward",
+        "regime_validation",
+        "parameter_sensitivity",
+        "transaction_cost_stress",
+    )
+    for stage in required_stages:
+        status = str(stage_status.get(stage, "not_run"))
+        if status not in PASS_LIKE_STAGE_STATUSES:
+            blockers.append(stage)
+    monte_carlo = str(stage_status.get("monte_carlo", "not_run"))
+    if monte_carlo not in PASS_LIKE_STAGE_STATUSES:
+        if candidate.trade_count < PROMOTION_MIN_TRADE_SAMPLE:
+            blockers.append("monte_carlo_waiting_for_primary_sample")
+        else:
+            blockers.append("monte_carlo")
+    return tuple(dict.fromkeys(blockers))
+
+
+def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> tuple[str, str]:
+    """Selects the next bounded continuation action from persisted state.
+    This is a small read-model over the existing candidate machinery, not a
+    second research engine."""
+    if candidate.status is StrategyCandidateStatus.PROMOTION_READY:
+        return "REQUEST_HUMAN_APPROVAL", "candidate_already_promotion_ready"
+    if candidate.status in (StrategyCandidateStatus.REJECTED, StrategyCandidateStatus.STAGNANT):
+        return "ROTATE_CANDIDATE", candidate.rejected_reason or "candidate_terminal"
+    blockers = candidate_remaining_blockers(candidate)
+    next_symbol = next_robustness_evidence_symbol(candidate)
+    if not candidate.has_sufficient_universe_evidence or not next_symbol:
+        return "EXPAND_SAMPLE", "need_new_independent_evidence_symbols"
+    if "out_of_sample" in blockers:
+        return "RUN_OOS", "out_of_sample_blocker"
+    if "transaction_cost_stress" in blockers:
+        return "RUN_COST_STRESS", "transaction_cost_blocker"
+    if "parameter_sensitivity" in blockers:
+        return "RUN_SENSITIVITY", "parameter_sensitivity_blocker"
+    if "regime_validation" in blockers:
+        return "RUN_REGIME", "regime_blocker"
+    if "monte_carlo_waiting_for_primary_sample" in blockers:
+        return "EXPAND_SAMPLE", "monte_carlo_waiting_for_primary_sample"
+    if "monte_carlo" in blockers:
+        return "RUN_MONTE_CARLO", "monte_carlo_blocker"
+    return "RANK_CANDIDATES", "no_blocking_validation_stage_remaining"
 
 
 def is_stagnant(candidate: StrategyCandidateRecord) -> bool:

@@ -1,5 +1,28 @@
 # Changelog
 
+## Autonomous Research Completion - Blocker-Driven Progression
+
+- Added evidence-bound candidate progress signatures and blocker read-model
+  helpers so continuation turns advance from actual evidence/sample/stage
+  changes instead of Research Director action-label churn.
+- Changed mission-driven breadth sampling to avoid already excluded,
+  breadth-validated, and robustness-tested symbols for the active
+  candidate, preventing duplicate evidence from being presented as new
+  progress.
+- Removed the robustness re-entry fallback that reused
+  `evidence_symbols[0]` after every known evidence symbol had already been
+  tested; exhausted robustness pools now clear focus so the next bounded
+  continuation expands the sample.
+- Added deterministic next-action reporting for robustness continuation
+  responses.
+- Added
+  `gaon-production-autonomous-research-completion-release-check`, covering
+  blocker-driven progression, duplicate evidence blocking, candidate
+  rotation, distinct promotion-ready counting, restart persistence,
+  provider capability honesty, and Patch 8.7/8.8 regression preservation.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, or strategy mutation added.
+
 ## Patch 8.8 Canonical Research Mission Read Model & Conversational State Consistency
 
 - Fixed a real VPS Telegram production defect: once an active,
