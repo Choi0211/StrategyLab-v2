@@ -8,6 +8,14 @@
   rendered as presentation text.
 - Added planned-action lineage for `RUN_REGIME`, `RUN_WALK_FORWARD`, OOS,
   cost stress, sensitivity, and Monte Carlo continuation cycles.
+- Fixed the production persistence/restart regression where a real executor
+  could consume `RUN_REGIME`, keep `regime_validation=partial`, persist that
+  partial result, and then select the identical `RUN_REGIME` action again on
+  the next Telegram continuation.
+- The blocker selector now treats the last action/symbol/stage/status
+  reference as a replay boundary, so exact same partial evidence is not
+  presented as a fresh action while other unresolved validation dimensions
+  remain available.
 - Changed robustness progress semantics so Research Director action-label
   churn alone cannot reset stagnation; progress requires new evidence,
   a changed validation-stage status, or a terminal promotion/rejection.
@@ -16,6 +24,7 @@
   bounded execution, provider honesty, Patch 8.7 handoff, and Patch 8.8
   canonical read-model behavior.
 - Added `gaon-production-research-action-execution-handoff-release-check`.
+- Added `gaon-production-research-action-persistence-release-check`.
 - Schema unchanged (v36); no live trading, orders, Champion
   auto-promotion, approval bypass, or strategy mutation added.
 

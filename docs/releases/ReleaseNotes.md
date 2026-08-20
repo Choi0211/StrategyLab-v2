@@ -21,16 +21,26 @@ promotion/rejection. Exact same action/evidence/dimension replay therefore
 counts toward no-progress/stagnation, while the same symbol can still
 advance a different validation dimension such as `RUN_WALK_FORWARD`.
 
+Production replay testing then exposed the case that the first synthetic
+release check did not cover: a real executor may consume `RUN_REGIME` and
+still return `regime_validation=partial`. That partial action/stage/status
+is now a persisted replay boundary. After a runtime restart the next
+continuation recomputes from canonical candidate state and selects another
+available blocker, or expands sample, instead of repeating the identical
+`RUN_REGIME` result indefinitely.
+
 New release check:
 
 ```bash
 python -m gaon.runtime.cli gaon-production-research-action-execution-handoff-release-check
+python -m gaon.runtime.cli gaon-production-research-action-persistence-release-check
 ```
 
 The check proves `RUN_REGIME` is consumed as execution input, duplicate
 replay is blocked, dimension-aware evidence identity is preserved, next
-action is recomputed after execution, and PR #148 completion behavior stays
-intact. Schema remains v36. Safety is unchanged: no live trading,
+action is recomputed after execution and across a fresh Telegram runtime,
+and PR #148 completion behavior stays intact. Schema remains v36. Safety is
+unchanged: no live trading,
 broker/KIS order, Champion auto-promotion, approval bypass, or unapproved
 strategy mutation.
 
