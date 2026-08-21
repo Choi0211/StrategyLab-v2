@@ -3,6 +3,42 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix: Research Mission Strategy-Space Expansion
+
+Production acceptance reached a valid but unhelpful stopping state:
+`promotion-ready candidates: 0/3` and
+`strategy_family_space_exhausted`. The mission had real failed/stagnant
+candidate evidence, but Gaon treated the exhausted base family list as a
+terminal blocker.
+
+The mission-driven Telegram continuation path now converts that state into
+`EXPAND_STRATEGY_SPACE`. The expansion step analyzes persisted
+`StrategyCandidateRecord` blockers and generates the next distinct
+candidate from a bounded declarative grammar. The grammar is intentionally
+limited to primitives already executable by the existing KRX research and
+backtest pipeline: breakout lookback, trend confirmation, volume
+confirmation, channel-low exits, and protective stops.
+
+Candidate identity remains the existing strategy fingerprint. If a proposed
+expansion is semantically equivalent to an existing candidate, it is skipped.
+The new candidate is then evaluated by the existing `multi_symbol_research`
+path with its exact `candidate_spec`; creating the candidate itself is not
+counted as validation progress.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-strategy-space-expansion-release-check
+```
+
+The check proves base-family exhaustion, `EXPAND_STRATEGY_SPACE`
+selection, evidence-backed hypothesis generation, non-duplicate
+fingerprint, candidate persistence, existing pipeline handoff,
+restart-safe history preservation, and no fabricated validation or
+promotion progress. Schema remains v36. Safety is unchanged: no live
+trading, broker/KIS order, Champion auto-promotion, approval bypass, or
+unapproved strategy mutation.
+
 ## Hotfix: Research Director Planned Action -> Executor Handoff
 
 Patch 8.9/PR #148 added a blocker-driven read model that can identify the

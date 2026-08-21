@@ -759,18 +759,21 @@ class UserStrategyParser:
         entry: dict[str, ProvenancedValue] = {}
         exit_rules: dict[str, ProvenancedValue] = {}
         filters: dict[str, ProvenancedValue] = {}
-        if "20" in normalized and ("고가" in text or "high" in normalized or "breakout" in normalized or "돌파" in text):
-            entry["breakout_lookback"] = ProvenancedValue(20, FieldProvenance.USER_PROVIDED)
-        if "ma20" in normalized or "20일" in text:
+        breakout_match = re.search(r"(\d+)\s*(?:day|일)?\s*(?:고가|high|breakout|돌파)", normalized)
+        if breakout_match or ("고가" in text or "high" in normalized or "breakout" in normalized or "돌파" in text):
+            entry["breakout_lookback"] = ProvenancedValue(int(breakout_match.group(1)) if breakout_match else 20, FieldProvenance.USER_PROVIDED)
+        if "ma20" in normalized:
             entry["close_gt_ma20"] = ProvenancedValue(True, FieldProvenance.USER_PROVIDED)
-        if "ma60" in normalized or "60일" in text:
+        if "ma60" in normalized:
             entry["ma20_gt_ma60"] = ProvenancedValue(True, FieldProvenance.USER_PROVIDED)
         if "거래량" in text or "volume" in normalized:
             filters["volume_gte_ma20"] = ProvenancedValue(True, FieldProvenance.USER_PROVIDED)
-        if "-5" in normalized or "손절" in text or "stop" in normalized:
-            exit_rules["protective_stop_pct"] = ProvenancedValue(-5.0, FieldProvenance.USER_PROVIDED)
-        if "10" in normalized and ("저점" in text or "low" in normalized or "청산" in text):
-            exit_rules["channel_exit_lookback"] = ProvenancedValue(10, FieldProvenance.USER_PROVIDED)
+        stop_match = re.search(r"(?:손절|stop)\s*-?\s*(\d+(?:\.\d+)?)\s*%?", normalized)
+        if stop_match or "손절" in text or "stop" in normalized:
+            exit_rules["protective_stop_pct"] = ProvenancedValue(-float(stop_match.group(1)) if stop_match else -5.0, FieldProvenance.USER_PROVIDED)
+        exit_match = re.search(r"(\d+)\s*(?:day|일)?\s*(?:저점|low|청산|exit)", normalized)
+        if exit_match or ("저점" in text or "low" in normalized or "청산" in text):
+            exit_rules["channel_exit_lookback"] = ProvenancedValue(int(exit_match.group(1)) if exit_match else 10, FieldProvenance.USER_PROVIDED)
         if "breakout_lookback" not in entry:
             entry["breakout_lookback"] = ProvenancedValue(20, FieldProvenance.DEFAULT)
         if "protective_stop_pct" not in exit_rules:

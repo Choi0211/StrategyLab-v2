@@ -938,5 +938,41 @@ class ResearchActionPersistenceReleaseCheckTests(unittest.TestCase):
         self.assertEqual(dict(first), dict(second))
 
 
+class StrategySpaceExpansionReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_strategy_space_expansion_release_check
+
+        result = production_strategy_space_expansion_release_check()
+        for key in (
+            "existing_families_exhausted",
+            "expand_strategy_space_action",
+            "evidence_backed_hypothesis",
+            "distinct_candidate_generated",
+            "fingerprint_not_duplicate",
+            "candidate_persisted",
+            "real_pipeline_receives_candidate",
+            "template_fingerprint_matched",
+            "previous_candidate_history_preserved",
+            "restart_preserves_new_candidate_history",
+            "validation_progress_not_fabricated",
+            "promotion_ready_not_fabricated",
+            "bounded_search_budget",
+        ):
+            self.assertTrue(result[key], key)
+        self.assertEqual(result["action"], "EXPAND_STRATEGY_SPACE")
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_strategy_space_expansion_release_check
+
+        first = production_strategy_space_expansion_release_check()
+        second = production_strategy_space_expansion_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
 if __name__ == "__main__":
     unittest.main()

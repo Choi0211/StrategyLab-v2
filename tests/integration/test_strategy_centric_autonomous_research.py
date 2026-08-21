@@ -33,11 +33,31 @@ from unittest.mock import patch
 
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import parse_update_result
-from gaon.knowledge.research_mission import MissionUniverseScope, candidate_records, distinct_promotion_ready_strategy_count
-from gaon.knowledge.strategy_candidate import build_candidate_spec, spec_rules_to_json
+from gaon.knowledge.research_mission import (
+    DEFAULT_KR_EXCHANGES,
+    MissionStatus,
+    MissionUniverseScope,
+    ResearchMission,
+    add_candidate,
+    candidate_records,
+    distinct_promotion_ready_strategy_count,
+    set_active_candidate,
+)
+from gaon.knowledge.strategy_candidate import (
+    STRATEGY_FAMILY_TEMPLATES,
+    STRATEGY_SPACE_EXPANSION_TEMPLATES,
+    build_candidate_spec,
+    mark_stagnant,
+    new_candidate,
+    record_breadth_progress,
+    record_robustness_progress,
+    spec_rules_to_json,
+)
 from gaon.research.krx_real_pipeline import KRXFixtureMarketDataProvider
 from gaon.research.real_research import MarketSymbol
 from gaon.runtime.config import GaonRuntimeConfig
+from gaon.runtime.conversation import ConversationInput
+from gaon.runtime.llm_conversation import LLMConversationRequest
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
 
@@ -333,6 +353,103 @@ class StrategyCentricAutonomousResearchTests(unittest.TestCase):
         candidates = candidate_records(mission_after)
         families = {candidate.strategy_family for candidate in candidates}
         self.assertGreaterEqual(len(families), 2, "a diversity request must bias toward a different strategy family")
+
+
+class StrategySpaceExpansionTelegramTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = RuntimeStateStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.agent = TelegramConversationAgent(_config(), self.store._connection)
+        self.runtime = TelegramRuntime(self.agent, allowed_chat_ids=("100",))
+        self.client = _RecordingTelegramClient()
+
+    def _seed_exhausted_mission(self) -> None:
+        now = "2026-08-21T00:00:00Z"
+        mission = ResearchMission(
+            mission_id="research-mission:test-strategy-space-expansion",
+            market="KR",
+            universe_scope=MissionUniverseScope.MARKET_WIDE,
+            symbols=(),
+            exchanges=DEFAULT_KR_EXCHANGES,
+            strategy_family="short_term_daytrade",
+            improve_return=True,
+            improve_safety=True,
+            baseline_comparison="registered_strategy",
+            target_promotion_ready_candidates=3,
+            current_promotion_ready_candidates=0,
+            promotion_ready_candidates=(),
+            explored_symbols=(),
+            status=MissionStatus.ACTIVE,
+            blocked_reason=None,
+            cycles_completed=4,
+            created_at=now,
+            updated_at=now,
+            originating_request="release-check",
+        )
+        for index, template in enumerate(STRATEGY_FAMILY_TEMPLATES, start=1):
+            candidate = new_candidate(template.family, sequence=index, now=now)
+            candidate = record_breadth_progress(
+                candidate,
+                attempted=5,
+                valid=3,
+                trade_count=12,
+                evidence_symbols=("005930", "000660", "005380"),
+                excluded_symbols=("035420", "051910"),
+                provider_blocked=False,
+                now=now,
+            )
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="RUN_REGIME",
+                terminal=False,
+                validation_stage_status={"regime_validation": "partial", "walk_forward": "partial"},
+                symbol="005930",
+                reference=f"release-check:failed-evidence:{template.family}",
+                now=now,
+            )
+            mission = add_candidate(mission, mark_stagnant(candidate, now=now), now=now)
+        mission = set_active_candidate(mission, None, now=now)
+        self.agent.handle(ConversationInput("telegram", "100", "100", "seed", "안녕하세요 가온", now))
+        seed = LLMConversationRequest("telegram:100", "telegram:100", "telegram", "seed", now, "telegram:100:seed")
+        self.agent._brain._remember_mission(seed, mission)
+
+    def test_exhausted_family_space_expands_to_distinct_candidate_and_real_research_path(self) -> None:
+        self._seed_exhausted_mission()
+        before = candidate_records(self.agent._brain._mission_for("telegram:100"))
+        before_fingerprints = {candidate.strategy_fingerprint for candidate in before}
+        received_at = "2026-08-21T00:10:00Z"
+        with patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=_baseline(trades=45, run_id="expansion")), patch(
+            "gaon.knowledge.telegram_autonomous_learning._run_production_external_research",
+            return_value={"state": "content_unavailable"},
+        ), patch(
+            "gaon.research.multi_symbol.build_market_data_provider_from_env",
+            return_value=_DeterministicKRUniverseProvider(),
+        ):
+            result = process_update(
+                parse_update_result(_update(10, 10, "연구를 계속해주세요"), received_at=received_at),
+                self.runtime,
+                self.client,
+            )
+
+        self.assertEqual(result.status, "sent", result)
+        mission = self.agent._brain._mission_for("telegram:100")
+        records = candidate_records(mission)
+        self.assertEqual(len(records), len(before) + 1)
+        expanded = records[-1]
+        self.assertIn(expanded.strategy_family, {template.family for template in STRATEGY_SPACE_EXPANSION_TEMPLATES})
+        self.assertNotIn(expanded.strategy_fingerprint, before_fingerprints)
+        for old in before:
+            preserved = next(candidate for candidate in records if candidate.candidate_id == old.candidate_id)
+            self.assertEqual(preserved.to_json(), old.to_json())
+        audits = self.store.tool_audit.list(tool_name="multi_symbol_research")
+        self.assertGreaterEqual(len(audits), 1)
+        self.assertEqual(audits[-1].request["arguments"].get("candidate_spec"), dict(expanded.spec_rules))
+        self.assertTrue(expanded.evidence_symbols or expanded.excluded_symbols)
+        response = self.client.sent[-1][1]
+        self.assertIn(expanded.candidate_id, response)
+        self.assertNotIn("strategy_family_space_exhausted", response)
+        self.assertEqual(len(self.store.tool_audit.list(tool_name="autonomous_learning_research")), 0)
+        self.assertEqual(len(self.store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
 
 
 if __name__ == "__main__":

@@ -176,7 +176,41 @@ STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
     ),
 )
 
-_TEMPLATE_BY_FAMILY = {template.family: template for template in STRATEGY_FAMILY_TEMPLATES}
+# Strategy-space expansion templates. These are deliberately outside
+# STRATEGY_FAMILY_TEMPLATES so the historical "base family space exhausted"
+# state remains observable. They still use only the existing
+# RuleBasedBacktestEngine grammar: breakout lookback, trend/volume filters,
+# channel-low exits, and percentage stops.
+STRATEGY_SPACE_EXPANSION_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
+    StrategyFamilyTemplate(
+        "breakout_fast_volume_confirmed", "빠른 거래량 확인 돌파",
+        {"breakout_lookback": 10}, {"protective_stop_pct": -4.0, "channel_exit_lookback": 7},
+        {"volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_slow_trend_confirmed", "느린 추세 확인 돌파",
+        {"breakout_lookback": 30, "close_gt_ma20": True, "ma20_gt_ma60": True},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 15}, {},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_slow_multi_confirmed", "느린 복합 확인 돌파",
+        {"breakout_lookback": 30, "close_gt_ma20": True, "ma20_gt_ma60": True},
+        {"protective_stop_pct": -6.0, "channel_exit_lookback": 15}, {"volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_wide_standard", "넓은 채널 돌파",
+        {"breakout_lookback": 40}, {"protective_stop_pct": -8.0, "channel_exit_lookback": 20}, {},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_fast_trend_confirmed", "빠른 추세 확인 돌파",
+        {"breakout_lookback": 10, "close_gt_ma20": True, "ma20_gt_ma60": True},
+        {"protective_stop_pct": -4.0, "channel_exit_lookback": 7}, {},
+    ),
+)
+
+ALL_STRATEGY_FAMILY_TEMPLATES = (*STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_TEMPLATES)
+
+_TEMPLATE_BY_FAMILY = {template.family: template for template in ALL_STRATEGY_FAMILY_TEMPLATES}
 
 # Natural-language text per family for the EXISTING single-symbol deep-
 # validation pipeline (OOS/walk-forward/regime/cost/Monte Carlo via
@@ -201,7 +235,34 @@ _FAMILY_REQUEST_TEXT: Mapping[str, str] = {
     "breakout_trend_confirmed": "20 고가 돌파 종가 > MA20 > MA60 손절 -5% 10일 저점 이탈 청산",
     "breakout_volume_confirmed": "20 고가 돌파 거래량 평균 이상 손절 -5% 10일 저점 이탈 청산",
     "breakout_multi_confirmed": "20 고가 돌파 종가 > MA20 > MA60 거래량 평균 이상 손절 -5% 10일 저점 이탈 청산",
+    "breakout_fast_volume_confirmed": "10 고가 돌파 거래량 평균 이상 손절 -4% 7일 저점 이탈 청산",
+    "breakout_slow_trend_confirmed": "30 고가 돌파 종가 > MA20 > MA60 손절 -5% 15일 저점 이탈 청산",
+    "breakout_slow_multi_confirmed": "30 고가 돌파 종가 > MA20 > MA60 거래량 평균 이상 손절 -6% 15일 저점 이탈 청산",
+    "breakout_wide_standard": "40 고가 돌파 손절 -8% 20일 저점 이탈 청산",
+    "breakout_fast_trend_confirmed": "10 고가 돌파 종가 > MA20 > MA60 손절 -4% 7일 저점 이탈 청산",
 }
+
+
+@dataclass(frozen=True)
+class StrategySpaceExpansion:
+    action: str
+    reason: str
+    candidate: "StrategyCandidateRecord | None"
+    evidence_signals: tuple[str, ...]
+    skipped_fingerprints: tuple[str, ...]
+    search_budget: int
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "action": self.action,
+            "reason": self.reason,
+            "candidate_id": self.candidate.candidate_id if self.candidate else None,
+            "strategy_family": self.candidate.strategy_family if self.candidate else None,
+            "strategy_fingerprint": self.candidate.strategy_fingerprint if self.candidate else None,
+            "evidence_signals": list(self.evidence_signals),
+            "skipped_fingerprints": list(self.skipped_fingerprints),
+            "search_budget": self.search_budget,
+        }
 
 
 def render_candidate_request_text(candidate: "StrategyCandidateRecord", symbol: str) -> str:
@@ -276,6 +337,96 @@ def next_untried_family(existing: tuple["StrategyCandidateRecord", ...]) -> str 
         if template.family not in used:
             return template.family
     return None
+
+
+def expand_strategy_space_candidate(
+    existing: tuple["StrategyCandidateRecord", ...],
+    *,
+    sequence: int,
+    now: str,
+) -> StrategySpaceExpansion:
+    """Generates the next bounded, evidence-linked strategy hypothesis.
+
+    This is the explicit continuation path once the base family inventory is
+    exhausted. It never fabricates performance. It only reads persisted
+    candidate blockers/status, picks from the bounded declarative grammar
+    above, rejects semantic duplicates by strategy fingerprint, and returns a
+    normal StrategyCandidateRecord for the existing mission pipeline to
+    validate through multi_symbol_research.
+    """
+    evidence_signals = _mission_failure_signals(existing)
+    known_fingerprints = {candidate.strategy_fingerprint for candidate in existing}
+    used_families = {candidate.strategy_family for candidate in existing}
+    skipped: list[str] = []
+    ranked = _rank_expansion_templates(evidence_signals)
+    for template in ranked[: len(STRATEGY_SPACE_EXPANSION_TEMPLATES)]:
+        spec = build_candidate_spec(template.family, created_at=now)
+        fingerprint = spec.strategy_family_fingerprint
+        if template.family in used_families or fingerprint in known_fingerprints:
+            skipped.append(fingerprint)
+            continue
+        candidate = new_candidate(template.family, sequence=sequence, now=now)
+        return StrategySpaceExpansion(
+            action="EXPAND_STRATEGY_SPACE",
+            reason="strategy_family_space_exhausted",
+            candidate=candidate,
+            evidence_signals=evidence_signals,
+            skipped_fingerprints=tuple(skipped),
+            search_budget=len(STRATEGY_SPACE_EXPANSION_TEMPLATES),
+        )
+    return StrategySpaceExpansion(
+        action="EXPAND_STRATEGY_SPACE",
+        reason="strategy_hypothesis_space_exhausted",
+        candidate=None,
+        evidence_signals=evidence_signals,
+        skipped_fingerprints=tuple(skipped),
+        search_budget=len(STRATEGY_SPACE_EXPANSION_TEMPLATES),
+    )
+
+
+def _mission_failure_signals(existing: tuple["StrategyCandidateRecord", ...]) -> tuple[str, ...]:
+    signals: list[str] = []
+    for candidate in existing:
+        if candidate.status in (StrategyCandidateStatus.STAGNANT, StrategyCandidateStatus.REJECTED):
+            signals.append(f"candidate_{candidate.status.value}")
+        if candidate.rejected_reason:
+            signals.append(candidate.rejected_reason)
+        if candidate.trade_count < PROMOTION_MIN_TRADE_SAMPLE:
+            signals.append("insufficient_trade_sample")
+        if candidate.attempted_symbols and not candidate.has_sufficient_universe_evidence:
+            signals.append("cross_symbol_weakness")
+        for blocker in candidate_remaining_blockers(candidate):
+            signals.append(blocker)
+        for stage, status in sorted(candidate.validation_stage_status.items()):
+            if status not in PASS_LIKE_STAGE_STATUSES:
+                signals.append(f"{stage}_{status}")
+    return tuple(dict.fromkeys(signals)) or ("base_family_space_exhausted",)
+
+
+def _rank_expansion_templates(evidence_signals: tuple[str, ...]) -> tuple[StrategyFamilyTemplate, ...]:
+    signal_text = " ".join(evidence_signals)
+
+    def score(template: StrategyFamilyTemplate) -> tuple[int, str]:
+        value = 0
+        lookback = int(template.entry.get("breakout_lookback", 20))
+        has_trend = bool(template.entry.get("close_gt_ma20") or template.entry.get("ma20_gt_ma60"))
+        has_volume = bool(template.filters.get("volume_gte_ma20"))
+        stop = abs(float(template.exit.get("protective_stop_pct", -5.0)))
+        if "insufficient_trade_sample" in signal_text or "minimum_trade_sample" in signal_text:
+            value += 4 if lookback <= 10 else 0
+        if "transaction_cost_stress" in signal_text or "cost_fragile" in signal_text:
+            value += 3 if lookback >= 30 else 0
+            value += 1 if has_trend else 0
+        if "regime_validation" in signal_text or "walk_forward" in signal_text or "out_of_sample" in signal_text:
+            value += 2 if has_trend else 0
+            value += 1 if has_volume else 0
+        if "cross_symbol_weakness" in signal_text or "multi_symbol" in signal_text:
+            value += 2 if has_volume else 0
+        if stop >= 8.0 and ("parameter_sensitivity" in signal_text or "mdd" in signal_text):
+            value += 1
+        return (-value, template.family)
+
+    return tuple(sorted(STRATEGY_SPACE_EXPANSION_TEMPLATES, key=score))
 
 
 @dataclass(frozen=True)
