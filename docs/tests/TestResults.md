@@ -2,6 +2,31 @@
 
 Status: Passed
 
+## Hotfix: Sample Exhaustion Candidate Decision
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\strategy_candidate.py src\gaon\knowledge\research_mission.py src\gaon\runtime\llm_conversation.py src\gaon\research\multi_symbol.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_strategy_candidate.SampleExhaustionDecisionTests tests.unit.test_research_mission.SampleExhaustionCandidateDecisionReleaseCheckTests -q`: PASS, 8 tests
+  - `python -m unittest tests.integration.test_strategy_centric_autonomous_research.SampleExhaustionCandidateDecisionTelegramTests -q`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-production-sample-exhaustion-candidate-decision-release-check`: PASS
+- Required full verification:
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1183 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 260 tests
+  - `python scripts\verify_release.py`: PASS
+  - Existing production release checks:
+    `gaon-production-canonical-candidate-handoff-release-check`,
+    `gaon-production-canonical-research-read-model-release-check`,
+    `gaon-production-autonomous-research-completion-release-check`,
+    `gaon-production-research-action-execution-handoff-release-check`,
+    `gaon-production-research-action-persistence-release-check`,
+    `gaon-production-strategy-space-expansion-release-check`, and
+    `gaon-production-cumulative-sample-persistence-release-check`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS; Windows line-ending warnings only
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated evidence.
+
 ## Hotfix: Cumulative Sample Persistence
 
 - Targeted local verification:

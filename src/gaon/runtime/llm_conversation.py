@@ -92,6 +92,7 @@ from gaon.knowledge.research_mission import (
 )
 from gaon.knowledge.strategy_candidate import (
     StrategyCandidateStatus,
+    candidate_sample_exhausted,
     expand_strategy_space_candidate,
     is_stagnant,
     mark_promotion_ready,
@@ -1264,6 +1265,29 @@ class LLMConversationBrain:
         # Director pipeline) alternate across turns rather than both
         # running inside one request: a research_budget_exhausted signal
         # from either still bounds this turn to a single tool call.
+        if not mission.pending_promotion_symbol and active is not None and candidate_sample_exhausted(active):
+            planned_action, planned_reason = next_blocker_driven_research_action(active)
+            if planned_action == "ROTATE_CANDIDATE":
+                return self._rotate_stagnant_candidate(
+                    request,
+                    mission,
+                    active,
+                    _dedupe((*warnings, f"sample_exhaustion_decision={planned_reason}")),
+                    references,
+                    tool_calls=(),
+                    extra_warnings=("candidate_pool_exhausted_not_repeated",),
+                )
+            if planned_action != "EXPAND_SAMPLE":
+                next_symbol = next_robustness_evidence_symbol(active)
+                if next_symbol is not None:
+                    mission = record_focus_symbol(mission, symbol=next_symbol, now=request.received_at)
+                    return self._try_candidate_robustness_cycle(
+                        request,
+                        mission,
+                        active,
+                        _dedupe((*warnings, f"sample_exhaustion_next_action={planned_action}", f"sample_exhaustion_reason={planned_reason}")),
+                        references,
+                    )
         if mission.pending_promotion_symbol:
             return self._try_candidate_robustness_cycle(request, mission, active, warnings, references)
         return self._try_candidate_breadth_cycle(
@@ -1342,6 +1366,13 @@ class LLMConversationBrain:
 
         output = result.output
         evidence_items = [item for item in _as_list(output.get("evidence")) if isinstance(item, dict)]
+        adaptive_sampling = _as_dict(output.get("adaptive_sampling"))
+        stop_reason = str(adaptive_sampling.get("stop_reason") or "")
+        sample_exhaustion_reason = (
+            stop_reason
+            if stop_reason in {"candidate_pool_exhausted", "configured_sample_budget_exhausted", "no_new_independent_symbols_available"}
+            else None
+        )
         attempted = len(evidence_items)
         valid_items = [item for item in evidence_items if item.get("eligible")]
         valid = len(valid_items)
@@ -1379,6 +1410,8 @@ class LLMConversationBrain:
             provider_blocked=provider_blocked,
             now=request.received_at,
             evidence_details=evidence_details,
+            sample_exhaustion_reason=sample_exhaustion_reason,
+            breadth_summary=_as_dict(output.get("summary")),
         )
         updated_mission = record_cycle_result(
             mission,

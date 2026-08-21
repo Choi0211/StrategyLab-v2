@@ -16,10 +16,12 @@ from gaon.research.krx_real_pipeline import UserStrategyParser
 from gaon.knowledge.strategy_candidate import (
     ABSOLUTE_CANDIDATE_CYCLE_CAP,
     ALL_STRATEGY_FAMILY_TEMPLATES,
+    ROBUSTNESS_EVIDENCE_SYMBOL_CAP,
     STRATEGY_FAMILY_TEMPLATES,
     STRATEGY_SPACE_EXPANSION_TEMPLATES,
     StrategyCandidateStatus,
     build_candidate_spec,
+    candidate_sample_exhausted,
     expand_strategy_space_candidate,
     is_stagnant,
     mark_promotion_ready,
@@ -832,6 +834,167 @@ class CumulativeBreadthEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(regressed_batch.valid_symbols, 15)
         self.assertEqual(regressed_batch.trade_count, 57)
+
+
+class SampleExhaustionDecisionTests(unittest.TestCase):
+    def test_pool_exhaustion_prevents_repeat_expand_sample_when_canonical_sample_is_sufficient(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        symbols = tuple(f"S{i:02d}" for i in range(32))
+        trades = tuple([6] * 31 + [15])
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=33,
+            valid=32,
+            trade_count=201,
+            evidence_symbols=symbols,
+            excluded_symbols=("BLOCKED",),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=_breadth_details(symbols, trades),
+            sample_exhaustion_reason="candidate_pool_exhausted",
+            breadth_summary={
+                "eligible_symbols": 32,
+                "total_symbols": 33,
+                "aggregate_trade_count": 201,
+                "sample_confidence": "high",
+                "median_return": -0.24,
+                "median_mdd": 0.31,
+                "profitable_symbol_ratio": 0.2,
+            },
+        )
+        self.assertTrue(candidate_sample_exhausted(candidate))
+        action, reason = next_blocker_driven_research_action(candidate)
+        self.assertNotEqual(action, "EXPAND_SAMPLE")
+        self.assertEqual(action, "RUN_OOS")
+        self.assertEqual(reason, "out_of_sample_blocker")
+
+    def test_pool_exhaustion_rotates_when_canonical_sample_is_still_insufficient(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        symbols = ("005930", "000660")
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=2,
+            trade_count=12,
+            evidence_symbols=symbols,
+            excluded_symbols=("005380", "035420", "051910"),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=_breadth_details(symbols, (6, 6)),
+            sample_exhaustion_reason="candidate_pool_exhausted",
+            breadth_summary={"aggregate_trade_count": 12, "sample_confidence": "low"},
+        )
+        action, reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual(action, "ROTATE_CANDIDATE")
+        self.assertEqual(reason, "candidate_pool_exhausted")
+
+    def test_monte_carlo_waiting_uses_cumulative_trade_count_not_latest_batch(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        symbols = tuple(f"S{i:02d}" for i in range(32))
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=28,
+            evidence_symbols=symbols[-5:],
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=_breadth_details(symbols, tuple([6] * 31 + [15])),
+            sample_exhaustion_reason="candidate_pool_exhausted",
+            breadth_summary={"aggregate_trade_count": 201, "sample_confidence": "high"},
+        )
+        for stage, status in (
+            ("out_of_sample", "pass"),
+            ("regime_validation", "pass"),
+            ("walk_forward", "pass"),
+            ("parameter_sensitivity", "stable"),
+            ("transaction_cost_stress", "cost_stable"),
+        ):
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="hold",
+                terminal=False,
+                validation_stage_status={stage: status},
+                symbol=symbols[0],
+                reference=f"action=setup|symbol={symbols[0]}|stage={stage}|status={status}",
+                now=LATER,
+            )
+        action, reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual(candidate.trade_count, 201)
+        self.assertEqual(action, "RUN_MONTE_CARLO")
+        self.assertEqual(reason, "monte_carlo_blocker")
+
+    def test_robustness_symbol_memory_can_cover_cumulative_breadth_sample(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        symbols = tuple(f"S{i:02d}" for i in range(32))
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=32,
+            valid=32,
+            trade_count=201,
+            evidence_symbols=symbols,
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=_breadth_details(symbols, tuple([6] * 31 + [15])),
+        )
+        for symbol in symbols:
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="hold",
+                terminal=False,
+                validation_stage_status={"out_of_sample": "partial"},
+                symbol=symbol,
+                now=LATER,
+            )
+        self.assertGreaterEqual(ROBUSTNESS_EVIDENCE_SYMBOL_CAP, len(symbols))
+        self.assertEqual(set(candidate.robustness_evidence_symbols), set(symbols))
+
+    def test_sample_exhaustion_with_no_remaining_blockers_ranks_instead_of_rotating(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        symbols = tuple(f"S{i:02d}" for i in range(32))
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=33,
+            valid=32,
+            trade_count=201,
+            evidence_symbols=symbols,
+            excluded_symbols=("BLOCKED",),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=_breadth_details(symbols, tuple([6] * 31 + [15])),
+            sample_exhaustion_reason="candidate_pool_exhausted",
+        )
+        for stage, status in (
+            ("out_of_sample", "pass"),
+            ("regime_validation", "pass"),
+            ("walk_forward", "pass"),
+            ("parameter_sensitivity", "stable"),
+            ("transaction_cost_stress", "cost_stable"),
+            ("monte_carlo", "pass"),
+        ):
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="hold",
+                terminal=False,
+                validation_stage_status={stage: status},
+                symbol=symbols[0],
+                reference=f"action=setup|symbol={symbols[0]}|stage={stage}|status={status}",
+                now=LATER,
+            )
+        for symbol in symbols:
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="hold",
+                terminal=False,
+                validation_stage_status={"monte_carlo": "pass"},
+                symbol=symbol,
+                now=LATER,
+            )
+        action, reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual(action, "RANK_CANDIDATES")
+        self.assertEqual(reason, "no_blocking_validation_stage_remaining")
 
     def test_status_summary_with_no_active_candidates_is_still_truthful(self) -> None:
         summary = render_candidate_status_summary((), current=0, target=3)

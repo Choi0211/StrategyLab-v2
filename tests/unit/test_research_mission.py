@@ -567,6 +567,25 @@ class CumulativeSamplePersistenceReleaseCheckTests(unittest.TestCase):
         self.assertEqual(payload["safety"], "pass")
 
 
+class SampleExhaustionCandidateDecisionReleaseCheckTests(unittest.TestCase):
+    def test_release_check_blocks_expand_sample_loop_after_pool_exhaustion(self) -> None:
+        from gaon.knowledge.research_mission import production_sample_exhaustion_candidate_decision_release_check
+
+        payload = production_sample_exhaustion_candidate_decision_release_check()
+        self.assertEqual(payload["canonical_valid_symbols"], 32)
+        self.assertEqual(payload["canonical_trade_count"], 201)
+        self.assertEqual(payload["latest_batch_valid_symbols"], 5)
+        self.assertEqual(payload["latest_batch_trade_count"], 28)
+        self.assertTrue(payload["candidate_pool_exhaustion_persisted"])
+        self.assertTrue(payload["expand_sample_not_repeated_after_exhaustion"])
+        self.assertTrue(payload["monte_carlo_uses_cumulative_sample"])
+        self.assertTrue(payload["mission_target_three_preserved"])
+        self.assertTrue(payload["restart_preserves_exhaustion_state"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertEqual(payload["safety"], "pass")
+
+
 class MissionPersistenceRoundTripTests(unittest.TestCase):
     def test_to_json_from_json_round_trip(self) -> None:
         from gaon.knowledge.research_mission import ResearchMission

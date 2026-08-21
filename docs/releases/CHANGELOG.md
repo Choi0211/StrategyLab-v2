@@ -1,5 +1,25 @@
 # Changelog
 
+## Hotfix: Sample Exhaustion Candidate Decision
+
+- Persisted `candidate_pool_exhausted` and related breadth summaries on
+  `StrategyCandidateRecord` so an exhausted provider/universe sample pool is
+  a decision boundary, not another `EXPAND_SAMPLE` loop.
+- Changed blocker-driven continuation to evaluate canonical cumulative
+  evidence after pool exhaustion: sufficient candidates move to OOS/regime/
+  walk-forward/cost/sensitivity/Monte Carlo validation, while still
+  insufficient exhausted candidates rotate safely.
+- Preserved batch-local presentation separately from cumulative mission
+  state, including the production-shaped `5 symbols / 28 trades` latest
+  batch versus `32 valid symbols / 201 trades` canonical sample.
+- Added restart-safe sample-exhaustion persistence and a Telegram/SQLite
+  regression proving the next continuation does not rerun
+  `multi_symbol_research` for the exhausted pool.
+- Added `gaon-production-sample-exhaustion-candidate-decision-release-check`.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, strategy mutation, or fabricated
+  metrics added.
+
 ## Hotfix: Cumulative Sample Persistence
 
 - Fixed a production ResearchMission regression where the same canonical

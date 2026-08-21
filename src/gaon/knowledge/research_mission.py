@@ -3416,3 +3416,176 @@ def production_cumulative_sample_persistence_release_check() -> Mapping[str, obj
         "approval_bypassed": False,
         "safety": "pass",
     }
+
+
+def production_sample_exhaustion_candidate_decision_release_check() -> Mapping[str, object]:
+    """Regression guard for candidate-pool exhaustion after cumulative sampling.
+
+    A candidate that already has authoritative cumulative evidence must not
+    keep requesting EXPAND_SAMPLE after the data/universe provider reports
+    that no new independent symbols are available.
+    """
+    from gaon.knowledge.strategy_candidate import (
+        candidate_sample_exhausted,
+        expand_strategy_space_candidate,
+        mark_stagnant,
+        new_candidate,
+        next_blocker_driven_research_action,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+
+    def details(symbols: tuple[str, ...], trades: tuple[int, ...]) -> dict[str, Mapping[str, object]]:
+        return {
+            symbol: {
+                "symbol": symbol,
+                "eligible": True,
+                "metrics": {"trade_count": trades[index]},
+                "evidence_id": f"release-check:sample-exhaustion:{symbol}",
+                "quality_status": "pass",
+                "source": "real:yahoo-chart",
+                "fixture_backed": False,
+            }
+            for index, symbol in enumerate(symbols)
+        }
+
+    now = "2026-08-22T00:00:00Z"
+    mission = ResearchMission(
+        mission_id="research-mission:sample-exhaustion-candidate-decision-release-check",
+        market="KR",
+        universe_scope=MissionUniverseScope.MARKET_WIDE,
+        symbols=(),
+        exchanges=DEFAULT_KR_EXCHANGES,
+        strategy_family="short_term_daytrade",
+        improve_return=True,
+        improve_safety=True,
+        baseline_comparison="registered_strategy",
+        target_promotion_ready_candidates=3,
+        current_promotion_ready_candidates=0,
+        promotion_ready_candidates=(),
+        explored_symbols=(),
+        status=MissionStatus.ACTIVE,
+        blocked_reason=None,
+        cycles_completed=0,
+        created_at=now,
+        updated_at=now,
+        originating_request="release-check",
+    )
+    candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=now)
+    symbols = tuple(f"S{i:02d}" for i in range(32))
+    trades = tuple([6] * 31 + [15])
+    batches = (
+        (symbols[:13], tuple([5] * 12 + [10])),
+        (symbols[13:17], (8, 8, 8, 7)),
+        (symbols[17:22], (7, 7, 6, 6, 6)),
+        (symbols[22:27], (8, 8, 8, 8, 8)),
+        (symbols[27:32], (6, 6, 6, 5, 5)),
+    )
+    for batch_index, (batch_symbols, batch_trades) in enumerate(batches, start=1):
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5 if batch_index > 1 else 13,
+            valid=len(batch_symbols),
+            trade_count=sum(batch_trades),
+            evidence_symbols=batch_symbols,
+            excluded_symbols=("BLOCKED",) if batch_index == len(batches) else (),
+            provider_blocked=False,
+            now=now,
+            evidence_details=details(batch_symbols, batch_trades),
+            sample_exhaustion_reason="candidate_pool_exhausted" if batch_index == len(batches) else None,
+            breadth_summary={
+                "total_symbols": 33,
+                "eligible_symbols": 32,
+                "aggregate_trade_count": 201,
+                "sample_confidence": "high",
+                "median_return": -0.24,
+                "median_mdd": 0.31,
+                "profitable_symbol_ratio": 0.2,
+            },
+        )
+    mission_with_candidate = add_candidate(mission, candidate, now=now)
+    candidate_action, candidate_reason = next_blocker_driven_research_action(candidate)
+    monte_ready = candidate
+    for stage, status in (
+        ("out_of_sample", "pass"),
+        ("regime_validation", "pass"),
+        ("walk_forward", "pass"),
+        ("parameter_sensitivity", "stable"),
+        ("transaction_cost_stress", "cost_stable"),
+    ):
+        monte_ready = record_robustness_progress(
+            monte_ready,
+            director_action="hold",
+            terminal=False,
+            validation_stage_status={stage: status},
+            symbol=symbols[0],
+            reference=f"action=setup|symbol={symbols[0]}|stage={stage}|status={status}",
+            now=now,
+        )
+    monte_action, monte_reason = next_blocker_driven_research_action(monte_ready)
+    exhausted_no_symbol = monte_ready
+    for symbol in symbols:
+        exhausted_no_symbol = record_robustness_progress(
+            exhausted_no_symbol,
+            director_action="hold",
+            terminal=False,
+            validation_stage_status={"monte_carlo": "monte_carlo_risk"},
+            symbol=symbol,
+            now=now,
+        )
+    rotation_action, rotation_reason = next_blocker_driven_research_action(exhausted_no_symbol)
+    rotated = mark_stagnant(exhausted_no_symbol, reason=rotation_reason, now=now)
+    rotated_mission = update_candidate(mission_with_candidate, rotated, now=now)
+    rotated_mission = set_active_candidate(rotated_mission, None, now=now)
+    expansion = expand_strategy_space_candidate(
+        candidate_records(rotated_mission),
+        sequence=next_candidate_sequence(rotated_mission),
+        now=now,
+    )
+    restored = ResearchMission.from_json(rotated_mission.to_json())
+    restored_candidate = get_candidate(restored, candidate.candidate_id)
+    checks = {
+        "canonical_sample_used": candidate.valid_symbols == 32 and candidate.trade_count == 201,
+        "candidate_pool_exhaustion_persisted": candidate_sample_exhausted(candidate),
+        "expand_sample_not_repeated_after_exhaustion": candidate_action != "EXPAND_SAMPLE",
+        "candidate_viability_evaluated": candidate_action in {"RUN_OOS", "RUN_REGIME", "RUN_WALK_FORWARD", "RUN_COST_STRESS", "RUN_SENSITIVITY", "RUN_MONTE_CARLO", "ROTATE_CANDIDATE", "RANK_CANDIDATES"},
+        "next_action_recomputed": candidate_action == "RUN_OOS" and candidate_reason == "out_of_sample_blocker",
+        "monte_carlo_uses_cumulative_sample": monte_ready.trade_count == 201
+        and monte_action == "RUN_MONTE_CARLO"
+        and monte_reason == "monte_carlo_blocker",
+        "candidate_rotation_available": rotation_action == "ROTATE_CANDIDATE"
+        and rotation_reason == "sample_pool_exhausted_no_untried_robustness_symbol",
+        "strategy_space_expansion_available": expansion.candidate is not None,
+        "mission_target_three_preserved": restored.target_promotion_ready_candidates == 3,
+        "batch_and_cumulative_metrics_separated": sum(batches[-1][1]) == 28
+        and candidate.trade_count == 201
+        and candidate.valid_symbols == 32,
+        "restart_preserves_exhaustion_state": restored_candidate is not None
+        and candidate_sample_exhausted(restored_candidate)
+        and restored_candidate.trade_count == 201,
+        "read_only_query_executes_no_research": True,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"sample exhaustion candidate decision release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "candidate_id": candidate.candidate_id,
+        "strategy_fingerprint": candidate.strategy_fingerprint,
+        "canonical_valid_symbols": candidate.valid_symbols,
+        "canonical_attempted_symbols": candidate.attempted_symbols,
+        "canonical_trade_count": candidate.trade_count,
+        "latest_batch_valid_symbols": len(batches[-1][0]),
+        "latest_batch_trade_count": sum(batches[-1][1]),
+        "candidate_action": candidate_action,
+        "candidate_reason": candidate_reason,
+        "monte_carlo_action": monte_action,
+        "rotation_action": rotation_action,
+        "rotation_reason": rotation_reason,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }

@@ -1081,7 +1081,7 @@ def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tu
     sampling=dict(adaptive_sampling or {})
     lines=[
         "[다중종목 실제 연구]","[연구 결과]","","[결론]",conclusion,"",
-        "[이번 연구]",
+        "[이번 batch]",
         f"- market={request.universe.market}",
         f"- 시장: {request.universe.market}",
         f"- 거래소: {', '.join(request.universe.exchanges)}",
@@ -1107,9 +1107,9 @@ def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tu
         if exclusion.get("provider_related_excluded") and exclusion["provider_related_excluded"] == exclusion.get("total_excluded"):
             lines.append("- 제외 사유가 모두 데이터 제공자/조회 문제이며, 전략 자체의 실패로 판단하지 않습니다.")
     if sampling:
-        lines.extend(["","[표본 확장]",
-            f"- 연구 라운드: {sampling.get('sampling_rounds',1)}회",
-            f"- budget: {sampling.get('research_budget_used',len(evidence))}/{sampling.get('research_budget_limit',len(evidence))}종목",
+        lines.extend(["","[batch 표본 확장]",
+            f"- batch research rounds: {sampling.get('sampling_rounds',1)}회",
+            f"- batch budget: {sampling.get('research_budget_used',len(evidence))}/{sampling.get('research_budget_limit',len(evidence))}종목",
             f"- 종료 이유: {sampling.get('stop_reason','unknown')}"])
         coverage=sampling.get("exchange_coverage")
         if isinstance(coverage,dict) and coverage:
@@ -1129,6 +1129,7 @@ def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tu
             star=" ⭐" if row.get("candidate_id")==generalization.winner_id else ""
             lines.append(f"- 후보 {label}{star}: 중앙 수익률 {pct(row.get('median_return'))}, MDD {pct(row.get('median_mdd'))}, 거래 {row.get('aggregate_trade_count',0)}회")
     lines.extend(["","[가온의 판단]",f"- {conclusion}"])
+    lines.extend(["","[누적 Research Mission]","- 누적 유효 종목/거래 수는 상단 전략 후보 블록의 canonical candidate state를 기준으로 판단합니다."])
     if summary.sample_confidence=="low":
         lines.append("- 현재 표본만으로 일반화하지 않고 추가 검증이 필요합니다.")
     elif generalization.decision is CandidateGeneralizationDecision.CANDIDATE_PREFERRED:
@@ -1136,7 +1137,9 @@ def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tu
     else:
         lines.append("- 서로 다른 종목·기간에서도 같은 결과가 반복되는지 확인해야 합니다.")
     lines.extend(["","[다음 연구]"])
-    if sampling.get("stop_reason")=="research_budget_exhausted":
+    if sampling.get("stop_reason")=="candidate_pool_exhausted":
+        lines.append("- 중복되지 않는 후보 종목 풀이 소진되었습니다. 같은 EXPAND_SAMPLE을 반복하지 않고 누적 증거로 후보 viability를 판정합니다.")
+    elif sampling.get("stop_reason")=="research_budget_exhausted":
         lines.append("- 설정된 연구 budget을 모두 사용했습니다. 다음 표본/기간으로 증거를 확장합니다.")
     elif summary.sample_confidence=="low":
         lines.append("- 중복되지 않는 대표 종목을 추가해 표본 신뢰도를 높입니다.")
