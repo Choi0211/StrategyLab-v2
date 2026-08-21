@@ -2,6 +2,24 @@
 
 Status: Passed
 
+## Hotfix: Cumulative Sample Persistence
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\strategy_candidate.py src\gaon\knowledge\research_mission.py src\gaon\runtime\llm_conversation.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_strategy_candidate.CumulativeBreadthEvidenceTests tests.unit.test_research_mission.CumulativeSamplePersistenceReleaseCheckTests -q`: PASS, 8 tests
+  - `python -m gaon.runtime.cli gaon-production-cumulative-sample-persistence-release-check`: PASS
+- Required full verification:
+  - `python -m unittest tests.unit.test_strategy_candidate tests.unit.test_research_mission -q`: PASS, 134 tests
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1177 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 259 tests
+  - `python scripts\verify_release.py`: PASS
+  - Existing production release checks: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated evidence.
+
 ## Hotfix: Research Mission Strategy-Space Expansion
 
 - Targeted local verification:

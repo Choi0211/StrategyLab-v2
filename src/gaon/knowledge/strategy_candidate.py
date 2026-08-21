@@ -78,6 +78,7 @@ MIN_VALID_SYMBOL_RATIO_FOR_UNIVERSE_EVIDENCE = 0.3
 # sample under one candidate's fingerprint - same cap as breadth's
 # evidence_symbols (see record_breadth_progress) for consistency.
 ROBUSTNESS_EVIDENCE_SYMBOL_CAP = 8
+BREADTH_EVIDENCE_SYMBOL_CAP = 64
 PROMOTION_MIN_TRADE_SAMPLE = 30
 
 PASS_LIKE_STAGE_STATUSES = frozenset(
@@ -473,6 +474,14 @@ class StrategyCandidateRecord:
     robustness_attempt_count: int = 0
     last_validation_symbol: str | None = None
     last_validation_reference: str | None = None
+    # Canonical breadth evidence keyed by symbol. The legacy scalar fields
+    # above (attempted_symbols, valid_symbols, trade_count, evidence_symbols,
+    # excluded_symbols) are derived from this map for new records. Older
+    # production records that predate this field keep their already persisted
+    # aggregate trade count as a floor in breadth_legacy_trade_count so a
+    # restart cannot regress 10-symbol evidence back to a 5-symbol batch.
+    breadth_evidence: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+    breadth_legacy_trade_count: int = 0
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -502,10 +511,28 @@ class StrategyCandidateRecord:
             "robustness_attempt_count": self.robustness_attempt_count,
             "last_validation_symbol": self.last_validation_symbol,
             "last_validation_reference": self.last_validation_reference,
+            "breadth_evidence": {str(key): dict(value) for key, value in self.breadth_evidence.items()},
+            "breadth_legacy_trade_count": self.breadth_legacy_trade_count,
         }
 
     @staticmethod
     def from_json(raw: Mapping[str, object]) -> "StrategyCandidateRecord":
+        breadth_evidence_raw = raw.get("breadth_evidence")
+        if isinstance(breadth_evidence_raw, Mapping):
+            breadth_evidence = {
+                str(key): dict(value) for key, value in dict(breadth_evidence_raw).items() if isinstance(value, Mapping)
+            }
+            breadth_legacy_trade_count = int(raw.get("breadth_legacy_trade_count", 0) or 0)
+        else:
+            breadth_evidence = {}
+            for symbol in raw.get("evidence_symbols", ()) or ():
+                breadth_evidence[str(symbol)] = {"symbol": str(symbol), "eligible": True, "trade_count": 0, "source": "legacy_candidate_state"}
+            for symbol in raw.get("excluded_symbols", ()) or ():
+                breadth_evidence.setdefault(
+                    str(symbol),
+                    {"symbol": str(symbol), "eligible": False, "trade_count": 0, "source": "legacy_candidate_state"},
+                )
+            breadth_legacy_trade_count = int(raw.get("trade_count", 0) or 0) if breadth_evidence else 0
         return StrategyCandidateRecord(
             candidate_id=str(raw["candidate_id"]),
             strategy_fingerprint=str(raw["strategy_fingerprint"]),
@@ -534,6 +561,8 @@ class StrategyCandidateRecord:
             robustness_attempt_count=int(raw.get("robustness_attempt_count", 0) or 0),
             last_validation_symbol=str(raw["last_validation_symbol"]) if raw.get("last_validation_symbol") else None,
             last_validation_reference=str(raw["last_validation_reference"]) if raw.get("last_validation_reference") else None,
+            breadth_evidence=breadth_evidence,
+            breadth_legacy_trade_count=breadth_legacy_trade_count,
         )
 
     @property
@@ -584,6 +613,8 @@ def new_candidate(
         promotion_ready_at=None,
         created_at=now,
         updated_at=now,
+        breadth_evidence={},
+        breadth_legacy_trade_count=0,
     )
 
 
@@ -597,6 +628,7 @@ def record_breadth_progress(
     excluded_symbols: tuple[str, ...],
     provider_blocked: bool,
     now: str,
+    evidence_details: Mapping[str, Mapping[str, object]] | None = None,
 ) -> StrategyCandidateRecord:
     """Records one cross-symbol (breadth) evaluation cycle's outcome.
 
@@ -605,7 +637,39 @@ def record_breadth_progress(
     never counts toward stagnation - a strategy is never penalized for a
     data outage.
     """
-    progressed = valid > candidate.valid_symbols or trade_count > candidate.trade_count
+    if evidence_details is None:
+        merged_evidence_symbols = tuple(dict.fromkeys((*candidate.evidence_symbols, *evidence_symbols)))[:BREADTH_EVIDENCE_SYMBOL_CAP]
+        merged_excluded_symbols = tuple(dict.fromkeys((*candidate.excluded_symbols, *excluded_symbols)))[:BREADTH_EVIDENCE_SYMBOL_CAP]
+        canonical_attempted = max(candidate.attempted_symbols, attempted, len(merged_evidence_symbols) + len(merged_excluded_symbols))
+        canonical_valid = max(candidate.valid_symbols, valid, len(merged_evidence_symbols))
+        canonical_trade_count = max(candidate.trade_count, trade_count)
+        canonical_breadth_evidence = dict(candidate.breadth_evidence)
+        canonical_legacy_trade_count = candidate.breadth_legacy_trade_count
+    else:
+        canonical_breadth_evidence = _seed_breadth_evidence(candidate)
+        for symbol, detail in evidence_details.items():
+            normalized = _normalize_breadth_evidence_detail(symbol, detail)
+            canonical_breadth_evidence[symbol] = normalized
+        canonical_breadth_evidence = dict(list(canonical_breadth_evidence.items())[:BREADTH_EVIDENCE_SYMBOL_CAP])
+        canonical_legacy_trade_count = candidate.breadth_legacy_trade_count
+        canonical_attempted = len(canonical_breadth_evidence)
+        merged_evidence_symbols = tuple(
+            symbol for symbol, detail in canonical_breadth_evidence.items() if bool(detail.get("eligible"))
+        )
+        merged_excluded_symbols = tuple(
+            symbol for symbol, detail in canonical_breadth_evidence.items() if not bool(detail.get("eligible"))
+        )
+        canonical_valid = len(merged_evidence_symbols)
+        canonical_trade_count = canonical_legacy_trade_count + sum(
+            int(detail.get("trade_count", 0) or 0)
+            for detail in canonical_breadth_evidence.values()
+            if bool(detail.get("eligible"))
+        )
+    progressed = (
+        canonical_valid > candidate.valid_symbols
+        or canonical_trade_count > candidate.trade_count
+        or tuple(merged_evidence_symbols) != tuple(candidate.evidence_symbols)
+    )
     if progressed:
         cycles_without_progress = 0
     elif provider_blocked:
@@ -617,16 +681,48 @@ def record_breadth_progress(
         status = StrategyCandidateStatus.VALIDATING
     return replace(
         candidate,
-        attempted_symbols=attempted,
-        valid_symbols=valid,
-        trade_count=trade_count,
-        evidence_symbols=tuple(dict.fromkeys((*candidate.evidence_symbols, *evidence_symbols)))[:8],
-        excluded_symbols=tuple(dict.fromkeys((*candidate.excluded_symbols, *excluded_symbols)))[:8],
+        attempted_symbols=canonical_attempted,
+        valid_symbols=canonical_valid,
+        trade_count=canonical_trade_count,
+        evidence_symbols=merged_evidence_symbols,
+        excluded_symbols=merged_excluded_symbols,
         cycles_completed=candidate.cycles_completed + 1,
         cycles_without_progress=cycles_without_progress,
         status=status,
         updated_at=now,
+        breadth_evidence=canonical_breadth_evidence,
+        breadth_legacy_trade_count=canonical_legacy_trade_count,
     )
+
+
+def _seed_breadth_evidence(candidate: StrategyCandidateRecord) -> dict[str, Mapping[str, object]]:
+    if candidate.breadth_evidence:
+        return {str(symbol): dict(detail) for symbol, detail in candidate.breadth_evidence.items()}
+    seeded: dict[str, Mapping[str, object]] = {}
+    for symbol in candidate.evidence_symbols:
+        seeded[str(symbol)] = {"symbol": str(symbol), "eligible": True, "trade_count": 0, "source": "legacy_candidate_state"}
+    for symbol in candidate.excluded_symbols:
+        seeded.setdefault(
+            str(symbol),
+            {"symbol": str(symbol), "eligible": False, "trade_count": 0, "source": "legacy_candidate_state"},
+        )
+    return seeded
+
+
+def _normalize_breadth_evidence_detail(symbol: str, detail: Mapping[str, object]) -> Mapping[str, object]:
+    metrics = detail.get("metrics") if isinstance(detail.get("metrics"), Mapping) else {}
+    trade_count = detail.get("trade_count")
+    if trade_count is None:
+        trade_count = dict(metrics).get("trade_count", 0)
+    return {
+        "symbol": symbol,
+        "eligible": bool(detail.get("eligible")),
+        "trade_count": int(trade_count or 0),
+        "evidence_id": str(detail.get("evidence_id", "")),
+        "quality_status": str(detail.get("quality_status", "")),
+        "source": str(detail.get("source", "")),
+        "fixture_backed": bool(detail.get("fixture_backed", False)),
+    }
 
 
 def record_robustness_progress(

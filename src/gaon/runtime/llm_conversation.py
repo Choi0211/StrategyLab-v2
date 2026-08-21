@@ -1348,6 +1348,24 @@ class LLMConversationBrain:
         trade_count = int(_as_dict(output.get("summary")).get("aggregate_trade_count", 0) or 0)
         evidence_symbols = tuple(str(item.get("symbol")) for item in valid_items if item.get("symbol"))
         excluded_symbols = tuple(str(item.get("symbol")) for item in evidence_items if not item.get("eligible") and item.get("symbol"))
+        evidence_details = {
+            str(item.get("symbol")): {
+                "symbol": str(item.get("symbol")),
+                "eligible": bool(item.get("eligible")),
+                "trade_count": int(
+                    item.get("trade_count")
+                    or _as_dict(item.get("metrics")).get("trade_count", 0)
+                    or 0
+                ),
+                "metrics": _as_dict(item.get("metrics")),
+                "evidence_id": str(item.get("evidence_id") or ""),
+                "quality_status": str(item.get("quality_status") or ""),
+                "source": str(item.get("source") or ""),
+                "fixture_backed": bool(item.get("fixture_backed", False)),
+            }
+            for item in evidence_items
+            if item.get("symbol")
+        }
         exclusion = _as_dict(output.get("exclusion_diagnostics"))
         provider_blocked = is_provider_acquisition_blocker(exclusion)
 
@@ -1360,6 +1378,7 @@ class LLMConversationBrain:
             excluded_symbols=excluded_symbols,
             provider_blocked=provider_blocked,
             now=request.received_at,
+            evidence_details=evidence_details,
         )
         updated_mission = record_cycle_result(
             mission,

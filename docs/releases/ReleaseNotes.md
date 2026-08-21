@@ -3,6 +3,31 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix: Cumulative Sample Persistence
+
+Production Telegram acceptance found a cumulative evidence regression in
+mission-driven autonomous research: the same canonical candidate
+fingerprint could show `5 symbols / 40 trades`, then `10 symbols / 57
+trades`, then regress to a later batch-local `5 symbols / 30 trades`.
+
+The defect was persisted candidate state, not only presentation. Breadth
+validation now stores canonical per-symbol evidence on the
+`StrategyCandidateRecord`, derives cumulative scalar read-model fields from
+that evidence, and keeps legacy aggregate trade counts as a restart-safe
+floor for records created before this hotfix.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-cumulative-sample-persistence-release-check
+```
+
+The check proves first-batch recording, second-batch accumulation, later
+batch non-regression, duplicate replay protection, restart preservation,
+legacy aggregate-floor preservation, and unchanged safety. Schema remains
+v36. No live trading, broker/KIS order, Champion auto-promotion, approval
+bypass, unapproved strategy mutation, or fabricated metrics were added.
+
 ## Hotfix: Research Mission Strategy-Space Expansion
 
 Production acceptance reached a valid but unhelpful stopping state:
