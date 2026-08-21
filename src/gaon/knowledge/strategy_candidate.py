@@ -77,8 +77,8 @@ MIN_VALID_SYMBOL_RATIO_FOR_UNIVERSE_EVIDENCE = 0.3
 # (deep single-symbol OOS/walk-forward/regime/cost/Monte Carlo) evaluation
 # sample under one candidate's fingerprint - same cap as breadth's
 # evidence_symbols (see record_breadth_progress) for consistency.
-ROBUSTNESS_EVIDENCE_SYMBOL_CAP = 8
 BREADTH_EVIDENCE_SYMBOL_CAP = 64
+ROBUSTNESS_EVIDENCE_SYMBOL_CAP = BREADTH_EVIDENCE_SYMBOL_CAP
 PROMOTION_MIN_TRADE_SAMPLE = 30
 
 PASS_LIKE_STAGE_STATUSES = frozenset(
@@ -482,6 +482,8 @@ class StrategyCandidateRecord:
     # restart cannot regress 10-symbol evidence back to a 5-symbol batch.
     breadth_evidence: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
     breadth_legacy_trade_count: int = 0
+    sample_exhaustion_reason: str | None = None
+    breadth_summary: Mapping[str, object] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -513,6 +515,8 @@ class StrategyCandidateRecord:
             "last_validation_reference": self.last_validation_reference,
             "breadth_evidence": {str(key): dict(value) for key, value in self.breadth_evidence.items()},
             "breadth_legacy_trade_count": self.breadth_legacy_trade_count,
+            "sample_exhaustion_reason": self.sample_exhaustion_reason,
+            "breadth_summary": dict(self.breadth_summary),
         }
 
     @staticmethod
@@ -563,6 +567,8 @@ class StrategyCandidateRecord:
             last_validation_reference=str(raw["last_validation_reference"]) if raw.get("last_validation_reference") else None,
             breadth_evidence=breadth_evidence,
             breadth_legacy_trade_count=breadth_legacy_trade_count,
+            sample_exhaustion_reason=str(raw["sample_exhaustion_reason"]) if raw.get("sample_exhaustion_reason") else None,
+            breadth_summary=dict(raw.get("breadth_summary") or {}),
         )
 
     @property
@@ -615,6 +621,8 @@ def new_candidate(
         updated_at=now,
         breadth_evidence={},
         breadth_legacy_trade_count=0,
+        sample_exhaustion_reason=None,
+        breadth_summary={},
     )
 
 
@@ -629,6 +637,8 @@ def record_breadth_progress(
     provider_blocked: bool,
     now: str,
     evidence_details: Mapping[str, Mapping[str, object]] | None = None,
+    sample_exhaustion_reason: str | None = None,
+    breadth_summary: Mapping[str, object] | None = None,
 ) -> StrategyCandidateRecord:
     """Records one cross-symbol (breadth) evaluation cycle's outcome.
 
@@ -650,6 +660,11 @@ def record_breadth_progress(
         for symbol, detail in evidence_details.items():
             normalized = _normalize_breadth_evidence_detail(symbol, detail)
             canonical_breadth_evidence[symbol] = normalized
+        for symbol in excluded_symbols:
+            canonical_breadth_evidence.setdefault(
+                str(symbol),
+                {"symbol": str(symbol), "eligible": False, "trade_count": 0, "source": "multi_symbol_research"},
+            )
         canonical_breadth_evidence = dict(list(canonical_breadth_evidence.items())[:BREADTH_EVIDENCE_SYMBOL_CAP])
         canonical_legacy_trade_count = candidate.breadth_legacy_trade_count
         canonical_attempted = len(canonical_breadth_evidence)
@@ -692,6 +707,8 @@ def record_breadth_progress(
         updated_at=now,
         breadth_evidence=canonical_breadth_evidence,
         breadth_legacy_trade_count=canonical_legacy_trade_count,
+        sample_exhaustion_reason=sample_exhaustion_reason or candidate.sample_exhaustion_reason,
+        breadth_summary=dict(breadth_summary or candidate.breadth_summary),
     )
 
 
@@ -877,25 +894,52 @@ def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> t
         return "ROTATE_CANDIDATE", candidate.rejected_reason or "candidate_terminal"
     blockers = candidate_remaining_blockers(candidate)
     next_symbol = next_robustness_evidence_symbol(candidate)
-    if not candidate.has_sufficient_universe_evidence or not next_symbol:
+    sample_exhausted = candidate_sample_exhausted(candidate)
+    if not sample_exhausted and (not candidate.has_sufficient_universe_evidence or not next_symbol):
         return "EXPAND_SAMPLE", "need_new_independent_evidence_symbols"
+    if sample_exhausted and not candidate.has_sufficient_universe_evidence:
+        return "ROTATE_CANDIDATE", candidate.sample_exhaustion_reason or "sample_pool_exhausted_without_sufficient_evidence"
     if "out_of_sample" in blockers and not _last_attempt_matches_stage(candidate, "RUN_OOS", "out_of_sample"):
+        if sample_exhausted and next_symbol is None:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
         return "RUN_OOS", "out_of_sample_blocker"
     if "regime_validation" in blockers and not _last_attempt_matches_stage(candidate, "RUN_REGIME", "regime_validation"):
+        if sample_exhausted and next_symbol is None:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
         return "RUN_REGIME", "regime_blocker"
     if "walk_forward" in blockers and not _last_attempt_matches_stage(candidate, "RUN_WALK_FORWARD", "walk_forward"):
+        if sample_exhausted and next_symbol is None:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
         return "RUN_WALK_FORWARD", "walk_forward_blocker"
     if "transaction_cost_stress" in blockers and not _last_attempt_matches_stage(candidate, "RUN_COST_STRESS", "transaction_cost_stress"):
+        if sample_exhausted and next_symbol is None:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
         return "RUN_COST_STRESS", "transaction_cost_blocker"
     if "parameter_sensitivity" in blockers and not _last_attempt_matches_stage(candidate, "RUN_SENSITIVITY", "parameter_sensitivity"):
+        if sample_exhausted and next_symbol is None:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
         return "RUN_SENSITIVITY", "parameter_sensitivity_blocker"
     if "monte_carlo_waiting_for_primary_sample" in blockers:
+        if sample_exhausted:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_below_monte_carlo_sample"
         return "EXPAND_SAMPLE", "monte_carlo_waiting_for_primary_sample"
     if "monte_carlo" in blockers and not _last_attempt_matches_stage(candidate, "RUN_MONTE_CARLO", "monte_carlo"):
+        if sample_exhausted and next_symbol is None:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
         return "RUN_MONTE_CARLO", "monte_carlo_blocker"
     if any(blocker in blockers for blocker in ACTION_STAGE_KEYS.values()):
+        if sample_exhausted:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_after_attempted_validation_dimensions"
         return "EXPAND_SAMPLE", "all_current_stage_blockers_already_attempted_without_progress"
     return "RANK_CANDIDATES", "no_blocking_validation_stage_remaining"
+
+
+def candidate_sample_exhausted(candidate: StrategyCandidateRecord) -> bool:
+    return str(candidate.sample_exhaustion_reason or "") in {
+        "candidate_pool_exhausted",
+        "configured_sample_budget_exhausted",
+        "no_new_independent_symbols_available",
+    }
 
 
 def _last_attempt_matches_stage(candidate: StrategyCandidateRecord, action: str, stage: str) -> bool:

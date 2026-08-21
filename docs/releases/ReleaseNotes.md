@@ -3,6 +3,36 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix: Sample Exhaustion Candidate Decision
+
+Production acceptance reached `candidate_pool_exhausted` after cumulative
+sampling had already accumulated `32 valid / 33 attempted / 201 trades`.
+The latest batch was only `5 valid / 28 trades`, but that batch-local value
+must not replace the candidate's canonical sample and must not trigger
+another `EXPAND_SAMPLE` request after the provider/universe pool is
+exhausted.
+
+`StrategyCandidateRecord` now persists the sample exhaustion reason and
+breadth summary beside canonical symbol-keyed evidence. Telegram mission
+continuation checks that state before starting another breadth cycle. If
+the cumulative candidate sample is sufficient, Gaon proceeds to the next
+bounded validation dimension such as OOS or Monte Carlo. If the sample is
+still insufficient and the pool is exhausted, Gaon rotates the candidate or
+uses the existing bounded strategy-space expansion path.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-sample-exhaustion-candidate-decision-release-check
+```
+
+The check proves canonical sample use, exhaustion persistence, no repeated
+`EXPAND_SAMPLE`, cumulative Monte Carlo eligibility, target `0/3`
+preservation, batch/cumulative presentation separation, restart
+preservation, and unchanged safety. Schema remains v36. No live trading,
+broker/KIS order, Champion auto-promotion, approval bypass, unapproved
+strategy mutation, or fabricated metrics were added.
+
 ## Hotfix: Cumulative Sample Persistence
 
 Production Telegram acceptance found a cumulative evidence regression in

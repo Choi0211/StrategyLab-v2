@@ -47,6 +47,7 @@ from gaon.knowledge.strategy_candidate import (
     STRATEGY_FAMILY_TEMPLATES,
     STRATEGY_SPACE_EXPANSION_TEMPLATES,
     build_candidate_spec,
+    candidate_sample_exhausted,
     mark_stagnant,
     new_candidate,
     record_breadth_progress,
@@ -450,6 +451,160 @@ class StrategySpaceExpansionTelegramTests(unittest.TestCase):
         self.assertNotIn("strategy_family_space_exhausted", response)
         self.assertEqual(len(self.store.tool_audit.list(tool_name="autonomous_learning_research")), 0)
         self.assertEqual(len(self.store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
+
+
+class SampleExhaustionCandidateDecisionTelegramTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = RuntimeStateStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.agent = TelegramConversationAgent(_config(), self.store._connection)
+        self.runtime = TelegramRuntime(self.agent, allowed_chat_ids=("100",))
+        self.client = _RecordingTelegramClient()
+
+    @staticmethod
+    def _details(symbols: tuple[str, ...], trades: tuple[int, ...]) -> dict[str, dict[str, object]]:
+        return {
+            symbol: {
+                "symbol": symbol,
+                "eligible": True,
+                "metrics": {"trade_count": trades[index]},
+                "evidence_id": f"integration:sample-exhaustion:{symbol}",
+                "quality_status": "pass",
+                "source": "real:yahoo-chart",
+                "fixture_backed": False,
+            }
+            for index, symbol in enumerate(symbols)
+        }
+
+    def _seed_sample_exhausted_candidate(self) -> None:
+        now = "2026-08-22T00:00:00Z"
+        symbols = tuple(f"S{i:02d}" for i in range(32))
+        batches = (
+            (symbols[:13], tuple([5] * 12 + [10])),
+            (symbols[13:17], (8, 8, 8, 7)),
+            (symbols[17:22], (7, 7, 6, 6, 6)),
+            (symbols[22:27], (8, 8, 8, 8, 8)),
+            (symbols[27:32], (6, 6, 6, 5, 5)),
+        )
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=now)
+        for batch_index, (batch_symbols, batch_trades) in enumerate(batches, start=1):
+            candidate = record_breadth_progress(
+                candidate,
+                attempted=13 if batch_index == 1 else 5,
+                valid=len(batch_symbols),
+                trade_count=sum(batch_trades),
+                evidence_symbols=batch_symbols,
+                excluded_symbols=("BLOCKED",) if batch_index == len(batches) else (),
+                provider_blocked=False,
+                now=now,
+                evidence_details=self._details(batch_symbols, batch_trades),
+                sample_exhaustion_reason="candidate_pool_exhausted" if batch_index == len(batches) else None,
+                breadth_summary={
+                    "total_symbols": 33,
+                    "eligible_symbols": 32,
+                    "aggregate_trade_count": 201,
+                    "latest_batch_valid_symbols": len(batch_symbols),
+                    "latest_batch_trade_count": sum(batch_trades),
+                },
+            )
+        mission = ResearchMission(
+            mission_id="research-mission:test-sample-exhaustion",
+            market="KR",
+            universe_scope=MissionUniverseScope.MARKET_WIDE,
+            symbols=(),
+            exchanges=DEFAULT_KR_EXCHANGES,
+            strategy_family="short_term_daytrade",
+            improve_return=True,
+            improve_safety=True,
+            baseline_comparison="registered_strategy",
+            target_promotion_ready_candidates=3,
+            current_promotion_ready_candidates=0,
+            promotion_ready_candidates=(),
+            explored_symbols=(),
+            status=MissionStatus.ACTIVE,
+            blocked_reason=None,
+            cycles_completed=5,
+            created_at=now,
+            updated_at=now,
+            originating_request="integration-test",
+            candidates=(candidate.to_json(),),
+            active_candidate_id=candidate.candidate_id,
+        )
+        self.agent.handle(ConversationInput("telegram", "100", "100", "seed", "안녕하세요 가온", now))
+        seed = LLMConversationRequest("telegram:100", "telegram:100", "telegram", "seed", now, "telegram:100:seed")
+        self.agent._brain._remember_mission(seed, mission)
+
+    def test_pool_exhaustion_persists_and_next_turn_does_not_repeat_expand_sample(self) -> None:
+        self._seed_sample_exhausted_candidate()
+        # Recreate the agent over the same SQLite connection to prove the
+        # decision uses persisted mission/candidate state, not only process
+        # memory.
+        self.agent = TelegramConversationAgent(_config(), self.store._connection)
+        self.runtime = TelegramRuntime(self.agent, allowed_chat_ids=("100",))
+        before_multi = len(self.store.tool_audit.list(tool_name="multi_symbol_research"))
+
+        def fake_learning(
+            _connection,
+            request_text,
+            *,
+            symbol="005930",
+            mode="research",
+            storage_root=None,
+            steps_used=0,
+            max_steps=8,
+            planned_action=None,
+            planned_action_reason=None,
+        ):
+            return {
+                "schema_version": 2,
+                "tool": "autonomous_learning_research",
+                "mode": mode,
+                "symbol": symbol,
+                "request_text": request_text,
+                "autonomous_learning_v2": {
+                    "research_director_decision": {"action": "hold", "reason": "bounded continuation", "terminal": False},
+                    "research_director_steps_used": 1,
+                    "planned_action_execution": {
+                        "planned_action": planned_action,
+                        "planned_action_reason": planned_action_reason,
+                        "dispatched": bool(planned_action),
+                    },
+                    "autonomous_quant_partner": {
+                        "production_grade_validation": {"out_of_sample": {"status": "pass", "executed": True}}
+                    },
+                    "promotion_candidate_context": {"candidate_id": "candidate:test", "candidate_fingerprint": "fp:test"},
+                },
+                "strategy_mutated": False,
+                "order_executed": False,
+                "automatic_champion_promotion": False,
+                "broker_order_called": False,
+                "kis_order_called": False,
+                "safety": "pass",
+            }
+
+        with patch("gaon.runtime.llm_tools.telegram_autonomous_learning_payload", side_effect=fake_learning):
+            result = process_update(
+                parse_update_result(_update(20, 20, "연구를 계속해주세요"), received_at="2026-08-22T00:10:00Z"),
+                self.runtime,
+                self.client,
+            )
+
+        self.assertEqual(result.status, "sent", result)
+        self.assertEqual(len(self.store.tool_audit.list(tool_name="multi_symbol_research")), before_multi)
+        audits = self.store.tool_audit.list(tool_name="autonomous_learning_research")
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(audits[-1].request["arguments"].get("planned_action"), "RUN_OOS")
+        self.assertEqual(audits[-1].request["arguments"].get("planned_action_reason"), "out_of_sample_blocker")
+        mission = self.agent._brain._mission_for("telegram:100")
+        self.assertEqual(mission.target_promotion_ready_candidates, 3)
+        candidate = candidate_records(mission)[0]
+        self.assertTrue(candidate_sample_exhausted(candidate))
+        self.assertEqual(candidate.valid_symbols, 32)
+        self.assertEqual(candidate.attempted_symbols, 33)
+        self.assertEqual(candidate.trade_count, 201)
+        response = self.client.sent[-1][1]
+        self.assertIn("action_executed=RUN_OOS", response)
+        self.assertNotIn("중복되지 않는 대표 종목을 추가", response)
 
 
 if __name__ == "__main__":
