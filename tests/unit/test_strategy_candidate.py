@@ -15,9 +15,12 @@ import unittest
 from gaon.research.krx_real_pipeline import UserStrategyParser
 from gaon.knowledge.strategy_candidate import (
     ABSOLUTE_CANDIDATE_CYCLE_CAP,
+    ALL_STRATEGY_FAMILY_TEMPLATES,
     STRATEGY_FAMILY_TEMPLATES,
+    STRATEGY_SPACE_EXPANSION_TEMPLATES,
     StrategyCandidateStatus,
     build_candidate_spec,
+    expand_strategy_space_candidate,
     is_stagnant,
     mark_promotion_ready,
     mark_rejected,
@@ -73,6 +76,13 @@ class DistinctStrategyRulesProduceDistinctFingerprintsTests(unittest.TestCase):
         }
         self.assertEqual(len(fingerprints), len(STRATEGY_FAMILY_TEMPLATES))
 
+    def test_expansion_templates_are_semantically_distinct_from_base_templates(self) -> None:
+        fingerprints = {
+            build_candidate_spec(template.family, created_at=NOW).strategy_family_fingerprint
+            for template in ALL_STRATEGY_FAMILY_TEMPLATES
+        }
+        self.assertEqual(len(fingerprints), len(ALL_STRATEGY_FAMILY_TEMPLATES))
+
     def test_families_are_named_honestly_within_backtester_capability(self) -> None:
         # Patch 8.2 explicitly must not invent strategy capabilities the
         # backtester does not implement (momentum/mean-reversion/
@@ -82,11 +92,30 @@ class DistinctStrategyRulesProduceDistinctFingerprintsTests(unittest.TestCase):
         supported_entry_keys = {"breakout_lookback", "close_gt_ma20", "ma20_gt_ma60"}
         supported_exit_keys = {"protective_stop_pct", "channel_exit_lookback"}
         supported_filter_keys = {"volume_gte_ma20"}
-        for template in STRATEGY_FAMILY_TEMPLATES:
+        for template in ALL_STRATEGY_FAMILY_TEMPLATES:
             self.assertTrue(set(template.entry.keys()) <= supported_entry_keys, template.family)
             self.assertTrue(set(template.exit.keys()) <= supported_exit_keys, template.family)
             self.assertTrue(set(template.filters.keys()) <= supported_filter_keys, template.family)
             self.assertIn("breakout_lookback", template.entry, template.family)
+
+    def test_expansion_request_text_round_trips_to_candidate_fingerprint(self) -> None:
+        parser = UserStrategyParser()
+        for template in STRATEGY_SPACE_EXPANSION_TEMPLATES:
+            candidate = new_candidate(template.family, sequence=1, now=NOW)
+            parsed = parser.parse(render_candidate_request_text(candidate, "005930"), symbol="005930")
+            self.assertEqual(parsed.strategy_family_fingerprint, candidate.strategy_fingerprint, template.family)
+
+    def test_parser_preserves_expansion_numeric_rules(self) -> None:
+        parsed = UserStrategyParser().parse("30 고가 돌파 종가 > MA20 > MA60 손절 -6% 15일 저점 이탈 청산", symbol="005930")
+        self.assertEqual(parsed.entry["breakout_lookback"].value, 30)
+        self.assertEqual(parsed.exit["protective_stop_pct"].value, -6.0)
+        self.assertEqual(parsed.exit["channel_exit_lookback"].value, 15)
+
+    def test_twenty_day_breakout_does_not_invent_ma_filter(self) -> None:
+        parsed = UserStrategyParser().parse("20일 고가 돌파 손절 -5% 10일 저점 이탈 청산", symbol="005930")
+        self.assertEqual(parsed.entry["breakout_lookback"].value, 20)
+        self.assertNotIn("close_gt_ma20", parsed.entry)
+        self.assertNotIn("ma20_gt_ma60", parsed.entry)
 
 
 class NoPerSymbolOptimizationTests(unittest.TestCase):
@@ -168,6 +197,51 @@ class StagnationRotationTests(unittest.TestCase):
             for index, template in enumerate(STRATEGY_FAMILY_TEMPLATES)
         )
         self.assertIsNone(next_untried_family(candidates))
+
+    def test_strategy_space_expansion_uses_evidence_and_skips_duplicate_fingerprints(self) -> None:
+        candidates = []
+        for index, template in enumerate(STRATEGY_FAMILY_TEMPLATES):
+            candidate = new_candidate(template.family, sequence=index + 1, now=NOW)
+            candidate = record_breadth_progress(
+                candidate,
+                attempted=5,
+                valid=2,
+                trade_count=8,
+                evidence_symbols=("005930", "000660"),
+                excluded_symbols=("005380", "035420", "051910"),
+                provider_blocked=False,
+                now=LATER,
+            )
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="RUN_REGIME",
+                terminal=False,
+                validation_stage_status={"regime_validation": "partial", "walk_forward": "partial"},
+                symbol="005930",
+                reference=f"release-check:{template.family}",
+                now=LATER,
+            )
+            candidates.append(mark_stagnant(candidate, now=LATER))
+
+        expansion = expand_strategy_space_candidate(tuple(candidates), sequence=len(candidates) + 1, now=LATER)
+        self.assertEqual(expansion.action, "EXPAND_STRATEGY_SPACE")
+        self.assertEqual(expansion.reason, "strategy_family_space_exhausted")
+        self.assertIsNotNone(expansion.candidate)
+        assert expansion.candidate is not None
+        self.assertIn(expansion.candidate.strategy_family, {template.family for template in STRATEGY_SPACE_EXPANSION_TEMPLATES})
+        self.assertNotIn(expansion.candidate.strategy_fingerprint, {candidate.strategy_fingerprint for candidate in candidates})
+        self.assertIn("insufficient_trade_sample", expansion.evidence_signals)
+        self.assertIn("regime_validation_partial", expansion.evidence_signals)
+
+    def test_strategy_space_expansion_is_bounded_when_all_expansion_templates_used(self) -> None:
+        candidates = tuple(
+            new_candidate(template.family, sequence=index + 1, now=NOW)
+            for index, template in enumerate(ALL_STRATEGY_FAMILY_TEMPLATES)
+        )
+        expansion = expand_strategy_space_candidate(candidates, sequence=len(candidates) + 1, now=LATER)
+        self.assertEqual(expansion.reason, "strategy_hypothesis_space_exhausted")
+        self.assertIsNone(expansion.candidate)
+        self.assertEqual(expansion.search_budget, len(STRATEGY_SPACE_EXPANSION_TEMPLATES))
 
     def test_promotion_ready_and_rejected_candidates_are_never_marked_stagnant(self) -> None:
         promoted = mark_promotion_ready(self.candidate, now=LATER)

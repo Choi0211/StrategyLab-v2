@@ -92,6 +92,7 @@ from gaon.knowledge.research_mission import (
 )
 from gaon.knowledge.strategy_candidate import (
     StrategyCandidateStatus,
+    expand_strategy_space_candidate,
     is_stagnant,
     mark_promotion_ready,
     mark_rejected,
@@ -1222,22 +1223,41 @@ class LLMConversationBrain:
         if active is None:
             family = next_untried_family(candidate_records(mission))
             if family is None:
-                updated = record_blocked(
-                    mission,
-                    reason="strategy_family_space_exhausted: every supported strategy family has already been tried this mission",
+                expansion = expand_strategy_space_candidate(
+                    candidate_records(mission),
+                    sequence=next_candidate_sequence(mission),
                     now=request.received_at,
                 )
-                self._remember_mission(request, updated)
-                return (
-                    mission_blocked_message(updated),
-                    "conversation_mission_blocked",
-                    _dedupe((*warnings, "strategy family space exhausted")),
-                    references,
-                    "deterministic",
-                    (),
+                if expansion.candidate is None:
+                    updated = record_blocked(
+                        mission,
+                        reason="strategy_hypothesis_space_exhausted: bounded declarative strategy expansion budget exhausted",
+                        now=request.received_at,
+                    )
+                    self._remember_mission(request, updated)
+                    return (
+                        mission_blocked_message(updated),
+                        "conversation_mission_blocked",
+                        _dedupe((*warnings, "strategy hypothesis space exhausted")),
+                        references,
+                        "deterministic",
+                        (),
+                    )
+                active = expansion.candidate
+                mission = add_candidate(mission, active, now=request.received_at)
+                warnings = _dedupe(
+                    (
+                        *warnings,
+                        "research_action=EXPAND_STRATEGY_SPACE",
+                        f"strategy_space_reason={expansion.reason}",
+                        f"strategy_space_evidence={','.join(expansion.evidence_signals)}",
+                        f"expanded_candidate={active.candidate_id}",
+                    )
                 )
-            active = new_candidate(family, sequence=next_candidate_sequence(mission), now=request.received_at)
-            mission = add_candidate(mission, active, now=request.received_at)
+                references = _dedupe((*references, "strategy-space:bounded-grammar"))
+            else:
+                active = new_candidate(family, sequence=next_candidate_sequence(mission), now=request.received_at)
+                mission = add_candidate(mission, active, now=request.received_at)
 
         # Cross-symbol breadth evaluation (multi_symbol_research) and deep
         # single-candidate robustness validation (the full Research

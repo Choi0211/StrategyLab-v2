@@ -1,5 +1,26 @@
 # Changelog
 
+## Hotfix: Research Mission Strategy-Space Expansion
+
+- Changed `strategy_family_space_exhausted` from a terminal mission
+  blocker into an explicit `EXPAND_STRATEGY_SPACE` continuation path.
+- Added bounded expansion templates that use only already-supported
+  declarative backtest primitives: breakout lookback, MA20/MA60 trend
+  confirmation, volume MA20 confirmation, channel-low exits, and
+  protective stops.
+- Ranked expansion hypotheses from persisted candidate evidence and
+  blockers such as insufficient trade sample, cross-symbol weakness,
+  partial walk-forward/regime validation, and cost fragility. The ranker
+  does not fabricate evidence or performance metrics.
+- Preserved semantic duplicate protection through the existing
+  strategy-family fingerprint and candidate spec lifecycle.
+- Wired expanded candidates back into the existing mission-driven
+  `multi_symbol_research` path via `candidate_spec`; no parallel research
+  engine was added.
+- Added `gaon-production-strategy-space-expansion-release-check`.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, or strategy mutation added.
+
 ## Hotfix: Research Director Planned Action -> Executor Handoff
 
 - Merged the Patch 8.9 planner/action read model into the Telegram

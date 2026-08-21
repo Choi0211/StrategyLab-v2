@@ -3125,3 +3125,139 @@ def production_research_action_persistence_release_check() -> Mapping[str, objec
         }
     finally:
         store.close()
+
+
+def production_strategy_space_expansion_release_check() -> Mapping[str, object]:
+    """Regression guard for exhausted strategy-family production missions.
+
+    The release check models the real production state: all base strategy
+    families have already been explored and actual blocker evidence exists,
+    but the mission is not allowed to terminally stop. It must generate one
+    bounded, evidence-linked, semantically distinct candidate and hand its
+    exact spec to the existing real multi-symbol research path.
+    """
+    from gaon.knowledge.strategy_candidate import (
+        STRATEGY_FAMILY_TEMPLATES,
+        STRATEGY_SPACE_EXPANSION_TEMPLATES,
+        build_candidate_spec,
+        expand_strategy_space_candidate,
+        mark_stagnant,
+        new_candidate,
+        next_untried_family,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+    from gaon.research.multi_symbol import _strategy_from_candidate_spec
+
+    now = "2026-08-21T00:00:00Z"
+    mission = ResearchMission(
+        mission_id="research-mission:strategy-space-expansion-release-check",
+        market="KR",
+        universe_scope=MissionUniverseScope.MARKET_WIDE,
+        symbols=(),
+        exchanges=DEFAULT_KR_EXCHANGES,
+        strategy_family="short_term_daytrade",
+        improve_return=True,
+        improve_safety=True,
+        baseline_comparison="registered_strategy",
+        target_promotion_ready_candidates=3,
+        current_promotion_ready_candidates=0,
+        promotion_ready_candidates=(),
+        explored_symbols=(),
+        status=MissionStatus.ACTIVE,
+        blocked_reason=None,
+        cycles_completed=4,
+        created_at=now,
+        updated_at=now,
+        originating_request="release-check",
+    )
+    for index, template in enumerate(STRATEGY_FAMILY_TEMPLATES, start=1):
+        candidate = new_candidate(template.family, sequence=index, now=now)
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=3,
+            trade_count=12,
+            evidence_symbols=("005930", "000660", "005380"),
+            excluded_symbols=("035420", "051910"),
+            provider_blocked=False,
+            now=now,
+        )
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="RUN_REGIME",
+            terminal=False,
+            validation_stage_status={
+                "multi_symbol_validation": "multi_symbol_partial",
+                "walk_forward": "partial",
+                "regime_validation": "partial",
+                "transaction_cost_stress": "cost_fragile",
+            },
+            symbol="005930",
+            reference=f"release-check:failed-evidence:{template.family}",
+            now=now,
+        )
+        candidate = mark_stagnant(candidate, now=now)
+        mission = add_candidate(mission, candidate, now=now)
+    mission = set_active_candidate(mission, None, now=now)
+    before_records = candidate_records(mission)
+    before_fingerprints = {candidate.strategy_fingerprint for candidate in before_records}
+    before_snapshots = {candidate.candidate_id: candidate.to_json() for candidate in before_records}
+
+    expansion = expand_strategy_space_candidate(before_records, sequence=next_candidate_sequence(mission), now=now)
+    if expansion.candidate is None:
+        raise RuntimeError("strategy-space expansion release check failed: no candidate generated")
+    expanded = expansion.candidate
+    expanded_mission = add_candidate(mission, expanded, now=now)
+    restored_mission = ResearchMission.from_json(expanded_mission.to_json())
+    restored_records = candidate_records(restored_mission)
+    restored_expanded = get_candidate(restored_mission, expanded.candidate_id)
+    reconstructed_spec = _strategy_from_candidate_spec(expanded.spec_rules, symbol="005930", created_at=now)
+    expansion_families = {template.family for template in STRATEGY_SPACE_EXPANSION_TEMPLATES}
+    expansion_template_spec = build_candidate_spec(expanded.strategy_family, created_at=now)
+
+    checks = {
+        "existing_families_exhausted": next_untried_family(before_records) is None,
+        "expand_strategy_space_action": expansion.action == "EXPAND_STRATEGY_SPACE",
+        "evidence_backed_hypothesis": bool(expansion.evidence_signals)
+        and "insufficient_trade_sample" in expansion.evidence_signals
+        and "regime_validation_partial" in expansion.evidence_signals
+        and "transaction_cost_stress_cost_fragile" in expansion.evidence_signals,
+        "distinct_candidate_generated": expanded.strategy_family in expansion_families,
+        "fingerprint_not_duplicate": expanded.strategy_fingerprint not in before_fingerprints,
+        "candidate_persisted": get_candidate(expanded_mission, expanded.candidate_id) is not None,
+        "real_pipeline_receives_candidate": reconstructed_spec.strategy_family_fingerprint == expanded.strategy_fingerprint,
+        "template_fingerprint_matched": expansion_template_spec.strategy_family_fingerprint == expanded.strategy_fingerprint,
+        "previous_candidate_history_preserved": all(
+            get_candidate(expanded_mission, candidate_id) is not None
+            and get_candidate(expanded_mission, candidate_id).to_json() == snapshot
+            for candidate_id, snapshot in before_snapshots.items()
+        ),
+        "restart_preserves_new_candidate_history": restored_expanded is not None
+        and restored_expanded.strategy_fingerprint == expanded.strategy_fingerprint
+        and len(restored_records) == len(before_records) + 1,
+        "validation_progress_not_fabricated": expanded.trade_count == 0
+        and expanded.cycles_completed == 0
+        and not expanded.validation_stage_status
+        and not expanded.evidence_symbols,
+        "promotion_ready_not_fabricated": restored_mission.current_promotion_ready_candidates == 0,
+        "bounded_search_budget": expansion.search_budget == len(STRATEGY_SPACE_EXPANSION_TEMPLATES),
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"strategy-space expansion release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "action": expansion.action,
+        "candidate_id": expanded.candidate_id,
+        "strategy_family": expanded.strategy_family,
+        "strategy_fingerprint": expanded.strategy_fingerprint,
+        "evidence_signals": expansion.evidence_signals,
+        "search_budget": expansion.search_budget,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }

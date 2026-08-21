@@ -2,6 +2,28 @@
 
 Status: Passed
 
+## Hotfix: Research Mission Strategy-Space Expansion
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\strategy_candidate.py src\gaon\knowledge\research_mission.py src\gaon\research\krx_real_pipeline.py src\gaon\runtime\llm_conversation.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_strategy_candidate tests.unit.test_research_mission.StrategySpaceExpansionReleaseCheckTests -q`: PASS, 58 tests
+  - `python -m unittest tests.integration.test_strategy_centric_autonomous_research.StrategySpaceExpansionTelegramTests -q`: PASS, 1 test
+  - `python -m gaon.runtime.cli gaon-production-strategy-space-expansion-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-canonical-candidate-handoff-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-canonical-research-read-model-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-autonomous-research-completion-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-action-execution-handoff-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-action-persistence-release-check`: PASS
+- Full local verification:
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1171 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 259 tests
+  - `python scripts\verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated evidence.
+
 ## Hotfix: Research Director Planned Action -> Executor Handoff
 
 - Targeted local verification:
