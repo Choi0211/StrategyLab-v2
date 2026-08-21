@@ -3,6 +3,30 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix: Research Mission Promotion Target Consistency
+
+Production Telegram acceptance showed `promotion-ready candidates: 0/1`
+after the mission had rotated from one candidate to the next. The value
+was not a renderer fallback: the status renderer was faithfully reading a
+persisted `ResearchMission.target_promotion_ready_candidates=1`.
+
+Mission target parsing now only accepts explicit target/goal wording, so
+incidental count phrases such as "현재 후보 1개" cannot reduce the
+mission target. Canonical KR market-wide strategy missions also repair a
+stale target below 3 when reloaded, preserving accumulated candidate and
+promotion evidence while restoring the correct objective.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-promotion-target-consistency-release-check
+```
+
+The check proves `0/3 -> 1/3 -> 2/3 -> 3/3`, duplicate fingerprint
+isolation, restart persistence, `AWAITING_HUMAN_APPROVAL` only at three
+distinct promotion-ready fingerprints, and unchanged safety. Schema
+remains v36.
+
 ## Hotfix: Sample Exhaustion Candidate Decision
 
 Production acceptance reached `candidate_pool_exhausted` after cumulative

@@ -2,6 +2,33 @@
 
 Status: Passed
 
+## Hotfix: Research Mission Promotion Target Consistency
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\research_mission.py src\gaon\runtime\cli.py tests\unit\test_research_mission.py`: PASS
+  - `python -m unittest tests.unit.test_research_mission.MissionUpdateTests tests.unit.test_research_mission.MissionPromotionGateTests -q`: PASS, 10 tests
+  - `python -m gaon.runtime.cli gaon-production-promotion-target-consistency-release-check`: PASS
+- Required full verification:
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1186 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 260 tests
+  - `python scripts\verify_release.py`: PASS
+  - Existing production release checks:
+    `gaon-production-canonical-candidate-handoff-release-check`,
+    `gaon-production-canonical-research-read-model-release-check`,
+    `gaon-production-autonomous-research-completion-release-check`,
+    `gaon-production-research-action-execution-handoff-release-check`,
+    `gaon-production-research-action-persistence-release-check`,
+    `gaon-production-strategy-space-expansion-release-check`,
+    `gaon-production-cumulative-sample-persistence-release-check`, and
+    `gaon-production-sample-exhaustion-candidate-decision-release-check`: PASS
+  - New production release check:
+    `gaon-production-promotion-target-consistency-release-check`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS; Windows line-ending warnings only
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated evidence.
+
 ## Hotfix: Sample Exhaustion Candidate Decision
 
 - Targeted local verification:
