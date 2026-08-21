@@ -2938,3 +2938,190 @@ def production_research_action_execution_handoff_release_check() -> Mapping[str,
         "approval_bypassed": False,
         "safety": "pass",
     }
+
+
+def production_research_action_persistence_release_check() -> Mapping[str, object]:
+    """Regression guard for production persistence/restart boundaries.
+
+    This reproduces the real VPS shape: an active persisted KR-ST-003-like
+    candidate starts with regime_validation=partial and next_action=RUN_REGIME.
+    The next turn executes RUN_REGIME but the real executor may still return
+    regime_validation=partial. A fresh process on the following turn must not
+    repeat the exact same action/stage/status without new evidence/retest
+    reason; it must recompute the next blocker from persisted canonical state.
+    """
+    from gaon.knowledge.strategy_candidate import (
+        new_candidate,
+        next_blocker_driven_research_action,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+    from gaon.runtime.config import GaonRuntimeConfig
+    from gaon.runtime.conversation import ConversationInput
+    from gaon.runtime.llm_conversation import LLMConversationRequest
+    from gaon.runtime.llm_tools import ToolResult
+    from gaon.runtime.storage import RuntimeStateStore
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    class _Executor:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def execute(self, request) -> ToolResult:
+            args = dict(request.arguments)
+            self.calls.append(args)
+            planned_action = str(args.get("planned_action") or "")
+            planned_reason = str(args.get("planned_action_reason") or "")
+            symbol = str(args.get("symbol") or "286940")
+            grade = {
+                "multi_symbol_validation": {"status": "multi_symbol_partial", "executed": True},
+                "out_of_sample": {"status": "pass", "executed": True},
+                "walk_forward": {"status": "partial", "executed": True},
+                "regime_validation": {"status": "partial", "executed": True},
+                "transaction_cost_stress": {"status": "cost_stable", "executed": True},
+                "parameter_sensitivity": {"status": "stable", "executed": True},
+                "monte_carlo": {"status": "not_run_insufficient_primary_sample", "executed": False},
+            }
+            return ToolResult(
+                "autonomous_learning_research",
+                "success",
+                {
+                    "schema_version": 2,
+                    "tool": "autonomous_learning_research",
+                    "mode": "continue",
+                    "symbol": symbol,
+                    "request_text": str(args.get("request_text") or ""),
+                    "autonomous_learning_v2": {
+                        "research_director_decision": {"action": "hold", "reason": "bounded continuation", "terminal": False},
+                        "research_director_steps_used": 1,
+                        "planned_action_execution": {
+                            "planned_action": planned_action,
+                            "planned_action_reason": planned_reason,
+                            "dispatched": bool(planned_action),
+                        },
+                        "autonomous_quant_partner": {"production_grade_validation": grade},
+                        "promotion_candidate_context": {"candidate_id": "KR-ST-003", "candidate_fingerprint": "8243d5b824d4b8ea"},
+                    },
+                    "planned_action_execution": {
+                        "planned_action": planned_action,
+                        "planned_action_reason": planned_reason,
+                        "dispatched": bool(planned_action),
+                    },
+                    "strategy_mutated": False,
+                    "order_executed": False,
+                    "automatic_champion_promotion": False,
+                    "broker_order_called": False,
+                    "kis_order_called": False,
+                    "safety": "pass",
+                },
+            )
+
+    now = "2026-08-21T00:00:00Z"
+    store = RuntimeStateStore(":memory:")
+    try:
+        executor = _Executor()
+        config = GaonRuntimeConfig(assistant_enabled=False)
+        candidate = new_candidate("breakout_volume_confirmed", sequence=3, now=now)
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=81,
+            evidence_symbols=("286940", "005930", "000660", "005380", "035420"),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=now,
+        )
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="collect_more_evidence",
+            terminal=False,
+            validation_stage_status={
+                "out_of_sample": "pass",
+                "walk_forward": "partial",
+                "regime_validation": "partial",
+                "transaction_cost_stress": "cost_stable",
+                "parameter_sensitivity": "stable",
+                "multi_symbol_validation": "multi_symbol_partial",
+                "monte_carlo": "not_run_insufficient_primary_sample",
+            },
+            symbol="286940",
+            reference="action=CONTINUE_ROBUSTNESS|symbol=286940|stage=none|status=partial",
+            now=now,
+        )
+        mission = ResearchMission(
+            mission_id="research-mission:production-persistence-check",
+            market="KR",
+            universe_scope=MissionUniverseScope.MARKET_WIDE,
+            symbols=(),
+            exchanges=DEFAULT_KR_EXCHANGES,
+            strategy_family="short_term_daytrade",
+            improve_return=True,
+            improve_safety=True,
+            baseline_comparison="registered_strategy",
+            target_promotion_ready_candidates=3,
+            current_promotion_ready_candidates=0,
+            promotion_ready_candidates=(),
+            explored_symbols=(),
+            status=MissionStatus.ACTIVE,
+            blocked_reason=None,
+            cycles_completed=1,
+            created_at=now,
+            updated_at=now,
+            originating_request="release-check",
+            candidates=(candidate.to_json(),),
+            active_candidate_id=candidate.candidate_id,
+        )
+        mission = record_focus_symbol(mission, symbol="286940", now=now)
+        turn1_action, turn1_reason = next_blocker_driven_research_action(candidate)
+
+        agent1 = TelegramConversationAgent(config, store._connection, tool_executor=executor)
+        agent1.handle(ConversationInput("telegram", "100", "100", "hello", "안녕하세요 가온", now))
+        agent1._brain._remember_mission(
+            LLMConversationRequest("telegram:100", "telegram:100", "telegram", "seed", now, "telegram:100:seed"),
+            mission,
+        )
+
+        agent2 = TelegramConversationAgent(config, store._connection, tool_executor=executor)
+        turn2 = agent2.handle(
+            ConversationInput("telegram", "100", "100", "turn2", "연구를 계속해주세요", "2026-08-21T00:01:00Z")
+        )
+        reloaded_after_turn2 = TelegramConversationAgent(config, store._connection, tool_executor=executor)._brain._mission_for("telegram:100")
+        reloaded_candidates = candidate_records(reloaded_after_turn2) if reloaded_after_turn2 else ()
+        candidate_after_turn2 = reloaded_candidates[0] if reloaded_candidates else None
+        next_after_turn2, next_reason_after_turn2 = next_blocker_driven_research_action(candidate_after_turn2)
+
+        agent3 = TelegramConversationAgent(config, store._connection, tool_executor=executor)
+        turn3 = agent3.handle(
+            ConversationInput("telegram", "100", "100", "turn3", "연구를 계속해주세요", "2026-08-21T00:02:00Z")
+        )
+        turn2_action = str(executor.calls[0].get("planned_action")) if executor.calls else ""
+        turn3_action = str(executor.calls[1].get("planned_action")) if len(executor.calls) > 1 else ""
+        checks = {
+            "turn1_next_action_regime": turn1_action == "RUN_REGIME" and turn1_reason == "regime_blocker",
+            "runtime_destroyed_between_turns": True,
+            "turn2_executed_regime": turn2_action == "RUN_REGIME" and "action_executed=RUN_REGIME" in turn2.text,
+            "partial_regime_persisted": bool(candidate_after_turn2 and candidate_after_turn2.validation_stage_status.get("regime_validation") == "partial"),
+            "recomputed_next_action": next_after_turn2 != "RUN_REGIME" and next_reason_after_turn2 != "regime_blocker",
+            "turn3_not_regime_replay": turn3_action != "RUN_REGIME" and "action_executed=RUN_REGIME" not in turn3.text,
+            "turn2_turn3_not_identical": turn2.text != turn3.text,
+        }
+        if not all(checks.values()):
+            failed = ",".join(name for name, ok in checks.items() if not ok)
+            raise RuntimeError(f"research action persistence release check failed: {failed}")
+        return {
+            "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+            **checks,
+            "turn1_action": turn1_action,
+            "turn2_action_executed": turn2_action,
+            "turn3_next_action": turn3_action,
+            "persisted_next_action_after_turn2": next_after_turn2,
+            "persisted_next_reason_after_turn2": next_reason_after_turn2,
+            "strategy_mutated": False,
+            "order_executed": False,
+            "champion_promoted": False,
+            "approval_bypassed": False,
+            "safety": "pass",
+        }
+    finally:
+        store.close()

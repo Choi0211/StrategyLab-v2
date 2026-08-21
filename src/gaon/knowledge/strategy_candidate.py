@@ -90,6 +90,15 @@ PASS_LIKE_STAGE_STATUSES = frozenset(
     }
 )
 
+ACTION_STAGE_KEYS = {
+    "RUN_OOS": "out_of_sample",
+    "RUN_REGIME": "regime_validation",
+    "RUN_WALK_FORWARD": "walk_forward",
+    "RUN_COST_STRESS": "transaction_cost_stress",
+    "RUN_SENSITIVITY": "parameter_sensitivity",
+    "RUN_MONTE_CARLO": "monte_carlo",
+}
+
 class StrategyCandidateStatus(str, Enum):
     EXPLORING = "exploring"
     VALIDATING = "validating"
@@ -623,21 +632,32 @@ def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> t
     next_symbol = next_robustness_evidence_symbol(candidate)
     if not candidate.has_sufficient_universe_evidence or not next_symbol:
         return "EXPAND_SAMPLE", "need_new_independent_evidence_symbols"
-    if "out_of_sample" in blockers:
+    if "out_of_sample" in blockers and not _last_attempt_matches_stage(candidate, "RUN_OOS", "out_of_sample"):
         return "RUN_OOS", "out_of_sample_blocker"
-    if "regime_validation" in blockers:
+    if "regime_validation" in blockers and not _last_attempt_matches_stage(candidate, "RUN_REGIME", "regime_validation"):
         return "RUN_REGIME", "regime_blocker"
-    if "walk_forward" in blockers:
+    if "walk_forward" in blockers and not _last_attempt_matches_stage(candidate, "RUN_WALK_FORWARD", "walk_forward"):
         return "RUN_WALK_FORWARD", "walk_forward_blocker"
-    if "transaction_cost_stress" in blockers:
+    if "transaction_cost_stress" in blockers and not _last_attempt_matches_stage(candidate, "RUN_COST_STRESS", "transaction_cost_stress"):
         return "RUN_COST_STRESS", "transaction_cost_blocker"
-    if "parameter_sensitivity" in blockers:
+    if "parameter_sensitivity" in blockers and not _last_attempt_matches_stage(candidate, "RUN_SENSITIVITY", "parameter_sensitivity"):
         return "RUN_SENSITIVITY", "parameter_sensitivity_blocker"
     if "monte_carlo_waiting_for_primary_sample" in blockers:
         return "EXPAND_SAMPLE", "monte_carlo_waiting_for_primary_sample"
-    if "monte_carlo" in blockers:
+    if "monte_carlo" in blockers and not _last_attempt_matches_stage(candidate, "RUN_MONTE_CARLO", "monte_carlo"):
         return "RUN_MONTE_CARLO", "monte_carlo_blocker"
+    if any(blocker in blockers for blocker in ACTION_STAGE_KEYS.values()):
+        return "EXPAND_SAMPLE", "all_current_stage_blockers_already_attempted_without_progress"
     return "RANK_CANDIDATES", "no_blocking_validation_stage_remaining"
+
+
+def _last_attempt_matches_stage(candidate: StrategyCandidateRecord, action: str, stage: str) -> bool:
+    symbol = candidate.last_validation_symbol
+    if not symbol:
+        return False
+    status = str(candidate.validation_stage_status.get(stage, "not_run"))
+    reference = f"action={action}|symbol={symbol}|stage={stage}|status={status}"
+    return candidate.last_validation_reference == reference
 
 
 def is_stagnant(candidate: StrategyCandidateRecord) -> bool:

@@ -6,15 +6,16 @@ Status: Passed
 
 - Targeted local verification:
   - `python -m py_compile src\gaon\knowledge\strategy_candidate.py src\gaon\knowledge\research_mission.py src\gaon\runtime\llm_conversation.py src\gaon\runtime\llm_tools.py src\gaon\knowledge\telegram_autonomous_learning.py src\gaon\runtime\cli.py tests\unit\test_strategy_candidate.py tests\unit\test_research_mission.py tests\integration\test_candidate_multi_symbol_robustness.py`: PASS
-  - `python -m unittest tests.unit.test_strategy_candidate.RobustnessProgressTests tests.unit.test_research_mission.ResearchActionExecutionHandoffReleaseCheckTests tests.unit.test_research_mission.AutonomousResearchCompletionReleaseCheckTests -q`: PASS, 10 tests
-  - `python -m unittest tests.integration.test_candidate_multi_symbol_robustness.CandidateMultiSymbolRobustnessTests.test_planned_run_regime_is_consumed_by_next_continuation -q`: PASS, 1 test
+  - `python -m unittest tests.unit.test_strategy_candidate.RobustnessProgressTests tests.unit.test_research_mission.ResearchActionExecutionHandoffReleaseCheckTests tests.unit.test_research_mission.ResearchActionPersistenceReleaseCheckTests tests.unit.test_research_mission.AutonomousResearchCompletionReleaseCheckTests -q`: PASS, 13 tests
+  - `python -m unittest tests.integration.test_candidate_multi_symbol_robustness.CandidateMultiSymbolRobustnessTests.test_planned_run_regime_is_consumed_by_next_continuation tests.integration.test_candidate_multi_symbol_robustness.CandidateMultiSymbolRobustnessTests.test_planned_action_recomputes_across_persistence_boundary_when_stage_remains_partial -q`: PASS, 2 tests
   - `python -m gaon.runtime.cli gaon-production-research-action-execution-handoff-release-check`: PASS
+  - `python -m gaon.runtime.cli gaon-production-research-action-persistence-release-check`: PASS
   - `python -m gaon.runtime.cli gaon-production-autonomous-research-completion-release-check`: PASS
   - `python -m gaon.runtime.cli gaon-production-canonical-candidate-handoff-release-check`: PASS
   - `python -m gaon.runtime.cli gaon-production-canonical-research-read-model-release-check`: PASS
 - Full local verification:
-  - `python -m unittest discover -s tests\unit -q`: PASS, 1160 tests
-  - `python -m unittest discover -s tests\integration -q`: PASS, 257 tests
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1163 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 258 tests
   - `python scripts\verify_release.py`: PASS
   - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
   - `git diff --check`: PASS

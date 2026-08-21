@@ -906,5 +906,37 @@ class ResearchActionExecutionHandoffReleaseCheckTests(unittest.TestCase):
         self.assertEqual(dict(first), dict(second))
 
 
+class ResearchActionPersistenceReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        from gaon.knowledge.research_mission import production_research_action_persistence_release_check
+
+        result = production_research_action_persistence_release_check()
+        for key in (
+            "turn1_next_action_regime",
+            "runtime_destroyed_between_turns",
+            "turn2_executed_regime",
+            "partial_regime_persisted",
+            "recomputed_next_action",
+            "turn3_not_regime_replay",
+            "turn2_turn3_not_identical",
+        ):
+            self.assertTrue(result[key], key)
+        self.assertEqual(result["turn1_action"], "RUN_REGIME")
+        self.assertEqual(result["turn2_action_executed"], "RUN_REGIME")
+        self.assertNotEqual(result["turn3_next_action"], "RUN_REGIME")
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_research_action_persistence_release_check
+
+        first = production_research_action_persistence_release_check()
+        second = production_research_action_persistence_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
 if __name__ == "__main__":
     unittest.main()

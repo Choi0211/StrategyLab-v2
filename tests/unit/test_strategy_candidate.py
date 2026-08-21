@@ -474,6 +474,43 @@ class RobustnessProgressTests(unittest.TestCase):
         self.assertEqual(action, "RUN_REGIME")
         self.assertEqual(reason, "regime_blocker")
 
+    def test_blocker_driven_action_does_not_repeat_same_partial_stage_without_new_reason(self) -> None:
+        candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
+        candidate = record_breadth_progress(
+            candidate, attempted=5, valid=5, trade_count=81,
+            evidence_symbols=("286940", "005930", "000660", "005380", "035420"),
+            excluded_symbols=(), provider_blocked=False, now=NOW,
+        )
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="collect_more_evidence",
+            terminal=False,
+            validation_stage_status={
+                "out_of_sample": "pass",
+                "walk_forward": "partial",
+                "regime_validation": "partial",
+                "parameter_sensitivity": "stable",
+                "transaction_cost_stress": "cost_stable",
+                "monte_carlo": "not_run_insufficient_primary_sample",
+            },
+            symbol="286940",
+            now=LATER,
+        )
+        first_action, _reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual(first_action, "RUN_REGIME")
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="hold",
+            terminal=False,
+            validation_stage_status={"regime_validation": "partial"},
+            symbol="286940",
+            reference="action=RUN_REGIME|symbol=286940|stage=regime_validation|status=partial",
+            now=LATER,
+        )
+        next_action, next_reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual(next_action, "RUN_WALK_FORWARD")
+        self.assertEqual(next_reason, "walk_forward_blocker")
+
     def test_blocker_driven_action_expands_before_monte_carlo_when_sample_is_small(self) -> None:
         candidate = new_candidate("breakout_standard", sequence=1, now=NOW)
         candidate = record_breadth_progress(
