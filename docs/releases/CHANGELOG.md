@@ -1,5 +1,22 @@
 # Changelog
 
+## Hotfix: Cumulative Sample Persistence
+
+- Fixed a production ResearchMission regression where the same canonical
+  candidate could advance from `5 symbols / 40 trades` to
+  `10 symbols / 57 trades`, then regress to the latest batch-local
+  `5 symbols / 30 trades`.
+- Added canonical symbol-keyed breadth evidence to
+  `StrategyCandidateRecord`, with duplicate replay protection and
+  restart-safe legacy aggregate trade-count preservation.
+- Wired Telegram mission-driven `multi_symbol_research` output to pass
+  per-symbol evidence details into candidate persistence instead of only
+  passing batch-local aggregate counts.
+- Added `gaon-production-cumulative-sample-persistence-release-check`.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, strategy mutation, or fabricated
+  metrics added.
+
 ## Hotfix: Research Mission Strategy-Space Expansion
 
 - Changed `strategy_family_space_exhausted` from a terminal mission

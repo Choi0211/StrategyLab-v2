@@ -3261,3 +3261,158 @@ def production_strategy_space_expansion_release_check() -> Mapping[str, object]:
         "approval_bypassed": False,
         "safety": "pass",
     }
+
+
+def production_cumulative_sample_persistence_release_check() -> Mapping[str, object]:
+    """Regression guard for cumulative candidate breadth evidence.
+
+    Production symptom: one canonical candidate advanced from 5 symbols/40
+    trades to 10 symbols/57 trades, then a later 5-symbol batch overwrote the
+    persisted candidate state as 5 symbols/30 trades. This check proves the
+    persisted state is canonical and monotonic while each batch summary stays
+    local to that batch.
+    """
+    from gaon.knowledge.strategy_candidate import new_candidate, record_breadth_progress
+
+    def details(symbols: tuple[str, ...], trades: tuple[int, ...]) -> dict[str, Mapping[str, object]]:
+        return {
+            symbol: {
+                "symbol": symbol,
+                "eligible": True,
+                "metrics": {"trade_count": trades[index]},
+                "evidence_id": f"release-check:evidence:{symbol}",
+                "quality_status": "pass",
+                "source": "real:yahoo-chart",
+                "fixture_backed": False,
+            }
+            for index, symbol in enumerate(symbols)
+        }
+
+    now = "2026-08-21T00:00:00Z"
+    mission = ResearchMission(
+        mission_id="research-mission:cumulative-sample-persistence-release-check",
+        market="KR",
+        universe_scope=MissionUniverseScope.MARKET_WIDE,
+        symbols=(),
+        exchanges=DEFAULT_KR_EXCHANGES,
+        strategy_family="short_term_daytrade",
+        improve_return=True,
+        improve_safety=True,
+        baseline_comparison="registered_strategy",
+        target_promotion_ready_candidates=3,
+        current_promotion_ready_candidates=0,
+        promotion_ready_candidates=(),
+        explored_symbols=(),
+        status=MissionStatus.ACTIVE,
+        blocked_reason=None,
+        cycles_completed=0,
+        created_at=now,
+        updated_at=now,
+        originating_request="release-check",
+    )
+    candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=now)
+    fingerprint = candidate.strategy_fingerprint
+    symbols_a = tuple(f"A{i}" for i in range(5))
+    symbols_b = tuple(f"B{i}" for i in range(5))
+    symbols_c = tuple(f"C{i}" for i in range(5))
+
+    first = record_breadth_progress(
+        candidate,
+        attempted=5,
+        valid=5,
+        trade_count=40,
+        evidence_symbols=symbols_a,
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+        evidence_details=details(symbols_a, (8, 8, 8, 8, 8)),
+    )
+    expanded = record_breadth_progress(
+        first,
+        attempted=5,
+        valid=5,
+        trade_count=17,
+        evidence_symbols=symbols_b,
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+        evidence_details=details(symbols_b, (4, 4, 3, 3, 3)),
+    )
+    next_batch = record_breadth_progress(
+        expanded,
+        attempted=5,
+        valid=5,
+        trade_count=30,
+        evidence_symbols=symbols_c,
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+        evidence_details=details(symbols_c, (6, 6, 6, 6, 6)),
+    )
+    duplicate_replay = record_breadth_progress(
+        next_batch,
+        attempted=5,
+        valid=5,
+        trade_count=30,
+        evidence_symbols=symbols_c,
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+        evidence_details=details(symbols_c, (6, 6, 6, 6, 6)),
+    )
+    persisted_mission = add_candidate(mission, next_batch, now=now)
+    restored_mission = ResearchMission.from_json(persisted_mission.to_json())
+    restored_candidate = get_candidate(restored_mission, next_batch.candidate_id)
+    legacy_raw = expanded.to_json()
+    legacy_raw.pop("breadth_evidence", None)
+    legacy_raw.pop("breadth_legacy_trade_count", None)
+    legacy_restored = type(expanded).from_json(legacy_raw)
+    legacy_progressed = record_breadth_progress(
+        legacy_restored,
+        attempted=5,
+        valid=5,
+        trade_count=30,
+        evidence_symbols=symbols_c,
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+        evidence_details=details(symbols_c, (6, 6, 6, 6, 6)),
+    )
+    checks = {
+        "first_batch_recorded": first.valid_symbols == 5 and first.trade_count == 40,
+        "expanded_batch_accumulated": expanded.valid_symbols == 10 and expanded.trade_count == 57,
+        "later_batch_did_not_regress": next_batch.valid_symbols == 15 and next_batch.trade_count == 87,
+        "batch_local_metrics_remain_separate": 5 != next_batch.valid_symbols and 30 != next_batch.trade_count,
+        "duplicate_replay_not_double_counted": duplicate_replay.valid_symbols == 15 and duplicate_replay.trade_count == 87,
+        "fingerprint_preserved": next_batch.strategy_fingerprint == fingerprint,
+        "candidate_persisted": get_candidate(persisted_mission, next_batch.candidate_id) is not None,
+        "restart_preserves_cumulative_state": restored_candidate is not None
+        and restored_candidate.valid_symbols == 15
+        and restored_candidate.trade_count == 87
+        and restored_candidate.strategy_fingerprint == fingerprint,
+        "legacy_restart_keeps_aggregate_floor": legacy_progressed.valid_symbols >= 10
+        and legacy_progressed.trade_count == 87,
+        "history_symbols_preserved": set((*symbols_a, *symbols_b, *symbols_c)).issubset(set(next_batch.evidence_symbols)),
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"cumulative sample persistence release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "candidate_id": next_batch.candidate_id,
+        "strategy_fingerprint": next_batch.strategy_fingerprint,
+        "batch1_valid_symbols": first.valid_symbols,
+        "batch1_trade_count": first.trade_count,
+        "batch2_valid_symbols": expanded.valid_symbols,
+        "batch2_trade_count": expanded.trade_count,
+        "batch3_local_valid_symbols": 5,
+        "batch3_local_trade_count": 30,
+        "canonical_valid_symbols": next_batch.valid_symbols,
+        "canonical_trade_count": next_batch.trade_count,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }

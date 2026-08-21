@@ -551,6 +551,22 @@ class MissionCandidatePortfolioTests(unittest.TestCase):
         self.assertEqual(restored.candidate_sequence, 0)
 
 
+class CumulativeSamplePersistenceReleaseCheckTests(unittest.TestCase):
+    def test_release_check_proves_cumulative_candidate_sample_persistence(self) -> None:
+        from gaon.knowledge.research_mission import production_cumulative_sample_persistence_release_check
+
+        payload = production_cumulative_sample_persistence_release_check()
+        self.assertEqual(payload["canonical_valid_symbols"], 15)
+        self.assertEqual(payload["canonical_trade_count"], 87)
+        self.assertTrue(payload["later_batch_did_not_regress"])
+        self.assertTrue(payload["duplicate_replay_not_double_counted"])
+        self.assertTrue(payload["restart_preserves_cumulative_state"])
+        self.assertTrue(payload["legacy_restart_keeps_aggregate_floor"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertEqual(payload["safety"], "pass")
+
+
 class MissionPersistenceRoundTripTests(unittest.TestCase):
     def test_to_json_from_json_round_trip(self) -> None:
         from gaon.knowledge.research_mission import ResearchMission

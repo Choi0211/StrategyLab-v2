@@ -40,6 +40,21 @@ NOW = "2026-08-17T00:00:00Z"
 LATER = "2026-08-17T00:05:00Z"
 
 
+def _breadth_details(symbols: tuple[str, ...], trades: tuple[int, ...]) -> dict[str, dict[str, object]]:
+    return {
+        symbol: {
+            "symbol": symbol,
+            "eligible": True,
+            "metrics": {"trade_count": trades[index]},
+            "evidence_id": f"evidence:{symbol}",
+            "quality_status": "pass",
+            "source": "real:yahoo-chart",
+            "fixture_backed": False,
+        }
+        for index, symbol in enumerate(symbols)
+    }
+
+
 class StrategyIdentityIsSymbolIndependentTests(unittest.TestCase):
     """Requirement 1: strategy identity is symbol-independent."""
 
@@ -659,6 +674,164 @@ class CandidateRenderingTests(unittest.TestCase):
         self.assertIn("KR-ST-001", summary)
         self.assertIn("KR-ST-002", summary)
         self.assertIn("0/3", summary)
+
+
+class CumulativeBreadthEvidenceTests(unittest.TestCase):
+    """Production regression: EXPAND_SAMPLE must not replace cumulative
+    candidate evidence with the latest batch-local summary."""
+
+    def test_breadth_progress_accumulates_distinct_symbol_evidence(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        symbols_a = tuple(f"A{i}" for i in range(5))
+        symbols_b = tuple(f"B{i}" for i in range(5))
+        symbols_c = tuple(f"C{i}" for i in range(5))
+
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=40,
+            evidence_symbols=symbols_a,
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=_breadth_details(symbols_a, (8, 8, 8, 8, 8)),
+        )
+        self.assertEqual(candidate.valid_symbols, 5)
+        self.assertEqual(candidate.trade_count, 40)
+
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=17,
+            evidence_symbols=symbols_b,
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=LATER,
+            evidence_details=_breadth_details(symbols_b, (4, 4, 3, 3, 3)),
+        )
+        self.assertEqual(candidate.valid_symbols, 10)
+        self.assertEqual(candidate.trade_count, 57)
+
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=30,
+            evidence_symbols=symbols_c,
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=LATER,
+            evidence_details=_breadth_details(symbols_c, (6, 6, 6, 6, 6)),
+        )
+        self.assertEqual(candidate.valid_symbols, 15)
+        self.assertEqual(candidate.trade_count, 87)
+        self.assertEqual(candidate.evidence_symbols, (*symbols_a, *symbols_b, *symbols_c))
+
+    def test_duplicate_symbol_evidence_does_not_double_count(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        symbols = tuple(f"A{i}" for i in range(5))
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=40,
+            evidence_symbols=symbols,
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=_breadth_details(symbols, (8, 8, 8, 8, 8)),
+        )
+        replay = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=40,
+            evidence_symbols=symbols,
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=LATER,
+            evidence_details=_breadth_details(symbols, (8, 8, 8, 8, 8)),
+        )
+        self.assertEqual(replay.valid_symbols, 5)
+        self.assertEqual(replay.trade_count, 40)
+        self.assertGreater(replay.cycles_without_progress, candidate.cycles_without_progress)
+
+    def test_legacy_record_keeps_persisted_trade_count_floor_after_restart(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        legacy = record_breadth_progress(
+            candidate,
+            attempted=10,
+            valid=10,
+            trade_count=57,
+            evidence_symbols=tuple(f"A{i}" for i in range(5)) + tuple(f"B{i}" for i in range(5)),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+        ).to_json()
+        legacy.pop("breadth_evidence", None)
+        legacy.pop("breadth_legacy_trade_count", None)
+        restored = type(candidate).from_json(legacy)
+
+        symbols_c = tuple(f"C{i}" for i in range(5))
+        progressed = record_breadth_progress(
+            restored,
+            attempted=5,
+            valid=5,
+            trade_count=30,
+            evidence_symbols=symbols_c,
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=LATER,
+            evidence_details=_breadth_details(symbols_c, (6, 6, 6, 6, 6)),
+        )
+        self.assertGreaterEqual(progressed.valid_symbols, 10)
+        self.assertEqual(progressed.trade_count, 87)
+
+    def test_breadth_evidence_survives_json_round_trip(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        symbols = tuple(f"A{i}" for i in range(5))
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=40,
+            evidence_symbols=symbols,
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=_breadth_details(symbols, (8, 8, 8, 8, 8)),
+        )
+        restored = type(candidate).from_json(candidate.to_json())
+        self.assertEqual(restored.breadth_evidence, candidate.breadth_evidence)
+        self.assertEqual(restored.valid_symbols, 5)
+        self.assertEqual(restored.trade_count, 40)
+
+    def test_batch_local_fallback_is_monotonic_without_evidence_details(self) -> None:
+        candidate = new_candidate("breakout_slow_multi_confirmed", sequence=5, now=NOW)
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=10,
+            valid=10,
+            trade_count=57,
+            evidence_symbols=tuple(f"A{i}" for i in range(10)),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+        )
+        regressed_batch = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=30,
+            evidence_symbols=tuple(f"C{i}" for i in range(5)),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=LATER,
+        )
+        self.assertEqual(regressed_batch.valid_symbols, 15)
+        self.assertEqual(regressed_batch.trade_count, 57)
 
     def test_status_summary_with_no_active_candidates_is_still_truthful(self) -> None:
         summary = render_candidate_status_summary((), current=0, target=3)
