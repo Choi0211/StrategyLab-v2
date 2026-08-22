@@ -13,7 +13,9 @@ from gaon.runtime.daily_briefing import (
     compose_post_market_briefing,
     compose_pre_market_briefing,
     compose_unresolved_research_review,
+    latest_research_mission_from_connection,
     production_daily_briefing_release_check,
+    production_morning_briefing_research_state_consistency_release_check,
     render_post_market_briefing_ko,
     render_pre_market_briefing_ko,
     render_unresolved_research_review_ko,
@@ -133,7 +135,105 @@ class DailyBriefingTests(unittest.TestCase):
         briefing = compose_pre_market_briefing(generated_at="2026-08-16T08:00:00Z", market="KOSPI")
         text = render_pre_market_briefing_ko(briefing)
         self.assertIn("반영할 만한 새 뉴스 근거가 없습니다", text)
-        self.assertIn("추가로 필요한 연구가 없습니다", text)
+        self.assertIn("새 뉴스에서 파생된 추가 연구 항목은 없습니다", text)
+        self.assertNotIn("추가로 필요한 연구가 없습니다", text)
+        self.assertIn("기준 시각: 2026-08-16 17:00 KST", text)
+
+    def test_pre_market_briefing_separates_news_and_active_research_mission(self) -> None:
+        from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+        from gaon.knowledge.strategy_candidate import new_candidate
+
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 3개의 단타 전략이 나올 때까지 연구해주세요",
+            existing=None,
+            now="2026-08-22T00:00:05Z",
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now="2026-08-22T00:00:05Z")
+        mission = add_candidate(mission, candidate, now="2026-08-22T00:00:05Z")
+        briefing = compose_pre_market_briefing(
+            generated_at="2026-08-22T00:00:05Z",
+            market="KOSPI",
+            research_mission=mission,
+        )
+        text = render_pre_market_briefing_ko(briefing)
+        self.assertIn("[뉴스]", text)
+        self.assertIn("새 뉴스에서 파생된 추가 연구 항목은 없습니다", text)
+        self.assertIn("[Research Mission]", text)
+        self.assertIn("promotion-ready: 0/3", text)
+        self.assertIn(f"active candidate: {candidate.candidate_id}", text)
+        self.assertIn("research status: 진행 중", text)
+        self.assertIn("next research action:", text)
+        self.assertNotIn("추가로 필요한 연구가 없습니다", text)
+
+    def test_pre_market_briefing_shows_awaiting_approval_state(self) -> None:
+        from gaon.knowledge.research_mission import (
+            add_candidate,
+            extract_or_update_mission,
+            next_candidate_sequence,
+            record_promotion_candidate,
+        )
+        from gaon.knowledge.strategy_candidate import new_candidate
+
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 3개의 단타 전략이 나올 때까지 연구해주세요",
+            existing=None,
+            now="2026-08-22T00:00:05Z",
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now="2026-08-22T00:00:05Z")
+        mission = add_candidate(mission, candidate, now="2026-08-22T00:00:05Z")
+        for index in range(3):
+            mission = record_promotion_candidate(
+                mission,
+                strategy_fingerprint=f"verified-distinct-fingerprint-{index}",
+                candidate_id=f"KR-ST-00{index + 1}",
+                now="2026-08-22T00:00:05Z",
+            )
+        text = render_pre_market_briefing_ko(
+            compose_pre_market_briefing(generated_at="2026-08-22T00:00:05Z", market="KOSPI", research_mission=mission)
+        )
+        self.assertIn("promotion-ready: 3/3", text)
+        self.assertIn("research status: 승격 승인 대기", text)
+        self.assertIn("next research action: 사용자 승격 승인 대기", text)
+
+    def test_latest_research_mission_read_model_survives_restart(self) -> None:
+        import json
+
+        from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+        from gaon.knowledge.strategy_candidate import new_candidate
+
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        migrate(connection)
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 3개의 단타 전략이 나올 때까지 연구해주세요",
+            existing=None,
+            now="2026-08-22T00:00:05Z",
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now="2026-08-22T00:00:05Z")
+        mission = add_candidate(mission, candidate, now="2026-08-22T00:00:05Z")
+        connection.execute(
+            """
+            INSERT INTO conversation_sessions(session_id, user_ref, source, status, created_at, updated_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "telegram:100",
+                "telegram:100",
+                "telegram",
+                "active",
+                "2026-08-22T00:00:05Z",
+                "2026-08-22T00:00:05Z",
+                json.dumps({"conversation_mvp": {"research_mission": mission.to_json()}}, sort_keys=True),
+            ),
+        )
+        connection.commit()
+        restored = latest_research_mission_from_connection(connection)
+        self.assertIsNotNone(restored)
+        text = render_pre_market_briefing_ko(
+            compose_pre_market_briefing(generated_at="2026-08-22T00:00:05Z", market="KOSPI", research_mission=restored)
+        )
+        self.assertIn("promotion-ready: 0/3", text)
+        self.assertIn(f"active candidate: {candidate.candidate_id}", text)
 
     def test_terminal_hold_from_budget_exhaustion_still_surfaces_as_followup(self) -> None:
         decision = _hold_decision()
@@ -173,6 +273,14 @@ class DailyBriefingTests(unittest.TestCase):
         self.assertFalse(payload["strategy_mutated"])
         self.assertFalse(payload["order_executed"])
         self.assertEqual(payload["jobs_registered"], 3)
+
+    def test_morning_briefing_research_state_consistency_release_check_passes(self) -> None:
+        payload = production_morning_briefing_research_state_consistency_release_check()
+        self.assertEqual(payload["safety"], "pass")
+        self.assertEqual(payload["news_followup_scope"], "news_only")
+        self.assertEqual(payload["promotion_ready_progress"], "0/3")
+        self.assertTrue(payload["restart_reads_canonical_mission"])
+        self.assertFalse(payload["research_action_executed"])
 
 
 class SendDailyBriefingTests(unittest.TestCase):

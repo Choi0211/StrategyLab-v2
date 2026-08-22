@@ -117,6 +117,27 @@ The explanation follow-ups must reuse the prior authoritative result from the
 same Telegram chat and must not rerun `autonomous_learning_research`. The raw
 prompt may show structured diagnostic fields from the stored result.
 
+## Morning Briefing Research State
+
+The pre-market Telegram briefing separates news-derived follow-up research from
+the canonical strategy Research Mission. When no new news evidence exists, the
+briefing should say that there are no additional research items derived from
+new news; it must not imply that the full autonomous Research Mission is
+finished.
+
+When a canonical `ResearchMission` is persisted in Telegram conversation
+metadata, the briefing renders a read-only `[Research Mission]` section with
+the active candidate, promotion-ready progress such as `0/3`, mission status,
+next blocker-driven action, and unresolved blockers. Rendering this section
+does not execute research, mutate strategies, place orders, promote a
+Champion, or bypass approval.
+
+Release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-morning-briefing-research-state-consistency-release-check --db /var/lib/strategylab/gaon-runtime.sqlite
+```
+
 Release checks:
 
 ```bash

@@ -3,6 +3,58 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix: Research Action Cycle Resolution
+
+Production autonomous research progression could still oscillate across
+different unresolved blockers, for example
+`RUN_OOS(false) -> RUN_REGIME(false) -> RUN_OOS(false)`, because the prior
+guard only blocked immediate same-action replay.
+
+Strategy candidates now persist a bounded validation attempt history keyed
+by material evidence state. The Research Director skips blocker actions
+that already returned no progress under the same evidence state, preserves
+the boundary across restart, and allows the action again only after new
+material evidence such as additional sample breadth or changed validation
+status appears.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-research-action-cycle-resolution-release-check
+```
+
+The check proves A-B-A and A-B-C-A no-progress cycle suppression,
+production KR-ST-006-shaped blocker handling, restart persistence,
+material-evidence reset, and unchanged safety. Schema remains v36.
+
+## Hotfix: Morning Briefing Research State Consistency
+
+Production Telegram pre-market briefings could say
+`추가로 필요한 연구가 없습니다.` when the news subsystem had no new
+follow-up item, even while the canonical Research Mission remained active
+with `promotion-ready: 0/3`, an active candidate, and unresolved
+robustness blockers.
+
+The briefing now separates news-derived follow-ups from strategy Research
+Mission state. No-news briefings say
+`새 뉴스에서 파생된 추가 연구 항목은 없습니다.` and, when a canonical
+mission exists, render a separate `[Research Mission]` section with scope,
+active candidate, `0/3` progress, mission status, next blocker-driven
+action, and unresolved blockers. User-facing briefing timestamps now render
+in Asia/Seoul (`YYYY-MM-DD HH:MM KST`) while internal timestamps remain
+UTC.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-morning-briefing-research-state-consistency-release-check
+```
+
+The check proves news-only follow-up wording, active mission `0/3`
+visibility, `3/3` `AWAITING_HUMAN_APPROVAL` presentation, restart-safe
+canonical mission reads from SQLite, KST timestamp rendering, and unchanged
+read-only safety. Schema remains v36.
+
 ## Hotfix: Research Mission Promotion Target Consistency
 
 Production Telegram acceptance showed `promotion-ready candidates: 0/1`

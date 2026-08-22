@@ -330,6 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-daily-briefing-telegram-delivery-release-check")
     sub.add_parser("gaon-production-daily-briefing-scheduler-release-check")
     sub.add_parser("gaon-production-daily-briefing-runtime-wiring-release-check")
+    sub.add_parser("gaon-production-morning-briefing-research-state-consistency-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
     sub.add_parser("gaon-production-strategy-centric-autonomous-research-release-check")
     sub.add_parser("gaon-production-persistent-strategy-candidate-continuation-release-check")
@@ -341,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-autonomous-research-completion-release-check")
     sub.add_parser("gaon-production-research-action-execution-handoff-release-check")
     sub.add_parser("gaon-production-research-action-persistence-release-check")
+    sub.add_parser("gaon-production-research-action-cycle-resolution-release-check")
     sub.add_parser("gaon-production-strategy-space-expansion-release-check")
     sub.add_parser("gaon-production-cumulative-sample-persistence-release-check")
     sub.add_parser("gaon-production-sample-exhaustion-candidate-decision-release-check")
@@ -2888,6 +2890,16 @@ def _run(args: argparse.Namespace) -> int:
         )
         print(f"gaon-production-research-action-persistence-release-check: PASS {details}")
 
+    elif args.command == "gaon-production-research-action-cycle-resolution-release-check":
+        from gaon.knowledge.research_mission import production_research_action_cycle_resolution_release_check
+
+        payload = production_research_action_cycle_resolution_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-research-action-cycle-resolution-release-check: PASS {details}")
+
     elif args.command == "gaon-production-strategy-space-expansion-release-check":
         from gaon.knowledge.research_mission import production_strategy_space_expansion_release_check
 
@@ -2982,6 +2994,27 @@ def _run(args: argparse.Namespace) -> int:
             f"jobs_registered={str(payload['jobs_registered']).lower()} "
             f"idempotent={str(payload['idempotent']).lower()} "
             f"durable_restart={str(payload['durable_restart']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-morning-briefing-research-state-consistency-release-check":
+        from gaon.runtime.daily_briefing import production_morning_briefing_research_state_consistency_release_check
+
+        payload = production_morning_briefing_research_state_consistency_release_check()
+        print(
+            "gaon-production-morning-briefing-research-state-consistency-release-check: PASS "
+            f"schema_version={payload['schema_version']} "
+            f"news_followup_scope={payload['news_followup_scope']} "
+            f"promotion_ready_progress={payload['promotion_ready_progress']} "
+            f"research_status_active={str(payload['research_status_active']).lower()} "
+            f"approval_status_visible={str(payload['approval_status_visible']).lower()} "
+            f"restart_reads_canonical_mission={str(payload['restart_reads_canonical_mission']).lower()} "
+            f"timestamp_timezone={payload['timestamp_timezone']} "
+            f"research_action_executed={str(payload['research_action_executed']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "

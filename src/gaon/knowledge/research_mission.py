@@ -3207,6 +3207,147 @@ def production_research_action_persistence_release_check() -> Mapping[str, objec
         store.close()
 
 
+def production_research_action_cycle_resolution_release_check() -> Mapping[str, object]:
+    """Regression guard for cross-action no-progress blocker cycles.
+
+    PR #149/#150 blocked immediate same-action replay, but production still
+    exposed RUN_OOS -> RUN_REGIME -> RUN_OOS ping-pong when both dimensions
+    returned no material evidence change. This check proves the candidate's
+    persisted action attempt history is scoped to the current material
+    evidence state, skips no-progress actions already tried in that state,
+    survives restart, and resets only when new material evidence appears.
+    """
+    from gaon.knowledge.strategy_candidate import (
+        new_candidate,
+        next_blocker_driven_research_action,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+
+    now = "2026-08-22T00:00:00Z"
+    symbols = ("005930", "000660", "005380", "035420", "051910", "068270", "006400", "267250", "086790")
+    candidate = new_candidate("breakout_fast_trend_confirmed", sequence=6, now=now)
+    candidate = record_breadth_progress(
+        candidate,
+        attempted=9,
+        valid=9,
+        trade_count=91,
+        evidence_symbols=symbols,
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+    )
+    candidate = record_robustness_progress(
+        candidate,
+        director_action="collect_more_evidence",
+        terminal=False,
+        validation_stage_status={
+            "out_of_sample": "insufficient_oos_sample",
+            "walk_forward": "fail",
+            "transaction_cost_stress": "cost_fragile",
+            "regime_validation": "insufficient_regime_coverage",
+            "multi_symbol_validation": "multi_symbol_partial",
+            "parameter_sensitivity": "stable",
+            "monte_carlo": "not_run_insufficient_primary_sample",
+        },
+        symbol="005930",
+        reference="action=SEED|symbol=005930|stage=none|status=partial",
+        now=now,
+    )
+    turn1_action, turn1_reason = next_blocker_driven_research_action(candidate)
+    after_oos = record_robustness_progress(
+        candidate,
+        director_action="hold",
+        terminal=False,
+        validation_stage_status={"out_of_sample": "insufficient_oos_sample"},
+        symbol="005930",
+        reference="action=RUN_OOS|symbol=005930|stage=out_of_sample|status=insufficient_oos_sample",
+        now=now,
+    )
+    turn2_action, turn2_reason = next_blocker_driven_research_action(after_oos)
+    after_regime = record_robustness_progress(
+        after_oos,
+        director_action="hold",
+        terminal=False,
+        validation_stage_status={"regime_validation": "insufficient_regime_coverage"},
+        symbol="005930",
+        reference="action=RUN_REGIME|symbol=005930|stage=regime_validation|status=insufficient_regime_coverage",
+        now=now,
+    )
+    turn3_action, turn3_reason = next_blocker_driven_research_action(after_regime)
+    after_walk = record_robustness_progress(
+        after_regime,
+        director_action="hold",
+        terminal=False,
+        validation_stage_status={"walk_forward": "fail"},
+        symbol="005930",
+        reference="action=RUN_WALK_FORWARD|symbol=005930|stage=walk_forward|status=fail",
+        now=now,
+    )
+    turn4_action, turn4_reason = next_blocker_driven_research_action(after_walk)
+    restored = type(after_regime).from_json(after_regime.to_json())
+    restart_action, restart_reason = next_blocker_driven_research_action(restored)
+    revised = record_breadth_progress(
+        after_regime,
+        attempted=10,
+        valid=10,
+        trade_count=105,
+        evidence_symbols=(*symbols, "267260"),
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+    )
+    revised_action, revised_reason = next_blocker_driven_research_action(revised)
+    exhausted = after_walk
+    for action, stage, status in (
+        ("RUN_COST_STRESS", "transaction_cost_stress", "cost_fragile"),
+        ("RUN_MONTE_CARLO", "monte_carlo", "not_run_insufficient_primary_sample"),
+    ):
+        exhausted = record_robustness_progress(
+            exhausted,
+            director_action="hold",
+            terminal=False,
+            validation_stage_status={stage: status},
+            symbol="005930",
+            reference=f"action={action}|symbol=005930|stage={stage}|status={status}",
+            now=now,
+        )
+    exhausted_action, exhausted_reason = next_blocker_driven_research_action(exhausted)
+
+    checks = {
+        "turn1_oos": turn1_action == "RUN_OOS" and turn1_reason == "out_of_sample_blocker",
+        "turn2_regime": turn2_action == "RUN_REGIME" and turn2_reason == "regime_blocker",
+        "aba_cycle_blocked": turn3_action != "RUN_OOS" and turn3_action == "RUN_WALK_FORWARD",
+        "abca_cycle_blocked": turn4_action != "RUN_OOS" and turn4_action in {"RUN_COST_STRESS", "RUN_MONTE_CARLO", "EXPAND_SAMPLE", "ROTATE_CANDIDATE"},
+        "all_current_blockers_exhausted_moves_on": exhausted_action in {"EXPAND_SAMPLE", "ROTATE_CANDIDATE"}
+        and exhausted_reason in {"validation_cycle_exhausted_needs_new_material_evidence", "validation_cycle_exhausted_without_progress"},
+        "material_evidence_revision_allows_oos_again": revised_action == "RUN_OOS" and revised_reason == "out_of_sample_blocker",
+        "restart_preserves_cycle_boundary": restart_action == turn3_action and restart_reason == turn3_reason,
+        "production_shape_no_ping_pong": turn3_action != "RUN_OOS" and restart_action != "RUN_OOS",
+        "attempt_history_persisted": len(restored.validation_attempt_history) >= 2,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"research action cycle resolution release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "turn1_action": turn1_action,
+        "turn2_action": turn2_action,
+        "turn3_action": turn3_action,
+        "turn4_action": turn4_action,
+        "restart_action": restart_action,
+        "revised_action": revised_action,
+        "exhausted_action": exhausted_action,
+        "exhausted_reason": exhausted_reason,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
 def production_strategy_space_expansion_release_check() -> Mapping[str, object]:
     """Regression guard for exhausted strategy-family production missions.
 

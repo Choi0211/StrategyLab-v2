@@ -57,6 +57,38 @@ def _breadth_details(symbols: tuple[str, ...], trades: tuple[int, ...]) -> dict[
     }
 
 
+def _production_cycle_candidate():
+    symbols = ("005930", "000660", "005380", "035420", "051910", "068270", "006400", "267250", "086790")
+    candidate = new_candidate("breakout_fast_trend_confirmed", sequence=6, now=NOW)
+    candidate = record_breadth_progress(
+        candidate,
+        attempted=9,
+        valid=9,
+        trade_count=91,
+        evidence_symbols=symbols,
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=NOW,
+    )
+    return record_robustness_progress(
+        candidate,
+        director_action="collect_more_evidence",
+        terminal=False,
+        validation_stage_status={
+            "out_of_sample": "insufficient_oos_sample",
+            "walk_forward": "fail",
+            "transaction_cost_stress": "cost_fragile",
+            "regime_validation": "insufficient_regime_coverage",
+            "multi_symbol_validation": "multi_symbol_partial",
+            "parameter_sensitivity": "stable",
+            "monte_carlo": "not_run_insufficient_primary_sample",
+        },
+        symbol="005930",
+        reference="action=SEED|symbol=005930|stage=none|status=partial",
+        now=NOW,
+    )
+
+
 class StrategyIdentityIsSymbolIndependentTests(unittest.TestCase):
     """Requirement 1: strategy identity is symbol-independent."""
 
@@ -601,6 +633,106 @@ class RobustnessProgressTests(unittest.TestCase):
         next_action, next_reason = next_blocker_driven_research_action(candidate)
         self.assertEqual(next_action, "RUN_WALK_FORWARD")
         self.assertEqual(next_reason, "walk_forward_blocker")
+
+    def test_cross_action_no_progress_cycle_moves_to_untried_dimension(self) -> None:
+        candidate = _production_cycle_candidate()
+        first_action, first_reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual((first_action, first_reason), ("RUN_OOS", "out_of_sample_blocker"))
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="hold",
+            terminal=False,
+            validation_stage_status={"out_of_sample": "insufficient_oos_sample"},
+            symbol="005930",
+            reference="action=RUN_OOS|symbol=005930|stage=out_of_sample|status=insufficient_oos_sample",
+            now=LATER,
+        )
+        second_action, second_reason = next_blocker_driven_research_action(candidate)
+        self.assertEqual((second_action, second_reason), ("RUN_REGIME", "regime_blocker"))
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="hold",
+            terminal=False,
+            validation_stage_status={"regime_validation": "insufficient_regime_coverage"},
+            symbol="005930",
+            reference="action=RUN_REGIME|symbol=005930|stage=regime_validation|status=insufficient_regime_coverage",
+            now=LATER,
+        )
+        third_action, third_reason = next_blocker_driven_research_action(candidate)
+        self.assertNotEqual(third_action, "RUN_OOS")
+        self.assertEqual((third_action, third_reason), ("RUN_WALK_FORWARD", "walk_forward_blocker"))
+
+    def test_three_action_no_progress_cycle_does_not_return_to_first_action(self) -> None:
+        candidate = _production_cycle_candidate()
+        for action, stage, status in (
+            ("RUN_OOS", "out_of_sample", "insufficient_oos_sample"),
+            ("RUN_REGIME", "regime_validation", "insufficient_regime_coverage"),
+            ("RUN_WALK_FORWARD", "walk_forward", "fail"),
+        ):
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="hold",
+                terminal=False,
+                validation_stage_status={stage: status},
+                symbol="005930",
+                reference=f"action={action}|symbol=005930|stage={stage}|status={status}",
+                now=LATER,
+            )
+        action, reason = next_blocker_driven_research_action(candidate)
+        self.assertNotEqual(action, "RUN_OOS")
+        self.assertIn(action, {"RUN_COST_STRESS", "RUN_MONTE_CARLO", "EXPAND_SAMPLE", "ROTATE_CANDIDATE"})
+        self.assertNotEqual(reason, "out_of_sample_blocker")
+
+    def test_material_evidence_revision_allows_previous_action_again(self) -> None:
+        candidate = _production_cycle_candidate()
+        for action, stage, status in (
+            ("RUN_OOS", "out_of_sample", "insufficient_oos_sample"),
+            ("RUN_REGIME", "regime_validation", "insufficient_regime_coverage"),
+        ):
+            candidate = record_robustness_progress(
+                candidate,
+                director_action="hold",
+                terminal=False,
+                validation_stage_status={stage: status},
+                symbol="005930",
+                reference=f"action={action}|symbol=005930|stage={stage}|status={status}",
+                now=LATER,
+            )
+        self.assertEqual(next_blocker_driven_research_action(candidate)[0], "RUN_WALK_FORWARD")
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=10,
+            valid=10,
+            trade_count=105,
+            evidence_symbols=(*candidate.evidence_symbols, "267260"),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=LATER,
+        )
+        self.assertEqual(next_blocker_driven_research_action(candidate)[0], "RUN_OOS")
+
+    def test_action_cycle_history_survives_serialization(self) -> None:
+        candidate = _production_cycle_candidate()
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="hold",
+            terminal=False,
+            validation_stage_status={"out_of_sample": "insufficient_oos_sample"},
+            symbol="005930",
+            reference="action=RUN_OOS|symbol=005930|stage=out_of_sample|status=insufficient_oos_sample",
+            now=LATER,
+        )
+        candidate = record_robustness_progress(
+            candidate,
+            director_action="hold",
+            terminal=False,
+            validation_stage_status={"regime_validation": "insufficient_regime_coverage"},
+            symbol="005930",
+            reference="action=RUN_REGIME|symbol=005930|stage=regime_validation|status=insufficient_regime_coverage",
+            now=LATER,
+        )
+        restored = type(candidate).from_json(candidate.to_json())
+        self.assertEqual(next_blocker_driven_research_action(restored)[0], "RUN_WALK_FORWARD")
 
     def test_blocker_driven_action_expands_before_monte_carlo_when_sample_is_small(self) -> None:
         candidate = new_candidate("breakout_standard", sequence=1, now=NOW)

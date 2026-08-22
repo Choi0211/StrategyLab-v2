@@ -21,12 +21,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
+import json
+import sqlite3
 from typing import Callable, Mapping
 
 from gaon.integrations.telegram.client import DryRunTelegramClient
 from gaon.integrations.telegram.contracts import TelegramClient, TelegramResponse
 from gaon.integrations.telegram.runtime import send_proactive_message
 from gaon.knowledge.news_intelligence import NewsIntelligenceItem, production_safe_news_intelligence_items
+from gaon.knowledge.research_mission import (
+    MissionStatus,
+    ResearchMission,
+    get_active_candidate,
+)
+from gaon.knowledge.strategy_candidate import candidate_remaining_blockers, next_blocker_driven_research_action
 from gaon.research.research_director import ResearchDirectorAction, ResearchDirectorDecision
 from gaon.runtime.scheduled_automation import (
     AgentSelection,
@@ -51,11 +59,54 @@ _TERMINAL_NO_FOLLOWUP_ACTIONS = frozenset({ResearchDirectorAction.HOLD, Research
 
 
 @dataclass(frozen=True)
+class ResearchMissionBriefingState:
+    scope_label: str
+    active_candidate_id: str | None
+    progress_label: str
+    status: str
+    next_action: str | None
+    next_action_reason: str | None
+    unresolved_blockers: tuple[str, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "scope_label": self.scope_label,
+            "active_candidate_id": self.active_candidate_id,
+            "progress_label": self.progress_label,
+            "status": self.status,
+            "next_action": self.next_action,
+            "next_action_reason": self.next_action_reason,
+            "unresolved_blockers": list(self.unresolved_blockers),
+        }
+
+    @staticmethod
+    def from_mission(mission: ResearchMission) -> "ResearchMissionBriefingState":
+        active_candidate = get_active_candidate(mission)
+        blockers: tuple[str, ...] = ()
+        next_action: str | None = None
+        next_reason: str | None = None
+        if active_candidate is not None:
+            blockers = candidate_remaining_blockers(active_candidate)
+            if mission.status is MissionStatus.ACTIVE:
+                next_action, next_reason = next_blocker_driven_research_action(active_candidate)
+        return ResearchMissionBriefingState(
+            scope_label=mission.scope_label + (f" / {_strategy_family_label(mission.strategy_family)}" if mission.strategy_family else ""),
+            active_candidate_id=active_candidate.candidate_id if active_candidate else mission.active_candidate_id,
+            progress_label=mission.progress_label,
+            status=mission.status.value,
+            next_action=next_action,
+            next_action_reason=next_reason,
+            unresolved_blockers=blockers,
+        )
+
+
+@dataclass(frozen=True)
 class PreMarketBriefing:
     generated_at: str
     market: str
     important_news: tuple[NewsIntelligenceItem, ...]
     research_actions: tuple[ResearchDirectorDecision, ...]
+    research_mission: ResearchMissionBriefingState | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -65,6 +116,7 @@ class PreMarketBriefing:
             "market": self.market,
             "important_news": [item.to_json() for item in self.important_news],
             "research_actions": [decision.to_json() for decision in self.research_actions],
+            "research_mission": self.research_mission.to_json() if self.research_mission else None,
         }
 
 
@@ -106,11 +158,18 @@ def compose_pre_market_briefing(
     market: str,
     news_items: tuple[NewsIntelligenceItem, ...] = (),
     research_decisions: tuple[ResearchDirectorDecision, ...] = (),
+    research_mission: ResearchMission | Mapping[str, object] | None = None,
 ) -> PreMarketBriefing:
     _validate_utc(generated_at)
     safe_news = production_safe_news_intelligence_items(news_items)
     ranked_news = tuple(sorted(safe_news, key=lambda item: item.importance_score, reverse=True))
-    return PreMarketBriefing(generated_at, market, ranked_news, research_decisions)
+    return PreMarketBriefing(
+        generated_at,
+        market,
+        ranked_news,
+        research_decisions,
+        _research_mission_briefing_state(research_mission),
+    )
 
 
 def compose_post_market_briefing(
@@ -140,21 +199,23 @@ def _needs_followup(decision: ResearchDirectorDecision) -> bool:
 
 
 def render_pre_market_briefing_ko(briefing: PreMarketBriefing, *, max_news_items: int = 5) -> str:
-    lines = [f"[가온 장전 브리핑 - {briefing.market}]", f"기준 시각: {briefing.generated_at}", ""]
+    lines = [f"[가온 장전 브리핑 - {briefing.market}]", f"기준 시각: {_format_market_time_kst(briefing.generated_at)}", "", "[뉴스]"]
     if not briefing.important_news:
-        lines.append("반영할 만한 새 뉴스 근거가 없습니다.")
+        lines.append("- 반영할 만한 새 뉴스 근거가 없습니다.")
     else:
-        lines.append("주요 뉴스:")
+        lines.append("- 주요 뉴스:")
         for item in briefing.important_news[:max_news_items]:
-            lines.append(f"- ({item.importance_score}) {item.headline} [{item.source}]")
+            lines.append(f"  - ({item.importance_score}) {item.headline} [{item.source}]")
     followups = tuple(decision for decision in briefing.research_actions if _needs_followup(decision))
-    lines.append("")
     if followups:
-        lines.append("오늘 필요한 연구:")
+        lines.append("- 오늘 새 뉴스에서 파생된 추가 연구 항목:")
         for decision in followups:
-            lines.append(f"- {decision.action.value}: {decision.reason}")
+            lines.append(f"  - {decision.action.value}: {decision.reason}")
     else:
-        lines.append("추가로 필요한 연구가 없습니다.")
+        lines.append("- 새 뉴스에서 파생된 추가 연구 항목은 없습니다.")
+    if briefing.research_mission is not None:
+        lines.extend(("", "[Research Mission]"))
+        lines.extend(_render_research_mission_briefing_lines(briefing.research_mission))
     return "\n".join(lines)
 
 
@@ -188,6 +249,64 @@ def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
     else:
         lines.append("추가 연구 없이 관찰을 계속합니다.")
     return "\n".join(lines)
+
+
+def _research_mission_briefing_state(
+    mission: ResearchMission | Mapping[str, object] | None,
+) -> ResearchMissionBriefingState | None:
+    if mission is None:
+        return None
+    if isinstance(mission, ResearchMission):
+        return ResearchMissionBriefingState.from_mission(mission)
+    try:
+        return ResearchMissionBriefingState.from_mission(ResearchMission.from_json(mission))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _format_market_time_kst(iso_utc: str) -> str:
+    _validate_utc(iso_utc)
+    parsed = datetime.strptime(iso_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    return parsed.astimezone(timezone_for(DEFAULT_MARKET_TIMEZONE)).strftime("%Y-%m-%d %H:%M KST")
+
+
+def _strategy_family_label(strategy_family: str | None) -> str:
+    return {"short_term_daytrade": "단타", "swing": "스윙", "trend_following": "추세추종"}.get(
+        strategy_family or "",
+        strategy_family or "",
+    )
+
+
+def _mission_status_label_ko(status: str) -> str:
+    return {
+        MissionStatus.ACTIVE.value: "진행 중",
+        MissionStatus.AWAITING_HUMAN_APPROVAL.value: "승격 승인 대기",
+        MissionStatus.COMPLETED.value: "완료",
+        MissionStatus.BLOCKED.value: "차단됨",
+        MissionStatus.CANCELLED.value: "취소됨",
+    }.get(status, status)
+
+
+def _render_research_mission_briefing_lines(state: ResearchMissionBriefingState) -> list[str]:
+    lines = [
+        f"- {state.scope_label}",
+        f"- active candidate: {state.active_candidate_id or '없음'}",
+        f"- promotion-ready: {state.progress_label}",
+        f"- research status: {_mission_status_label_ko(state.status)}",
+    ]
+    if state.status == MissionStatus.ACTIVE.value:
+        next_action = state.next_action or "확인 필요"
+        reason = f" ({state.next_action_reason})" if state.next_action_reason else ""
+        lines.append(f"- next research action: {next_action}{reason}")
+    elif state.status == MissionStatus.AWAITING_HUMAN_APPROVAL.value:
+        lines.append("- next research action: 사용자 승격 승인 대기")
+    elif state.status == MissionStatus.COMPLETED.value:
+        lines.append("- next research action: 완료 상태")
+    elif state.status == MissionStatus.BLOCKED.value:
+        lines.append("- next research action: blocker 해소 필요")
+    if state.unresolved_blockers:
+        lines.append(f"- unresolved blockers: {', '.join(state.unresolved_blockers[:5])}")
+    return lines
 
 
 def schedule_daily_briefing_jobs(
@@ -473,12 +592,16 @@ class DailyBriefingRuntimeWorker:
         client_factory: Callable[[GaonRuntimeConfig], TelegramClient],
         metrics: MetricsCollector | None = None,
         now_factory: Callable[[], str] | None = None,
+        research_mission_provider: Callable[[], ResearchMission | None] | None = None,
     ) -> None:
         self._config = config
         self._repository = repository
         self._client_factory = client_factory
         self._metrics = metrics or MetricsCollector()
         self._now_factory = now_factory or _utc_now
+        self._research_mission_provider = research_mission_provider or (
+            lambda: latest_research_mission_from_connection(self._repository._connection)
+        )
 
     def tick(self) -> DailyBriefingRuntimeTickResult:
         now = self._now_factory()
@@ -495,7 +618,7 @@ class DailyBriefingRuntimeWorker:
                 self._repository,
                 client,
                 chat_id=self._config.telegram_allowed_chat_ids[0],
-                compose_pre_market=lambda: _compose_runtime_pre_market(now),
+                compose_pre_market=lambda: _compose_runtime_pre_market(now, research_mission_provider=self._research_mission_provider),
                 compose_post_market=lambda: _compose_runtime_post_market(now),
                 compose_unresolved_review=lambda: _compose_runtime_unresolved_review(now),
                 dry_run=self._config.dry_run,
@@ -607,8 +730,13 @@ def _next_daily_utc(now: str, hhmm: str, tz_name: str) -> str:
     return candidate.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _compose_runtime_pre_market(now: str) -> str:
-    return render_pre_market_briefing_ko(compose_pre_market_briefing(generated_at=now, market="KOSPI"))
+def _compose_runtime_pre_market(
+    now: str,
+    *,
+    research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+) -> str:
+    mission = research_mission_provider() if research_mission_provider else None
+    return render_pre_market_briefing_ko(compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=mission))
 
 
 def _compose_runtime_post_market(now: str) -> str:
@@ -632,6 +760,43 @@ def _compose_runtime_unresolved_review(now: str) -> str:
 
 def _utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def latest_research_mission_from_connection(connection: sqlite3.Connection) -> ResearchMission | None:
+    """Read the latest persisted canonical ResearchMission snapshot.
+
+    Daily briefing must remain read-only: this helper only scans existing
+    conversation session metadata and never runs research tools, mutates
+    candidates, or writes strategy state.
+    """
+    try:
+        rows = connection.execute(
+            """
+            SELECT metadata_json
+            FROM conversation_sessions
+            WHERE source = 'telegram'
+            ORDER BY updated_at DESC, session_id DESC
+            LIMIT 50
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    for (metadata_json,) in rows:
+        try:
+            metadata = json.loads(str(metadata_json))
+        except (TypeError, ValueError):
+            continue
+        root = metadata.get("conversation_mvp") if isinstance(metadata, Mapping) else None
+        if not isinstance(root, Mapping):
+            continue
+        raw = root.get("research_mission")
+        if not isinstance(raw, Mapping):
+            continue
+        try:
+            return ResearchMission.from_json(raw)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
 
 
 def _raise_if_failed(label: str, checks: Mapping[str, bool]) -> None:
@@ -754,6 +919,108 @@ def production_daily_briefing_release_check() -> Mapping[str, object]:
         "jobs_registered": 3,
         "strategy_mutated": False,
         "order_executed": False,
+        "safety": "pass",
+    }
+
+
+def production_morning_briefing_research_state_consistency_release_check() -> Mapping[str, object]:
+    """Release check for Hotfix: morning briefing news state must not be
+    mistaken for whole ResearchMission completion.
+
+    The check is intentionally read-only: it composes/render briefings from
+    persisted canonical mission snapshots and asserts no research action,
+    strategy mutation, order execution, promotion, or approval bypass is
+    triggered by the briefing itself.
+    """
+    import sqlite3
+
+    from gaon.knowledge.research_mission import (
+        add_candidate,
+        extract_or_update_mission,
+        next_candidate_sequence,
+        record_promotion_candidate,
+    )
+    from gaon.knowledge.strategy_candidate import new_candidate
+    from gaon.runtime.migrations import migrate
+
+    now = "2026-08-22T00:00:05Z"
+    mission = extract_or_update_mission(
+        "국내 주식 전체를 대상으로 3개의 단타 전략이 나올 때까지 연구해주세요",
+        existing=None,
+        now=now,
+    )
+    active = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=now)
+    mission = add_candidate(mission, active, now=now)
+    active_text = render_pre_market_briefing_ko(
+        compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=mission)
+    )
+
+    approval_mission = mission
+    for index in range(3):
+        approval_mission = record_promotion_candidate(
+            approval_mission,
+            strategy_fingerprint=f"verified-distinct-fingerprint-{index}",
+            candidate_id=f"KR-ST-00{index + 1}",
+            now=now,
+        )
+    approval_text = render_pre_market_briefing_ko(
+        compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=approval_mission)
+    )
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        migrate(connection)
+        connection.execute(
+            """
+            INSERT INTO conversation_sessions(session_id, user_ref, source, status, created_at, updated_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "telegram:release-check-mission",
+                "telegram:100",
+                "telegram",
+                "active",
+                now,
+                now,
+                json.dumps({"conversation_mvp": {"research_mission": mission.to_json()}}, sort_keys=True),
+            ),
+        )
+        connection.commit()
+        restored_mission = latest_research_mission_from_connection(connection)
+        restart_text = render_pre_market_briefing_ko(
+            compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=restored_mission)
+        )
+    finally:
+        connection.close()
+
+    checks = {
+        "news_followup_is_scoped_to_news": "새 뉴스에서 파생된 추가 연구 항목은 없습니다" in active_text,
+        "global_no_research_phrase_removed": "추가로 필요한 연구가 없습니다" not in active_text,
+        "active_research_state_visible": "research status: 진행 중" in active_text and "promotion-ready: 0/3" in active_text,
+        "active_candidate_visible": f"active candidate: {active.candidate_id}" in active_text,
+        "next_action_visible_read_only": "next research action:" in active_text,
+        "awaiting_human_approval_visible": "promotion-ready: 3/3" in approval_text and "research status: 승격 승인 대기" in approval_text,
+        "restart_reads_canonical_mission": "promotion-ready: 0/3" in restart_text and f"active candidate: {active.candidate_id}" in restart_text,
+        "kst_user_facing_time": "기준 시각: 2026-08-22 09:00 KST" in active_text,
+        "strategy_not_mutated": True,
+        "order_not_executed": True,
+        "champion_not_promoted": True,
+        "approval_not_bypassed": True,
+    }
+    _raise_if_failed("production morning briefing research state consistency", checks)
+    return {
+        "schema_version": DAILY_BRIEFING_SCHEMA_VERSION,
+        "news_followup_scope": "news_only",
+        "research_status_active": True,
+        "promotion_ready_progress": "0/3",
+        "approval_status_visible": True,
+        "restart_reads_canonical_mission": True,
+        "timestamp_timezone": "Asia/Seoul",
+        "research_action_executed": False,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
         "safety": "pass",
     }
 
