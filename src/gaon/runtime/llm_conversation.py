@@ -64,8 +64,10 @@ from gaon.knowledge.research_mission import (
     candidate_records,
     clear_focus_symbol,
     distinct_promotion_ready_strategy_count,
+    extract_candidate_id,
     extract_or_update_mission,
     get_active_candidate,
+    get_candidate,
     is_candidate_robustness_continuation_request,
     is_cycle_budget_exhausted,
     is_diversity_request,
@@ -93,6 +95,7 @@ from gaon.knowledge.research_mission import (
 from gaon.knowledge.strategy_candidate import (
     EconomicViabilityStatus,
     StrategyCandidateStatus,
+    candidate_remaining_blockers,
     candidate_sample_exhausted,
     evaluate_economic_viability,
     expand_strategy_space_candidate,
@@ -965,23 +968,71 @@ class LLMConversationBrain:
         # request, so this can never intercept a genuine "continue
         # validating the current candidate" message - those are already
         # handled (and returned from) by the block directly above.
-        active_candidate = get_active_candidate(mission) if mission is not None else None
+        # KR-ST-008 production bug fix: a message explicitly naming a
+        # candidate id ("KR-ST-008") and explicitly saying not to execute
+        # any research ("연구 실행 없이 read-only로만 알려주세요") used to
+        # never match ``is_mission_candidate_read_request`` at all (its
+        # subject-token list only recognized generic phrases like
+        # "활성후보", never an explicit id or an explicit "read-only"
+        # marker) - it fell through into ``_try_autonomous_research_
+        # conversation`` below, where ``_autonomous_learning_request_mode``
+        # classified it as "external_research" purely because the message
+        # happened to contain the bare substring "evidence" (from the
+        # user's own request to see "performance evidence"), with no
+        # awareness that the sentence explicitly forbade execution. That
+        # path then resolved its target symbol from STALE per-session
+        # conversational context, running a full research/OOS/walk-
+        # forward/cost-stress cycle on an unrelated old symbol - the exact
+        # opposite of what was asked. See ``is_mission_candidate_read_
+        # request``/``extract_candidate_id`` in research_mission.py for the
+        # fix; this block additionally resolves an EXPLICITLY named
+        # candidate id from the mission's own persisted candidate map
+        # (never the "active" one, never a stale conversational symbol),
+        # and fails closed with an honest not-found message rather than
+        # ever falling back to single-symbol research when that id does
+        # not exist.
         if (
             mission is not None
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
-            and active_candidate is not None
             and is_mission_candidate_read_request(request.text)
         ):
-            self._remember_mission(request, mission)
-            text = self._render_mission_candidate_read_response(request.text, mission, active_candidate)
-            return (
-                text,
-                "conversation_mission_candidate_read",
-                _dedupe((*warnings, "mission-aware canonical candidate read model; no research tool executed")),
-                references,
-                "deterministic",
-                (),
-            )
+            explicit_candidate_id = extract_candidate_id(request.text)
+            if explicit_candidate_id is not None:
+                read_candidate = get_candidate(mission, explicit_candidate_id)
+                self._remember_mission(request, mission)
+                if read_candidate is None:
+                    return (
+                        f"영하님, {explicit_candidate_id} 후보를 현재 Research Mission에서 찾을 수 없습니다. "
+                        "존재하지 않거나 아직 생성되지 않은 후보 id이며, 다른 종목이나 후보를 임의로 "
+                        "대신 연구하지 않습니다.\n\n"
+                        f"{mission_status_block(mission)}",
+                        "conversation_mission_candidate_read_not_found",
+                        _dedupe((*warnings, f"candidate_not_found={explicit_candidate_id}", "read-only; no research tool executed")),
+                        references,
+                        "deterministic",
+                        (),
+                    )
+                text = self._render_mission_candidate_read_response(request.text, mission, read_candidate)
+                return (
+                    text,
+                    "conversation_mission_candidate_read",
+                    _dedupe((*warnings, f"candidate_read={read_candidate.candidate_id}", "read-only; no research tool executed")),
+                    references,
+                    "deterministic",
+                    (),
+                )
+            active_candidate = get_active_candidate(mission)
+            if active_candidate is not None:
+                self._remember_mission(request, mission)
+                text = self._render_mission_candidate_read_response(request.text, mission, active_candidate)
+                return (
+                    text,
+                    "conversation_mission_candidate_read",
+                    _dedupe((*warnings, "mission-aware canonical candidate read model; no research tool executed")),
+                    references,
+                    "deterministic",
+                    (),
+                )
 
         if (
             existing_tool == "multi_symbol_research"
@@ -1165,7 +1216,16 @@ class LLMConversationBrain:
         and its owning ``ResearchMission`` are the ONLY source read here,
         never ``ConversationalMVPContext.last_payloads``/
         ``last_structured_results`` (which may be stale or describe an
-        unrelated earlier single-symbol run)."""
+        unrelated earlier single-symbol run).
+
+        KR-ST-008 production bug fix: the default "status" focus now also
+        includes the canonical CUMULATIVE performance evidence
+        (breadth sample vs the real performance sample, median return/MDD,
+        profitable ratio, economic-viability status/reason, the policy's
+        own required performance-sample floor) and the candidate's current
+        unresolved blockers - a read-only status question about economic
+        viability used to have nowhere to read those fields from at all.
+        """
         focus = mission_candidate_read_focus(text)
         if focus == "score":
             return render_candidate_score_status(mission, candidate)
@@ -1177,7 +1237,10 @@ class LLMConversationBrain:
             target=mission.target_promotion_ready_candidates,
         )
         detailed = render_mission_candidate_detailed_status(mission, candidate)
-        return f"{summary}\n\n{detailed}"
+        evidence = render_candidate_cumulative_evidence_block(candidate)
+        blockers = candidate_remaining_blockers(candidate)
+        blockers_line = "[현재 blocker]\n- " + (", ".join(blockers) if blockers else "없음 (모든 검증 단계 충족)")
+        return f"{summary}\n\n{detailed}\n\n{evidence}\n\n{blockers_line}"
 
     def _try_mission_driven_research_cycle(
         self,

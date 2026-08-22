@@ -18,13 +18,16 @@ from gaon.knowledge.research_mission import (
     best_symbol_from_multi_symbol_output,
     clear_focus_symbol,
     distinct_promotion_ready_strategy_count,
+    extract_candidate_id,
     extract_or_update_mission,
     get_active_candidate,
     get_candidate,
     is_candidate_robustness_continuation_request,
     is_cycle_budget_exhausted,
     is_diversity_request,
+    is_explicit_read_only_query,
     is_generic_continuation_request,
+    is_mission_candidate_read_request,
     is_provider_acquisition_blocker,
     mission_awaiting_approval_message,
     mission_blocked_message,
@@ -38,6 +41,7 @@ from gaon.knowledge.research_mission import (
     record_focus_symbol,
     record_promotion_candidate,
     update_candidate,
+    production_candidate_read_only_routing_release_check,
     production_research_action_cycle_resolution_release_check,
     production_terminal_validation_retry_boundary_release_check,
     production_promotion_target_consistency_release_check,
@@ -1128,6 +1132,116 @@ class StrategySpaceExpansionReleaseCheckTests(unittest.TestCase):
 
         first = production_strategy_space_expansion_release_check()
         second = production_strategy_space_expansion_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
+_KR_ST_008_READ_ONLY_MESSAGE = (
+    "현재 KR-ST-008의 상태를 연구 실행 없이 read-only로만 알려주세요.\n\n"
+    "특히 economic viability 판단에 실제 사용되는 canonical performance evidence를 보여주세요.\n\n"
+    "- breadth valid symbols\n- breadth cumulative trades\n- performance_sample_symbols\n"
+    "- performance_sample_trades\n- cumulative median return\n- cumulative median MDD\n"
+    "- profitable symbol ratio\n- economic_viability status\n- economic_viability reason\n"
+    "- economic viability 최소 요구 symbol/trade sample\n- 다음 action\n\n"
+    "새 연구나 표본 확장, validation action은 실행하지 말고 현재 persisted state만 조회해주세요."
+)
+
+
+class CandidateIdAndReadOnlyDetectionTests(unittest.TestCase):
+    """KR-ST-008 production bug fix: extract_candidate_id/is_explicit_read_
+    only_query/is_mission_candidate_read_request unit-level coverage. See
+    CandidateReadOnlyRoutingReleaseCheckTests below for the full-stack
+    proof through the real LLMConversationBrain."""
+
+    def test_extracts_candidate_id_and_normalizes_zero_padding(self) -> None:
+        self.assertEqual(extract_candidate_id("KR-ST-008 상태 보여줘"), "KR-ST-008")
+        self.assertEqual(extract_candidate_id("kr-st-8 상태 보여줘"), "KR-ST-008")
+        self.assertEqual(extract_candidate_id("KR-ST-999 상태 보여줘"), "KR-ST-999")
+        self.assertIsNone(extract_candidate_id("현재 활성 후보 상태 보여줘"))
+
+    def test_explicit_read_only_marker_is_detected(self) -> None:
+        for text in (
+            "연구 실행 없이 read-only로만 알려주세요",
+            "새 연구는 실행하지 말고 현재 persisted state만 조회해주세요",
+            "read-only로 알려줘",
+        ):
+            self.assertTrue(is_explicit_read_only_query(text), text)
+        self.assertFalse(is_explicit_read_only_query("연구 계속해주세요"))
+
+    def test_explicit_read_only_marker_wins_over_coincidental_continuation_token_overlap(self) -> None:
+        # Independent-review regression: this message explicitly says not
+        # to execute anything ("실행하지 말고"), but also contains the
+        # literal _GENERIC_CONTINUATION_TOKENS substring "충분한증거"
+        # (from "증거가 충분할 때까지 연구해주세요"-style continuation
+        # phrasing) as part of an otherwise ordinary status question. The
+        # explicit read-only marker must still win - before this fix,
+        # is_generic_continuation_request's guard rejected the message
+        # before the read-only marker was ever consulted, reproducing the
+        # original KR-ST-008 defect for a new phrasing.
+        text = "KR-ST-008에 대해 충분한 증거가 모였는지, 실행하지 말고 read-only로 알려주세요"
+        self.assertTrue(is_generic_continuation_request(text), "test setup: text must contain a real continuation-token overlap")
+        self.assertTrue(is_mission_candidate_read_request(text))
+
+    def test_kr_st_008_production_message_is_recognized_as_read_only(self) -> None:
+        # Root cause regression pin: this exact message contains the bare
+        # substring "evidence" (from the user's own request to see
+        # "performance evidence") which used to misclassify it as
+        # "external_research" (an EXECUTION mode) in
+        # gaon.runtime.llm_conversation._autonomous_learning_request_mode -
+        # is_mission_candidate_read_request must intercept it first.
+        self.assertTrue(is_mission_candidate_read_request(_KR_ST_008_READ_ONLY_MESSAGE))
+
+    def test_genuine_continuation_request_is_never_read_only(self) -> None:
+        for text in ("연구 계속해주세요", "증거가 충분할 때까지 연구해주세요"):
+            self.assertFalse(is_mission_candidate_read_request(text), text)
+
+    def test_candidate_id_with_continuation_verb_is_not_read_only(self) -> None:
+        # Naming a candidate id does not, by itself, force a read-only
+        # classification when the rest of the message is an execution
+        # request (already caught by is_generic_continuation_request).
+        self.assertFalse(is_mission_candidate_read_request("KR-ST-008 검증 계속해줘"))
+
+    def test_benign_status_and_evidence_words_alone_are_not_continuation(self) -> None:
+        # Item 6: "다음 action"/"상태"/"evidence"/"현재" appearing in a
+        # message must never, by themselves, be read as a continuation/
+        # execution request.
+        for text in ("다음 action이 뭔가요", "현재 상태", "evidence를 보여줘", "현재 상황"):
+            self.assertFalse(is_generic_continuation_request(text), text)
+
+
+class CandidateReadOnlyRoutingReleaseCheckTests(unittest.TestCase):
+    def test_release_check_proves_kr_st_008_read_only_routing_fixed(self) -> None:
+        payload = production_candidate_read_only_routing_release_check()
+        for key in (
+            "case_a_zero_research_tool_calls",
+            "case_a_stale_symbol_never_leaks_into_response",
+            "case_a_names_the_explicit_candidate",
+            "case_a_reports_breadth_and_performance_sample_separately",
+            "case_a_reports_economic_viability_status_and_reason",
+            "case_a_reports_required_performance_sample_floor",
+            "case_a_never_mutates_mission",
+            "case_b_continuation_still_executes",
+            "case_c_reads_the_named_non_active_candidate",
+            "case_c_never_changes_active_candidate",
+            "case_c_zero_research_tool_calls",
+            "case_d_fails_closed_with_honest_not_found",
+            "case_d_zero_research_tool_calls",
+            "case_d_never_mutates_mission",
+            "restart_preserves_candidate_state",
+            "no_mutation_anywhere",
+        ):
+            self.assertTrue(payload[key], key)
+        self.assertEqual(payload["research_tool_calls_during_read_only_turn"], 0)
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["mission_mutated"])
+        self.assertFalse(payload["research_executed"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["champion_promoted"])
+        self.assertFalse(payload["approval_bypassed"])
+        self.assertEqual(payload["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        first = production_candidate_read_only_routing_release_check()
+        second = production_candidate_read_only_routing_release_check()
         self.assertEqual(dict(first), dict(second))
 
 
