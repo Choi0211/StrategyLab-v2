@@ -42,12 +42,25 @@ NOW = "2026-08-17T00:00:00Z"
 LATER = "2026-08-17T00:05:00Z"
 
 
-def _breadth_details(symbols: tuple[str, ...], trades: tuple[int, ...]) -> dict[str, dict[str, object]]:
+def _breadth_details(
+    symbols: tuple[str, ...],
+    trades: tuple[int, ...],
+    *,
+    returns: tuple[float, ...] | None = None,
+    mdds: tuple[float, ...] | None = None,
+) -> dict[str, dict[str, object]]:
+    metrics_by_index = [{"trade_count": trades[index]} for index in range(len(symbols))]
+    if returns is not None:
+        for index, value in enumerate(returns):
+            metrics_by_index[index]["total_return"] = value
+    if mdds is not None:
+        for index, value in enumerate(mdds):
+            metrics_by_index[index]["mdd"] = value
     return {
         symbol: {
             "symbol": symbol,
             "eligible": True,
-            "metrics": {"trade_count": trades[index]},
+            "metrics": metrics_by_index[index],
             "evidence_id": f"evidence:{symbol}",
             "quality_status": "pass",
             "source": "real:yahoo-chart",
@@ -1190,7 +1203,18 @@ class SampleExhaustionDecisionTests(unittest.TestCase):
             excluded_symbols=("BLOCKED",),
             provider_blocked=False,
             now=NOW,
-            evidence_details=_breadth_details(symbols, tuple([6] * 31 + [15])),
+            # Decisively positive/majority-profitable cumulative performance
+            # evidence: this test asserts blocker exhaustion alone reaches
+            # RANK_CANDIDATES, which now (economic viability gate) also
+            # requires the candidate's own cumulative economics to have
+            # actually cleared the PASS bar, not merely have every
+            # robustness stage marked complete.
+            evidence_details=_breadth_details(
+                symbols,
+                tuple([6] * 31 + [15]),
+                returns=tuple([0.08] * 32),
+                mdds=tuple([0.15] * 32),
+            ),
             sample_exhaustion_reason="candidate_pool_exhausted",
         )
         for stage, status in (

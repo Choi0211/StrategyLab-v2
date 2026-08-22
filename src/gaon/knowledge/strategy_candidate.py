@@ -101,6 +101,35 @@ ACTION_STAGE_KEYS = {
 }
 ACTION_CYCLE_HISTORY_CAP = 48
 
+# Root cause this closes: KR-ST-008 (production, 2026-08) kept receiving
+# EXPAND_SYMBOLS/EXPAND_SAMPLE forever - 5/41 -> 10/75 -> 15/112 -> 20/149
+# symbols/trades - while its own batch reports showed consistently negative
+# median returns (-20.2%, -23.0%, +1.4%, -7.8%) and large drawdowns (35-47%
+# MDD). candidate_remaining_blockers()/next_blocker_driven_research_action()
+# below only ever gated on WHETHER a validation stage ran (OOS/walk-forward/
+# regime/cost/Monte Carlo "PASS"), never on WHETHER the strategy actually
+# made money. A candidate whose robustness stages kept coming back partial
+# was therefore never rejected - "not yet passing" always reset
+# cycles_without_progress via new breadth evidence, so EXPAND_SAMPLE could
+# run until the entire candidate symbol pool was exhausted, no matter how
+# decisively unprofitable the accumulating evidence was. See
+# evaluate_economic_viability() below - an ABSOLUTE (not relative-to-
+# baseline) profitability/risk gate, deliberately separate from robustness.
+#
+# The sample-size bar for an economic (accept/reject) verdict is
+# intentionally set well above MIN_VALID_SYMBOLS_FOR_UNIVERSE_EVIDENCE/
+# PROMOTION_MIN_TRADE_SAMPLE (which only gate "enough to start validating at
+# all"): a 5-symbol/41-trade batch is real evidence but not enough to
+# conclude a strategy is a structural loser rather than an unlucky sample -
+# see KR-ST-008's own batch-to-batch swing (-20.2% -> +1.4% -> -7.8%). These
+# thresholds are an explicit, bounded, project-owned policy (see
+# EconomicViabilityPolicy) - not a fabricated "X% return is good" number:
+# the pass/fail boundary itself is anchored at zero return / a bare-majority
+# profitable-symbol ratio, never an invented magnitude.
+ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE = 20
+ECONOMIC_VIABILITY_MIN_TRADE_SAMPLE = 120
+ECONOMIC_VIABILITY_MIN_PROFITABLE_SYMBOL_RATIO = 0.5
+
 class StrategyCandidateStatus(str, Enum):
     EXPLORING = "exploring"
     VALIDATING = "validating"
@@ -108,6 +137,18 @@ class StrategyCandidateStatus(str, Enum):
     PROMOTION_READY = "promotion_ready"
     REJECTED = "rejected"
     STAGNANT = "stagnant"
+
+
+class EconomicViabilityStatus(str, Enum):
+    """Absolute (not relative-to-baseline) profitability/risk verdict over a
+    candidate's own CANONICAL cumulative performance evidence - deliberately
+    separate from robustness (OOS/walk-forward/regime/cost/Monte Carlo)
+    completion. Robustness PASS answers "is this measured honestly"; this
+    answers "is what was honestly measured actually worth trading"."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    NEEDS_MORE_EVIDENCE = "needs_more_evidence"
 
 
 @dataclass(frozen=True)
@@ -594,6 +635,164 @@ class StrategyCandidateRecord:
         )
 
 
+@dataclass(frozen=True)
+class CandidatePerformanceEvidence:
+    """Canonical CUMULATIVE candidate-level performance aggregate, computed
+    fresh each time from ``StrategyCandidateRecord.breadth_evidence`` (never
+    persisted separately, so it can never drift out of sync with the
+    symbol-keyed evidence it is derived from).
+
+    Deliberately distinct from ``gaon.research.multi_symbol.
+    UniverseResearchSummary``: that type is a single BATCH's local
+    aggregate (one multi_symbol_research call, real production example:
+    "5 symbols / 37 trades, median return -7.8%"). This type aggregates
+    across EVERY distinct symbol this candidate has ever been validated
+    against (real production example: "20 symbols / 149 trades" after four
+    such batches) - the canonical number a promotion/rejection decision
+    must be based on, not any single batch's local snapshot.
+    """
+
+    performance_sample_symbols: int
+    performance_sample_trades: int
+    median_return: float | None
+    median_mdd: float | None
+    profitable_symbol_ratio: float | None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": STRATEGY_CANDIDATE_SCHEMA_VERSION,
+            "performance_sample_symbols": self.performance_sample_symbols,
+            "performance_sample_trades": self.performance_sample_trades,
+            "median_return": self.median_return,
+            "median_mdd": self.median_mdd,
+            "profitable_symbol_ratio": self.profitable_symbol_ratio,
+        }
+
+
+def candidate_cumulative_performance(candidate: "StrategyCandidateRecord") -> CandidatePerformanceEvidence:
+    """Computes this candidate's canonical cumulative performance aggregate
+    from its symbol-keyed ``breadth_evidence`` (deduplicated by construction
+    - each symbol occupies exactly one dict entry, so replaying the same
+    symbol in a later batch overwrites its entry instead of double-counting
+    it). Only symbols with real recorded performance evidence (eligible,
+    traded, and carrying a non-``None`` ``total_return`` - see
+    ``_normalize_breadth_evidence_detail``) contribute; legacy candidate
+    records persisted before this field existed contribute none, so this
+    honestly returns ``None`` medians/ratio rather than fabricating a
+    performance read from breadth counts alone.
+    """
+    returns: list[float] = []
+    mdds: list[float] = []
+    profitable_count = 0
+    trade_total = 0
+    for detail in candidate.breadth_evidence.values():
+        if not bool(detail.get("eligible")):
+            continue
+        trades = int(detail.get("trade_count", 0) or 0)
+        total_return = detail.get("total_return")
+        if trades <= 0 or total_return is None:
+            continue
+        returns.append(float(total_return))
+        mdd = detail.get("mdd")
+        if mdd is not None:
+            mdds.append(float(mdd))
+        if bool(detail.get("profitable")):
+            profitable_count += 1
+        trade_total += trades
+    sample_size = len(returns)
+    return CandidatePerformanceEvidence(
+        performance_sample_symbols=sample_size,
+        performance_sample_trades=trade_total,
+        median_return=_median(returns),
+        median_mdd=_median(mdds) if mdds else None,
+        profitable_symbol_ratio=round(profitable_count / sample_size, 6) if sample_size else None,
+    )
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    mid = n // 2
+    if n % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+@dataclass(frozen=True)
+class EconomicViabilityPolicy:
+    """Explicit, bounded, project-owned economic-viability policy (see
+    ECONOMIC_VIABILITY_* constants above for the rationale). Deliberately a
+    configuration object, not inline magic numbers, so it is independently
+    testable and adjustable without touching the decision logic below."""
+
+    min_symbol_sample: int = ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE
+    min_trade_sample: int = ECONOMIC_VIABILITY_MIN_TRADE_SAMPLE
+    min_profitable_symbol_ratio: float = ECONOMIC_VIABILITY_MIN_PROFITABLE_SYMBOL_RATIO
+
+
+DEFAULT_ECONOMIC_VIABILITY_POLICY = EconomicViabilityPolicy()
+
+
+@dataclass(frozen=True)
+class EconomicViabilityResult:
+    status: EconomicViabilityStatus
+    reason: str
+    performance: CandidatePerformanceEvidence
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": STRATEGY_CANDIDATE_SCHEMA_VERSION,
+            "status": self.status.value,
+            "reason": self.reason,
+            "performance": self.performance.to_json(),
+        }
+
+
+def evaluate_economic_viability(
+    candidate: "StrategyCandidateRecord",
+    policy: EconomicViabilityPolicy = DEFAULT_ECONOMIC_VIABILITY_POLICY,
+) -> EconomicViabilityResult:
+    """Absolute profitability/risk verdict, separate from and in addition to
+    robustness stage completion (see candidate_remaining_blockers). This is
+    the gate KR-ST-008-shaped candidates were missing: a candidate can pass
+    every robustness stage and still fail HERE if its own cumulative evidence
+    shows it loses money.
+
+    Three outcomes, never two, because a candidate with real but still-thin
+    evidence must be allowed to keep gathering MORE evidence rather than
+    being forced into a premature accept/reject call:
+    - PASS: cumulative median return is positive AND at least
+      ``min_profitable_symbol_ratio`` of validated symbols were individually
+      profitable. Both signals must agree - "better than before" is not
+      viability, and a positive median driven by one outlier symbol is not
+      either.
+    - FAIL: cumulative median return is non-positive AND fewer than
+      ``min_profitable_symbol_ratio`` of validated symbols were profitable -
+      both signals agree the candidate is a structural loser, only once
+      ``policy``'s sample-size floor is met.
+    - NEEDS_MORE_EVIDENCE: either the sample is still below policy's floor,
+      no performance evidence has been recorded at all (e.g. a legacy
+      candidate, or a candidate still purely in the breadth-gathering
+      stage), or the two signals disagree (e.g. a positive median driven by
+      an unrepresentative few symbols) - bounded sample expansion should
+      continue rather than forcing a premature verdict either way.
+    """
+    performance = candidate_cumulative_performance(candidate)
+    if candidate.valid_symbols < policy.min_symbol_sample or candidate.trade_count < policy.min_trade_sample:
+        return EconomicViabilityResult(EconomicViabilityStatus.NEEDS_MORE_EVIDENCE, "insufficient_breadth_for_economic_decision", performance)
+    if performance.median_return is None or performance.profitable_symbol_ratio is None:
+        return EconomicViabilityResult(EconomicViabilityStatus.NEEDS_MORE_EVIDENCE, "no_performance_evidence_recorded", performance)
+    profitable = performance.median_return > 0 and performance.profitable_symbol_ratio >= policy.min_profitable_symbol_ratio
+    unprofitable = performance.median_return <= 0 and performance.profitable_symbol_ratio < policy.min_profitable_symbol_ratio
+    if profitable:
+        return EconomicViabilityResult(EconomicViabilityStatus.PASS, "positive_median_return_and_majority_profitable_symbols", performance)
+    if unprofitable:
+        return EconomicViabilityResult(EconomicViabilityStatus.FAIL, "non_positive_median_return_and_minority_profitable_symbols", performance)
+    return EconomicViabilityResult(EconomicViabilityStatus.NEEDS_MORE_EVIDENCE, "mixed_profitability_signal", performance)
+
+
 def new_candidate(
     family: str,
     *,
@@ -733,14 +932,44 @@ def _seed_breadth_evidence(candidate: StrategyCandidateRecord) -> dict[str, Mapp
 
 
 def _normalize_breadth_evidence_detail(symbol: str, detail: Mapping[str, object]) -> Mapping[str, object]:
+    """Normalizes one symbol's raw multi-symbol-research evidence into this
+    candidate's canonical, symbol-keyed record.
+
+    Root cause fix (see ECONOMIC_VIABILITY_* above): this used to drop
+    ``detail["metrics"]`` entirely after reading ``trade_count`` out of it,
+    even though the real engine (``gaon.research.multi_symbol.
+    aggregate_symbol_evidence``) already computes ``total_return``/``mdd``
+    per symbol - those numbers reached this function and were then
+    discarded, so no persisted candidate state ever remembered whether its
+    own validated symbols made or lost money. ``total_return``/``mdd``/
+    ``profitable`` are now carried through unchanged (never invented: a
+    symbol whose engine result never reported a return, e.g. an excluded/
+    untraded symbol, keeps ``total_return=None``/``mdd=None``/
+    ``profitable=None`` rather than defaulting to 0.0, which would silently
+    fabricate a break-even result).
+    """
     metrics = detail.get("metrics") if isinstance(detail.get("metrics"), Mapping) else {}
     trade_count = detail.get("trade_count")
     if trade_count is None:
         trade_count = dict(metrics).get("trade_count", 0)
+    total_return = detail.get("total_return")
+    if total_return is None:
+        total_return = dict(metrics).get("total_return")
+    mdd = detail.get("mdd")
+    if mdd is None:
+        mdd = dict(metrics).get("mdd")
+    eligible = bool(detail.get("eligible"))
+    trade_count_int = int(trade_count or 0)
+    total_return_value = float(total_return) if total_return is not None else None
+    mdd_value = float(mdd) if mdd is not None else None
+    has_performance_evidence = eligible and trade_count_int > 0 and total_return_value is not None
     return {
         "symbol": symbol,
-        "eligible": bool(detail.get("eligible")),
-        "trade_count": int(trade_count or 0),
+        "eligible": eligible,
+        "trade_count": trade_count_int,
+        "total_return": total_return_value,
+        "mdd": mdd_value,
+        "profitable": (total_return_value > 0) if has_performance_evidence else None,
         "evidence_id": str(detail.get("evidence_id", "")),
         "quality_status": str(detail.get("quality_status", "")),
         "source": str(detail.get("source", "")),
@@ -951,6 +1180,17 @@ def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> t
         return "REQUEST_HUMAN_APPROVAL", "candidate_already_promotion_ready"
     if candidate.status in (StrategyCandidateStatus.REJECTED, StrategyCandidateStatus.STAGNANT):
         return "ROTATE_CANDIDATE", candidate.rejected_reason or "candidate_terminal"
+    # Root cause fix (see ECONOMIC_VIABILITY_* above): an economic-viability
+    # FAIL takes priority over every remaining robustness/breadth blocker,
+    # including EXPAND_SAMPLE. Robustness stages measure whether the
+    # evidence is trustworthy; they say nothing about whether it is
+    # profitable. Checked BEFORE the breadth-sufficiency/EXPAND_SAMPLE
+    # branches below so a candidate with decisively negative cumulative
+    # economics is rotated out the moment that becomes clear, instead of
+    # continuing to expand its sample toward the whole candidate pool.
+    economic_viability = evaluate_economic_viability(candidate)
+    if economic_viability.status is EconomicViabilityStatus.FAIL:
+        return "ROTATE_CANDIDATE", f"economic_viability_failed:{economic_viability.reason}"
     blockers = candidate_remaining_blockers(candidate)
     next_symbol = next_robustness_evidence_symbol(candidate)
     sample_exhausted = candidate_sample_exhausted(candidate)
@@ -989,6 +1229,17 @@ def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> t
         if sample_exhausted:
             return "ROTATE_CANDIDATE", "sample_pool_exhausted_after_attempted_validation_dimensions"
         return "EXPAND_SAMPLE", "validation_cycle_exhausted_needs_new_material_evidence"
+    # Every robustness/breadth blocker is cleared, but a PASS verdict (see
+    # evaluate_economic_viability) has not actually been reached yet - e.g.
+    # robustness finished on a candidate whose breadth sample is still below
+    # the (higher) economic-decision sample floor. RANK_CANDIDATES ->
+    # eventual promotion must never be reached on robustness completion
+    # alone (item D: promotion-ready requires economic viability AND
+    # robustness AND sufficient sample, not any one of them).
+    if economic_viability.status is EconomicViabilityStatus.NEEDS_MORE_EVIDENCE:
+        if sample_exhausted:
+            return "ROTATE_CANDIDATE", "sample_pool_exhausted_insufficient_economic_evidence"
+        return "EXPAND_SAMPLE", "economic_viability_needs_more_evidence"
     return "RANK_CANDIDATES", "no_blocking_validation_stage_remaining"
 
 
@@ -1092,6 +1343,44 @@ def render_candidate_block(candidate: StrategyCandidateRecord) -> str:
     return "\n".join(lines)
 
 
+def _pct_or_na(value: float | None) -> str:
+    return f"{value * 100:.1f}%" if value is not None else "N/A"
+
+
+_ROBUSTNESS_STAGE_BLOCKERS = frozenset({*ACTION_STAGE_KEYS.values(), "monte_carlo_waiting_for_primary_sample"})
+
+
+def render_candidate_cumulative_evidence_block(candidate: StrategyCandidateRecord) -> str:
+    """Renders the CANONICAL cumulative candidate-level evidence and the
+    resulting economic-viability/robustness/next-action decision - item E's
+    "[누적 후보 evidence]"/"[후보 판단]" sections. Deliberately separate from
+    whatever a single batch's own report already shows (e.g.
+    ``gaon.research.multi_symbol.MultiSymbolResearchRun.korean_report``,
+    rendered as "[이번 batch]" alongside this by the caller), and computed
+    fresh from persisted state every call - it is a read model, never a
+    second source of truth that could drift from ``breadth_evidence``."""
+    performance = candidate_cumulative_performance(candidate)
+    viability = evaluate_economic_viability(candidate)
+    remaining_blockers = candidate_remaining_blockers(candidate)
+    stage_blockers = tuple(blocker for blocker in remaining_blockers if blocker in _ROBUSTNESS_STAGE_BLOCKERS)
+    robustness_label = "pass" if not stage_blockers else ",".join(stage_blockers)
+    decision, decision_reason = next_blocker_driven_research_action(candidate)
+    lines = [
+        "[누적 후보 evidence]",
+        f"- {candidate.valid_symbols} symbols / {candidate.trade_count} trades",
+        f"- cumulative median return: {_pct_or_na(performance.median_return)}",
+        f"- cumulative median MDD: {_pct_or_na(performance.median_mdd)}",
+        f"- profitable symbol ratio: {_pct_or_na(performance.profitable_symbol_ratio)}",
+        "",
+        "[후보 판단]",
+        f"- economic viability: {viability.status.value}",
+        f"- robustness: {robustness_label}",
+        f"- decision: {decision}",
+        f"- reason: {decision_reason}",
+    ]
+    return "\n".join(lines)
+
+
 def render_candidate_status_summary(candidates: tuple[StrategyCandidateRecord, ...], *, current: int, target: int | None) -> str:
     active = [candidate for candidate in candidates if candidate.status in (StrategyCandidateStatus.EXPLORING, StrategyCandidateStatus.VALIDATING, StrategyCandidateStatus.ROBUSTNESS)]
     if not active:
@@ -1170,3 +1459,195 @@ def render_candidate_strategy_explanation(candidate: StrategyCandidateRecord) ->
     lines.append("[청산 조건]")
     lines.extend(_describe_rule_section(exit_rules, _EXIT_RULE_LABELS) or ["- (기록된 청산 규칙 없음)"])
     return "\n".join(lines)
+
+
+def _raise_if_failed(label: str, checks: Mapping[str, bool]) -> None:
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"{label} release check failed: {failed}")
+
+
+def production_economic_viability_gate_release_check() -> Mapping[str, object]:
+    """Deterministic regression proving the KR-ST-008-shaped production
+    defect (see the comment above ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE) is
+    closed: a candidate whose cumulative cross-symbol evidence is
+    decisively unprofitable is rejected instead of EXPAND_SAMPLE running
+    forever, while a genuinely borderline/positive candidate is still
+    allowed bounded sample expansion and, once robustness is also
+    satisfied, reaches RANK_CANDIDATES - never an auto-promotion, that
+    still requires the separate human-gated step this module never
+    performs itself.
+
+    Replays the real reported trace: batch 1 (5 symbols/41 trades, median
+    return -20.2%, MDD 46.0%) -> batch 2 (+5/34 trades, -23.0%, 35.4%) ->
+    batch 3 (+5/37 trades, +1.4%, 47.1%) -> batch 4 (+5/37 trades, -7.8%,
+    41.9%), reaching the real reported canonical cumulative breadth of 20
+    symbols / 149 trades.
+    """
+    now = "2026-08-22T00:00:00Z"
+    candidate = new_candidate("breakout_slow_trend_confirmed", sequence=8, now=now)
+
+    # Real reported per-batch data. Per-symbol return/MDD values within each
+    # batch are chosen so each batch's OWN median return/MDD reproduces the
+    # real reported batch-level figures exactly (batches only ever reported
+    # medians, never every symbol's individual result).
+    batches: tuple[tuple[tuple[str, int, float, float], ...], ...] = (
+        (
+            ("KR001", 8, -0.35, 0.30), ("KR002", 8, -0.25, 0.40), ("KR003", 8, -0.202, 0.46),
+            ("KR004", 8, -0.15, 0.50), ("KR005", 9, -0.05, 0.60),
+        ),
+        (
+            ("KR006", 7, -0.40, 0.20), ("KR007", 7, -0.30, 0.30), ("KR008", 7, -0.23, 0.354),
+            ("KR009", 6, -0.10, 0.40), ("KR010", 7, 0.05, 0.45),
+        ),
+        (
+            ("KR011", 7, -0.10, 0.30), ("KR012", 7, -0.02, 0.40), ("KR013", 8, 0.014, 0.471),
+            ("KR014", 7, 0.05, 0.55), ("KR015", 8, 0.20, 0.60),
+        ),
+        (
+            ("KR016", 7, -0.30, 0.25), ("KR017", 7, -0.15, 0.35), ("KR018", 8, -0.078, 0.419),
+            ("KR019", 7, -0.02, 0.45), ("KR020", 8, 0.10, 0.55),
+        ),
+    )
+    expected_cumulative_symbols = (5, 10, 15, 20)
+    expected_cumulative_trades = (41, 75, 112, 149)
+    per_batch_decisions: list[tuple[str, str]] = []
+    for index, batch in enumerate(batches):
+        evidence_details = {
+            symbol: {"eligible": True, "trade_count": trades, "metrics": {"total_return": total_return, "mdd": mdd}}
+            for symbol, trades, total_return, mdd in batch
+        }
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=len(batch),
+            valid=len(batch),
+            trade_count=sum(trades for _, trades, _, _ in batch),
+            evidence_symbols=tuple(symbol for symbol, _, _, _ in batch),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=now,
+            evidence_details=evidence_details,
+            breadth_summary={"aggregate_trade_count": sum(trades for _, trades, _, _ in batch)},
+        )
+        assert candidate.valid_symbols == expected_cumulative_symbols[index]
+        assert candidate.trade_count == expected_cumulative_trades[index]
+        per_batch_decisions.append(next_blocker_driven_research_action(candidate))
+
+    after_batch4 = candidate
+    performance_after_batch4 = candidate_cumulative_performance(after_batch4)
+    viability_after_batch4 = evaluate_economic_viability(after_batch4)
+    action_after_batch4, reason_after_batch4 = next_blocker_driven_research_action(after_batch4)
+
+    # Duplicate replay of an already-recorded batch (e.g. a retried
+    # continuation) must never double-count that batch's symbols/trades.
+    replayed = record_breadth_progress(
+        after_batch4,
+        attempted=len(batches[-1]),
+        valid=len(batches[-1]),
+        trade_count=sum(trades for _, trades, _, _ in batches[-1]),
+        evidence_symbols=tuple(symbol for symbol, _, _, _ in batches[-1]),
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+        evidence_details={
+            symbol: {"eligible": True, "trade_count": trades, "metrics": {"total_return": total_return, "mdd": mdd}}
+            for symbol, trades, total_return, mdd in batches[-1]
+        },
+    )
+
+    # Even a candidate whose robustness stages are ALL reported PASS-like
+    # must not be allowed to promote on a decisive economic-viability FAIL
+    # (item D): robustness answers "was this measured honestly", not "is it
+    # worth trading".
+    robust_but_unprofitable = replace(
+        after_batch4,
+        validation_stage_status={
+            "out_of_sample": "pass", "regime_validation": "pass", "walk_forward": "pass",
+            "transaction_cost_stress": "cost_stable", "parameter_sensitivity": "stable", "monte_carlo": "pass",
+        },
+    )
+    action_robust_but_unprofitable, reason_robust_but_unprofitable = next_blocker_driven_research_action(robust_but_unprofitable)
+
+    # Restart persistence: the rejection verdict and the evidence behind it
+    # must survive a to_json/from_json round trip unchanged.
+    restarted = StrategyCandidateRecord.from_json(after_batch4.to_json())
+    viability_after_restart = evaluate_economic_viability(restarted)
+
+    # Legacy backward compatibility: a candidate persisted before this
+    # patch (breadth counts only, no per-symbol return/MDD) must never be
+    # scored as FAIL/PASS from fabricated performance data.
+    legacy = StrategyCandidateRecord.from_json(
+        {
+            "candidate_id": "KR-ST-LEGACY", "strategy_fingerprint": "fp:legacy", "strategy_family": "breakout_standard",
+            "status": "validating", "attempted_symbols": 20, "valid_symbols": 20, "trade_count": 150,
+            "evidence_symbols": [f"LEG{i:02d}" for i in range(20)], "excluded_symbols": [],
+            "created_at": now, "updated_at": now,
+        }
+    )
+    legacy_viability = evaluate_economic_viability(legacy)
+
+    # Opposite case: sufficient breadth, decisively positive economics, and
+    # complete robustness reaches RANK_CANDIDATES - but never mutates status
+    # to PROMOTION_READY itself (that stays a separate human-gated step).
+    profitable_candidate = new_candidate("breakout_multi_confirmed", sequence=9, now=now)
+    profitable_batch = tuple(
+        (f"PR{i:02d}", 6, 0.08 if i % 2 == 0 else -0.02, 0.20) for i in range(20)
+    )
+    profitable_candidate = record_breadth_progress(
+        profitable_candidate,
+        attempted=len(profitable_batch),
+        valid=len(profitable_batch),
+        trade_count=sum(trades for _, trades, _, _ in profitable_batch),
+        evidence_symbols=tuple(symbol for symbol, _, _, _ in profitable_batch),
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+        evidence_details={
+            symbol: {"eligible": True, "trade_count": trades, "metrics": {"total_return": total_return, "mdd": mdd}}
+            for symbol, trades, total_return, mdd in profitable_batch
+        },
+    )
+    profitable_candidate = replace(
+        profitable_candidate,
+        validation_stage_status={
+            "out_of_sample": "pass", "regime_validation": "pass", "walk_forward": "pass",
+            "transaction_cost_stress": "cost_stable", "parameter_sensitivity": "stable", "monte_carlo": "pass",
+        },
+    )
+    profitable_viability = evaluate_economic_viability(profitable_candidate)
+    profitable_action, _ = next_blocker_driven_research_action(profitable_candidate)
+
+    checks = {
+        "batch1_undersized_sample_never_forces_a_verdict": per_batch_decisions[0][0] != "ROTATE_CANDIDATE",
+        "cumulative_breadth_matches_reported_trace": (after_batch4.valid_symbols, after_batch4.trade_count) == (20, 149),
+        "cumulative_median_return_is_negative": performance_after_batch4.median_return is not None and performance_after_batch4.median_return < 0,
+        "cumulative_profitable_ratio_is_minority": performance_after_batch4.profitable_symbol_ratio is not None and performance_after_batch4.profitable_symbol_ratio < 0.5,
+        "economic_viability_fails_on_sufficient_negative_evidence": viability_after_batch4.status is EconomicViabilityStatus.FAIL,
+        "decisive_failure_rotates_instead_of_expanding_forever": action_after_batch4 == "ROTATE_CANDIDATE" and action_after_batch4 != "EXPAND_SAMPLE",
+        "rotation_reason_names_economic_viability": reason_after_batch4.startswith("economic_viability_failed"),
+        "duplicate_symbol_replay_does_not_double_count": (replayed.valid_symbols, replayed.trade_count) == (20, 149),
+        "robustness_pass_does_not_override_economic_fail": action_robust_but_unprofitable == "ROTATE_CANDIDATE" and reason_robust_but_unprofitable.startswith("economic_viability_failed"),
+        "rejection_survives_restart": viability_after_restart.status is EconomicViabilityStatus.FAIL,
+        "legacy_record_never_fabricates_a_verdict": legacy_viability.status is EconomicViabilityStatus.NEEDS_MORE_EVIDENCE,
+        "profitable_candidate_passes_economic_viability": profitable_viability.status is EconomicViabilityStatus.PASS,
+        "profitable_and_robust_candidate_reaches_ranking_not_auto_promotion": (
+            profitable_action == "RANK_CANDIDATES" and profitable_candidate.status is not StrategyCandidateStatus.PROMOTION_READY
+        ),
+        "no_mutation_beyond_bookkeeping": after_batch4.status is not StrategyCandidateStatus.PROMOTION_READY,
+    }
+    _raise_if_failed("production economic viability gate", checks)
+    return {
+        "schema_version": STRATEGY_CANDIDATE_SCHEMA_VERSION,
+        "cumulative_symbols": after_batch4.valid_symbols,
+        "cumulative_trades": after_batch4.trade_count,
+        "cumulative_median_return": performance_after_batch4.median_return,
+        "cumulative_median_mdd": performance_after_batch4.median_mdd,
+        "profitable_symbol_ratio": performance_after_batch4.profitable_symbol_ratio,
+        "economic_viability": viability_after_batch4.status.value,
+        "decision": action_after_batch4,
+        "reason": reason_after_batch4,
+        "safety": "pass",
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+    }
