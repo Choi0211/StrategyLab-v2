@@ -3,6 +3,30 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix: Research Action Cycle Resolution
+
+Production autonomous research progression could still oscillate across
+different unresolved blockers, for example
+`RUN_OOS(false) -> RUN_REGIME(false) -> RUN_OOS(false)`, because the prior
+guard only blocked immediate same-action replay.
+
+Strategy candidates now persist a bounded validation attempt history keyed
+by material evidence state. The Research Director skips blocker actions
+that already returned no progress under the same evidence state, preserves
+the boundary across restart, and allows the action again only after new
+material evidence such as additional sample breadth or changed validation
+status appears.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-research-action-cycle-resolution-release-check
+```
+
+The check proves A-B-A and A-B-C-A no-progress cycle suppression,
+production KR-ST-006-shaped blocker handling, restart persistence,
+material-evidence reset, and unchanged safety. Schema remains v36.
+
 ## Hotfix: Morning Briefing Research State Consistency
 
 Production Telegram pre-market briefings could say

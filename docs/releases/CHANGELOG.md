@@ -1,5 +1,23 @@
 # Changelog
 
+## Hotfix: Research Action Cycle Resolution
+
+- Added persisted, bounded `validation_attempt_history` to
+  `StrategyCandidateRecord` so no-progress validation attempts are tracked
+  by candidate fingerprint, validation dimension, symbol/sample, and
+  material evidence state.
+- Updated blocker-driven action selection to skip actions that have already
+  returned no measurable progress under the current evidence state,
+  preventing `RUN_OOS -> RUN_REGIME -> RUN_OOS` and broader
+  `A -> B -> C -> A` cycles.
+- Preserved legitimate reruns when new material evidence appears, such as
+  additional symbol/sample breadth or changed validation-stage status.
+- Added restart-safe JSON serialization for the attempt history and
+  `gaon-production-research-action-cycle-resolution-release-check`.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, strategy mutation, or fabricated
+  metrics added.
+
 ## Hotfix: Morning Briefing Research State Consistency
 
 - Scoped morning briefing "no follow-up research" wording to news-derived

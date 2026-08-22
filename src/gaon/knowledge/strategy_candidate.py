@@ -99,6 +99,7 @@ ACTION_STAGE_KEYS = {
     "RUN_SENSITIVITY": "parameter_sensitivity",
     "RUN_MONTE_CARLO": "monte_carlo",
 }
+ACTION_CYCLE_HISTORY_CAP = 48
 
 class StrategyCandidateStatus(str, Enum):
     EXPLORING = "exploring"
@@ -484,6 +485,7 @@ class StrategyCandidateRecord:
     breadth_legacy_trade_count: int = 0
     sample_exhaustion_reason: str | None = None
     breadth_summary: Mapping[str, object] = field(default_factory=dict)
+    validation_attempt_history: tuple[Mapping[str, object], ...] = field(default_factory=tuple)
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -517,6 +519,7 @@ class StrategyCandidateRecord:
             "breadth_legacy_trade_count": self.breadth_legacy_trade_count,
             "sample_exhaustion_reason": self.sample_exhaustion_reason,
             "breadth_summary": dict(self.breadth_summary),
+            "validation_attempt_history": [dict(item) for item in self.validation_attempt_history],
         }
 
     @staticmethod
@@ -569,6 +572,9 @@ class StrategyCandidateRecord:
             breadth_legacy_trade_count=breadth_legacy_trade_count,
             sample_exhaustion_reason=str(raw["sample_exhaustion_reason"]) if raw.get("sample_exhaustion_reason") else None,
             breadth_summary=dict(raw.get("breadth_summary") or {}),
+            validation_attempt_history=tuple(
+                dict(item) for item in raw.get("validation_attempt_history", ()) or () if isinstance(item, Mapping)
+            )[-ACTION_CYCLE_HISTORY_CAP:],
         )
 
     @property
@@ -797,6 +803,22 @@ def record_robustness_progress(
         )[:ROBUSTNESS_EVIDENCE_SYMBOL_CAP]
         robustness_attempt_count = candidate.robustness_attempt_count + 1
         last_validation_symbol = symbol
+    attempt_action = _action_from_reference(reference) or director_action
+    attempt_stage = ACTION_STAGE_KEYS.get(attempt_action, "")
+    state_key = candidate_material_evidence_key(candidate)
+    validation_attempt_history = candidate.validation_attempt_history
+    if attempt_action in ACTION_STAGE_KEYS:
+        validation_attempt_history = (
+            *candidate.validation_attempt_history,
+            {
+                "action": attempt_action,
+                "stage": attempt_stage,
+                "symbol": symbol or "",
+                "state_key": state_key,
+                "progressed": progressed,
+                "reference": reference or "",
+            },
+        )[-ACTION_CYCLE_HISTORY_CAP:]
     return replace(
         candidate,
         last_director_action=director_action,
@@ -808,6 +830,7 @@ def record_robustness_progress(
         robustness_attempt_count=robustness_attempt_count,
         last_validation_symbol=last_validation_symbol,
         last_validation_reference=reference if reference is not None else candidate.last_validation_reference,
+        validation_attempt_history=validation_attempt_history,
         updated_at=now,
     )
 
@@ -847,6 +870,31 @@ def candidate_progress_signature(candidate: StrategyCandidateRecord) -> tuple[ob
         tuple(sorted((str(key), str(value)) for key, value in candidate.validation_stage_status.items())),
         candidate.promotion_ready_at or "",
         candidate.rejected_reason or "",
+    )
+
+
+def candidate_material_evidence_key(candidate: StrategyCandidateRecord) -> str:
+    """State identity for action-cycle suppression.
+
+    Deliberately excludes presentation fields, timestamps, last attempted
+    action, and counters. If the candidate gains new sample breadth, a new
+    robustness symbol, changed validation status, or terminal evidence, the
+    key changes and a previously exhausted validation action may be tried
+    again under the new evidence state.
+    """
+    return "|".join(
+        (
+            candidate.strategy_fingerprint,
+            str(candidate.valid_symbols),
+            str(candidate.trade_count),
+            ",".join(candidate.evidence_symbols),
+            ",".join(candidate.excluded_symbols),
+            ",".join(candidate.robustness_evidence_symbols),
+            ",".join(f"{key}={value}" for key, value in sorted(candidate.validation_stage_status.items())),
+            candidate.sample_exhaustion_reason or "",
+            candidate.promotion_ready_at or "",
+            candidate.rejected_reason or "",
+        )
     )
 
 
@@ -899,39 +947,57 @@ def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> t
         return "EXPAND_SAMPLE", "need_new_independent_evidence_symbols"
     if sample_exhausted and not candidate.has_sufficient_universe_evidence:
         return "ROTATE_CANDIDATE", candidate.sample_exhaustion_reason or "sample_pool_exhausted_without_sufficient_evidence"
-    if "out_of_sample" in blockers and not _last_attempt_matches_stage(candidate, "RUN_OOS", "out_of_sample"):
+    exhausted_actions = _no_progress_actions_for_current_evidence_state(candidate)
+    for blocker, action, reason in (
+        ("out_of_sample", "RUN_OOS", "out_of_sample_blocker"),
+        ("regime_validation", "RUN_REGIME", "regime_blocker"),
+        ("walk_forward", "RUN_WALK_FORWARD", "walk_forward_blocker"),
+        ("transaction_cost_stress", "RUN_COST_STRESS", "transaction_cost_blocker"),
+        ("parameter_sensitivity", "RUN_SENSITIVITY", "parameter_sensitivity_blocker"),
+    ):
+        if blocker not in blockers:
+            continue
+        if action in exhausted_actions:
+            continue
+        if _last_attempt_matches_stage(candidate, action, blocker):
+            continue
         if sample_exhausted and next_symbol is None:
             return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
-        return "RUN_OOS", "out_of_sample_blocker"
-    if "regime_validation" in blockers and not _last_attempt_matches_stage(candidate, "RUN_REGIME", "regime_validation"):
-        if sample_exhausted and next_symbol is None:
-            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
-        return "RUN_REGIME", "regime_blocker"
-    if "walk_forward" in blockers and not _last_attempt_matches_stage(candidate, "RUN_WALK_FORWARD", "walk_forward"):
-        if sample_exhausted and next_symbol is None:
-            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
-        return "RUN_WALK_FORWARD", "walk_forward_blocker"
-    if "transaction_cost_stress" in blockers and not _last_attempt_matches_stage(candidate, "RUN_COST_STRESS", "transaction_cost_stress"):
-        if sample_exhausted and next_symbol is None:
-            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
-        return "RUN_COST_STRESS", "transaction_cost_blocker"
-    if "parameter_sensitivity" in blockers and not _last_attempt_matches_stage(candidate, "RUN_SENSITIVITY", "parameter_sensitivity"):
-        if sample_exhausted and next_symbol is None:
-            return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
-        return "RUN_SENSITIVITY", "parameter_sensitivity_blocker"
+        return action, reason
     if "monte_carlo_waiting_for_primary_sample" in blockers:
         if sample_exhausted:
             return "ROTATE_CANDIDATE", "sample_pool_exhausted_below_monte_carlo_sample"
         return "EXPAND_SAMPLE", "monte_carlo_waiting_for_primary_sample"
-    if "monte_carlo" in blockers and not _last_attempt_matches_stage(candidate, "RUN_MONTE_CARLO", "monte_carlo"):
+    if "monte_carlo" in blockers and "RUN_MONTE_CARLO" not in exhausted_actions and not _last_attempt_matches_stage(candidate, "RUN_MONTE_CARLO", "monte_carlo"):
         if sample_exhausted and next_symbol is None:
             return "ROTATE_CANDIDATE", "sample_pool_exhausted_no_untried_robustness_symbol"
         return "RUN_MONTE_CARLO", "monte_carlo_blocker"
     if any(blocker in blockers for blocker in ACTION_STAGE_KEYS.values()):
+        if candidate.cycles_without_progress >= STAGNATION_CYCLE_THRESHOLD:
+            return "ROTATE_CANDIDATE", "validation_cycle_exhausted_without_progress"
         if sample_exhausted:
             return "ROTATE_CANDIDATE", "sample_pool_exhausted_after_attempted_validation_dimensions"
-        return "EXPAND_SAMPLE", "all_current_stage_blockers_already_attempted_without_progress"
+        return "EXPAND_SAMPLE", "validation_cycle_exhausted_needs_new_material_evidence"
     return "RANK_CANDIDATES", "no_blocking_validation_stage_remaining"
+
+
+def _no_progress_actions_for_current_evidence_state(candidate: StrategyCandidateRecord) -> frozenset[str]:
+    state_key = candidate_material_evidence_key(candidate)
+    return frozenset(
+        str(item.get("action"))
+        for item in candidate.validation_attempt_history
+        if str(item.get("state_key", "")) == state_key and item.get("progressed") is False
+    )
+
+
+def _action_from_reference(reference: str | None) -> str | None:
+    if not reference:
+        return None
+    for part in str(reference).split("|"):
+        if part.startswith("action="):
+            action = part.split("=", 1)[1]
+            return action or None
+    return None
 
 
 def candidate_sample_exhausted(candidate: StrategyCandidateRecord) -> bool:
