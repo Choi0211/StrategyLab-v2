@@ -16,12 +16,17 @@ from gaon.research.krx_real_pipeline import UserStrategyParser
 from gaon.knowledge.strategy_candidate import (
     ABSOLUTE_CANDIDATE_CYCLE_CAP,
     ALL_STRATEGY_FAMILY_TEMPLATES,
+    ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE,
+    ECONOMIC_VIABILITY_MIN_TRADE_SAMPLE,
     ROBUSTNESS_EVIDENCE_SYMBOL_CAP,
     STRATEGY_FAMILY_TEMPLATES,
     STRATEGY_SPACE_EXPANSION_TEMPLATES,
+    EconomicViabilityStatus,
     StrategyCandidateStatus,
     build_candidate_spec,
+    candidate_cumulative_performance,
     candidate_sample_exhausted,
+    evaluate_economic_viability,
     expand_strategy_space_candidate,
     is_stagnant,
     mark_promotion_ready,
@@ -42,12 +47,25 @@ NOW = "2026-08-17T00:00:00Z"
 LATER = "2026-08-17T00:05:00Z"
 
 
-def _breadth_details(symbols: tuple[str, ...], trades: tuple[int, ...]) -> dict[str, dict[str, object]]:
+def _breadth_details(
+    symbols: tuple[str, ...],
+    trades: tuple[int, ...],
+    *,
+    returns: tuple[float, ...] | None = None,
+    mdds: tuple[float, ...] | None = None,
+) -> dict[str, dict[str, object]]:
+    metrics_by_index = [{"trade_count": trades[index]} for index in range(len(symbols))]
+    if returns is not None:
+        for index, value in enumerate(returns):
+            metrics_by_index[index]["total_return"] = value
+    if mdds is not None:
+        for index, value in enumerate(mdds):
+            metrics_by_index[index]["mdd"] = value
     return {
         symbol: {
             "symbol": symbol,
             "eligible": True,
-            "metrics": {"trade_count": trades[index]},
+            "metrics": metrics_by_index[index],
             "evidence_id": f"evidence:{symbol}",
             "quality_status": "pass",
             "source": "real:yahoo-chart",
@@ -1190,7 +1208,18 @@ class SampleExhaustionDecisionTests(unittest.TestCase):
             excluded_symbols=("BLOCKED",),
             provider_blocked=False,
             now=NOW,
-            evidence_details=_breadth_details(symbols, tuple([6] * 31 + [15])),
+            # Decisively positive/majority-profitable cumulative performance
+            # evidence: this test asserts blocker exhaustion alone reaches
+            # RANK_CANDIDATES, which now (economic viability gate) also
+            # requires the candidate's own cumulative economics to have
+            # actually cleared the PASS bar, not merely have every
+            # robustness stage marked complete.
+            evidence_details=_breadth_details(
+                symbols,
+                tuple([6] * 31 + [15]),
+                returns=tuple([0.08] * 32),
+                mdds=tuple([0.15] * 32),
+            ),
             sample_exhaustion_reason="candidate_pool_exhausted",
         )
         for stage, status in (
@@ -1308,6 +1337,175 @@ class FingerprintProvenanceIndependenceTests(unittest.TestCase):
         multi = build_candidate_spec("breakout_multi_confirmed", created_at=NOW)
         fingerprints = {spec.strategy_family_fingerprint for spec in (standard, trend, volume, multi)}
         self.assertEqual(len(fingerprints), 4)
+
+
+class EconomicViabilityGateReleaseCheckTests(unittest.TestCase):
+    """Independent-review fix: production_economic_viability_gate_release_check
+    (added alongside the economic-viability gate itself) had no caller
+    anywhere in src/ or tests/, so its assertions never executed as part of
+    `python -m unittest discover` / scripts/verify_release.py - it provided
+    zero real regression protection despite documenting itself as proving
+    the KR-ST-008 defect closed. This test wires it in, matching the
+    convention every other production_*_release_check in this codebase
+    already uses (see e.g. CumulativeSamplePersistenceReleaseCheckTests in
+    tests/unit/test_research_mission.py)."""
+
+    def test_release_check_proves_kr_st_008_scenario_closed(self) -> None:
+        from gaon.knowledge.strategy_candidate import production_economic_viability_gate_release_check
+
+        payload = production_economic_viability_gate_release_check()
+        self.assertEqual(payload["cumulative_symbols"], 20)
+        self.assertEqual(payload["cumulative_trades"], 149)
+        self.assertLess(payload["cumulative_median_return"], 0)
+        self.assertEqual(payload["economic_viability"], "fail")
+        self.assertEqual(payload["decision"], "ROTATE_CANDIDATE")
+        self.assertTrue(str(payload["reason"]).startswith("economic_viability_failed"))
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["champion_promoted"])
+        self.assertFalse(payload["approval_bypassed"])
+        self.assertEqual(payload["safety"], "pass")
+
+
+class EconomicViabilityGateCliWiringTests(unittest.TestCase):
+    """CLI wiring for production_economic_viability_gate_release_check,
+    following the exact existing gaon-production-*-release-check pattern
+    (see e.g. gaon-production-promotion-target-consistency-release-check in
+    src/gaon/runtime/cli.py) and the existing CLI-level test convention
+    (see test_daily_briefing_runtime_release_check_cli_passes in
+    tests/unit/test_runtime_service.py). Calls the SAME existing
+    production_economic_viability_gate_release_check() implementation via
+    the CLI - no parallel/duplicate release-check logic and no new
+    synthetic metrics are introduced here."""
+
+    def test_economic_viability_gate_release_check_cli_passes(self) -> None:
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from gaon.runtime.cli import main as cli_main
+
+        output = StringIO()
+        with redirect_stdout(output):
+            # A non-zero/SystemExit here would mean the subcommand is not
+            # actually registered with argparse - this call doubles as the
+            # "CLI command is registered" check, not just "runs and passes".
+            exit_code = cli_main(["gaon-production-economic-viability-gate-release-check"])
+        self.assertEqual(exit_code, 0)
+        printed = output.getvalue()
+        self.assertIn("gaon-production-economic-viability-gate-release-check: PASS", printed)
+        # Expected economic-viability diagnostics (mirrors the KR-ST-008
+        # scenario proven by production_economic_viability_gate_release_check
+        # itself - see EconomicViabilityGateReleaseCheckTests above).
+        self.assertIn("cumulative_symbols=20", printed)
+        self.assertIn("cumulative_trades=149", printed)
+        self.assertIn("economic_viability=fail", printed)
+        self.assertIn("decision=ROTATE_CANDIDATE", printed)
+        self.assertIn("reason=economic_viability_failed:", printed)
+        self.assertIn("strategy_mutated=false", printed)
+        self.assertIn("order_executed=false", printed)
+        self.assertIn("champion_promoted=false", printed)
+        self.assertIn("approval_bypassed=false", printed)
+        self.assertIn("safety=pass", printed)
+
+
+class EconomicViabilitySampleFloorTests(unittest.TestCase):
+    """Independent-review regression: evaluate_economic_viability's sample-
+    size floor must be measured against the REAL performance-evidence
+    sample (CandidatePerformanceEvidence.performance_sample_symbols/trades
+    - symbols that actually carry a recorded total_return), never
+    candidate.valid_symbols/trade_count. Those breadth-level counters
+    include every eligible symbol even ones with trade_count=0 (quality-
+    passed but never traded) or no recorded total_return at all - before
+    the fix, a candidate could look breadth-sufficient (valid_symbols/
+    trade_count clearing the 20-symbol/120-trade floor) while only a
+    handful of symbols ever carried a real return figure, letting that
+    thin real sample force a premature FAIL verdict."""
+
+    def test_breadth_sufficient_but_performance_sample_thin_needs_more_evidence(self) -> None:
+        candidate = new_candidate("breakout_slow_trend_confirmed", sequence=1, now=NOW)
+        # 20 "eligible" symbols that were quality-checked but never actually
+        # traded (trade_count=0, no total_return) - inflates valid_symbols
+        # past the symbol floor without contributing any real performance
+        # evidence at all.
+        untraded = {f"ZT{i:02d}": {"eligible": True, "trade_count": 0} for i in range(20)}
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=20,
+            valid=20,
+            trade_count=0,
+            evidence_symbols=tuple(untraded),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=untraded,
+        )
+        # 3 real, decisively unprofitable traded symbols - 135 trades alone
+        # already clears the trade floor, but only 3 symbols of REAL
+        # performance evidence, well under the 20-symbol floor.
+        real = {
+            "R1": {"eligible": True, "trade_count": 45, "metrics": {"total_return": -0.30, "mdd": 0.40}},
+            "R2": {"eligible": True, "trade_count": 45, "metrics": {"total_return": -0.25, "mdd": 0.35}},
+            "R3": {"eligible": True, "trade_count": 45, "metrics": {"total_return": -0.20, "mdd": 0.30}},
+        }
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=3,
+            valid=3,
+            trade_count=135,
+            evidence_symbols=tuple(real),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=real,
+        )
+
+        # Sanity: this candidate LOOKS breadth-sufficient by the raw,
+        # non-performance-aware counters - exactly the state that used to
+        # incorrectly clear the sample-size floor.
+        self.assertGreaterEqual(candidate.valid_symbols, ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE)
+        self.assertGreaterEqual(candidate.trade_count, ECONOMIC_VIABILITY_MIN_TRADE_SAMPLE)
+
+        performance = candidate_cumulative_performance(candidate)
+        self.assertEqual(performance.performance_sample_symbols, 3)
+        self.assertLess(performance.performance_sample_symbols, ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE)
+
+        viability = evaluate_economic_viability(candidate)
+        self.assertIs(viability.status, EconomicViabilityStatus.NEEDS_MORE_EVIDENCE)
+        self.assertEqual(viability.reason, "insufficient_breadth_for_economic_decision")
+        # Must never be forced into a decisive verdict off 3 real data
+        # points, even though those 3 symbols are unanimously and
+        # decisively unprofitable.
+        self.assertIsNot(viability.status, EconomicViabilityStatus.FAIL)
+
+    def test_performance_sample_itself_meeting_floor_allows_decisive_fail(self) -> None:
+        candidate = new_candidate("breakout_slow_trend_confirmed", sequence=2, now=NOW)
+        # 20 symbols, ALL with real, decisively negative performance
+        # evidence - clears BOTH the raw breadth floor AND the real
+        # performance-sample floor, so a decisive FAIL must still be
+        # reachable (the floor fix must not turn into a FAIL that never
+        # fires).
+        losing = {
+            f"L{i:02d}": {"eligible": True, "trade_count": 6, "metrics": {"total_return": -0.15, "mdd": 0.30}}
+            for i in range(20)
+        }
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=20,
+            valid=20,
+            trade_count=120,
+            evidence_symbols=tuple(losing),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=NOW,
+            evidence_details=losing,
+        )
+        performance = candidate_cumulative_performance(candidate)
+        self.assertEqual(performance.performance_sample_symbols, 20)
+        self.assertGreaterEqual(performance.performance_sample_symbols, ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE)
+        self.assertGreaterEqual(performance.performance_sample_trades, ECONOMIC_VIABILITY_MIN_TRADE_SAMPLE)
+
+        viability = evaluate_economic_viability(candidate)
+        self.assertIs(viability.status, EconomicViabilityStatus.FAIL)
 
 
 class AbsoluteCandidateCycleCapTests(unittest.TestCase):

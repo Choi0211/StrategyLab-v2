@@ -91,8 +91,10 @@ from gaon.knowledge.research_mission import (
     update_candidate,
 )
 from gaon.knowledge.strategy_candidate import (
+    EconomicViabilityStatus,
     StrategyCandidateStatus,
     candidate_sample_exhausted,
+    evaluate_economic_viability,
     expand_strategy_space_candidate,
     is_stagnant,
     mark_promotion_ready,
@@ -105,6 +107,7 @@ from gaon.knowledge.strategy_candidate import (
     record_breadth_progress,
     record_robustness_progress,
     render_candidate_block,
+    render_candidate_cumulative_evidence_block,
     render_candidate_request_text,
     render_candidate_status_summary,
     render_candidate_strategy_explanation,
@@ -1276,6 +1279,7 @@ class LLMConversationBrain:
                     references,
                     tool_calls=(),
                     extra_warnings=("candidate_pool_exhausted_not_repeated",),
+                    reason=planned_reason,
                 )
             if planned_action != "EXPAND_SAMPLE":
                 next_symbol = next_robustness_evidence_symbol(active)
@@ -1314,6 +1318,29 @@ class LLMConversationBrain:
         as ``candidate_spec`` - see ``AutonomousMultiSymbolResearchOrchestrator.run``)
         across the mission's symbol universe - the SAME rules on every
         symbol, never a different candidate per symbol."""
+        # Root cause fix (KR-ST-008, production 2026-08): this used to run
+        # an unconditional new EXPAND_SAMPLE-shaped batch every time it was
+        # entered, regardless of whether the candidate's OWN accumulated
+        # evidence already called for something else (most importantly: a
+        # decisive economic-viability FAIL - see evaluate_economic_viability
+        # in gaon.knowledge.strategy_candidate). A candidate could reach
+        # this function repeatedly (via any of its several call sites/
+        # routing paths) and keep expanding its cross-symbol sample toward
+        # the whole candidate pool even after its own cumulative evidence
+        # had already decisively shown it loses money. Consulting the same
+        # blocker-driven decision every other entry point already uses
+        # closes that gap here too, independent of which path led in.
+        planned_action, planned_reason = next_blocker_driven_research_action(candidate)
+        if planned_action == "ROTATE_CANDIDATE":
+            return self._rotate_stagnant_candidate(
+                request,
+                mission,
+                candidate,
+                _dedupe((*warnings, f"breadth_cycle_decision={planned_reason}")),
+                references,
+                tool_calls=(),
+                reason=planned_reason,
+            )
         if preferred_symbols:
             result = self._execute_mvp_multi_symbol_research(
                 request,
@@ -1477,7 +1504,12 @@ class LLMConversationBrain:
                 ("multi_symbol_research",),
             )
 
-        text = f"{candidate_text}\n\n{_format_tool_response('multi_symbol_research', output, request.text)}\n\n{mission_status_block(updated_mission)}"
+        text = (
+            f"{candidate_text}\n\n"
+            f"[이번 batch]\n{_format_tool_response('multi_symbol_research', output, request.text)}\n\n"
+            f"{render_candidate_cumulative_evidence_block(updated_candidate)}\n\n"
+            f"{mission_status_block(updated_mission)}"
+        )
         return (
             text,
             "conversation_mission_driven_multi_symbol_research",
@@ -1536,6 +1568,7 @@ class LLMConversationBrain:
                 _dedupe((*warnings, f"planned_action_consumed={planned_action}", f"planned_action_reason={planned_reason}")),
                 references,
                 tool_calls=(),
+                reason=planned_reason,
             )
         symbol = str(mission.pending_promotion_symbol)
         context = self._mvp_context_for(request.session_id)
@@ -1640,14 +1673,40 @@ class LLMConversationBrain:
             if action == "request_human_promotion_review":
                 updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
                 if identity_verified:
-                    updated_mission = record_promotion_candidate(
-                        updated_mission,
-                        strategy_fingerprint=candidate.strategy_fingerprint,
-                        candidate_id=candidate.candidate_id,
-                        now=request.received_at,
-                    )
-                    updated_candidate = mark_promotion_ready(updated_candidate, now=request.received_at)
-                    updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
+                    # Root cause fix: the deep Research Director's own
+                    # "request_human_promotion_review" verdict (see
+                    # gaon.research.research_director.ResearchDirector.decide)
+                    # only ever checks evidence strength/conflict/robustness
+                    # stage completion - it has no notion of whether the
+                    # candidate actually made money. Robustness alone must
+                    # never reach PROMOTION_READY (item D): this candidate's
+                    # own canonical cumulative economic-viability verdict is
+                    # checked here, independently, before promotion-ready is
+                    # ever recorded.
+                    economic_viability = evaluate_economic_viability(updated_candidate)
+                    if economic_viability.status is EconomicViabilityStatus.PASS:
+                        updated_mission = record_promotion_candidate(
+                            updated_mission,
+                            strategy_fingerprint=candidate.strategy_fingerprint,
+                            candidate_id=candidate.candidate_id,
+                            now=request.received_at,
+                        )
+                        updated_candidate = mark_promotion_ready(updated_candidate, now=request.received_at)
+                        updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
+                    elif economic_viability.status is EconomicViabilityStatus.FAIL:
+                        updated_candidate = mark_rejected(
+                            updated_candidate,
+                            reason=f"economic_viability_failed:{economic_viability.reason}",
+                            now=request.received_at,
+                        )
+                        updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
+                    # NEEDS_MORE_EVIDENCE: robustness is done but the
+                    # candidate's own economic sample is still below the
+                    # decision floor - stay active; the mission is left with
+                    # no focus symbol so the next continuation returns to
+                    # next_blocker_driven_research_action, which routes an
+                    # economically-undecided, robustness-complete candidate
+                    # back to EXPAND_SAMPLE rather than fabricating a verdict.
             elif action == "reject_candidate":
                 updated_candidate = mark_rejected(updated_candidate, reason="research_director_rejected_candidate", now=request.received_at)
                 updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
@@ -1689,7 +1748,26 @@ class LLMConversationBrain:
         if updated_mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
             text = f"{candidate_text}\n\n{mission_awaiting_approval_message(updated_mission)}"
         elif updated_candidate.status is StrategyCandidateStatus.REJECTED:
-            text = f"{candidate_text}\n\n영하님, {updated_candidate.candidate_id} 전략은 검증 결과 기각되어 다음 사이클에서 다른 전략 후보로 전환합니다.\n\n{mission_status_block(updated_mission)}"
+            # Independent-review fix: this generic branch used to render a
+            # fixed Korean sentence with no reason at all - a candidate
+            # rejected HERE specifically for failing economic viability
+            # (see the request_human_promotion_review branch above) lost
+            # that specific reason from the user-facing response even
+            # though it was correctly persisted in rejected_reason, unlike
+            # the parallel _rotate_stagnant_candidate path which already
+            # explains an economic rejection explicitly. Surfacing the real
+            # persisted reason and the cumulative evidence block here keeps
+            # both rejection paths equally informative.
+            reason_line = (
+                f"사유: {updated_candidate.rejected_reason}\n\n" if updated_candidate.rejected_reason else ""
+            )
+            text = (
+                f"{candidate_text}\n\n"
+                f"영하님, {updated_candidate.candidate_id} 전략은 검증 결과 기각되어 다음 사이클에서 다른 전략 후보로 전환합니다.\n\n"
+                f"{reason_line}"
+                f"{render_candidate_cumulative_evidence_block(updated_candidate)}\n\n"
+                f"{mission_status_block(updated_mission)}"
+            )
         else:
             # ULTRAREVIEW High #2 fix (Patch 8.6: superseded by the
             # candidate-centric structured response below, which never
@@ -1704,6 +1782,7 @@ class LLMConversationBrain:
             # threshold, splitting one logical answer across two Telegram
             # messages.
             text = render_robustness_cycle_response(updated_candidate, updated_mission, symbol=symbol)
+            text = f"{text}\n\n{render_candidate_cumulative_evidence_block(updated_candidate)}"
             text = (
                 f"{text}\n\n[실행된 연구 action]\n"
                 f"- action_executed={planned_action}\n"
@@ -1755,6 +1834,7 @@ class LLMConversationBrain:
         *,
         tool_calls: tuple[str, ...],
         extra_warnings: tuple[str, ...] = (),
+        reason: str | None = None,
     ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
         """A candidate that made no measurable progress across
         ``STRATEGY_CANDIDATE_STAGNATION_THRESHOLD`` bounded cycles (never
@@ -1762,22 +1842,51 @@ class LLMConversationBrain:
         ``record_breadth_progress``) is marked stagnant and released as the
         active candidate, so the NEXT continuation generates a genuinely
         different strategy hypothesis instead of endlessly re-researching
-        one candidate (or, as production showed, one symbol)."""
-        stagnant = mark_stagnant(candidate, now=request.received_at)
-        updated_mission = update_candidate(mission, stagnant, now=request.received_at)
+        one candidate (or, as production showed, one symbol).
+
+        ``reason`` (root cause fix) is the specific
+        ``next_blocker_driven_research_action`` reason that produced this
+        ROTATE_CANDIDATE decision (e.g. "economic_viability_failed:..."), so
+        WHY this candidate was rotated out is persisted on the record
+        (``rejected_reason``) rather than only ever appearing as a
+        transient warning string. An economic-viability failure is recorded
+        as REJECTED (a deliberate, evidence-based verdict), never as the
+        generic STAGNANT ("no measurable progress") status, since this
+        candidate progressed plenty - it just decisively lost money.
+        """
+        is_economic_rejection = bool(reason and reason.startswith("economic_viability_failed"))
+        if is_economic_rejection:
+            rotated = mark_rejected(candidate, reason=reason, now=request.received_at)
+            status_line = (
+                f"영하님, {rotated.candidate_id} 전략은 충분한 누적 증거(경계 이상) 하에서 "
+                "경제적 타당성(누적 수익률/수익 종목 비율)이 기준에 미달하여 기각되었습니다. "
+                "다음 연구 사이클에서는 다른 전략 후보로 전환하겠습니다."
+            )
+            response_route = "conversation_mission_candidate_economic_rejection"
+        else:
+            # Independent-review fix: pass reason through only when the
+            # caller actually supplied one, rather than duplicating
+            # mark_stagnant's own default text as a second inline literal
+            # that could silently drift out of sync with it.
+            rotated = mark_stagnant(candidate, now=request.received_at, **({"reason": reason} if reason else {}))
+            status_line = (
+                f"영하님, {rotated.candidate_id} 전략은 여러 사이클 동안 뚜렷한 진전이 없어 "
+                "다음 연구 사이클에서는 다른 전략 후보로 전환하겠습니다."
+            )
+            response_route = "conversation_mission_candidate_stagnant"
+        updated_mission = update_candidate(mission, rotated, now=request.received_at)
         updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
         updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
         self._remember_mission(request, updated_mission)
         text = (
-            f"{render_candidate_block(stagnant)}\n\n"
-            f"영하님, {stagnant.candidate_id} 전략은 여러 사이클 동안 뚜렷한 진전이 없어 "
-            "다음 연구 사이클에서는 다른 전략 후보로 전환하겠습니다.\n\n"
+            f"{render_candidate_block(rotated)}\n\n"
+            f"{status_line}\n\n"
             f"{mission_status_block(updated_mission)}"
         )
         return (
             text,
-            "conversation_mission_candidate_stagnant",
-            _dedupe((*warnings, *extra_warnings, f"candidate_stagnant={stagnant.candidate_id}")),
+            response_route,
+            _dedupe((*warnings, *extra_warnings, f"candidate_rotated={rotated.candidate_id}", f"candidate_rotation_reason={reason or 'stagnation'}")),
             references,
             "deterministic",
             tool_calls,
