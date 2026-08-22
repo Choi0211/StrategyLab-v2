@@ -1361,33 +1361,51 @@ def _pct_or_na(value: float | None) -> str:
 _ROBUSTNESS_STAGE_BLOCKERS = frozenset({*ACTION_STAGE_KEYS.values(), "monte_carlo_waiting_for_primary_sample"})
 
 
-def render_candidate_cumulative_evidence_block(candidate: StrategyCandidateRecord) -> str:
+def render_candidate_cumulative_evidence_block(
+    candidate: StrategyCandidateRecord,
+    policy: EconomicViabilityPolicy = DEFAULT_ECONOMIC_VIABILITY_POLICY,
+) -> str:
     """Renders the CANONICAL cumulative candidate-level evidence and the
     resulting economic-viability/robustness/next-action decision - item E's
-    "[누적 후보 evidence]"/"[후보 판단]" sections. Deliberately separate from
-    whatever a single batch's own report already shows (e.g.
+    "[누적 후보 evidence]"/"[경제성 판단]" sections. Deliberately separate
+    from whatever a single batch's own report already shows (e.g.
     ``gaon.research.multi_symbol.MultiSymbolResearchRun.korean_report``,
     rendered as "[이번 batch]" alongside this by the caller), and computed
     fresh from persisted state every call - it is a read model, never a
-    second source of truth that could drift from ``breadth_evidence``."""
+    second source of truth that could drift from ``breadth_evidence``.
+
+    Independent-review fix: breadth sample size (``valid_symbols``/
+    ``trade_count`` - every eligible symbol, including untraded ones) and
+    the REAL performance-evidence sample
+    (``performance_sample_symbols``/``performance_sample_trades`` - only
+    symbols that actually carry a recorded return) are shown as two
+    explicitly separate lines, alongside the policy's own required
+    performance-sample floor - so a user reading a NEEDS_MORE_EVIDENCE
+    verdict can see exactly why (e.g. breadth already cleared its own
+    lower bar while the real performance sample has not yet reached the
+    higher economic-decision bar), instead of a single ambiguous count
+    that conflates the two."""
     performance = candidate_cumulative_performance(candidate)
-    viability = evaluate_economic_viability(candidate)
+    viability = evaluate_economic_viability(candidate, policy)
     remaining_blockers = candidate_remaining_blockers(candidate)
     stage_blockers = tuple(blocker for blocker in remaining_blockers if blocker in _ROBUSTNESS_STAGE_BLOCKERS)
     robustness_label = "pass" if not stage_blockers else ",".join(stage_blockers)
     decision, decision_reason = next_blocker_driven_research_action(candidate)
     lines = [
         "[누적 후보 evidence]",
-        f"- {candidate.valid_symbols} symbols / {candidate.trade_count} trades",
-        f"- cumulative median return: {_pct_or_na(performance.median_return)}",
-        f"- cumulative median MDD: {_pct_or_na(performance.median_mdd)}",
-        f"- profitable symbol ratio: {_pct_or_na(performance.profitable_symbol_ratio)}",
+        f"- breadth: {candidate.valid_symbols} symbols / {candidate.trade_count} trades",
+        f"- performance sample: {performance.performance_sample_symbols} symbols / {performance.performance_sample_trades} trades",
+        f"- median return: {_pct_or_na(performance.median_return)}",
+        f"- median MDD: {_pct_or_na(performance.median_mdd)}",
+        f"- profitable ratio: {_pct_or_na(performance.profitable_symbol_ratio)}",
         "",
-        "[후보 판단]",
-        f"- economic viability: {viability.status.value}",
+        "[경제성 판단]",
+        f"- status: {viability.status.value}",
+        f"- reason: {viability.reason}",
+        f"- required performance sample: {policy.min_symbol_sample} symbols / {policy.min_trade_sample} trades",
         f"- robustness: {robustness_label}",
         f"- decision: {decision}",
-        f"- reason: {decision_reason}",
+        f"- decision_reason: {decision_reason}",
     ]
     return "\n".join(lines)
 

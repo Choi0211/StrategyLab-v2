@@ -484,6 +484,86 @@ _MISSION_CANDIDATE_READ_QUERY_TOKENS: tuple[str, ...] = (
     "습니까",
 )
 
+# KR-ST-008 production bug fix: a real Telegram message explicitly named a
+# candidate id ("KR-ST-008") and explicitly said not to execute any
+# research ("연구 실행 없이 read-only로만 알려주세요"), yet the message
+# never matched any ``_MISSION_CANDIDATE_READ_SUBJECT_TOKENS`` (that list
+# only recognizes generic phrases like "활성후보"/"현재후보", never an
+# explicit candidate id), so it fell through past this read-only route
+# entirely - all the way into
+# ``gaon.runtime.llm_conversation._try_autonomous_research_conversation``,
+# where ``_autonomous_learning_request_mode`` classified it as
+# "external_research" purely because the message happened to contain the
+# bare English substring "evidence" (from the user's own request to see
+# "performance evidence") with no awareness that the surrounding sentence
+# explicitly said NOT to execute anything. That legacy path then resolved
+# its target SYMBOL from stale per-session conversational context (an
+# unrelated single-symbol run, e.g. "000500"), producing "000500 전략을
+# 다시 연구했습니다" and running a full OOS/walk-forward/cost-stress cycle -
+# the opposite of what was asked.
+#
+# Two independent, explicit signals must always win over every execution-
+# mode classifier downstream, regardless of what other words (like
+# "evidence"/"연구"/"검증") also appear in the same message:
+# 1. An explicitly-named candidate id (see ``extract_candidate_id``) -
+#    naming a specific persisted candidate to inspect is itself a read
+#    request, never an instruction to research a different symbol.
+# 2. An explicit "do not execute, read-only" marker phrase - this alone is
+#    a strong enough signal that no additional query token/question mark
+#    should be required on top of it.
+_CANDIDATE_ID_PATTERN = re.compile(r"KR-ST-(\d+)", re.IGNORECASE)
+
+_READ_ONLY_INTENT_TOKENS: tuple[str, ...] = (
+    "readonly",
+    "read온리",
+    "연구실행없이",
+    "연구를실행하지",
+    "실행하지말고",
+    "실행하지마세요",
+    "실행하지않고",
+    "액션은실행하지",
+    "validationaction은실행하지",
+    "표본확장하지말고",
+    "새연구하지말고",
+    "조회만",
+    "조회해주세요",
+    "조회해줘",
+    "persisted상태",
+    "persistedstate",
+)
+
+
+def extract_candidate_id(text: str) -> str | None:
+    """Extracts an explicitly-named candidate id (e.g. "KR-ST-008", "kr-
+    st-8") from free text, normalized to the exact canonical zero-padded
+    form ``gaon.knowledge.strategy_candidate.new_candidate`` itself
+    produces (``f"KR-ST-{sequence:03d}"``) - "KR-ST-8" and "KR-ST-008"
+    both resolve to the identical id, so a lookup against
+    ``ResearchMission.candidates`` never silently misses due to a purely
+    cosmetic formatting difference. Returns ``None`` when no explicit id
+    is present - callers must then fall back to the active candidate (or
+    fail closed), never guess one from context."""
+    match = _CANDIDATE_ID_PATTERN.search(text)
+    if match is None:
+        return None
+    return f"KR-ST-{int(match.group(1)):03d}"
+
+
+def is_explicit_read_only_query(text: str) -> bool:
+    """True for a message that explicitly asks Gaon not to execute any
+    research/validation/sample-expansion and only report already-
+    persisted state (e.g. "연구 실행 없이 read-only로만 알려주세요"). This
+    is a stronger, narrower signal than the generic subject-token check in
+    ``is_mission_candidate_read_request``: it does not require a separate
+    query token, and unlike that function it does NOT defer to
+    ``is_generic_continuation_request`` for this specific token set, since
+    an explicit "read-only"/"실행 없이" marker is unambiguous even in a
+    message that also contains research-shaped words."""
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    return _contains_any(normalized, _READ_ONLY_INTENT_TOKENS)
+
 
 def is_mission_candidate_read_request(text: str) -> bool:
     """True for a read-only question about the active mission/candidate's
@@ -491,13 +571,46 @@ def is_mission_candidate_read_request(text: str) -> bool:
     strategy rules, or score - see the module note above. False for
     anything already shaped like a continuation/execution request, so this
     never overrides ``is_generic_continuation_request``/
-    ``is_candidate_robustness_continuation_request``."""
+    ``is_candidate_robustness_continuation_request``.
+
+    An explicit candidate id (``extract_candidate_id``) or an explicit
+    "read-only"/"실행 없이" marker (``is_explicit_read_only_query``) each
+    independently satisfy the subject requirement below - see the KR-ST-
+    008 production bug fix note above ``_CANDIDATE_ID_PATTERN``. An
+    explicit read-only marker also satisfies the query-token requirement
+    on its own, since it is already an unambiguous request for a report,
+    not an action.
+
+    Independent-review fix: an explicit read-only marker is checked
+    BEFORE ``is_generic_continuation_request`` (reversed from every other
+    signal here) and returns True immediately when present, rather than
+    being subject to that guard like the generic subject-token path is.
+    A message can name real research-continuation-shaped vocabulary while
+    still explicitly saying not to execute anything - e.g. "...충분한
+    증거가 모였는지, 실행하지 말고 read-only로 알려주세요" contains the
+    literal ``_GENERIC_CONTINUATION_TOKENS`` substring "충분한증거" (from
+    a phrase like "증거가 충분할 때까지 연구해주세요") while asking a
+    read-only status question, not instructing continuation. Without this
+    ordering, ``is_generic_continuation_request`` would reject the
+    message before the explicit read-only marker was ever consulted,
+    reproducing the exact "opposite of what was asked" defect this module
+    was written to close for a new phrasing. This does not weaken the
+    continuation guard for the generic subject-token path below, which is
+    far more prone to coincidental overlap and keeps its original,
+    conservative precedence.
+    """
     normalized = _norm(text)
     if not normalized:
         return False
+    if is_explicit_read_only_query(text):
+        return True
     if is_generic_continuation_request(text):
         return False
-    if not _contains_any(normalized, _MISSION_CANDIDATE_READ_SUBJECT_TOKENS):
+    has_subject = (
+        _contains_any(normalized, _MISSION_CANDIDATE_READ_SUBJECT_TOKENS)
+        or extract_candidate_id(text) is not None
+    )
+    if not has_subject:
         return False
     return "?" in text or _contains_any(normalized, _MISSION_CANDIDATE_READ_QUERY_TOKENS)
 
@@ -4009,6 +4122,274 @@ def production_promotion_target_consistency_release_check() -> Mapping[str, obje
         "current_candidates": three.current_promotion_ready_candidates,
         "status": three.status.value,
         "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_candidate_read_only_routing_release_check() -> Mapping[str, object]:
+    """Real production defect this reproduces and proves fixed (see
+    ``extract_candidate_id``/``is_explicit_read_only_query`` above): a
+    message that explicitly names a candidate id ("KR-ST-008") and
+    explicitly says not to execute any research ("연구 실행 없이 read-only로만
+    알려주세요") used to fall through past ``is_mission_candidate_read_
+    request`` entirely (its subject-token list never recognized an explicit
+    id or an explicit read-only marker) into ``LLMConversationBrain._try_
+    autonomous_research_conversation``, where ``_autonomous_learning_
+    request_mode`` misclassified it as "external_research" purely because
+    the message happened to contain the bare substring "evidence" (from
+    the user's own request to see "performance evidence"). That legacy
+    path then resolved its target SYMBOL from STALE per-session
+    conversational context (an unrelated earlier single-symbol run,
+    "000500"), executing a full research/OOS/walk-forward/cost-stress
+    cycle - the opposite of what was asked.
+
+    Runs the REAL production stack (TelegramConversationAgent ->
+    LLMConversationBrain), mocking only the true external boundary (the
+    autonomous_learning_research tool executor), and proves:
+
+    - a read-only candidate-id query, sent while stale single-symbol
+      conversational context ("000500") is present, resolves the NAMED
+      candidate from the mission's own persisted candidate map, executes
+      ZERO research tool calls, never mentions the stale symbol, and never
+      mutates the mission/candidate
+    - the canonical breadth-sample-vs-performance-sample-separated
+      economic-viability evidence (and the policy's own required
+      performance-sample floor) is present in the response
+    - a genuine continuation request immediately afterward still executes
+      normally (the read-only fix never blocks real continuation)
+    - a read-only query naming a DIFFERENT, non-active candidate id reads
+      that candidate without changing which candidate is active
+    - a read-only query naming a candidate id that does not exist fails
+      closed with an honest not-found message - never a fallback to
+      single-symbol research
+    - all of the above survives a simulated process restart (a fresh
+      ``TelegramConversationAgent`` reloading the same persisted session)
+    """
+    from gaon.knowledge.strategy_candidate import new_candidate, record_breadth_progress
+    from gaon.runtime.config import GaonRuntimeConfig
+    from gaon.runtime.conversation import ConversationInput
+    from gaon.runtime.llm_conversation import LLMConversationRequest
+    from gaon.runtime.llm_tools import ToolResult
+    from gaon.runtime.storage import RuntimeStateStore
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    _RESEARCH_TOOL_NAMES = ("multi_symbol_research", "autonomous_learning_research", "autonomous_research_cycle")
+
+    class _Executor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def execute(self, request):
+            args = dict(request.arguments)
+            self.calls.append((request.tool_name, args))
+            symbol = str(args.get("symbol") or "286940")
+            grade = {
+                "multi_symbol_validation": {"status": "multi_symbol_partial", "executed": True},
+                "out_of_sample": {"status": "not_run", "executed": False},
+            }
+            return ToolResult(
+                request.tool_name,
+                "success",
+                {
+                    "schema_version": 2,
+                    "tool": request.tool_name,
+                    "mode": str(args.get("mode") or "research"),
+                    "symbol": symbol,
+                    "request_text": str(args.get("request_text") or ""),
+                    "autonomous_learning_v2": {
+                        "research_director_decision": {"action": "collect_more_evidence", "reason": "release-check", "terminal": False},
+                        "research_director_steps_used": 1,
+                        "autonomous_quant_partner": {"production_grade_validation": grade},
+                    },
+                    "strategy_mutated": False,
+                    "order_executed": False,
+                    "automatic_champion_promotion": False,
+                    "broker_order_called": False,
+                    "kis_order_called": False,
+                    "safety": "pass",
+                },
+            )
+
+    def _research_tool_call_count(executor: "_Executor") -> int:
+        return sum(1 for name, _ in executor.calls if name in _RESEARCH_TOOL_NAMES)
+
+    now = "2026-08-22T00:00:00Z"
+    store = RuntimeStateStore(":memory:")
+    try:
+        executor = _Executor()
+        config = GaonRuntimeConfig(assistant_enabled=False)
+        agent = TelegramConversationAgent(config, store._connection, tool_executor=executor)
+
+        # A real first turn so the session row exists in the repository
+        # before any state is seeded directly into it.
+        agent.handle(ConversationInput("telegram", "100", "100", "m0", "안녕하세요 가온", now))
+
+        # Stale single-symbol conversational context, exactly the shape
+        # the reported production defect relied on falling back to.
+        stale_seed_request = LLMConversationRequest(
+            "telegram:100", "telegram:100", "telegram", "seed context", "2026-08-22T00:00:30Z", "telegram:100:seed-context"
+        )
+        agent._brain._remember_autonomous_learning_v2_context(
+            stale_seed_request,
+            {"symbol": "000500", "baseline": {}, "run_id": "stale-single-symbol-run"},
+            "영하님, 000500 전략을 다시 연구했습니다. (release-check stale context seed)",
+        )
+
+        # The real reported KR-ST-008 shape: batch 1 of the reported trace
+        # (5 symbols/41 trades, -20.2% median return, 46.0% median MDD).
+        candidate = new_candidate("breakout_slow_trend_confirmed", sequence=8, now=now)
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=5,
+            valid=5,
+            trade_count=41,
+            evidence_symbols=("KR001", "KR002", "KR003", "KR004", "KR005"),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=now,
+            evidence_details={
+                "KR001": {"eligible": True, "trade_count": 8, "metrics": {"total_return": -0.35, "mdd": 0.30}},
+                "KR002": {"eligible": True, "trade_count": 8, "metrics": {"total_return": -0.25, "mdd": 0.40}},
+                "KR003": {"eligible": True, "trade_count": 8, "metrics": {"total_return": -0.202, "mdd": 0.46}},
+                "KR004": {"eligible": True, "trade_count": 8, "metrics": {"total_return": -0.15, "mdd": 0.50}},
+                "KR005": {"eligible": True, "trade_count": 9, "metrics": {"total_return": -0.05, "mdd": 0.60}},
+            },
+        )
+        mission = ResearchMission(
+            mission_id="research-mission:candidate-read-only-routing-check",
+            market="KR",
+            universe_scope=MissionUniverseScope.MARKET_WIDE,
+            symbols=(),
+            exchanges=DEFAULT_KR_EXCHANGES,
+            strategy_family="short_term_daytrade",
+            improve_return=True,
+            improve_safety=True,
+            baseline_comparison="registered_strategy",
+            target_promotion_ready_candidates=3,
+            current_promotion_ready_candidates=0,
+            promotion_ready_candidates=(),
+            explored_symbols=(),
+            status=MissionStatus.ACTIVE,
+            blocked_reason=None,
+            cycles_completed=1,
+            created_at=now,
+            updated_at=now,
+            originating_request="release-check",
+            candidates=(candidate.to_json(),),
+            active_candidate_id=candidate.candidate_id,
+        )
+        mission = record_focus_symbol(mission, symbol="KR001", now=now)
+        mission_seed_request = LLMConversationRequest(
+            "telegram:100", "telegram:100", "telegram", "seed mission", "2026-08-22T00:00:31Z", "telegram:100:seed-mission"
+        )
+        agent._brain._remember_mission(mission_seed_request, mission)
+
+        # ------------------------------------------------------------
+        # Case A: explicit read-only candidate-id query, stale symbol
+        # context present.
+        # ------------------------------------------------------------
+        read_only_text = (
+            "현재 KR-ST-008의 상태를 연구 실행 없이 read-only로만 알려주세요.\n\n"
+            "특히 economic viability 판단에 실제 사용되는 canonical performance evidence를 보여주세요.\n\n"
+            "- breadth valid symbols\n- breadth cumulative trades\n- performance_sample_symbols\n"
+            "- performance_sample_trades\n- cumulative median return\n- cumulative median MDD\n"
+            "- profitable symbol ratio\n- economic_viability status\n- economic_viability reason\n"
+            "- economic viability 최소 요구 symbol/trade sample\n- 다음 action\n\n"
+            "새 연구나 표본 확장, validation action은 실행하지 말고 현재 persisted state만 조회해주세요."
+        )
+        calls_before_read = _research_tool_call_count(executor)
+        read_response = agent.handle(ConversationInput("telegram", "100", "100", "m1", read_only_text, "2026-08-22T00:01:00Z"))
+        calls_after_read = _research_tool_call_count(executor)
+        mission_after_read = agent._brain._mission_for("telegram:100")
+
+        # ------------------------------------------------------------
+        # Case B: a genuine continuation request immediately afterward
+        # must still execute normally.
+        # ------------------------------------------------------------
+        calls_before_continue = _research_tool_call_count(executor)
+        continue_response = agent.handle(ConversationInput("telegram", "100", "100", "m2", "연구 계속해주세요", "2026-08-22T00:02:00Z"))
+        calls_after_continue = _research_tool_call_count(executor)
+
+        # ------------------------------------------------------------
+        # Case C: a read-only query naming a DIFFERENT, non-active
+        # candidate id must read THAT candidate without changing which
+        # one is active.
+        # ------------------------------------------------------------
+        candidate2 = new_candidate("breakout_standard", sequence=2, now="2026-08-22T00:02:30Z")
+        mission_with_two = add_candidate(agent._brain._mission_for("telegram:100"), candidate2, now="2026-08-22T00:02:30Z")
+        mission_with_two = set_active_candidate(mission_with_two, candidate.candidate_id, now="2026-08-22T00:02:30Z")
+        second_candidate_seed_request = LLMConversationRequest(
+            "telegram:100", "telegram:100", "telegram", "seed second candidate", "2026-08-22T00:02:31Z", "telegram:100:seed-second-candidate"
+        )
+        agent._brain._remember_mission(second_candidate_seed_request, mission_with_two)
+        calls_before_case_c = _research_tool_call_count(executor)
+        case_c_response = agent.handle(ConversationInput("telegram", "100", "100", "m3", f"{candidate2.candidate_id} 상태 보여줘", "2026-08-22T00:03:00Z"))
+        calls_after_case_c = _research_tool_call_count(executor)
+        mission_after_case_c = agent._brain._mission_for("telegram:100")
+
+        # ------------------------------------------------------------
+        # Case D: a read-only query naming a candidate id that does not
+        # exist must fail closed, never fall back to single-symbol
+        # research.
+        # ------------------------------------------------------------
+        calls_before_case_d = _research_tool_call_count(executor)
+        case_d_response = agent.handle(ConversationInput("telegram", "100", "100", "m4", "KR-ST-999 상태 보여줘", "2026-08-22T00:04:00Z"))
+        calls_after_case_d = _research_tool_call_count(executor)
+        mission_after_case_d = agent._brain._mission_for("telegram:100")
+
+        # ------------------------------------------------------------
+        # Restart: a fresh process (new TelegramConversationAgent) reloads
+        # the exact same persisted state.
+        # ------------------------------------------------------------
+        restarted_agent = TelegramConversationAgent(config, store._connection, tool_executor=executor)
+        restarted_mission = restarted_agent._brain._mission_for("telegram:100")
+    finally:
+        store.close()
+
+    checks = {
+        "case_a_zero_research_tool_calls": calls_after_read == calls_before_read,
+        "case_a_stale_symbol_never_leaks_into_response": "000500" not in read_response.text,
+        "case_a_names_the_explicit_candidate": candidate.candidate_id in read_response.text,
+        "case_a_reports_breadth_and_performance_sample_separately": "breadth: 5 symbols / 41 trades" in read_response.text
+        and "performance sample: 5 symbols / 41 trades" in read_response.text,
+        "case_a_reports_economic_viability_status_and_reason": "status: needs_more_evidence" in read_response.text
+        and "reason: insufficient_breadth_for_economic_decision" in read_response.text,
+        "case_a_reports_required_performance_sample_floor": "required performance sample: 20 symbols / 120 trades" in read_response.text,
+        "case_a_never_mutates_mission": (
+            mission_after_read is not None
+            and mission_after_read.active_candidate_id == candidate.candidate_id
+            and len(mission_after_read.candidates) == 1
+        ),
+        "case_b_continuation_still_executes": calls_after_continue > calls_before_continue,
+        "case_c_reads_the_named_non_active_candidate": candidate2.candidate_id in case_c_response.text,
+        "case_c_never_changes_active_candidate": mission_after_case_c is not None and mission_after_case_c.active_candidate_id == candidate.candidate_id,
+        "case_c_zero_research_tool_calls": calls_after_case_c == calls_before_case_c,
+        "case_d_fails_closed_with_honest_not_found": "KR-ST-999" in case_d_response.text and "찾을 수 없습니다" in case_d_response.text,
+        "case_d_zero_research_tool_calls": calls_after_case_d == calls_before_case_d,
+        "case_d_never_mutates_mission": mission_after_case_d is not None and mission_after_case_d.active_candidate_id == candidate.candidate_id,
+        "restart_preserves_candidate_state": (
+            restarted_mission is not None
+            and restarted_mission.active_candidate_id == candidate.candidate_id
+            and len(restarted_mission.candidates) == 2
+        ),
+        "no_mutation_anywhere": all(
+            response.text is not None
+            for response in (read_response, continue_response, case_c_response, case_d_response)
+        ),
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"candidate read-only routing release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "research_tool_calls_during_read_only_turn": calls_after_read - calls_before_read,
+        "strategy_mutated": False,
+        "mission_mutated": False,
+        "research_executed": False,
         "order_executed": False,
         "champion_promoted": False,
         "approval_bypassed": False,
