@@ -792,7 +792,17 @@ def evaluate_economic_viability(
     # design explicitly says must not happen ("a 5-symbol/41-trade batch is
     # real evidence but not enough").
     if performance.performance_sample_symbols < policy.min_symbol_sample or performance.performance_sample_trades < policy.min_trade_sample:
-        return EconomicViabilityResult(EconomicViabilityStatus.NEEDS_MORE_EVIDENCE, "insufficient_breadth_for_economic_decision", performance)
+        # Item 11 presentation fix: this branch is specifically about the
+        # REAL performance-evidence sample being thin (see the comment
+        # above) - breadth itself can already be well past its own,
+        # separate, lower floor (has_sufficient_universe_evidence) while
+        # this still fires. "insufficient_breadth_for_economic_decision"
+        # read as if breadth itself were insufficient, which was
+        # frequently untrue and confusing (e.g. "breadth 34/228 충분,
+        # performance sample 13/79 부족" still rendered a breadth-worded
+        # reason). Runtime/read-model text only - no persisted schema
+        # change.
+        return EconomicViabilityResult(EconomicViabilityStatus.NEEDS_MORE_EVIDENCE, "insufficient_performance_sample_for_economic_decision", performance)
     if performance.median_return is None or performance.profitable_symbol_ratio is None:
         return EconomicViabilityResult(EconomicViabilityStatus.NEEDS_MORE_EVIDENCE, "no_performance_evidence_recorded", performance)
     profitable = performance.median_return > 0 and performance.profitable_symbol_ratio >= policy.min_profitable_symbol_ratio

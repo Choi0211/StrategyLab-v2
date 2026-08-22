@@ -41,7 +41,9 @@ from gaon.knowledge.research_mission import (
     record_focus_symbol,
     record_promotion_candidate,
     update_candidate,
+    is_stop_or_negation_request,
     production_candidate_read_only_routing_release_check,
+    production_typo_tolerant_research_continuation_release_check,
     production_research_action_cycle_resolution_release_check,
     production_terminal_validation_retry_boundary_release_check,
     production_promotion_target_consistency_release_check,
@@ -1242,6 +1244,163 @@ class CandidateReadOnlyRoutingReleaseCheckTests(unittest.TestCase):
     def test_release_check_is_deterministic_across_runs(self) -> None:
         first = production_candidate_read_only_routing_release_check()
         second = production_candidate_read_only_routing_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
+class TypoTolerantContinuationRoutingTests(unittest.TestCase):
+    """KR-ST-008 production bug fix: "연구 계속햐두세요" (a typo of "연구
+    계속해주세요") matched none of is_generic_continuation_request's exact
+    tokens, fell through into a SEPARATE legacy classifier in
+    llm_conversation.py that accidentally recognized it as "continue" via
+    a different substring, and dispatched to the legacy single-symbol
+    autonomous-research path using STALE conversational context. See
+    TypoTolerantContinuationReleaseCheckTests below for the full-stack
+    proof; this class covers the underlying predicates directly, per the
+    explicit priority order this fix guarantees:
+    STOP/NEGATION > READ-ONLY > EXPLICIT CONTINUATION > TYPO-TOLERANT
+    CONTINUATION > other routing."""
+
+    def test_case_a_explicit_continuation_phrasings_are_recognized(self) -> None:
+        for text in (
+            "연구 계속해주세요",
+            "연구 계속 해주세요",
+            "연구를 계속해주세요",
+            "연구 계속해줘",
+            "연구 이어서 해주세요",
+            "계속 연구해주세요",
+        ):
+            self.assertTrue(is_generic_continuation_request(text), text)
+
+    def test_case_b_bounded_typos_are_recognized_as_continuation(self) -> None:
+        for text in (
+            "연구 계속햐두세요",
+            "연구 계속햐주세요",
+            "연구 계솟해주세요",
+            "연구 계쏙해주세요",
+        ):
+            self.assertTrue(is_generic_continuation_request(text), text)
+
+    def test_case_d_e_stop_and_negation_block_continuation(self) -> None:
+        for text in (
+            "연구 계속하지 마세요",
+            "연구하지 말아주세요",
+            "연구 중단해주세요",
+            "이제 연구 그만해주세요",
+            "계속하지 마세요",
+        ):
+            self.assertTrue(is_stop_or_negation_request(text), text)
+            self.assertFalse(is_generic_continuation_request(text), text)
+            self.assertFalse(is_mission_candidate_read_request(text), text)
+
+    def test_case_f_read_only_boundary_not_regressed_by_typo_tolerance(self) -> None:
+        for text in (
+            "상태만 보여줘",
+            "연구 실행 없이 보여줘",
+            "read-only로 알려줘",
+            "다음 action만 알려줘",
+            "KR-ST-008 상태를 실행 없이 보여줘",
+        ):
+            self.assertFalse(is_generic_continuation_request(text), text)
+
+    def test_case_g_candidate_id_with_exact_continuation_verb_is_continuation(self) -> None:
+        self.assertTrue(is_generic_continuation_request("KR-ST-008 검증 계속해줘"))
+        self.assertFalse(is_stop_or_negation_request("KR-ST-008 검증 계속해줘"))
+
+    def test_case_h_severely_garbled_text_never_matches_typo_tolerance(self) -> None:
+        # Not remotely close to any known continuation-verb stem within
+        # the bounded edit-distance budget - must not match. This is what
+        # keeps the typo tolerance from degrading into unrestricted
+        # fuzzy matching over arbitrary short text.
+        for text in ("ㅁㄴㅇㄹㅁㄴㅇㄹ", "오늘 날씨 어때", "안녕하세요"):
+            self.assertFalse(is_generic_continuation_request(text), text)
+
+    def test_continuation_anchor_edit_distance_does_not_collide_with_unrelated_verbs(self) -> None:
+        # Independent-review regression: an earlier version tolerated any
+        # 2-character word within edit-distance 1 of "계속" as the
+        # continuation anchor - "계획"("plan")/"계산"("calculate")/
+        # "계약"("contract") are ALL edit-distance 1 from "계속"
+        # ("continue") since only the second character differs, and
+        # followed by an exact "해주세요" this used to false-positive a
+        # real mission research cycle for messages that never asked to
+        # continue anything. The anchor is now an explicit, closed list of
+        # actual known spellings (canonical + reported typos), never a
+        # distance formula.
+        for text in ("다음 계획해주세요", "수익률 계산해주세요", "계약해주세요"):
+            self.assertFalse(is_generic_continuation_request(text), text)
+
+    def test_stop_anchor_does_not_swallow_an_unrelated_negation_in_the_same_message(self) -> None:
+        # Independent-review regression: "실행"/"진행"/"조사"/"검증" were
+        # speculative STOP anchors beyond what any real reported phrasing
+        # needs - "주문 실행하지 마세요, 계속 연구해주세요" (don't execute
+        # orders, [but] DO keep researching) matched anchor "실행" and made
+        # is_stop_or_negation_request return True unconditionally, silently
+        # discarding the "계속 연구해주세요" continuation in the very same
+        # message - STOP's absolute priority becoming a liability instead
+        # of a safety feature once the anchor stopped being research-
+        # specific. Narrowed to exactly "연구"/"계속".
+        text = "주문 실행하지 마세요, 계속 연구해주세요"
+        self.assertFalse(is_stop_or_negation_request(text))
+        self.assertTrue(is_generic_continuation_request(text))
+
+    def test_stop_wins_over_a_typo_tolerant_continuation_phrase_in_the_same_message(self) -> None:
+        # A message containing BOTH a bounded-typo-tolerant continuation-
+        # shaped phrase and an exact STOP phrase must resolve to STOP -
+        # the priority check (STOP checked first, unconditionally) wins
+        # regardless of what else the message contains.
+        text = "연구 계속햐두세요 아니 계속하지 마세요"
+        self.assertTrue(is_stop_or_negation_request(text))
+        self.assertFalse(is_generic_continuation_request(text))
+
+    def test_stop_anchor_requires_an_exact_research_verb_not_a_near_miss(self) -> None:
+        # Independent-review regression: the STOP anchor match is
+        # deliberately EXACT (never edit-distance-tolerant), unlike the
+        # continuation anchor - "조정" ("adjust") is edit-distance 1 from
+        # the "조사" anchor and, with typo tolerance, used to make
+        # "파라미터를 조정하지 마세요" ("don't adjust the parameters" - an
+        # unrelated instruction, not a request to stop research) a false
+        # STOP. A tolerant STOP anchor is a worse failure mode than a
+        # tolerant continuation anchor: over-triggering STOP silently
+        # discards a real research request the user did not ask to cancel.
+        text = "특정 종목에 맞춰 파라미터를 조정하지 마세요."
+        self.assertFalse(is_stop_or_negation_request(text))
+
+    def test_explicit_read_only_marker_still_wins_over_typo_tolerant_continuation(self) -> None:
+        # A message combining an explicit read-only marker with text that
+        # coincidentally resembles a continuation-verb stem must still be
+        # read-only - explicit signals are checked before typo tolerance.
+        text = "연구 실행 없이 현재 상태만 read-only로 알려주세요"
+        self.assertTrue(is_mission_candidate_read_request(text))
+
+
+class TypoTolerantContinuationReleaseCheckTests(unittest.TestCase):
+    def test_release_check_proves_typo_and_stop_routing_fixed(self) -> None:
+        payload = production_typo_tolerant_research_continuation_release_check()
+        for key in (
+            "planned_action_was_expand_sample",
+            "typo_continuation_executes_mission_cycle",
+            "typo_continuation_names_correct_candidate",
+            "typo_continuation_never_mentions_stale_symbol",
+            "typo_continuation_preserves_active_candidate",
+            "stop_request_executes_zero_research_tool_calls",
+            "stop_request_never_mentions_stale_symbol",
+            "stop_request_never_changes_active_candidate",
+        ):
+            self.assertTrue(payload[key], key)
+        self.assertEqual(payload["mission_candidate"], "KR-ST-008")
+        self.assertTrue(payload["mission_continuation_executed"])
+        self.assertFalse(payload["unrelated_single_symbol_research"])
+        self.assertFalse(payload["stale_symbol_used"])
+        self.assertFalse(payload["research_executed"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["mission_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["champion_promoted"])
+        self.assertFalse(payload["approval_bypassed"])
+        self.assertEqual(payload["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        first = production_typo_tolerant_research_continuation_release_check()
+        second = production_typo_tolerant_research_continuation_release_check()
         self.assertEqual(dict(first), dict(second))
 
 

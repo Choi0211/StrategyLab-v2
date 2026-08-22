@@ -373,6 +373,241 @@ _CANDIDATE_CONTINUATION_VERB_TOKENS: tuple[str, ...] = (
 )
 
 
+# KR-ST-008 production bug fix (typo-tolerant continuation routing):
+# "연구 계속햐두세요" (a Korean typo for "연구 계속해주세요") matched none
+# of _GENERIC_CONTINUATION_TOKENS above, so this predicate returned False
+# and the mission-continuation precedence hook in
+# gaon.runtime.llm_conversation._try_conversational_mvp never fired. The
+# message then fell into gaon.runtime.llm_conversation._autonomous_
+# learning_request_mode, an entirely SEPARATE token-matching classifier
+# that happened to (accidentally) recognize the SAME typo as "continue"
+# via a different, shorter token ("연구계속") - dispatching to the LEGACY
+# single-symbol autonomous-research path, which resolved its target
+# symbol from stale per-session conversational context and executed a
+# real research cycle on an unrelated symbol (013520) instead of
+# continuing the active market-wide candidate (KR-ST-008).
+#
+# Two things must both be true before any continuation - typo-tolerant or
+# not - is honored:
+# 1. It must not be a STOP/negation request (see
+#    is_stop_or_negation_request, checked FIRST, unconditionally, by
+#    every continuation-detection entry point below - "계속하지
+#    마세요"/"연구 중단해주세요" must never be treated as continuation no
+#    matter how closely edit distance would otherwise put them near a
+#    continuation phrase).
+# 2. Any typo-tolerant match is BOUNDED: it only compares a small,
+#    length-scaled edit distance against a short, explicit list of KNOWN
+#    continuation-verb stems (_TYPO_TOLERANT_CONTINUATION_STEMS) using a
+#    sliding window sized to each stem - never an open-ended fuzzy
+#    comparison against the whole message. This deliberately cannot match
+#    an unrelated sentence merely because it is short.
+# Independent-review fix: a bare "하지마"/"하지마세요" substring anywhere
+# in the message used to unconditionally count as STOP - but "하지 마"
+# ("don't do X") is generic Korean negation grammar that applies to
+# whatever X the speaker names, not specifically "stop researching". This
+# module's OWN production request text
+# (gaon.research.multi_symbol.PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT)
+# contains an unrelated safety disclaimer ("...config 변경은 하지 마") -
+# an instruction not to auto-mutate config, nothing to do with pausing
+# research - which used to false-positive as a full STOP, discarding the
+# entire multi-symbol research execution request it was attached to.
+# _STOP_NEGATION_SUFFIXES (the generic "don't do X" forms) therefore now
+# require one of _STOP_ANCHOR_TOKENS - an actual research/continuation
+# verb - to appear IMMEDIATELY before them (same anchor+suffix contract
+# as the typo-tolerant continuation matcher above, for the same reason:
+# the anchor is what makes this "stop RESEARCHING" instead of "don't do
+# some unrelated X"). "중단"/"그만" ("stop"/"quit") are inherently
+# unambiguous stop verbs and are kept as self-contained tokens requiring
+# no separate anchor.
+# Independent-review fix (second false positive): "진행"/"조사"/"실행"/
+# "검증" as anchors were speculative additions beyond what any real
+# reported STOP phrasing needs, and one of them reproduced this exact
+# module's OWN failure mode one level up - "주문 실행하지 마세요, 계속
+# 연구해주세요" (don't execute orders, [but] DO keep researching) matched
+# anchor "실행" and made this predicate return True unconditionally,
+# silently discarding the "계속 연구해주세요" continuation request in the
+# very same message - STOP's absolute priority becoming a liability
+# instead of a safety feature the moment the anchor stops being research-
+# specific. Narrowed to exactly the two words every real reported STOP
+# phrasing actually uses.
+_STOP_ANCHOR_TOKENS: tuple[str, ...] = ("연구", "계속")
+_STOP_NEGATION_SUFFIXES: tuple[str, ...] = (
+    "하지마세요",
+    "하지마요",
+    "하지마",
+    "하지말아주세요",
+    "하지말아줘",
+    "하지말라",
+)
+_STOP_STANDALONE_TOKENS: tuple[str, ...] = (
+    "중단해주세요",
+    "중단해줘",
+    "중단할게요",
+    "중단합니다",
+    "그만해주세요",
+    "그만해줘",
+    "그만두세요",
+    "그만할게요",
+)
+
+# Independent-review fix: matching a whole stem like "계속해주세요" with a
+# length-scaled edit-distance budget of 2 turned out to false-positive on
+# completely unrelated requests sharing the same 4-character "~해주세요"
+# politeness suffix - "설명해주세요" ("please explain") is edit-distance 2
+# from "계속해주세요" ("please continue") since only the 2-character verb
+# root differs (설명 vs 계속) and the suffix is identical. Splitting the
+# match into an ANCHOR (the distinctive continuation word itself - "계속"/
+# "이어서"/"이어가", tolerance capped at 1 char) that must be found FIRST,
+# followed IMMEDIATELY (no gap) by a SUFFIX match (the verb ending,
+# tolerance scaled to its length) closes this: "설명" is edit-distance 2
+# from "계속" (both characters differ) and fails the anchor check on its
+# own, regardless of how loose the suffix tolerance is - the anchor is
+# what makes this "continuation-specific" instead of "any request-shaped
+# sentence ending in 해주세요/해줘".
+# Independent-review fix (third false positive class): matching the
+# 2-character anchor "계속" with 1-char edit-distance tolerance was
+# itself too loose on its own - "계획해주세요" ("please plan"), "계산해
+# 주세요" ("please calculate"), and "계약해주세요" ("please contract")
+# are ALL edit-distance 1 from "계속" (only the second character differs:
+# 획/산/약 vs 속) and, followed by an exact "해주세요", all matched as a
+# false continuation - a real research cycle would fire for a message
+# that never asked to continue anything. A 2-character Korean anchor is
+# simply too short for 1-char tolerance to stay specific: nearly any
+# other 2-character verb root sharing its first character is within that
+# budget. Replaced with an explicit, closed list of the anchor's actual
+# known spellings (canonical + the two specific reported typos) instead
+# of a formula - exact substring matching only, no edit distance on the
+# anchor at all. This is deliberately narrower than "any word close to
+# 계속": it recognizes precisely the typos real production has reported,
+# never anything merely nearby in edit-distance space.
+_CONTINUATION_ANCHOR_TOKENS: tuple[str, ...] = ("계속", "계솟", "계쏙", "이어서", "이어가")
+# Independent-review fix (second occurrence of the same collision class):
+# "진행해주세요"/"진행해줘" as SUFFIX entries had the identical problem one
+# level up - a 6-char suffix with budget 2 matches ANY unrelated 2-char
+# verb root sharing the "~해주세요" ending, e.g. "이어서 설명해주세요"
+# ("please continue *explaining*" - a real H3 regression fixture, see
+# tests/integration/test_persistent_research_mission_conversation.py)
+# matched anchor "이어서" then, via the old "진행해주세요" suffix entry,
+# treated "설명해주세요" as edit-distance 2 from "진행해주세요" (only the
+# 2-char root 설명/진행 differs). Removed: "계속 진행해주세요"/"이어서
+# 진행해주세요" style phrasing is already covered by the EXACT
+# _GENERIC_CONTINUATION_TOKENS entries ("계속진행"/"계속진행해"/
+# "이어서진행" - substring matches, so the polite ending's exact wording
+# never needs to be checked there). Only short, atomic verb endings remain
+# here, each still budget-scaled to ITS OWN length - not the length of a
+# whole compound phrase - which is what keeps a 2-character unrelated verb
+# root from ever fitting inside the tolerance.
+_CONTINUATION_SUFFIX_TOKENS: tuple[str, ...] = (
+    "해주세요",
+    "해줘",
+    "해달라",
+)
+
+
+def is_stop_or_negation_request(text: str) -> bool:
+    """True for an explicit instruction to STOP or not perform research
+    ("연구 계속하지 마세요", "연구 중단해주세요", "이제 연구 그만해주세요").
+    This has absolute priority over every continuation signal (exact,
+    typo-tolerant, or candidate-robustness) - see the callers below and
+    ``gaon.runtime.llm_conversation._try_conversational_mvp``'s top-level
+    STOP gate, which never executes any research tool when this is True.
+
+    A generic "하지 마"-family negation suffix only counts when it is
+    anchored to an actual research/continuation verb immediately before
+    it (see ``_STOP_ANCHOR_TOKENS``/``_STOP_NEGATION_SUFFIXES`` above) -
+    "하지 마" alone is ordinary Korean negation grammar for whatever the
+    speaker names, not specifically about research (see the production
+    false-positive this closes: an unrelated "config 변경은 하지 마"
+    safety disclaimer inside a real multi-symbol research request used to
+    make this predicate discard the entire request as a STOP).
+    "중단"/"그만" ("stop"/"quit") are unambiguous on their own and need no
+    anchor. The anchor match itself is deliberately EXACT, never edit-
+    distance-tolerant like the continuation anchor is: a tolerant STOP
+    anchor was tried and reverted (see the release-check regression
+    covering it) - "조정" ("adjust") is edit-distance 1 from the "조사"
+    anchor, which made "파라미터를 조정하지 마세요" ("don't adjust the
+    parameters") a false STOP. A false STOP silently discards a real
+    research request the user never asked to cancel, which is a worse
+    failure mode than a false negative here (an unrecognized typo'd STOP
+    still reaches the mission-aware fail-safe elsewhere rather than
+    silently running research on a stale symbol).
+
+    Does not attempt to resolve Korean double-negation ("그만하지
+    마세요" = "don't stop", i.e. actually a continuation) - none of the
+    real reported phrasings require that, and getting it wrong silently
+    would be worse than not attempting it.
+    """
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    if _contains_any(normalized, _STOP_STANDALONE_TOKENS):
+        return True
+    for anchor in _STOP_ANCHOR_TOKENS:
+        search_from = 0
+        while True:
+            idx = normalized.find(anchor, search_from)
+            if idx == -1:
+                break
+            remainder = normalized[idx + len(anchor):]
+            if any(remainder.startswith(suffix) for suffix in _STOP_NEGATION_SUFFIXES):
+                return True
+            search_from = idx + 1
+    return False
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    previous = list(range(len(b) + 1))
+    for i, char_a in enumerate(a, start=1):
+        current = [i] + [0] * len(b)
+        for j, char_b in enumerate(b, start=1):
+            cost = 0 if char_a == char_b else 1
+            current[j] = min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + cost,
+            )
+        previous = current
+    return previous[-1]
+
+
+def _is_typo_tolerant_continuation_match(normalized: str) -> bool:
+    """Bounded typo tolerance ONLY against known continuation ANCHOR+
+    SUFFIX pairs (never the whole message, never a bare suffix alone):
+    finds an EXACT occurrence of one of ``_CONTINUATION_ANCHOR_TOKENS``
+    (already a closed list including known typo spellings - no edit
+    distance on the anchor itself, see that constant's comment for why),
+    then requires the text immediately following it (no gap) to resemble
+    one of ``_CONTINUATION_SUFFIX_TOKENS`` within a small, length-scaled
+    edit distance. The anchor match is what makes this continuation-
+    specific; a generic request sentence sharing only the polite
+    "~해주세요"/"~해줘" ending (e.g. "설명해주세요") never contains "계속"/
+    "이어서" (or one of their listed typo spellings) immediately before
+    that ending, so it never reaches the suffix check at all."""
+    for anchor in _CONTINUATION_ANCHOR_TOKENS:
+        anchor_len = len(anchor)
+        search_from = 0
+        while True:
+            start = normalized.find(anchor, search_from)
+            if start == -1:
+                break
+            remainder = normalized[start + anchor_len:start + anchor_len + 8]
+            for suffix in _CONTINUATION_SUFFIX_TOKENS:
+                suffix_len = len(suffix)
+                if suffix_len > len(remainder):
+                    continue
+                budget = 1 if suffix_len <= 3 else 2
+                if _levenshtein(remainder[:suffix_len], suffix) <= budget:
+                    return True
+            search_from = start + 1
+    return False
+
+
 def is_candidate_robustness_continuation_request(text: str) -> bool:
     """True for "후보 A 계속 검증해줘" / "OOS 검증해줘" / "walk-forward까지
     진행해줘" style requests to continue the ACTIVE strategy candidate's
@@ -380,6 +615,8 @@ def is_candidate_robustness_continuation_request(text: str) -> bool:
     production defect this closes."""
     normalized = _norm(text)
     if not normalized:
+        return False
+    if is_stop_or_negation_request(text):
         return False
     mentions_candidate_or_stage = _contains_any(normalized, _CANDIDATE_REFERENCE_TOKENS) or _contains_any(
         normalized, _ROBUSTNESS_STAGE_TOKENS
@@ -401,9 +638,20 @@ def is_generic_continuation_request(text: str) -> bool:
     before treating a match here as a mission continuation - this predicate
     alone only judges the presence of a research-continuation phrase, not
     the full conversational intent.
+
+    KR-ST-008 production bug fix: also recognizes a BOUNDED typo-tolerant
+    match against known continuation-verb stems (see
+    ``_is_typo_tolerant_continuation_match``) as a last resort, after
+    every other check - see the module note above
+    ``_TYPO_TOLERANT_CONTINUATION_STEMS``. STOP/negation
+    (``is_stop_or_negation_request``) is checked FIRST, unconditionally,
+    and short-circuits this to False before any continuation signal -
+    exact, typo-tolerant, or candidate-robustness - is even considered.
     """
     normalized = _norm(text)
     if not normalized:
+        return False
+    if is_stop_or_negation_request(text):
         return False
     if normalized == "계속":
         # A message that is *only* "계속" ("continue") and nothing else -
@@ -418,7 +666,9 @@ def is_generic_continuation_request(text: str) -> bool:
         return True
     if is_candidate_robustness_continuation_request(text):
         return True
-    return _contains_any(normalized, _GENERIC_CONTINUATION_TOKENS)
+    if _contains_any(normalized, _GENERIC_CONTINUATION_TOKENS):
+        return True
+    return _is_typo_tolerant_continuation_match(normalized)
 
 
 # Patch 8.8 production bug fix: real VPS Telegram production acceptance
@@ -4356,7 +4606,7 @@ def production_candidate_read_only_routing_release_check() -> Mapping[str, objec
         "case_a_reports_breadth_and_performance_sample_separately": "breadth: 5 symbols / 41 trades" in read_response.text
         and "performance sample: 5 symbols / 41 trades" in read_response.text,
         "case_a_reports_economic_viability_status_and_reason": "status: needs_more_evidence" in read_response.text
-        and "reason: insufficient_breadth_for_economic_decision" in read_response.text,
+        and "reason: insufficient_performance_sample_for_economic_decision" in read_response.text,
         "case_a_reports_required_performance_sample_floor": "required performance sample: 20 symbols / 120 trades" in read_response.text,
         "case_a_never_mutates_mission": (
             mission_after_read is not None
@@ -4390,6 +4640,255 @@ def production_candidate_read_only_routing_release_check() -> Mapping[str, objec
         "strategy_mutated": False,
         "mission_mutated": False,
         "research_executed": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_typo_tolerant_research_continuation_release_check() -> Mapping[str, object]:
+    """Real production defect this reproduces and proves fixed: a plain
+    Korean typo in an otherwise unambiguous continuation request -
+    "연구 계속햐두세요" ("해주세요" typo'd to "햐두세요") - matched none of
+    is_generic_continuation_request's exact tokens, so the mission-
+    continuation precedence hook in
+    LLMConversationBrain._try_conversational_mvp never fired. The message
+    then fell into gaon.runtime.llm_conversation._autonomous_learning_
+    request_mode, a SEPARATE token-matching classifier that happened to
+    (accidentally) recognize the same typo as "continue" via a different,
+    shorter substring ("연구계속") - dispatching to the LEGACY single-
+    symbol autonomous-research path, which resolved its target symbol
+    from stale per-session conversational context (013520) and executed a
+    real research cycle on an unrelated symbol instead of continuing the
+    active market-wide candidate (KR-ST-008).
+
+    Runs the REAL production stack (TelegramConversationAgent ->
+    LLMConversationBrain), mocking only the tool executor, and proves the
+    full priority order (STOP/NEGATION > READ-ONLY > EXPLICIT
+    CONTINUATION > TYPO-TOLERANT CONTINUATION > other routing):
+
+    - a bounded-typo-tolerant continuation request, sent while stale
+      single-symbol conversational context (013520) is present, continues
+      the ACTIVE candidate (KR-ST-008) via the canonical mission cycle -
+      never the stale symbol, never an unrelated single-symbol research
+      run
+    - an explicit STOP/negation request ("연구 계속하지 마세요") executes
+      ZERO research tool calls, even though it contains the same
+      "연구계속" substring the legacy classifier used to (wrongly)
+      recognize as continuation
+    """
+    from gaon.knowledge.strategy_candidate import new_candidate, next_blocker_driven_research_action, record_breadth_progress
+    from gaon.runtime.config import GaonRuntimeConfig
+    from gaon.runtime.conversation import ConversationInput
+    from gaon.runtime.llm_conversation import LLMConversationRequest
+    from gaon.runtime.llm_tools import ToolResult
+    from gaon.runtime.storage import RuntimeStateStore
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    _RESEARCH_TOOL_NAMES = ("multi_symbol_research", "autonomous_learning_research", "autonomous_research_cycle")
+
+    class _Executor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def execute(self, request):
+            args = dict(request.arguments)
+            self.calls.append((request.tool_name, args))
+            if request.tool_name == "multi_symbol_research":
+                symbols = list(args.get("symbols") or [])
+                evidence = [
+                    {
+                        "symbol": symbol,
+                        "eligible": True,
+                        "trade_count": 5,
+                        "metrics": {"trade_count": 5, "total_return": 0.01, "mdd": 0.1},
+                        "evidence_id": f"evidence:{symbol}",
+                        "quality_status": "pass",
+                        "source": "release-check",
+                        "fixture_backed": False,
+                    }
+                    for symbol in symbols
+                ]
+                return ToolResult(
+                    "multi_symbol_research",
+                    "success",
+                    {
+                        "schema_version": 1,
+                        "evidence": evidence,
+                        "summary": {"aggregate_trade_count": 5 * len(symbols)},
+                        "exclusion_diagnostics": {"by_category": {}, "excluded_symbols": []},
+                        "adaptive_sampling": {},
+                        "korean_report": "release-check multi-symbol research report",
+                        "candidate_generalization": {"decision": "insufficient_evidence", "winner_id": None, "rows": [], "reason": "release-check"},
+                        "final_recommendation": "release-check",
+                    },
+                )
+            symbol = str(args.get("symbol") or "286940")
+            grade = {
+                "multi_symbol_validation": {"status": "multi_symbol_partial", "executed": True},
+                "out_of_sample": {"status": "not_run", "executed": False},
+            }
+            return ToolResult(
+                request.tool_name,
+                "success",
+                {
+                    "schema_version": 2,
+                    "tool": request.tool_name,
+                    "mode": str(args.get("mode") or "research"),
+                    "symbol": symbol,
+                    "request_text": str(args.get("request_text") or ""),
+                    "autonomous_learning_v2": {
+                        "research_director_decision": {"action": "collect_more_evidence", "reason": "release-check", "terminal": False},
+                        "research_director_steps_used": 1,
+                        "autonomous_quant_partner": {"production_grade_validation": grade},
+                    },
+                    "strategy_mutated": False,
+                    "order_executed": False,
+                    "automatic_champion_promotion": False,
+                    "broker_order_called": False,
+                    "kis_order_called": False,
+                    "safety": "pass",
+                },
+            )
+
+    def _research_tool_call_count(executor: "_Executor") -> int:
+        return sum(1 for name, _ in executor.calls if name in _RESEARCH_TOOL_NAMES)
+
+    now = "2026-08-23T00:00:00Z"
+    store = RuntimeStateStore(":memory:")
+    try:
+        executor = _Executor()
+        config = GaonRuntimeConfig(assistant_enabled=False)
+        agent = TelegramConversationAgent(config, store._connection, tool_executor=executor)
+
+        agent.handle(ConversationInput("telegram", "100", "100", "m0", "안녕하세요 가온", now))
+
+        stale_seed_request = LLMConversationRequest(
+            "telegram:100", "telegram:100", "telegram", "seed context", "2026-08-23T00:00:30Z", "telegram:100:seed-context"
+        )
+        agent._brain._remember_autonomous_learning_v2_context(
+            stale_seed_request,
+            {"symbol": "013520", "baseline": {}, "run_id": "stale-single-symbol-run"},
+            "영하님, 013520 전략을 다시 연구했습니다. (release-check stale context seed)",
+        )
+
+        # The real reported KR-ST-008 shape right before the typo: breadth
+        # 34 symbols/228-ish trades, 13 symbols/79-ish trades of REAL
+        # performance evidence (below the 20/120 economic-decision floor),
+        # every robustness stage already passing - next action EXPAND_SAMPLE.
+        candidate = new_candidate("breakout_slow_trend_confirmed", sequence=8, now=now)
+        untraded = {f"ZT{i:02d}": {"eligible": True, "trade_count": 0} for i in range(21)}
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=21,
+            valid=21,
+            trade_count=0,
+            evidence_symbols=tuple(untraded),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=now,
+            evidence_details=untraded,
+        )
+        real = {f"R{i:02d}": {"eligible": True, "trade_count": 6, "metrics": {"total_return": 0.02, "mdd": 0.2}} for i in range(13)}
+        candidate = record_breadth_progress(
+            candidate,
+            attempted=13,
+            valid=13,
+            trade_count=79,
+            evidence_symbols=tuple(real),
+            excluded_symbols=(),
+            provider_blocked=False,
+            now=now,
+            evidence_details=real,
+        )
+        candidate = replace(
+            candidate,
+            validation_stage_status={
+                "out_of_sample": "pass",
+                "regime_validation": "pass",
+                "walk_forward": "pass",
+                "transaction_cost_stress": "cost_stable",
+                "parameter_sensitivity": "stable",
+                "monte_carlo": "pass",
+            },
+        )
+        planned_action, planned_reason = next_blocker_driven_research_action(candidate)
+        mission = ResearchMission(
+            mission_id="research-mission:typo-tolerant-continuation-check",
+            market="KR",
+            universe_scope=MissionUniverseScope.MARKET_WIDE,
+            symbols=(),
+            exchanges=DEFAULT_KR_EXCHANGES,
+            strategy_family="short_term_daytrade",
+            improve_return=True,
+            improve_safety=True,
+            baseline_comparison="registered_strategy",
+            target_promotion_ready_candidates=3,
+            current_promotion_ready_candidates=0,
+            promotion_ready_candidates=(),
+            explored_symbols=(),
+            status=MissionStatus.ACTIVE,
+            blocked_reason=None,
+            cycles_completed=1,
+            created_at=now,
+            updated_at=now,
+            originating_request="release-check",
+            candidates=(candidate.to_json(),),
+            active_candidate_id=candidate.candidate_id,
+        )
+        mission_seed_request = LLMConversationRequest(
+            "telegram:100", "telegram:100", "telegram", "seed mission", "2026-08-23T00:00:31Z", "telegram:100:seed-mission"
+        )
+        agent._brain._remember_mission(mission_seed_request, mission)
+
+        # ------------------------------------------------------------
+        # The typo-tolerant continuation itself.
+        # ------------------------------------------------------------
+        calls_before_typo = _research_tool_call_count(executor)
+        typo_response = agent.handle(ConversationInput("telegram", "100", "100", "m1", "연구 계속햐두세요", "2026-08-23T00:01:00Z"))
+        calls_after_typo = _research_tool_call_count(executor)
+        mission_after_typo = agent._brain._mission_for("telegram:100")
+
+        # ------------------------------------------------------------
+        # STOP/negation must still take absolute priority, even though it
+        # shares the "연구계속" substring the legacy classifier used to
+        # (wrongly) recognize as continuation.
+        # ------------------------------------------------------------
+        calls_before_stop = _research_tool_call_count(executor)
+        stop_response = agent.handle(ConversationInput("telegram", "100", "100", "m2", "연구 계속하지 마세요", "2026-08-23T00:02:00Z"))
+        calls_after_stop = _research_tool_call_count(executor)
+        mission_after_stop = agent._brain._mission_for("telegram:100")
+    finally:
+        store.close()
+
+    checks = {
+        "planned_action_was_expand_sample": planned_action == "EXPAND_SAMPLE",
+        "typo_continuation_executes_mission_cycle": calls_after_typo > calls_before_typo,
+        "typo_continuation_names_correct_candidate": candidate.candidate_id in typo_response.text,
+        "typo_continuation_never_mentions_stale_symbol": "013520" not in typo_response.text,
+        "typo_continuation_preserves_active_candidate": (
+            mission_after_typo is not None and mission_after_typo.active_candidate_id == candidate.candidate_id
+        ),
+        "stop_request_executes_zero_research_tool_calls": calls_after_stop == calls_before_stop,
+        "stop_request_never_mentions_stale_symbol": "013520" not in stop_response.text,
+        "stop_request_never_changes_active_candidate": (
+            mission_after_stop is not None and mission_after_stop.active_candidate_id == candidate.candidate_id
+        ),
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"typo-tolerant research continuation release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "mission_candidate": candidate.candidate_id,
+        "mission_continuation_executed": calls_after_typo > calls_before_typo,
+        "unrelated_single_symbol_research": "013520" in typo_response.text,
+        "stale_symbol_used": "013520" in typo_response.text,
+        "research_executed": calls_after_stop > calls_before_stop,
+        "strategy_mutated": False,
+        "mission_mutated": False,
         "order_executed": False,
         "champion_promoted": False,
         "approval_bypassed": False,
