@@ -6,7 +6,10 @@ from gaon.research.multi_symbol import (
     DEFAULT_CURATED_SYMBOLS,
     PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT,
     AutonomousMultiSymbolResearchOrchestrator,
+    CandidateGeneralizationDecision,
+    CandidateSymbolEvidence,
     KRXResearchUniverseResolver,
+    SymbolResearchEvidence,
     aggregate_symbol_evidence,
     compare_candidate_generalization,
     multi_symbol_research_history_payload,
@@ -23,6 +26,39 @@ from gaon.runtime.routing_debug import telegram_routing_debug_payload
 
 NOW = "2026-07-27T00:00:00Z"
 REQUEST = "20일 고가 돌파 종가 > MA20 > MA60 거래량 20일 평균 이상 손절 -5% 10일 저점 이탈 청산"
+
+
+def _symbol_evidence(symbol: str, *, total_return: float, mdd: float, trades: int) -> SymbolResearchEvidence:
+    return SymbolResearchEvidence(
+        evidence_id=f"evidence:{symbol}",
+        symbol=symbol,
+        eligible=True,
+        blocked_reason=None,
+        dataset_id=f"dataset:{symbol}",
+        dataset_fingerprint=f"dataset-fp:{symbol}",
+        quality_status="pass",
+        provider="fixture:test",
+        source="fixture:test",
+        fixture_backed=True,
+        rows=500,
+        provider_gap_dates=(),
+        provider_ohlc_anomaly_dates=(),
+        provider_zero_volume_anomaly_dates=(),
+        blocking_findings=(),
+        metrics={"total_return": total_return, "mdd": mdd, "trade_count": trades},
+        backtest_result=None,
+        warnings=(),
+    )
+
+
+def _candidate_evidence(candidate_id: str, symbol: str, *, total_return: float, mdd: float, trades: int) -> CandidateSymbolEvidence:
+    return CandidateSymbolEvidence(
+        candidate_id=candidate_id,
+        symbol=symbol,
+        eligible=True,
+        metrics={"total_return": total_return, "mdd": mdd, "trade_count": trades},
+        backtest_result=None,
+    )
 
 
 class MultiSymbolResearchTests(unittest.TestCase):
@@ -175,6 +211,50 @@ class MultiSymbolResearchTests(unittest.TestCase):
         self.assertEqual(result["summary"]["total_symbols"], 5)
         self.assertEqual(result["summary"]["sample_confidence"], "high")
         self.assertEqual(result["candidate_generalization"]["decision"], "original_preferred")
+
+    def test_candidate_return_improvement_with_smaller_trade_sample_is_not_hidden_as_original_stability(self) -> None:
+        original = (
+            _symbol_evidence("005930", total_return=-0.30, mdd=0.35, trades=20),
+            _symbol_evidence("000660", total_return=-0.20, mdd=0.31, trades=20),
+            _symbol_evidence("005380", total_return=-0.167, mdd=0.293, trades=20),
+            _symbol_evidence("035420", total_return=-0.10, mdd=0.25, trades=19),
+            _symbol_evidence("051910", total_return=-0.05, mdd=0.20, trades=19),
+        )
+        candidate_a = (
+            _candidate_evidence("candidate-a", "005930", total_return=-0.10, mdd=0.30, trades=12),
+            _candidate_evidence("candidate-a", "000660", total_return=-0.07, mdd=0.26, trades=11),
+            _candidate_evidence("candidate-a", "005380", total_return=-0.048, mdd=0.23, trades=11),
+            _candidate_evidence("candidate-a", "035420", total_return=-0.02, mdd=0.21, trades=11),
+            _candidate_evidence("candidate-a", "051910", total_return=0.01, mdd=0.19, trades=11),
+        )
+
+        result = compare_candidate_generalization(original, candidate_a)
+
+        self.assertEqual(result.decision, CandidateGeneralizationDecision.NO_CLEAR_WINNER)
+        self.assertIsNone(result.winner_id)
+        self.assertIn("median return improved", result.reason)
+        self.assertIn("aggregate trade sample decreased", result.reason)
+
+    def test_candidate_preferred_requires_return_breadth_trade_sample_and_mdd(self) -> None:
+        original = (
+            _symbol_evidence("005930", total_return=-0.30, mdd=0.35, trades=20),
+            _symbol_evidence("000660", total_return=-0.20, mdd=0.31, trades=20),
+            _symbol_evidence("005380", total_return=-0.167, mdd=0.293, trades=20),
+            _symbol_evidence("035420", total_return=-0.10, mdd=0.25, trades=19),
+            _symbol_evidence("051910", total_return=-0.05, mdd=0.20, trades=19),
+        )
+        candidate_a = (
+            _candidate_evidence("candidate-a", "005930", total_return=-0.10, mdd=0.30, trades=20),
+            _candidate_evidence("candidate-a", "000660", total_return=-0.07, mdd=0.26, trades=20),
+            _candidate_evidence("candidate-a", "005380", total_return=-0.048, mdd=0.23, trades=20),
+            _candidate_evidence("candidate-a", "035420", total_return=-0.02, mdd=0.21, trades=19),
+            _candidate_evidence("candidate-a", "051910", total_return=0.01, mdd=0.19, trades=19),
+        )
+
+        result = compare_candidate_generalization(original, candidate_a)
+
+        self.assertEqual(result.decision, CandidateGeneralizationDecision.CANDIDATE_PREFERRED)
+        self.assertEqual(result.winner_id, "candidate-a")
 
 
 if __name__ == "__main__":

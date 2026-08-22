@@ -3348,6 +3348,119 @@ def production_research_action_cycle_resolution_release_check() -> Mapping[str, 
     }
 
 
+def production_terminal_validation_retry_boundary_release_check() -> Mapping[str, object]:
+    """Regression guard for progress=true terminal validation replay.
+
+    Production KR-ST-007 showed that RUN_OOS could progress from a partial
+    state into ``fail_underperformed_baseline`` and then become eligible
+    again after a no-op RUN_REGIME. The OOS action had indeed progressed,
+    but it consumed the current material evidence revision. Under that same
+    revision the planner must move to another blocker, sample expansion, or
+    rotation instead of rerunning OOS.
+    """
+    from gaon.knowledge.strategy_candidate import (
+        new_candidate,
+        next_blocker_driven_research_action,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+
+    now = "2026-08-22T00:00:00Z"
+    symbols = ("005930", "000660", "005380", "035420", "051910")
+    candidate = new_candidate("breakout_fast_trend_confirmed", sequence=7, now=now)
+    candidate = record_breadth_progress(
+        candidate,
+        attempted=5,
+        valid=5,
+        trade_count=98,
+        evidence_symbols=symbols,
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+    )
+    candidate = record_robustness_progress(
+        candidate,
+        director_action="collect_more_evidence",
+        terminal=False,
+        validation_stage_status={
+            "out_of_sample": "partial",
+            "walk_forward": "partial",
+            "transaction_cost_stress": "cost_fragile",
+            "regime_validation": "partial",
+            "multi_symbol_validation": "multi_symbol_partial",
+            "parameter_sensitivity": "stable",
+            "monte_carlo": "not_run_insufficient_primary_sample",
+        },
+        symbol="005930",
+        reference="action=SEED|symbol=005930|stage=none|status=partial",
+        now=now,
+    )
+    turn1_action, turn1_reason = next_blocker_driven_research_action(candidate)
+    after_oos = record_robustness_progress(
+        candidate,
+        director_action="hold",
+        terminal=False,
+        validation_stage_status={"out_of_sample": "fail_underperformed_baseline"},
+        symbol="005930",
+        reference="action=RUN_OOS|symbol=005930|stage=out_of_sample|status=fail_underperformed_baseline",
+        now=now,
+    )
+    turn2_action, turn2_reason = next_blocker_driven_research_action(after_oos)
+    after_regime = record_robustness_progress(
+        after_oos,
+        director_action="hold",
+        terminal=False,
+        validation_stage_status={"regime_validation": "partial"},
+        symbol="005930",
+        reference="action=RUN_REGIME|symbol=005930|stage=regime_validation|status=partial",
+        now=now,
+    )
+    turn3_action, turn3_reason = next_blocker_driven_research_action(after_regime)
+    restored = type(after_regime).from_json(after_regime.to_json())
+    restart_action, restart_reason = next_blocker_driven_research_action(restored)
+    revised = record_breadth_progress(
+        after_regime,
+        attempted=6,
+        valid=6,
+        trade_count=120,
+        evidence_symbols=(*symbols, "068270"),
+        excluded_symbols=(),
+        provider_blocked=False,
+        now=now,
+    )
+    revised_action, revised_reason = next_blocker_driven_research_action(revised)
+
+    checks = {
+        "turn1_oos": turn1_action == "RUN_OOS" and turn1_reason == "out_of_sample_blocker",
+        "turn2_regime": turn2_action == "RUN_REGIME" and turn2_reason == "regime_blocker",
+        "terminal_oos_not_replanned_same_state": turn3_action != "RUN_OOS" and turn3_reason != "out_of_sample_blocker",
+        "untried_blocker_selected": turn3_action in {"RUN_WALK_FORWARD", "RUN_COST_STRESS", "RUN_MONTE_CARLO", "EXPAND_SAMPLE", "ROTATE_CANDIDATE"},
+        "restart_preserves_terminal_boundary": restart_action == turn3_action and restart_action != "RUN_OOS",
+        "material_evidence_revision_allows_oos_again": revised_action == "RUN_OOS" and revised_reason == "out_of_sample_blocker",
+        "result_state_key_persisted": any(
+            item.get("action") == "RUN_OOS" and item.get("result_state_key")
+            for item in restored.validation_attempt_history
+        ),
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"terminal validation retry boundary release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "turn1_action": turn1_action,
+        "turn2_action": turn2_action,
+        "turn3_action": turn3_action,
+        "restart_action": restart_action,
+        "revised_action": revised_action,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
 def production_strategy_space_expansion_release_check() -> Mapping[str, object]:
     """Regression guard for exhausted strategy-family production missions.
 

@@ -39,6 +39,7 @@ from gaon.knowledge.research_mission import (
     record_promotion_candidate,
     update_candidate,
     production_research_action_cycle_resolution_release_check,
+    production_terminal_validation_retry_boundary_release_check,
     production_promotion_target_consistency_release_check,
     production_persistent_research_mission_release_check,
 )
@@ -1061,6 +1062,36 @@ class ResearchActionCycleResolutionReleaseCheckTests(unittest.TestCase):
     def test_release_check_is_deterministic_across_runs(self) -> None:
         first = production_research_action_cycle_resolution_release_check()
         second = production_research_action_cycle_resolution_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
+class TerminalValidationRetryBoundaryReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes_deterministically(self) -> None:
+        result = production_terminal_validation_retry_boundary_release_check()
+        for key in (
+            "turn1_oos",
+            "turn2_regime",
+            "terminal_oos_not_replanned_same_state",
+            "untried_blocker_selected",
+            "restart_preserves_terminal_boundary",
+            "material_evidence_revision_allows_oos_again",
+            "result_state_key_persisted",
+        ):
+            self.assertTrue(result[key], key)
+        self.assertEqual(result["turn1_action"], "RUN_OOS")
+        self.assertEqual(result["turn2_action"], "RUN_REGIME")
+        self.assertNotEqual(result["turn3_action"], "RUN_OOS")
+        self.assertNotEqual(result["restart_action"], "RUN_OOS")
+        self.assertEqual(result["revised_action"], "RUN_OOS")
+        self.assertFalse(result["strategy_mutated"])
+        self.assertFalse(result["order_executed"])
+        self.assertFalse(result["champion_promoted"])
+        self.assertFalse(result["approval_bypassed"])
+        self.assertEqual(result["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        first = production_terminal_validation_retry_boundary_release_check()
+        second = production_terminal_validation_retry_boundary_release_check()
         self.assertEqual(dict(first), dict(second))
 
 
