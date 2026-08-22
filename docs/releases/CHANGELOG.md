@@ -1,5 +1,23 @@
 # Changelog
 
+## Hotfix: Terminal Validation Retry Boundary
+
+- Fixed a production planner regression where `RUN_OOS` could be planned
+  again after it had already produced a decisive
+  `fail_underperformed_baseline` result under the same material evidence
+  revision.
+- Extended validation attempt history with `result_state_key`, so both
+  no-progress attempts and progress-to-terminal-result attempts consume the
+  current evidence revision until new material evidence appears.
+- Added
+  `gaon-production-terminal-validation-retry-boundary-release-check`.
+- Clarified multi-symbol candidate comparison by requiring candidate
+  preference to preserve return, breadth, trade sample, and MDD evidence,
+  and by rendering the structured selection reason.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, strategy mutation, or fabricated
+  metrics added.
+
 ## Hotfix: Research Action Cycle Resolution
 
 - Added persisted, bounded `validation_attempt_history` to

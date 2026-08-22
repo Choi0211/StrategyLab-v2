@@ -2,6 +2,33 @@
 
 Status: Passed
 
+## Hotfix: Terminal Validation Retry Boundary
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\knowledge\strategy_candidate.py src\gaon\knowledge\research_mission.py src\gaon\runtime\cli.py src\gaon\research\multi_symbol.py tests\unit\test_strategy_candidate.py tests\unit\test_research_mission.py tests\unit\test_multi_symbol_research.py`: PASS
+  - `python -m unittest tests.unit.test_strategy_candidate tests.unit.test_research_mission.TerminalValidationRetryBoundaryReleaseCheckTests tests.unit.test_multi_symbol_research.MultiSymbolResearchTests -q`: PASS, 91 tests
+  - `python -m gaon.runtime.cli gaon-production-terminal-validation-retry-boundary-release-check`: PASS
+  - Existing production release checks:
+    `gaon-production-research-action-cycle-resolution-release-check`,
+    `gaon-production-research-action-execution-handoff-release-check`,
+    `gaon-production-research-action-persistence-release-check`,
+    `gaon-production-canonical-candidate-handoff-release-check`,
+    `gaon-production-canonical-research-read-model-release-check`,
+    `gaon-production-autonomous-research-completion-release-check`,
+    `gaon-production-strategy-space-expansion-release-check`,
+    `gaon-production-cumulative-sample-persistence-release-check`,
+    `gaon-production-sample-exhaustion-candidate-decision-release-check`,
+    and `gaon-production-promotion-target-consistency-release-check`: PASS
+- Required full verification:
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1202 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 260 tests
+  - `python scripts\verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS; Windows line-ending warnings only
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated evidence.
+
 ## Hotfix: Research Action Cycle Resolution
 
 - Targeted local verification:

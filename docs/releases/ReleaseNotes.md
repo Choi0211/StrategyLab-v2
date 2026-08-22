@@ -3,6 +3,33 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Hotfix: Terminal Validation Retry Boundary
+
+Production KR-ST-007 progression showed `RUN_OOS` being planned again
+after OOS had already progressed into the decisive
+`fail_underperformed_baseline` state and a subsequent `RUN_REGIME`
+attempt made no material progress.
+
+Validation attempt history now records both the pre-attempt material state
+and the post-attempt result state. Blocker selection treats the action as
+consumed under either state, so a decisive validation result cannot be
+rerun under the same evidence revision merely because another blocker was
+attempted in between. Once new material evidence appears, the validation
+action can become eligible again.
+
+The multi-symbol candidate comparison report also exposes structured
+selection reasons. If a candidate improves median return but reduces the
+aggregate trade sample, Gaon reports mixed evidence instead of presenting
+an unsupported stability conclusion.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-terminal-validation-retry-boundary-release-check
+```
+
+Schema remains v36 and safety boundaries are unchanged.
+
 ## Hotfix: Research Action Cycle Resolution
 
 Production autonomous research progression could still oscillate across

@@ -806,6 +806,16 @@ def record_robustness_progress(
     attempt_action = _action_from_reference(reference) or director_action
     attempt_stage = ACTION_STAGE_KEYS.get(attempt_action, "")
     state_key = candidate_material_evidence_key(candidate)
+    result_state_key = candidate_material_evidence_key(
+        replace(
+            candidate,
+            status=status,
+            validation_stage_status=merged_stage_status,
+            robustness_evidence_symbols=robustness_evidence_symbols,
+            robustness_attempt_count=robustness_attempt_count,
+            last_validation_symbol=last_validation_symbol,
+        )
+    )
     validation_attempt_history = candidate.validation_attempt_history
     if attempt_action in ACTION_STAGE_KEYS:
         validation_attempt_history = (
@@ -815,6 +825,7 @@ def record_robustness_progress(
                 "stage": attempt_stage,
                 "symbol": symbol or "",
                 "state_key": state_key,
+                "result_state_key": result_state_key,
                 "progressed": progressed,
                 "reference": reference or "",
             },
@@ -947,7 +958,7 @@ def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> t
         return "EXPAND_SAMPLE", "need_new_independent_evidence_symbols"
     if sample_exhausted and not candidate.has_sufficient_universe_evidence:
         return "ROTATE_CANDIDATE", candidate.sample_exhaustion_reason or "sample_pool_exhausted_without_sufficient_evidence"
-    exhausted_actions = _no_progress_actions_for_current_evidence_state(candidate)
+    exhausted_actions = _attempted_actions_for_current_evidence_state(candidate)
     for blocker, action, reason in (
         ("out_of_sample", "RUN_OOS", "out_of_sample_blocker"),
         ("regime_validation", "RUN_REGIME", "regime_blocker"),
@@ -981,12 +992,25 @@ def next_blocker_driven_research_action(candidate: StrategyCandidateRecord) -> t
     return "RANK_CANDIDATES", "no_blocking_validation_stage_remaining"
 
 
-def _no_progress_actions_for_current_evidence_state(candidate: StrategyCandidateRecord) -> frozenset[str]:
+def _attempted_actions_for_current_evidence_state(candidate: StrategyCandidateRecord) -> frozenset[str]:
+    """Validation actions already consumed under this evidence revision.
+
+    A prior action may have ``progressed=True`` because it changed a stage
+    from ``not_run``/``partial`` into a decisive failure such as
+    ``fail_underperformed_baseline``. That action still consumed the current
+    evidence revision: rerunning it immediately after another no-op blocker
+    would be the same research, not new evidence. We therefore match both
+    the pre-attempt state key used by no-progress attempts and the
+    post-attempt ``result_state_key`` introduced for decisive/progressing
+    validation outcomes. Once breadth, sample, fingerprint, or validation
+    evidence changes, the material key changes and the action can become
+    eligible again.
+    """
     state_key = candidate_material_evidence_key(candidate)
     return frozenset(
         str(item.get("action"))
         for item in candidate.validation_attempt_history
-        if str(item.get("state_key", "")) == state_key and item.get("progressed") is False
+        if str(item.get("state_key", "")) == state_key or str(item.get("result_state_key", "")) == state_key
     )
 
 

@@ -1056,13 +1056,46 @@ def compare_candidate_generalization(original: tuple[SymbolResearchEvidence, ...
     eligible_rows = [row for row in rows if row["confidence"] != "low" and row["median_return"] is not None]
     if len(eligible_rows) < 2:
         return CandidateGeneralization(CandidateGeneralizationDecision.NEEDS_MORE_EVIDENCE, None, tuple(rows), "not enough eligible candidate evidence")
-    best = max(eligible_rows, key=lambda row: (float(row["median_return"] or 0.0), int(row["aggregate_trade_count"] or 0)))
+    best = max(
+        eligible_rows,
+        key=lambda row: (
+            float(row["median_return"] or 0.0),
+            -float(row["median_mdd"] or 1.0),
+            int(row["aggregate_trade_count"] or 0),
+        ),
+    )
     original_row = rows[0]
     if best["candidate_id"] == "original":
-        return CandidateGeneralization(CandidateGeneralizationDecision.ORIGINAL_PREFERRED, "original", tuple(rows), "original has the strongest generalized evidence")
-    if float(best["median_return"] or 0.0) > float(original_row["median_return"] or 0.0) and int(best["symbols_with_trades"] or 0) >= int(original_row["symbols_with_trades"] or 0):
-        return CandidateGeneralization(CandidateGeneralizationDecision.CANDIDATE_PREFERRED, str(best["candidate_id"]), tuple(rows), "tested candidate improves median return without reducing symbol breadth")
-    return CandidateGeneralization(CandidateGeneralizationDecision.NO_CLEAR_WINNER, None, tuple(rows), "candidate evidence is mixed across symbols")
+        return CandidateGeneralization(
+            CandidateGeneralizationDecision.ORIGINAL_PREFERRED,
+            "original",
+            tuple(rows),
+            "original has the strongest generalized evidence by median return, drawdown, and trade sample",
+        )
+    return_improved = float(best["median_return"] or 0.0) > float(original_row["median_return"] or 0.0)
+    breadth_preserved = int(best["symbols_with_trades"] or 0) >= int(original_row["symbols_with_trades"] or 0)
+    trade_sample_preserved = int(best["aggregate_trade_count"] or 0) >= int(original_row["aggregate_trade_count"] or 0)
+    mdd_not_worse = float(best["median_mdd"] or 1.0) <= float(original_row["median_mdd"] or 1.0)
+    if return_improved and breadth_preserved and trade_sample_preserved and mdd_not_worse:
+        return CandidateGeneralization(
+            CandidateGeneralizationDecision.CANDIDATE_PREFERRED,
+            str(best["candidate_id"]),
+            tuple(rows),
+            "tested candidate improves median return without reducing symbol breadth, trade sample, or median MDD",
+        )
+    blockers: list[str] = []
+    if return_improved:
+        blockers.append("median return improved")
+    if not breadth_preserved:
+        blockers.append("symbols with trades decreased")
+    if not trade_sample_preserved:
+        blockers.append("aggregate trade sample decreased")
+    if not mdd_not_worse:
+        blockers.append("median MDD worsened")
+    reason = "candidate evidence is mixed across symbols"
+    if blockers:
+        reason = "candidate is not preferred because " + ", ".join(blockers)
+    return CandidateGeneralization(CandidateGeneralizationDecision.NO_CLEAR_WINNER, None, tuple(rows), reason)
 
 
 def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tuple[SymbolResearchEvidence, ...], summary: UniverseResearchSummary, generalization: CandidateGeneralization, recommendation: str, *, adaptive_sampling: dict[str, object] | None = None) -> str:
@@ -1128,7 +1161,7 @@ def render_multi_symbol_report(request: MultiSymbolResearchRequest, evidence: tu
             label=chr(65+i) if i<26 else str(i+1)
             star=" ⭐" if row.get("candidate_id")==generalization.winner_id else ""
             lines.append(f"- 후보 {label}{star}: 중앙 수익률 {pct(row.get('median_return'))}, MDD {pct(row.get('median_mdd'))}, 거래 {row.get('aggregate_trade_count',0)}회")
-    lines.extend(["","[가온의 판단]",f"- {conclusion}"])
+    lines.extend(["","[가온의 판단]",f"- {conclusion}", f"- 판단 근거: {generalization.reason}"])
     lines.extend(["","[누적 Research Mission]","- 누적 유효 종목/거래 수는 상단 전략 후보 블록의 canonical candidate state를 기준으로 판단합니다."])
     if summary.sample_confidence=="low":
         lines.append("- 현재 표본만으로 일반화하지 않고 추가 검증이 필요합니다.")
