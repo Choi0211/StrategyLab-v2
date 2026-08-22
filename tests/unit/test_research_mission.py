@@ -29,6 +29,7 @@ from gaon.knowledge.research_mission import (
     mission_awaiting_approval_message,
     mission_blocked_message,
     mission_budget_exhausted_message,
+    mission_status_block,
     render_mission_candidate_detailed_status,
     next_candidate_sequence,
     next_unexplored_symbols,
@@ -37,6 +38,7 @@ from gaon.knowledge.research_mission import (
     record_focus_symbol,
     record_promotion_candidate,
     update_candidate,
+    production_promotion_target_consistency_release_check,
     production_persistent_research_mission_release_check,
 )
 from gaon.knowledge.strategy_candidate import new_candidate, record_breadth_progress
@@ -113,6 +115,40 @@ class MissionUpdateTests(unittest.TestCase):
         # already-established target candidate count.
         again = extract_or_update_mission("증거가 충분할 때까지 연구해주세요", existing=updated, now=LATER)
         self.assertEqual(again.target_promotion_ready_candidates, 3)
+
+    def test_incidental_single_candidate_count_does_not_reduce_target(self) -> None:
+        updated = extract_or_update_mission(
+            "승격 요청이 가능한 정도까지 되는 3개의 전략이 나올때까지 연구해주세요 "
+            "삼성만 하지말고 국내 주식 전체를 대상으로 연구해주세요",
+            existing=self.mission,
+            now=LATER,
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(updated), now=LATER)
+        with_candidate = add_candidate(updated, candidate, now=LATER)
+
+        status_read = extract_or_update_mission("현재 후보 1개의 상태를 알려주세요", existing=with_candidate, now=LATER)
+        self.assertEqual(status_read.target_promotion_ready_candidates, 3)
+        self.assertIn("promotion-ready candidates: 0/3", mission_status_block(status_read))
+
+        explicit_lower_target = extract_or_update_mission(
+            "승격 후보 1개가 나올 때까지 계속 연구해주세요", existing=status_read, now=LATER
+        )
+        self.assertEqual(explicit_lower_target.target_promotion_ready_candidates, 3)
+
+    def test_corrupted_canonical_mission_target_is_restored_on_restart(self) -> None:
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 승격 요청이 가능한 3개의 전략이 나올때까지 연구해주세요",
+            existing=None,
+            now=NOW,
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=NOW)
+        mission = add_candidate(mission, candidate, now=NOW)
+        raw = mission.to_json()
+        raw["target_promotion_ready_candidates"] = 1
+
+        restored = ResearchMission.from_json(raw)
+        self.assertEqual(restored.target_promotion_ready_candidates, 3)
+        self.assertIn("promotion-ready candidates: 0/3", mission_status_block(restored))
 
     def test_objective_flags_accumulate_across_turns(self) -> None:
         first = extract_or_update_mission("수익률을 개선해주세요 연구", existing=None, now=NOW)
@@ -450,6 +486,29 @@ class MissionPromotionGateTests(unittest.TestCase):
             updated = record_promotion_candidate(updated, strategy_fingerprint=fingerprint, candidate_id=candidate_id, now=LATER)
         self.assertEqual(updated.current_promotion_ready_candidates, 2)
         self.assertEqual(distinct_promotion_ready_strategy_count(updated), 2)
+
+    def test_target_consistency_trace_reaches_human_approval_only_at_three_distinct_fingerprints(self) -> None:
+        candidate_1 = new_candidate("breakout_standard", sequence=next_candidate_sequence(self.mission), now=NOW)
+        active = add_candidate(self.mission, candidate_1, now=NOW)
+        self.assertIn("promotion-ready candidates: 0/3", mission_status_block(active))
+
+        candidate_2 = new_candidate("breakout_trend_confirmed", sequence=next_candidate_sequence(active), now=NOW)
+        rotated = add_candidate(active, candidate_2, now=NOW)
+        self.assertIn("promotion-ready candidates: 0/3", mission_status_block(rotated))
+
+        one = record_promotion_candidate(rotated, strategy_fingerprint="fp-aaa", candidate_id="KR-ST-001", now=LATER)
+        self.assertEqual(one.progress_label, "1/3")
+        restarted = ResearchMission.from_json(one.to_json())
+        self.assertEqual(restarted.progress_label, "1/3")
+
+        two = record_promotion_candidate(restarted, strategy_fingerprint="fp-bbb", candidate_id="KR-ST-002", now=LATER)
+        duplicate = record_promotion_candidate(two, strategy_fingerprint="fp-bbb", candidate_id="KR-ST-002", now=LATER)
+        self.assertEqual(duplicate.progress_label, "2/3")
+        self.assertEqual(duplicate.status, MissionStatus.ACTIVE)
+
+        three = record_promotion_candidate(duplicate, strategy_fingerprint="fp-ccc", candidate_id="KR-ST-003", now=LATER)
+        self.assertEqual(three.progress_label, "3/3")
+        self.assertEqual(three.status, MissionStatus.AWAITING_HUMAN_APPROVAL)
 
 
 class MissionSafeFailureExplanationTests(unittest.TestCase):

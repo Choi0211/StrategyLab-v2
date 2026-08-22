@@ -52,6 +52,7 @@ from gaon.knowledge.strategy_candidate import StrategyCandidateRecord, StrategyC
 RESEARCH_MISSION_SCHEMA_VERSION = 1
 
 DEFAULT_KR_EXCHANGES: tuple[str, ...] = ("KOSPI", "KOSDAQ")
+CANONICAL_PROMOTION_READY_TARGET = 3
 
 
 class MissionUniverseScope(str, Enum):
@@ -151,6 +152,16 @@ class ResearchMission:
         raw_pending_symbol = raw.get("pending_promotion_symbol")
         pending_promotion_symbol = str(raw_pending_symbol) if raw_pending_symbol and raw_candidates else None
         target_promotion_ready_candidates = int(raw["target_promotion_ready_candidates"]) if raw.get("target_promotion_ready_candidates") is not None else None
+        target_promotion_ready_candidates = _canonical_promotion_ready_target(
+            market=str(raw.get("market", "KR")),
+            universe_scope=MissionUniverseScope(str(raw.get("universe_scope", MissionUniverseScope.SINGLE_SYMBOL.value))),
+            strategy_family=str(raw["strategy_family"]) if raw.get("strategy_family") else None,
+            improve_return=bool(objective.get("improve_return", False)),
+            improve_safety=bool(objective.get("improve_safety", False)),
+            baseline_comparison=str(objective["baseline_comparison"]) if objective.get("baseline_comparison") else None,
+            candidates=raw_candidates,
+            target=target_promotion_ready_candidates,
+        )
         raw_status = MissionStatus(str(raw.get("status", MissionStatus.ACTIVE.value)))
         target_reached_by_verified_count = (
             target_promotion_ready_candidates is not None
@@ -527,6 +538,17 @@ _KOREAN_DIGIT_WORDS: Mapping[str, int] = {
 }
 
 _TARGET_COUNT_UNIT_TOKENS: tuple[str, ...] = ("전략", "후보", "종목", "candidate", "strategy")
+_TARGET_COUNT_CONTEXT_TOKENS: tuple[str, ...] = (
+    "승격",
+    "promotionready",
+    "promotion",
+    "준비될때까지",
+    "나올때까지",
+    "될때까지",
+    "때까지",
+    "목표",
+    "확보",
+)
 
 
 def _extract_target_count(text: str) -> int | None:
@@ -540,6 +562,8 @@ def _extract_target_count(text: str) -> int | None:
         return None
     if not _contains_any(normalized, _TARGET_COUNT_UNIT_TOKENS + ("개",)):
         return None
+    if not _contains_any(normalized, _TARGET_COUNT_CONTEXT_TOKENS):
+        return None
     digit_match = re.search(r"(\d{1,2})개(?!월|년|당)", normalized)
     if digit_match:
         return int(digit_match.group(1))
@@ -547,6 +571,52 @@ def _extract_target_count(text: str) -> int | None:
         if re.search(rf"{word}개(?!월|년|당)", normalized):
             return value
     return None
+
+
+def _canonical_promotion_ready_target(
+    *,
+    market: str,
+    universe_scope: MissionUniverseScope,
+    strategy_family: str | None,
+    improve_return: bool,
+    improve_safety: bool,
+    baseline_comparison: str | None,
+    candidates: tuple[Mapping[str, object], ...],
+    target: int | None,
+) -> int | None:
+    """Return the canonical target for production KR research missions.
+
+    The Research Mission contract is to gather three DISTINCT
+    promotion-ready strategy fingerprints before human approval. A stale
+    target of 1 can appear when older continuation turns misread incidental
+    counts ("후보 1개", "1건") as the target; loading or continuing such a
+    mission must restore the canonical target without touching evidence.
+    """
+    is_strategy_mission = bool(strategy_family or improve_return or improve_safety or baseline_comparison or candidates)
+    if market == "KR" and universe_scope is MissionUniverseScope.MARKET_WIDE and is_strategy_mission:
+        if target is None or target < CANONICAL_PROMOTION_READY_TARGET:
+            return CANONICAL_PROMOTION_READY_TARGET
+    return target
+
+
+def _merge_promotion_ready_target(existing: ResearchMission | None, extracted_target: int | None) -> int | None:
+    if existing is None:
+        return extracted_target
+    existing_target = _canonical_promotion_ready_target(
+        market=existing.market,
+        universe_scope=existing.universe_scope,
+        strategy_family=existing.strategy_family,
+        improve_return=existing.improve_return,
+        improve_safety=existing.improve_safety,
+        baseline_comparison=existing.baseline_comparison,
+        candidates=existing.candidates,
+        target=existing.target_promotion_ready_candidates,
+    )
+    if extracted_target is None:
+        return existing_target
+    if existing_target is None:
+        return extracted_target
+    return max(existing_target, extracted_target)
 
 
 # ---------------------------------------------------------------------------
@@ -697,11 +767,21 @@ def extract_or_update_mission(
 
     market = "KR" if (kr_market_wide or (existing is not None and existing.market == "KR") or _norm(text).find("한국") >= 0 or _norm(text).find("국내") >= 0 or _norm(text).find("대한민국") >= 0) else (existing.market if existing is not None else "KR")
 
-    merged_target = target if target is not None else (existing.target_promotion_ready_candidates if existing is not None else None)
+    merged_target = _merge_promotion_ready_target(existing, target)
     merged_return = objective["improve_return"] or (existing.improve_return if existing is not None else False)
     merged_safety = objective["improve_safety"] or (existing.improve_safety if existing is not None else False)
     merged_baseline = objective["baseline_comparison"] or (existing.baseline_comparison if existing is not None else None)
     merged_family = strategy_family or (existing.strategy_family if existing is not None else None)
+    merged_target = _canonical_promotion_ready_target(
+        market=market,
+        universe_scope=universe_scope,
+        strategy_family=merged_family,
+        improve_return=merged_return,
+        improve_safety=merged_safety,
+        baseline_comparison=merged_baseline,
+        candidates=existing.candidates if existing is not None else (),
+        target=merged_target,
+    )
 
     if existing is not None:
         status = existing.status
@@ -3583,6 +3663,97 @@ def production_sample_exhaustion_candidate_decision_release_check() -> Mapping[s
         "monte_carlo_action": monte_action,
         "rotation_action": rotation_action,
         "rotation_reason": rotation_reason,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_promotion_target_consistency_release_check() -> Mapping[str, object]:
+    """Regression guard for the Research Mission promotion target.
+
+    Production acceptance observed ``promotion-ready candidates: 0/1`` on a
+    mission whose canonical contract is three distinct promotion-ready
+    strategy fingerprints. This check proves that candidate-pool size,
+    active candidate count, and incidental "1개" status wording never
+    replace the mission target, and that a stale persisted target of 1 is
+    repaired at the ResearchMission read-model boundary.
+    """
+    from gaon.knowledge.strategy_candidate import new_candidate
+
+    now = "2026-08-22T01:00:00Z"
+    mission = extract_or_update_mission(
+        "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. 승격 준비 후보 3개가 준비될 때까지 계속해주세요.",
+        existing=None,
+        now=now,
+    )
+    mission = extract_or_update_mission("국내 주식 전체를 대상으로 계속 연구해주세요", existing=mission, now=now)
+    candidate_1 = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=now)
+    mission = add_candidate(mission, candidate_1, now=now)
+    active_display = "promotion-ready candidates: 0/3" in mission_status_block(mission)
+
+    candidate_2 = new_candidate("breakout_trend_confirmed", sequence=next_candidate_sequence(mission), now=now)
+    rotated = add_candidate(mission, candidate_2, now=now)
+    rotation_display = "promotion-ready candidates: 0/3" in mission_status_block(rotated)
+
+    incidental = extract_or_update_mission("현재 후보 1개의 상태를 알려주세요", existing=rotated, now=now)
+    incidental_count_not_target = (
+        incidental is not None
+        and incidental.target_promotion_ready_candidates == CANONICAL_PROMOTION_READY_TARGET
+        and incidental.progress_label == "0/3"
+    )
+    explicit_lower = extract_or_update_mission("승격 후보 1개가 나올 때까지 계속 연구해주세요", existing=incidental, now=now)
+    lower_target_not_applied = (
+        explicit_lower is not None
+        and explicit_lower.target_promotion_ready_candidates == CANONICAL_PROMOTION_READY_TARGET
+        and explicit_lower.progress_label == "0/3"
+    )
+
+    corrupted_raw = explicit_lower.to_json()
+    corrupted_raw["target_promotion_ready_candidates"] = 1
+    restored = ResearchMission.from_json(corrupted_raw)
+    restart_restores_target = restored.target_promotion_ready_candidates == CANONICAL_PROMOTION_READY_TARGET
+
+    one = record_promotion_candidate(restored, strategy_fingerprint="fp-target-a", candidate_id="KR-ST-001", now=now)
+    one_restart = ResearchMission.from_json(one.to_json())
+    two = record_promotion_candidate(one_restart, strategy_fingerprint="fp-target-b", candidate_id="KR-ST-002", now=now)
+    duplicate = record_promotion_candidate(two, strategy_fingerprint="fp-target-b", candidate_id="KR-ST-002", now=now)
+    three = record_promotion_candidate(duplicate, strategy_fingerprint="fp-target-c", candidate_id="KR-ST-003", now=now)
+    distinct_count_trace = (
+        one.progress_label == "1/3"
+        and one_restart.progress_label == "1/3"
+        and two.progress_label == "2/3"
+        and duplicate.progress_label == "2/3"
+        and distinct_promotion_ready_strategy_count(duplicate) == 2
+        and three.progress_label == "3/3"
+        and three.status is MissionStatus.AWAITING_HUMAN_APPROVAL
+    )
+
+    checks = {
+        "mission_target_three": mission.target_promotion_ready_candidates == CANONICAL_PROMOTION_READY_TARGET,
+        "active_candidate_display_zero_of_three": active_display,
+        "rotation_display_zero_of_three": rotation_display,
+        "incidental_count_not_target": incidental_count_not_target,
+        "lower_target_not_applied": lower_target_not_applied,
+        "restart_restores_target": restart_restores_target,
+        "one_of_three_after_first_distinct": one.progress_label == "1/3",
+        "restart_preserves_one_of_three": one_restart.progress_label == "1/3",
+        "two_of_three_after_second_distinct": two.progress_label == "2/3",
+        "duplicate_fingerprint_not_counted": duplicate.progress_label == "2/3",
+        "three_of_three_awaits_human": three.status is MissionStatus.AWAITING_HUMAN_APPROVAL,
+        "distinct_count_trace": distinct_count_trace,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"promotion target consistency release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "target_candidates": three.target_promotion_ready_candidates,
+        "current_candidates": three.current_promotion_ready_candidates,
+        "status": three.status.value,
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,

@@ -1,5 +1,21 @@
 # Changelog
 
+## Hotfix: Research Mission Promotion Target Consistency
+
+- Fixed a production ResearchMission state regression where incidental
+  count wording such as `후보 1개` could overwrite the canonical promotion
+  target and render `promotion-ready candidates: 0/1`.
+- Restored canonical KR market-wide strategy research missions to target
+  `3` at the read-model boundary when stale persisted state contains
+  `target_promotion_ready_candidates=1`.
+- Preserved distinct promotion-ready counting by strategy fingerprint:
+  candidate pool size and active candidate count never become the mission
+  target.
+- Added `gaon-production-promotion-target-consistency-release-check`.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, strategy mutation, or fabricated
+  metrics added.
+
 ## Hotfix: Sample Exhaustion Candidate Decision
 
 - Persisted `candidate_pool_exhausted` and related breadth summaries on
