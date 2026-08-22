@@ -780,7 +780,18 @@ def evaluate_economic_viability(
       continue rather than forcing a premature verdict either way.
     """
     performance = candidate_cumulative_performance(candidate)
-    if candidate.valid_symbols < policy.min_symbol_sample or candidate.trade_count < policy.min_trade_sample:
+    # Independent-review fix: the sample-size floor must be measured against
+    # the REAL performance-evidence sample (performance.performance_sample_*
+    # - symbols that actually carry a recorded total_return), not
+    # candidate.valid_symbols/trade_count. Those breadth-level counters
+    # include every eligible symbol, even ones with trade_count=0 (quality-
+    # passed but never traded) or a legacy-migrated entry with no
+    # total_return at all - a candidate could reach 20 "valid" symbols where
+    # only 3 ever carried a real return/MDD figure and still clear this
+    # floor, letting a 3-symbol sample force a FAIL verdict the module's own
+    # design explicitly says must not happen ("a 5-symbol/41-trade batch is
+    # real evidence but not enough").
+    if performance.performance_sample_symbols < policy.min_symbol_sample or performance.performance_sample_trades < policy.min_trade_sample:
         return EconomicViabilityResult(EconomicViabilityStatus.NEEDS_MORE_EVIDENCE, "insufficient_breadth_for_economic_decision", performance)
     if performance.median_return is None or performance.profitable_symbol_ratio is None:
         return EconomicViabilityResult(EconomicViabilityStatus.NEEDS_MORE_EVIDENCE, "no_performance_evidence_recorded", performance)
@@ -1650,4 +1661,5 @@ def production_economic_viability_gate_release_check() -> Mapping[str, object]:
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,
+        "approval_bypassed": False,
     }

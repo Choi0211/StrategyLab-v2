@@ -348,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-cumulative-sample-persistence-release-check")
     sub.add_parser("gaon-production-sample-exhaustion-candidate-decision-release-check")
     sub.add_parser("gaon-production-promotion-target-consistency-release-check")
+    sub.add_parser("gaon-production-economic-viability-gate-release-check")
     sub.add_parser("gaon-production-independent-evidence-release-check")
     sub.add_parser("gaon-production-out-of-sample-release-check")
     sub.add_parser("gaon-production-walk-forward-release-check")
@@ -2950,6 +2951,16 @@ def _run(args: argparse.Namespace) -> int:
             for key, value in payload.items()
         )
         print(f"gaon-production-promotion-target-consistency-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-economic-viability-gate-release-check":
+        from gaon.knowledge.strategy_candidate import production_economic_viability_gate_release_check
+
+        payload = production_economic_viability_gate_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-economic-viability-gate-release-check: PASS {details}")
 
     elif args.command == "gaon-production-news-research-integration-release-check":
         from gaon.knowledge.telegram_autonomous_learning import production_news_research_integration_release_check

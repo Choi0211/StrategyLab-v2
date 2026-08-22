@@ -1748,7 +1748,26 @@ class LLMConversationBrain:
         if updated_mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
             text = f"{candidate_text}\n\n{mission_awaiting_approval_message(updated_mission)}"
         elif updated_candidate.status is StrategyCandidateStatus.REJECTED:
-            text = f"{candidate_text}\n\n영하님, {updated_candidate.candidate_id} 전략은 검증 결과 기각되어 다음 사이클에서 다른 전략 후보로 전환합니다.\n\n{mission_status_block(updated_mission)}"
+            # Independent-review fix: this generic branch used to render a
+            # fixed Korean sentence with no reason at all - a candidate
+            # rejected HERE specifically for failing economic viability
+            # (see the request_human_promotion_review branch above) lost
+            # that specific reason from the user-facing response even
+            # though it was correctly persisted in rejected_reason, unlike
+            # the parallel _rotate_stagnant_candidate path which already
+            # explains an economic rejection explicitly. Surfacing the real
+            # persisted reason and the cumulative evidence block here keeps
+            # both rejection paths equally informative.
+            reason_line = (
+                f"사유: {updated_candidate.rejected_reason}\n\n" if updated_candidate.rejected_reason else ""
+            )
+            text = (
+                f"{candidate_text}\n\n"
+                f"영하님, {updated_candidate.candidate_id} 전략은 검증 결과 기각되어 다음 사이클에서 다른 전략 후보로 전환합니다.\n\n"
+                f"{reason_line}"
+                f"{render_candidate_cumulative_evidence_block(updated_candidate)}\n\n"
+                f"{mission_status_block(updated_mission)}"
+            )
         else:
             # ULTRAREVIEW High #2 fix (Patch 8.6: superseded by the
             # candidate-centric structured response below, which never
@@ -1845,7 +1864,11 @@ class LLMConversationBrain:
             )
             response_route = "conversation_mission_candidate_economic_rejection"
         else:
-            rotated = mark_stagnant(candidate, now=request.received_at, reason=reason or "stagnation: no measurable progress across bounded cycles")
+            # Independent-review fix: pass reason through only when the
+            # caller actually supplied one, rather than duplicating
+            # mark_stagnant's own default text as a second inline literal
+            # that could silently drift out of sync with it.
+            rotated = mark_stagnant(candidate, now=request.received_at, **({"reason": reason} if reason else {}))
             status_line = (
                 f"영하님, {rotated.candidate_id} 전략은 여러 사이클 동안 뚜렷한 진전이 없어 "
                 "다음 연구 사이클에서는 다른 전략 후보로 전환하겠습니다."
