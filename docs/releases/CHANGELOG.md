@@ -1,5 +1,24 @@
 # Changelog
 
+## Hotfix: Morning Briefing Research State Consistency
+
+- Scoped morning briefing "no follow-up research" wording to news-derived
+  follow-ups so it no longer implies that the full autonomous Research
+  Mission has completed.
+- Added a read-only canonical `ResearchMission` snapshot to pre-market
+  briefings, including active candidate, promotion-ready progress, mission
+  status, next blocker-driven action, and unresolved blockers.
+- Wired the production daily briefing worker to read the latest persisted
+  Telegram `research_mission` from `conversation_sessions` metadata without
+  executing research tools or mutating strategy state.
+- Rendered user-facing pre-market timestamps in Asia/Seoul as
+  `YYYY-MM-DD HH:MM KST` while preserving UTC storage.
+- Added
+  `gaon-production-morning-briefing-research-state-consistency-release-check`.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, strategy mutation, or fabricated
+  metrics added.
+
 ## Hotfix: Research Mission Promotion Target Consistency
 
 - Fixed a production ResearchMission state regression where incidental

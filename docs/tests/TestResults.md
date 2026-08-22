@@ -2,6 +2,30 @@
 
 Status: Passed
 
+## Hotfix: Morning Briefing Research State Consistency
+
+- Targeted local verification:
+  - `python -m py_compile src\gaon\runtime\daily_briefing.py src\gaon\runtime\cli.py`: PASS
+  - `python -m unittest tests.unit.test_daily_briefing -q`: PASS, 25 tests
+  - `python -m gaon.runtime.cli gaon-production-morning-briefing-research-state-consistency-release-check`: PASS
+  - Existing daily briefing release checks:
+    `gaon-production-daily-briefing-release-check`,
+    `gaon-production-daily-briefing-telegram-delivery-release-check`,
+    `gaon-production-daily-briefing-scheduler-release-check`, and
+    `gaon-production-daily-briefing-runtime-wiring-release-check`: PASS
+  - Research-action cross-action regression checks:
+    `gaon-production-research-action-execution-handoff-release-check` and
+    `gaon-production-research-action-persistence-release-check`: PASS
+- Required full verification:
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1190 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 260 tests
+  - `python scripts\verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS; Windows line-ending warnings only
+- Production Telegram verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: briefing read path is read-only; no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no fabricated evidence.
+
 ## Hotfix: Research Mission Promotion Target Consistency
 
 - Targeted local verification:
