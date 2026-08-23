@@ -41,9 +41,11 @@ session metadata column is reused.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, replace
 from enum import Enum
 import re
+import sys
 from typing import Mapping
 from uuid import uuid4
 
@@ -4371,6 +4373,183 @@ def production_promotion_target_consistency_release_check() -> Mapping[str, obje
         "target_candidates": three.target_promotion_ready_candidates,
         "current_candidates": three.current_promotion_ready_candidates,
         "status": three.status.value,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_promotion_readiness_reachability_release_check() -> Mapping[str, object]:
+    """Regression guard proving `promotion-ready` is reachable end-to-end,
+    not a functional dead end.
+
+    Production has never produced a promotion-ready candidate, which raised
+    the question of whether the pipeline itself has a structural blocker
+    (e.g. the Monte Carlo primary-sample floor, or the cross-symbol
+    ``multi_symbol_partial`` state, never actually transitioning to PASS)
+    versus simply never having seen a candidate good enough to clear the
+    deliberately strict economic-viability bar.
+
+    Unlike ``production_promotion_target_consistency_release_check`` above
+    (which drives mission-level bookkeeping directly via
+    ``record_promotion_candidate`` with pre-made fingerprints, bypassing
+    candidate-level gates entirely), this check drives THREE independent,
+    production-shaped candidates through the REAL candidate-level gate
+    chain - breadth evidence, all robustness validation stages, an
+    independently-recomputed economic-viability evaluation, and
+    ``next_blocker_driven_research_action`` resolving to ``RANK_CANDIDATES``
+    - mirroring the exact glue-code sequence in
+    ``gaon.runtime.llm_conversation`` (around the terminal
+    ``request_human_promotion_review`` handling) that only calls
+    ``mark_promotion_ready`` after economic viability independently
+    confirms PASS. It also replays one candidate's fingerprint a second
+    time to prove duplicates never inflate the distinct-promotion-ready
+    count, and round-trips the mission through JSON to prove the terminal
+    state survives a process restart.
+    """
+    from gaon.knowledge.strategy_candidate import (
+        ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE,
+        ECONOMIC_VIABILITY_MIN_TRADE_SAMPLE,
+        EconomicViabilityStatus,
+        StrategyCandidateStatus,
+        evaluate_economic_viability,
+        mark_promotion_ready,
+        new_candidate,
+        next_blocker_driven_research_action,
+        record_breadth_progress,
+        record_robustness_progress,
+    )
+
+    now = "2026-08-23T00:00:00Z"
+    all_stages_pass = {
+        "out_of_sample": "pass",
+        "regime_validation": "pass",
+        "walk_forward": "pass",
+        "transaction_cost_stress": "cost_stable",
+        "parameter_sensitivity": "stable",
+        "monte_carlo": "pass",
+    }
+
+    def make_profitable_candidate(family, sequence):
+        candidate = new_candidate(family, sequence=sequence, now=now)
+        n = ECONOMIC_VIABILITY_MIN_SYMBOL_SAMPLE
+        trades_each = (ECONOMIC_VIABILITY_MIN_TRADE_SAMPLE // n) + 1
+        batch = tuple(
+            (f"{family[:2].upper()}{i:03d}", trades_each, 0.08 if i % 2 == 0 else -0.02, 0.20)
+            for i in range(n)
+        )
+        candidate = record_breadth_progress(
+            candidate, attempted=n, valid=n, trade_count=sum(t for _, t, _, _ in batch),
+            evidence_symbols=tuple(s for s, _, _, _ in batch), excluded_symbols=(), provider_blocked=False, now=now,
+            evidence_details={
+                s: {"eligible": True, "trade_count": t, "metrics": {"total_return": r, "mdd": m}}
+                for s, t, r, m in batch
+            },
+        )
+        candidate = record_robustness_progress(
+            candidate, director_action="collect_more_evidence", terminal=False, now=now,
+            validation_stage_status=all_stages_pass, symbol=batch[0][0],
+            reference=f"action=RUN_MONTE_CARLO|symbol={batch[0][0]}",
+        )
+        return candidate
+
+    def promote_terminal_step(mission, candidate):
+        viability = evaluate_economic_viability(candidate)
+        action, _reason = next_blocker_driven_research_action(candidate)
+        mission = record_promotion_candidate(
+            mission, strategy_fingerprint=candidate.strategy_fingerprint, candidate_id=candidate.candidate_id, now=now,
+        )
+        candidate = mark_promotion_ready(candidate, now=now)
+        mission = set_active_candidate(mission, None, now=now)
+        mission = update_candidate(mission, candidate, now=now)
+        return mission, candidate, viability, action
+
+    mission = extract_or_update_mission(
+        "대한민국 장에 맞는 단타 매매 전략을 연구해줘. 승격 준비 후보 3개가 준비될 때까지 계속해줘.",
+        existing=None, now=now,
+    )
+
+    candidate_a = make_profitable_candidate("breakout_standard", next_candidate_sequence(mission))
+    mission = add_candidate(mission, candidate_a, now=now)
+    zero_of_three = mission.progress_label == "0/3"
+    mission, candidate_a, viability_a, action_a = promote_terminal_step(mission, candidate_a)
+    one_of_three = mission.progress_label == "1/3"
+
+    candidate_b = make_profitable_candidate("breakout_trend_confirmed", next_candidate_sequence(mission))
+    mission = add_candidate(mission, candidate_b, now=now)
+    mission, candidate_b, viability_b, action_b = promote_terminal_step(mission, candidate_b)
+    two_of_three = mission.progress_label == "2/3"
+
+    mission_after_duplicate = record_promotion_candidate(
+        mission, strategy_fingerprint=candidate_b.strategy_fingerprint, candidate_id=candidate_b.candidate_id, now=now,
+    )
+    duplicate_not_counted = (
+        mission_after_duplicate.progress_label == "2/3"
+        and distinct_promotion_ready_strategy_count(mission_after_duplicate) == 2
+    )
+    mission = mission_after_duplicate
+
+    candidate_c = make_profitable_candidate("breakout_volume_confirmed", next_candidate_sequence(mission))
+    mission = add_candidate(mission, candidate_c, now=now)
+    mission, candidate_c, viability_c, action_c = promote_terminal_step(mission, candidate_c)
+    three_of_three_awaits_human = (
+        mission.progress_label == "3/3" and mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL
+    )
+
+    restarted = ResearchMission.from_json(mission.to_json())
+    restart_persists_terminal_state = (
+        restarted.progress_label == "3/3" and restarted.status is MissionStatus.AWAITING_HUMAN_APPROVAL
+    )
+
+    # AST-based (not substring) scan: this check runs inside this same
+    # module, so a plain substring search for "futures_create_order" would
+    # match its own name literal below. Walking for an actual ast.Call node
+    # avoids that self-match and is also more precise against comments/
+    # docstrings than a text search would be.
+    forbidden_call_names = {"futures_create_order", "place_order"}
+    no_bypass_source_scan = True
+    for module_name in ("gaon.knowledge.strategy_candidate", "gaon.knowledge.research_mission"):
+        module = sys.modules.get(module_name)
+        if module is None or not getattr(module, "__file__", None):
+            no_bypass_source_scan = False
+            continue
+        with open(module.__file__, encoding="utf-8") as handle:
+            source_text = handle.read()
+        tree = ast.parse(source_text, filename=module.__file__)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            called_name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if called_name in forbidden_call_names:
+                no_bypass_source_scan = False
+
+    checks = {
+        "starts_at_zero_of_three": zero_of_three,
+        "candidate_a_economic_viability_pass": viability_a.status is EconomicViabilityStatus.PASS,
+        "candidate_a_reaches_rank_candidates": action_a == "RANK_CANDIDATES",
+        "one_of_three_after_candidate_a": one_of_three,
+        "candidate_a_promotion_ready": candidate_a.status is StrategyCandidateStatus.PROMOTION_READY,
+        "candidate_b_economic_viability_pass": viability_b.status is EconomicViabilityStatus.PASS,
+        "candidate_b_reaches_rank_candidates": action_b == "RANK_CANDIDATES",
+        "two_of_three_after_candidate_b": two_of_three,
+        "duplicate_fingerprint_not_counted": duplicate_not_counted,
+        "candidate_c_economic_viability_pass": viability_c.status is EconomicViabilityStatus.PASS,
+        "candidate_c_reaches_rank_candidates": action_c == "RANK_CANDIDATES",
+        "three_of_three_awaits_human_approval": three_of_three_awaits_human,
+        "restart_persists_terminal_state": restart_persists_terminal_state,
+        "no_order_or_promote_symbol_in_source": no_bypass_source_scan,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"promotion readiness reachability release check failed: {failed}")
+    return {
+        "schema_version": RESEARCH_MISSION_SCHEMA_VERSION,
+        **checks,
+        "final_status": mission.status.value,
+        "distinct_promotion_ready_count": distinct_promotion_ready_strategy_count(mission),
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,
