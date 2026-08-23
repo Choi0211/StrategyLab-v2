@@ -594,7 +594,7 @@ class LLMConversationBrain:
             self._metrics.increment("gaon_llm_provider_requests_total", provider=self._config.assistant_provider)
             self._append_provider_event("LLMProviderRequestStarted", request, {"provider": self._config.assistant_provider})
             provider = self._assistant_provider or build_assistant_provider(self._config)
-            tools = self._tool_executor.assistant_tool_definitions() if self._tool_executor is not None else ()
+            tools = self._tool_executor.assistant_tool_definitions(request.text) if self._tool_executor is not None else ()
             provider_response = validate_provider_response(
                 provider.respond(
                     AssistantRequest(

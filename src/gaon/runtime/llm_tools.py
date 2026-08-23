@@ -51,6 +51,17 @@ class ToolDefinition:
     risk_level: ToolRiskLevel
     required_args: tuple[str, ...] = ()
     allowed_args: tuple[str, ...] = ()
+    # Fixture-gated tools return synthetic self-improving-research demo data
+    # (see gaon.research.self_improving) rather than evidence about the
+    # user's actual strategy or the runtime's operational state. They must
+    # not be handed to the assistant provider for a general conversation or
+    # status question, since the provider is otherwise free to pick any
+    # tool that seems topically close and has no way to know the data is a
+    # fixture until after it has already presented it as an answer. They
+    # stay available, but only once the message itself explicitly asks for
+    # a strategy candidate critique/quality-score/comparison - see
+    # ``_fixture_gate_allows``.
+    fixture_gated: bool = False
 
 
 @dataclass(frozen=True)
@@ -162,8 +173,13 @@ class SafeToolExecutor:
     def definitions(self) -> tuple[ToolDefinition, ...]:
         return self._registry.list()
 
-    def assistant_tool_definitions(self) -> tuple[AssistantToolDefinition, ...]:
-        return tuple(_assistant_tool_definition(definition) for definition in self._registry.list() if definition.risk_level is ToolRiskLevel.READ_ONLY)
+    def assistant_tool_definitions(self, request_text: str = "") -> tuple[AssistantToolDefinition, ...]:
+        return tuple(
+            _assistant_tool_definition(definition)
+            for definition in self._registry.list()
+            if definition.risk_level is ToolRiskLevel.READ_ONLY
+            and (not definition.fixture_gated or _fixture_gate_allows(definition.name, request_text))
+        )
 
     def _append_audit(self, request: ToolRequest, result: ToolResult) -> None:
         if self._audit is None:
@@ -183,6 +199,29 @@ class SafeToolExecutor:
                 created_at=request.requested_at,
             )
         )
+
+
+def _fixture_gate_allows(tool_name: str, request_text: str) -> bool:
+    """Only offer a fixture-gated self-improving-research demo tool once the
+    message itself explicitly asks for that kind of strategy-candidate
+    diagnostic. This mirrors the deterministic keyword checks already used
+    by ``llm_tool_routing.route_read_only_tool`` for the same tool names, so
+    a general/status question (e.g. "현재 연결 상태를 알려주세요") never even sees these
+    tools offered to the assistant provider."""
+    from gaon.runtime.llm_tool_routing import _contains_any, _normalize, _strategy_critique, _strategy_quality
+
+    normalized = _normalize(request_text)
+    if not normalized:
+        return False
+    if tool_name == "strategy_critique":
+        return _strategy_critique(normalized)
+    if tool_name == "strategy_quality_score":
+        return _strategy_quality(normalized)
+    if tool_name == "research_candidate_compare":
+        compare = ("비교", "compare", "랭킹", "순위", "토너먼트", "tournament")
+        subject = ("전략", "strategy", "후보", "연구", "research", "candidate")
+        return _contains_any(normalized, compare) and _contains_any(normalized, subject)
+    return False
 
 
 def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
@@ -236,15 +275,15 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         lambda args: _research_memory_search(connection, args),
     )
     registry.register(
-        ToolDefinition("strategy_critique", "Critique a fixture strategy candidate without changing strategy state.", ToolRiskLevel.READ_ONLY, allowed_args=("scenario",)),
+        ToolDefinition("strategy_critique", "Critique a fixture strategy candidate without changing strategy state.", ToolRiskLevel.READ_ONLY, allowed_args=("scenario",), fixture_gated=True),
         lambda args: strategy_critique_payload(str(args.get("scenario", "balanced"))),
     )
     registry.register(
-        ToolDefinition("strategy_quality_score", "Score a fixture strategy candidate across quality components.", ToolRiskLevel.READ_ONLY, allowed_args=("scenario",)),
+        ToolDefinition("strategy_quality_score", "Score a fixture strategy candidate across quality components.", ToolRiskLevel.READ_ONLY, allowed_args=("scenario",), fixture_gated=True),
         lambda args: strategy_quality_payload(str(args.get("scenario", "balanced"))),
     )
     registry.register(
-        ToolDefinition("research_candidate_compare", "Rank fixture research candidates through the advisory tournament engine.", ToolRiskLevel.READ_ONLY, allowed_args=("top_n",)),
+        ToolDefinition("research_candidate_compare", "Rank fixture research candidates through the advisory tournament engine.", ToolRiskLevel.READ_ONLY, allowed_args=("top_n",), fixture_gated=True),
         lambda args: research_candidate_compare_payload(int(args.get("top_n", 3))),
     )
     registry.register(

@@ -6417,7 +6417,7 @@ class _StrictGroundingFakeExecutor:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
 
-    def assistant_tool_definitions(self) -> tuple[object, ...]:
+    def assistant_tool_definitions(self, request_text: str = "") -> tuple[object, ...]:
         return ()
 
     def execute(self, request: ToolRequest) -> ToolResult:
@@ -7147,7 +7147,7 @@ class _RaisingToolExecutor:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
-    def assistant_tool_definitions(self) -> tuple[object, ...]:
+    def assistant_tool_definitions(self, request_text: str = "") -> tuple[object, ...]:
         return ()
 
     def execute(self, request):
