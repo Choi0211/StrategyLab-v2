@@ -320,7 +320,7 @@ class _StrictExecutor:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
 
-    def assistant_tool_definitions(self) -> tuple[object, ...]:
+    def assistant_tool_definitions(self, request_text: str = "") -> tuple[object, ...]:
         return ()
 
     def execute(self, request) -> ToolResult:

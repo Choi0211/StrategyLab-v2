@@ -71,6 +71,60 @@ class LLMToolFrameworkTests(unittest.TestCase):
         self.assertEqual(result.status, "denied")
 
 
+class FixtureGatedToolExposureTests(unittest.TestCase):
+    """Self-improving-research fixture tools (strategy_critique,
+    strategy_quality_score, research_candidate_compare) must not be handed
+    to the assistant provider for a general/status conversation - a real
+    production incident showed the provider picking one of these for
+    "안녕하세요 현재 연결 상태를 알려주세요" and answering with fixture-tagged
+    research data instead of a normal status reply."""
+
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
+        migrate(self.connection)
+        self.executor = SafeToolExecutor(default_tool_registry(self.connection))
+
+    def _names(self, request_text: str) -> set[str]:
+        return {definition.name for definition in self.executor.assistant_tool_definitions(request_text)}
+
+    def test_general_status_question_excludes_fixture_tools(self) -> None:
+        names = self._names("안녕하세요 현재 연결 상태를 알려주세요")
+
+        self.assertNotIn("strategy_critique", names)
+        self.assertNotIn("strategy_quality_score", names)
+        self.assertNotIn("research_candidate_compare", names)
+        self.assertIn("runtime_status", names)
+
+    def test_empty_request_excludes_fixture_tools(self) -> None:
+        names = self._names("")
+
+        self.assertNotIn("strategy_critique", names)
+        self.assertNotIn("strategy_quality_score", names)
+        self.assertNotIn("research_candidate_compare", names)
+
+    def test_explicit_strategy_critique_request_includes_that_tool_only(self) -> None:
+        names = self._names("이 전략의 약점을 비판해줘")
+
+        self.assertIn("strategy_critique", names)
+        self.assertNotIn("strategy_quality_score", names)
+        self.assertNotIn("research_candidate_compare", names)
+
+    def test_explicit_strategy_quality_request_includes_that_tool_only(self) -> None:
+        names = self._names("이 전략 품질점수 알려줘")
+
+        self.assertIn("strategy_quality_score", names)
+        self.assertNotIn("strategy_critique", names)
+        self.assertNotIn("research_candidate_compare", names)
+
+    def test_explicit_candidate_compare_request_includes_that_tool_only(self) -> None:
+        names = self._names("연구 후보들 비교해서 순위 매겨줘")
+
+        self.assertIn("research_candidate_compare", names)
+        self.assertNotIn("strategy_critique", names)
+        self.assertNotIn("strategy_quality_score", names)
+
+
 def _request(tool_name: str, arguments: dict[str, object] | None = None) -> ToolRequest:
     return ToolRequest(
         tool_name=tool_name,
