@@ -19,7 +19,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-echo "== 1/6: system user/group =="
+echo "== 1/7: system user/group =="
 if id "$SERVICE_USER" &>/dev/null; then
   echo "user '$SERVICE_USER' already exists, skipping"
 else
@@ -27,7 +27,7 @@ else
   echo "created system user '$SERVICE_USER'"
 fi
 
-echo "== 2/6: directories =="
+echo "== 2/7: directories =="
 for dir in "$INSTALL_DIR" "$VAR_DIR" "$VAR_DIR/backups" "$ETC_DIR"; do
   if [[ -d "$dir" ]]; then
     echo "$dir already exists, skipping"
@@ -39,7 +39,7 @@ for dir in "$INSTALL_DIR" "$VAR_DIR" "$VAR_DIR/backups" "$ETC_DIR"; do
   fi
 done
 
-echo "== 3/6: application code =="
+echo "== 3/7: application code =="
 if [[ "$REPO_ROOT" != "$INSTALL_DIR" ]]; then
   echo "NOTE: this script was invoked from $REPO_ROOT, not $INSTALL_DIR."
   echo "It only installs systemd units/env templates below - it does NOT copy"
@@ -51,7 +51,7 @@ else
   echo "running from $INSTALL_DIR, application code is already in place"
 fi
 
-echo "== 4/6: systemd unit files (backs up an existing file before replacing) =="
+echo "== 4/7: systemd unit files (backs up an existing file before replacing) =="
 for unit in strategylab-gaon.service gaon-web.service gaon-storage-lifecycle.service gaon-storage-lifecycle.timer; do
   src="$REPO_ROOT/deploy/systemd/$unit"
   dest="$SYSTEMD_DIR/$unit"
@@ -74,7 +74,7 @@ for unit in strategylab-gaon.service gaon-web.service gaon-storage-lifecycle.ser
   fi
 done
 
-echo "== 5/6: env files (never overwrites an existing file - these hold secrets) =="
+echo "== 5/7: env files (never overwrites an existing file - these hold secrets) =="
 for env_example in strategylab-gaon.env.example gaon-web.env.example; do
   dest_name="${env_example%.example}"
   src="$REPO_ROOT/deploy/systemd/$env_example"
@@ -93,7 +93,26 @@ for env_example in strategylab-gaon.env.example gaon-web.env.example; do
   fi
 done
 
-echo "== 6/6: reload systemd =="
+echo "== 6/7: journald retention cap =="
+JOURNALD_DROPIN_DIR="/etc/systemd/journald.conf.d"
+JOURNALD_DROPIN="$JOURNALD_DROPIN_DIR/strategylab.conf"
+JOURNALD_SRC="$REPO_ROOT/deploy/systemd/journald-strategylab.conf"
+if [[ ! -f "$JOURNALD_SRC" ]]; then
+  echo "WARNING: $JOURNALD_SRC not found in this checkout, skipping journald cap" >&2
+elif [[ -f "$JOURNALD_DROPIN" ]] && cmp -s "$JOURNALD_SRC" "$JOURNALD_DROPIN"; then
+  echo "$JOURNALD_DROPIN already up to date, skipping"
+else
+  mkdir -p "$JOURNALD_DROPIN_DIR"
+  if [[ -f "$JOURNALD_DROPIN" ]]; then
+    backup="$JOURNALD_DROPIN.bak.$(date +%s)"
+    cp "$JOURNALD_DROPIN" "$backup"
+    echo "$JOURNALD_DROPIN differed - backed up to $backup before replacing"
+  fi
+  cp "$JOURNALD_SRC" "$JOURNALD_DROPIN"
+  echo "installed $JOURNALD_DROPIN (500M journal cap) - run 'systemctl restart systemd-journald' to apply"
+fi
+
+echo "== 7/7: reload systemd =="
 systemctl daemon-reload
 echo "systemd units reloaded"
 
@@ -114,4 +133,6 @@ Install script finished. Remaining MANUAL steps (not automated on purpose):
   4. Check status:
        systemctl status strategylab-gaon.service gaon-web.service
        curl -sf http://127.0.0.1:8765/gaon/health
+  5. Apply the journald retention cap installed in step 6/7:
+       systemctl restart systemd-journald
 EOF

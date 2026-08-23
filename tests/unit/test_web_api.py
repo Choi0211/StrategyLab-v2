@@ -23,6 +23,7 @@ from gaon.runtime.web_api import (
     GaonWebChatAdapter,
     dispatch_request,
     production_gaon_research_status_api_release_check,
+    production_gaon_storage_status_api_release_check,
     production_gaon_web_chat_api_release_check,
     run_server,
 )
@@ -376,6 +377,49 @@ class ResearchStatusApiCliWiringTests(unittest.TestCase):
         self.assertIn("order_executed=false", printed)
         self.assertIn("champion_promoted=false", printed)
         self.assertIn("approval_bypassed=false", printed)
+        self.assertIn("safety=pass", printed)
+
+
+class StorageStatusApiReleaseCheckTests(unittest.TestCase):
+    """GET /gaon/storage/status runs the real deploy/scripts/
+    storage_lifecycle_manager.py --report as a subprocess and relays its
+    JSON - proven against a temp directory, not the real /var/lib/
+    strategylab, so this passes on any dev machine."""
+
+    def test_release_check_passes(self) -> None:
+        payload = production_gaon_storage_status_api_release_check()
+        for key in (
+            "report_status_ok",
+            "report_has_tier_bytes",
+            "report_has_disk_usage",
+            "report_never_destructive",
+            "missing_script_is_clean_error",
+        ):
+            self.assertTrue(payload[key], key)
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["champion_promoted"])
+        self.assertFalse(payload["approval_bypassed"])
+        self.assertEqual(payload["safety"], "pass")
+
+
+class StorageStatusApiCliWiringTests(unittest.TestCase):
+    """CLI wiring for production_gaon_storage_status_api_release_check,
+    following the exact existing gaon-production-*-release-check pattern."""
+
+    def test_storage_status_api_release_check_cli_passes(self) -> None:
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from gaon.runtime.cli import main as cli_main
+
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = cli_main(["gaon-production-storage-status-api-release-check"])
+        self.assertEqual(exit_code, 0)
+        printed = output.getvalue()
+        self.assertIn("gaon-production-storage-status-api-release-check: PASS", printed)
+        self.assertIn("strategy_mutated=false", printed)
         self.assertIn("safety=pass", printed)
 
 

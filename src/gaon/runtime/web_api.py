@@ -40,11 +40,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sqlite3
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -86,6 +90,22 @@ MAX_REQUEST_BODY_BYTES = 8192
 # detection Telegram/CLI callers already get from typing "readonly" -
 # no second, HTTP-only mutation-permission concept is introduced here.
 _READ_ONLY_TEXT_MARKER = "readonly"
+
+# deploy/scripts/storage_lifecycle_manager.py lives outside the installable
+# `gaon` package (deploy/ is deployment tooling, not application code), so
+# GET /gaon/storage/status reuses it via subprocess --report rather than
+# importing it or duplicating its HOT/WARM/COLD classification logic here -
+# one source of truth for what counts as HOT/WARM/COLD. --report is
+# documented (in that script's own module docstring) as read-only and safe
+# to run at any time.
+_STORAGE_LIFECYCLE_SCRIPT = Path(__file__).resolve().parents[3] / "deploy" / "scripts" / "storage_lifecycle_manager.py"
+STORAGE_STATUS_TIMEOUT_SECONDS = 15
+
+
+def _default_storage_root_paths() -> list[str]:
+    raw = os.environ.get("GAON_STORAGE_ROOT_PATHS", "")
+    paths = [p.strip() for p in raw.split(",") if p.strip()]
+    return paths or ["/var/lib/strategylab", "/opt/strategylab-v2"]
 
 
 class GaonWebChatAdapter:
@@ -261,6 +281,8 @@ def dispatch_request(
     detail_match = _CANDIDATE_DETAIL_PATH.match(route_path)
     if method == "GET" and detail_match:
         return _handle_candidate_detail(adapter, query, detail_match.group("candidate_id"))
+    if method == "GET" and route_path == "/gaon/storage/status":
+        return _handle_storage_status()
     return 404, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "not found"}
 
 
@@ -372,6 +394,45 @@ def _handle_candidate_detail(
         "champion_promoted": False,
         "approval_bypassed": False,
     }
+
+
+def _handle_storage_status() -> tuple[int, Mapping[str, object]]:
+    """Runs storage_lifecycle_manager.py --report (read-only, per that
+    script's own contract) as a subprocess and relays its JSON report.
+    Never raises out to the caller - a missing script, a bad exit code, or
+    unparsable output all degrade to a well-shaped error response rather
+    than a 500 or an unhandled exception, matching this module's existing
+    failure-isolation pattern for /gaon/chat."""
+    if not _STORAGE_LIFECYCLE_SCRIPT.exists():
+        return 502, {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "error": f"storage_lifecycle_manager.py not found at {_STORAGE_LIFECYCLE_SCRIPT}",
+        }
+    cmd = [sys.executable, str(_STORAGE_LIFECYCLE_SCRIPT), "--report", *_default_storage_root_paths_argv()]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=STORAGE_STATUS_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 502, {"schema_version": WEB_API_SCHEMA_VERSION, "error": f"could not run storage_lifecycle_manager.py: {exc}"}
+    if result.returncode != 0:
+        return 502, {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "error": "storage_lifecycle_manager.py --report exited non-zero",
+            "stderr": result.stderr.strip()[-2000:],
+        }
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        return 502, {"schema_version": WEB_API_SCHEMA_VERSION, "error": f"storage_lifecycle_manager.py output was not valid JSON: {exc}"}
+    return 200, report
+
+
+def _default_storage_root_paths_argv() -> list[str]:
+    argv: list[str] = []
+    for root in _default_storage_root_paths():
+        argv.extend(["--root", root])
+    return argv
 
 
 def _utc_now() -> str:
@@ -617,6 +678,60 @@ def production_gaon_research_status_api_release_check() -> Mapping[str, object]:
         "schema_version": WEB_API_SCHEMA_VERSION,
         **checks,
         "sample_progress_label": mission_payload.get("progress_label"),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_gaon_storage_status_api_release_check() -> Mapping[str, object]:
+    """Regression guard for GET /gaon/storage/status: proves it actually
+    runs the real deploy/scripts/storage_lifecycle_manager.py --report
+    subprocess (against a temp directory tree it builds itself, not the
+    real /var/lib/strategylab - this check must be runnable on a dev
+    machine with none of that present) and relays a well-shaped report,
+    and separately proves the endpoint degrades gracefully (a clear error,
+    not a crash) when the script path doesn't exist."""
+    import shutil
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "strategylab"
+        (root / "backups").mkdir(parents=True)
+        (root / "backups" / "sample.bak").write_bytes(b"sample backup content")
+
+        original_default = _default_storage_root_paths
+        original_script = globals()["_STORAGE_LIFECYCLE_SCRIPT"]
+        try:
+            globals()["_default_storage_root_paths"] = lambda: [str(root)]
+            status, payload = _handle_storage_status()
+        finally:
+            globals()["_default_storage_root_paths"] = original_default
+
+        # Second call: script path deliberately pointed at nothing, proving
+        # the endpoint returns a clean error instead of raising.
+        try:
+            globals()["_STORAGE_LIFECYCLE_SCRIPT"] = Path(tmp) / "does-not-exist.py"
+            missing_status, missing_payload = _handle_storage_status()
+        finally:
+            globals()["_STORAGE_LIFECYCLE_SCRIPT"] = original_script
+
+    checks = {
+        "report_status_ok": status == 200,
+        "report_has_tier_bytes": isinstance(payload.get("tier_bytes"), dict),
+        "report_has_disk_usage": isinstance(payload.get("disk_usage"), dict),
+        "report_never_destructive": payload.get("destructive_action_taken") is False,
+        "missing_script_is_clean_error": missing_status == 502 and "error" in missing_payload,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"gaon storage status api release check failed: {failed}")
+
+    return {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        **checks,
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,

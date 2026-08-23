@@ -432,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-binance-adapter-read-only-release-check")
     sub.add_parser("gaon-production-web-chat-api-release-check")
     sub.add_parser("gaon-production-research-status-api-release-check")
+    sub.add_parser("gaon-production-storage-status-api-release-check")
     sub.add_parser("gaon-production-deployment-artifacts-no-pc-dependency-release-check")
     sub.add_parser("gaon-production-economic-viability-gate-release-check")
     sub.add_parser("gaon-production-candidate-read-only-routing-release-check")
@@ -3099,6 +3100,16 @@ def _run(args: argparse.Namespace) -> int:
             for key, value in payload.items()
         )
         print(f"gaon-production-research-status-api-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-storage-status-api-release-check":
+        from gaon.runtime.web_api import production_gaon_storage_status_api_release_check
+
+        payload = production_gaon_storage_status_api_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-storage-status-api-release-check: PASS {details}")
 
     elif args.command == "gaon-production-deployment-artifacts-no-pc-dependency-release-check":
         payload = production_deployment_artifacts_no_pc_dependency_release_check()
