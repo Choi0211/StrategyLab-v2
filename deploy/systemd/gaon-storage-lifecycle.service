@@ -15,3 +15,8 @@ ExecStart=/opt/strategylab-v2/.venv/bin/python /opt/strategylab-v2/deploy/script
 StandardOutput=journal
 NoNewPrivileges=true
 PrivateTmp=true
+# --report never writes anywhere (see the comment above and
+# storage_lifecycle_manager.py's own cmd_report - it only reads and prints
+# JSON to stdout), so the whole filesystem can be read-only for this unit -
+# no ReadWritePaths needed at all.
+ProtectSystem=strict

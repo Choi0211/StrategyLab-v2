@@ -26,8 +26,22 @@ echo "== 1/6: backing up current DB (before any code change) =="
 mkdir -p "$BACKUPS_DIR"
 if [[ -f "$DB_PATH" ]]; then
   BACKUP_PATH="$BACKUPS_DIR/gaon-runtime.sqlite.$(date -u +%Y-%m-%dT%H%M%SZ).bak"
-  cp "$DB_PATH" "$BACKUP_PATH"
-  echo "backed up $DB_PATH -> $BACKUP_PATH"
+  # strategylab-gaon.service / gaon-web.service are still running at this
+  # point (they aren't stopped until step 6, by design - an upgrade that
+  # fails its checks below must never have taken the service down for
+  # nothing). A plain `cp` of a SQLite file that's actively being written
+  # to can capture a torn/inconsistent snapshot if it lands mid-transaction.
+  # sqlite3's own online backup command is safe against concurrent writers
+  # regardless of journal mode - use it instead of `cp` for exactly this
+  # reason.
+  if ! command -v sqlite3 &>/dev/null; then
+    echo "ERROR: sqlite3 CLI not found - required for a safe online backup of a live database." >&2
+    echo "Install it (e.g. 'apt install sqlite3') before running this script, or stop both" >&2
+    echo "services first and re-run if you accept a brief outage instead." >&2
+    exit 1
+  fi
+  sqlite3 "$DB_PATH" ".backup '$BACKUP_PATH'"
+  echo "backed up $DB_PATH -> $BACKUP_PATH (via sqlite3 .backup, safe against concurrent writers)"
 else
   echo "no existing DB at $DB_PATH yet (first deploy?), nothing to back up"
 fi

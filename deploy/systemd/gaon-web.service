@@ -15,6 +15,10 @@ Restart=on-failure
 RestartSec=10
 NoNewPrivileges=true
 PrivateTmp=true
+# Only the runtime DB needs to be writable - this process never writes into
+# /opt/strategylab-v2 (its own code/venv) at all.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/strategylab
 
 [Install]
 WantedBy=multi-user.target
