@@ -106,12 +106,15 @@ sudo /opt/strategylab-v2/deploy/scripts/storage_lifecycle_manager.py \
   --build-cold-manifest /var/lib/strategylab/backups/cold-manifest.json
 ```
 Get that manifest to the PC (scp, or expose it via the reverse proxy behind
-auth - your choice, not prescribed here). On the PC (Windows):
+auth - your choice, not prescribed here). On the PC (Windows), fill in your
+own local paths for `<PC_ARCHIVE_SYNC_CHECKOUT>` (where you cloned
+`binance_ai_bot_2`) and `<PC_ARCHIVE_DIR>` (wherever you want the archive
+kept):
 ```powershell
-python C:\Users\<you>\binance_ai_bot_2\tools\pc_archive_sync\archive_sync.py `
+python <PC_ARCHIVE_SYNC_CHECKOUT>\tools\pc_archive_sync\archive_sync.py `
   --manifest <path-or-url-to-cold-manifest.json> `
-  --archive-dir D:\Archive\strategylab-cold `
-  --verified-manifest-out D:\Archive\verified-manifest.json
+  --archive-dir <PC_ARCHIVE_DIR> `
+  --verified-manifest-out <PC_ARCHIVE_DIR>\verified-manifest.json
 ```
 Copy `verified-manifest.json` back to the VPS, then, as a **separate,
 deliberate** step (never automatic):
