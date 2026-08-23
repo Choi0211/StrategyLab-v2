@@ -1,0 +1,24 @@
+[Unit]
+Description=StrategyLab Gaon Web Chat/Research-Status API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=strategylab
+Group=strategylab
+WorkingDirectory=/opt/strategylab-v2
+EnvironmentFile=/etc/strategylab/gaon.env
+EnvironmentFile=/etc/strategylab/gaon-web.env
+ExecStart=/opt/strategylab-v2/.venv/bin/python -m gaon.runtime.cli gaon-web-serve --db /var/lib/strategylab/gaon-runtime.sqlite --host ${GAON_WEB_HOST} --port ${GAON_WEB_PORT}
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+# Only the runtime DB needs to be writable - this process never writes into
+# /opt/strategylab-v2 (its own code/venv) at all.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/strategylab
+
+[Install]
+WantedBy=multi-user.target

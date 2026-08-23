@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily StrategyLab storage lifecycle report
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,70 @@
+# EXAMPLE nginx server block - copy to /etc/nginx/sites-available/, replace
+# <YOUR_DOMAIN> with a real domain you control, replace the TLS cert paths
+# with the ones certbot gives you (see ../docs/https_setup.md), then symlink
+# into /etc/nginx/sites-enabled/ and `nginx -t && systemctl reload nginx`.
+#
+# Fronts two independently deployed, unrelated services on this one host:
+#   - Gaon's web chat / research-status API (gaon-web.service, 127.0.0.1:8765)
+#   - The Binance trading dashboard (a separate deployment, expected on
+#     127.0.0.1:5000 - this file only assumes that port number, it does not
+#     depend on knowing that service's internal routes)
+#
+# This is intentionally a plain reverse proxy with rate limiting, NOT an
+# authentication layer - add real auth (see deploy/docs/https_setup.md's
+# notes) before relying on this alone to gate access to either backend.
+
+limit_req_zone $binary_remote_addr zone=strategylab_rl:10m rate=10r/s;
+
+server {
+    listen 80;
+    server_name <YOUR_DOMAIN>;
+    # certbot's nginx plugin will add its own ACME challenge location and
+    # rewrite this block to redirect to 443 automatically - leave this bare
+    # for now if you plan to run `certbot --nginx`.
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name <YOUR_DOMAIN>;
+
+    ssl_certificate     /etc/letsencrypt/live/<YOUR_DOMAIN>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/<YOUR_DOMAIN>/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    limit_req zone=strategylab_rl burst=20 nodelay;
+
+    # Gaon web chat / research-status API.
+    location /gaon/ {
+        # Single-operator gate - uncomment after running
+        # deploy/scripts/setup_basic_auth.sh (creates the password file this
+        # points at). Both location blocks share ONE .htpasswd file/realm by
+        # default; use two separate auth_basic_user_file paths instead if
+        # you ever want different credentials per backend.
+        # auth_basic "StrategyLab/Gaon";
+        # auth_basic_user_file /etc/nginx/.htpasswd-strategylab;
+
+        proxy_pass http://127.0.0.1:8765/gaon/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+
+    # Binance trading dashboard (separate deployment - see the
+    # binance_ai_bot repo's own deploy docs for its systemd unit).
+    location / {
+        # auth_basic "StrategyLab/Gaon";
+        # auth_basic_user_file /etc/nginx/.htpasswd-strategylab;
+
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+}

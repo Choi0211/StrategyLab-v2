@@ -162,6 +162,81 @@ def _deployment_import_path_payload(expected_source: str | None = None) -> dict[
     }
 
 
+_DEPLOY_WINDOWS_PATH_PATTERN_SOURCE = r"\b[A-Za-z]:[\\/]"  # \b excludes "http://"/"https://" false positives
+_DEPLOY_SECRET_SHAPED_PATTERN_SOURCES = (
+    r"sk-ant-[A-Za-z0-9_-]{10,}",       # Anthropic-shaped API key
+    r"AKIA[0-9A-Z]{16}",                # AWS access-key-shaped
+    r"\b[0-9]{6,10}:[A-Za-z0-9_-]{30,}\b",  # Telegram bot-token-shaped
+    r"\bghp_[A-Za-z0-9]{30,}\b",        # GitHub PAT-shaped
+)
+_DEV_MACHINE_USERNAME = "super"  # the literal username of the dev box this was written on
+
+
+def production_deployment_artifacts_no_pc_dependency_release_check() -> dict[str, object]:
+    """Regression guard proving the deploy/ artifacts are portable and do
+    not accidentally bake in this Windows dev machine as a hidden
+    dependency: scans every file under deploy/ for a Windows-style
+    absolute path, a literal reference to this dev machine's username/home
+    directory, or a value shaped like a real secret (as opposed to an
+    obvious <PLACEHOLDER>)."""
+    import re
+    from pathlib import Path
+
+    deploy_root = Path(__file__).resolve().parents[3] / "deploy"
+    if not deploy_root.is_dir():
+        raise ConfigurationError(f"deploy directory not found at {deploy_root}")
+
+    windows_path_re = re.compile(_DEPLOY_WINDOWS_PATH_PATTERN_SOURCE)
+    secret_shaped_res = [re.compile(p) for p in _DEPLOY_SECRET_SHAPED_PATTERN_SOURCES]
+
+    scanned_files: list[str] = []
+    windows_path_hits: list[str] = []
+    dev_username_hits: list[str] = []
+    secret_shaped_hits: list[str] = []
+
+    for path in sorted(deploy_root.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        rel = str(path.relative_to(deploy_root))
+        scanned_files.append(rel)
+
+        if windows_path_re.search(text):
+            windows_path_hits.append(rel)
+        normalized = text.replace("\\", "/")
+        if f"/{_DEV_MACHINE_USERNAME}/" in normalized or f"Users/{_DEV_MACHINE_USERNAME}" in normalized:
+            dev_username_hits.append(rel)
+        if any(pattern.search(text) for pattern in secret_shaped_res):
+            secret_shaped_hits.append(rel)
+
+    checks = {
+        "scanned_at_least_one_file": len(scanned_files) > 0,
+        "no_windows_path_literal": not windows_path_hits,
+        "no_dev_machine_username_literal": not dev_username_hits,
+        "no_secret_shaped_value": not secret_shaped_hits,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(
+            "deployment artifacts PC-dependency check failed: "
+            f"{failed} (windows_path_hits={windows_path_hits}, "
+            f"dev_username_hits={dev_username_hits}, secret_shaped_hits={secret_shaped_hits})"
+        )
+    return {
+        "schema_version": 1,
+        **checks,
+        "scanned_file_count": len(scanned_files),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
 def _configure_cli_text_streams() -> None:
     _configure_text_stream(sys.stdout)
     _configure_text_stream(sys.stderr)
@@ -194,6 +269,10 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("run")
     run.add_argument("--db", default=":memory:")
     run.add_argument("--once", action="store_true", default=False)
+    web_serve = sub.add_parser("gaon-web-serve")
+    web_serve.add_argument("--db", default=":memory:")
+    web_serve.add_argument("--host", default=None)
+    web_serve.add_argument("--port", type=int, default=None)
     status_cmd = sub.add_parser("status")
     status_cmd.add_argument("--db", default=":memory:")
     assistant_status = sub.add_parser("assistant-status")
@@ -263,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-autonomous-external-research-execution-release-check")
     sub.add_parser("gaon-external-research-memory-release-check")
     sub.add_parser("gaon-evidence-backed-hypothesis-release-check")
+    sub.add_parser("gaon-price-action-knowledge-seed-release-check")
     sub.add_parser("gaon-strategy-experiment-builder-release-check")
     sub.add_parser("gaon-authoritative-experiment-execution-release-check")
     sub.add_parser("gaon-validation-loop-v2-release-check")
@@ -348,6 +428,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-cumulative-sample-persistence-release-check")
     sub.add_parser("gaon-production-sample-exhaustion-candidate-decision-release-check")
     sub.add_parser("gaon-production-promotion-target-consistency-release-check")
+    sub.add_parser("gaon-production-promotion-readiness-reachability-release-check")
+    sub.add_parser("gaon-production-binance-adapter-read-only-release-check")
+    sub.add_parser("gaon-production-web-chat-api-release-check")
+    sub.add_parser("gaon-production-research-status-api-release-check")
+    sub.add_parser("gaon-production-storage-status-api-release-check")
+    sub.add_parser("gaon-production-deployment-artifacts-no-pc-dependency-release-check")
     sub.add_parser("gaon-production-economic-viability-gate-release-check")
     sub.add_parser("gaon-production-candidate-read-only-routing-release-check")
     sub.add_parser("gaon-production-typo-tolerant-research-continuation-release-check")
@@ -1046,6 +1132,17 @@ def _run(args: argparse.Namespace) -> int:
             print(f"running={status.running} ticks={status.ticks} active_workers={status.active_workers}")
         except KeyboardInterrupt:
             print("runtime service stopped")
+        finally:
+            store.close()
+    elif args.command == "gaon-web-serve":
+        from gaon.runtime.web_api import run_server
+
+        config = load_runtime_config(os.environ)
+        store = RuntimeStateStore(args.db)
+        try:
+            run_server(config, store, host=args.host, port=args.port)
+        except KeyboardInterrupt:
+            print("gaon web API stopped")
         finally:
             store.close()
     elif args.command == "assistant-status":
@@ -2022,6 +2119,16 @@ def _run(args: argparse.Namespace) -> int:
             "strategy_mutated=false order_executed=false safety=pass"
         )
 
+    elif args.command == "gaon-price-action-knowledge-seed-release-check":
+        from gaon.knowledge.price_action_knowledge import production_price_action_knowledge_seed_release_check
+
+        payload = production_price_action_knowledge_seed_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-price-action-knowledge-seed-release-check: PASS {details}")
+
     elif args.command == "gaon-strategy-experiment-builder-release-check":
         from gaon.knowledge.strategy_experiment import strategy_experiment_builder_release_check
 
@@ -2953,6 +3060,64 @@ def _run(args: argparse.Namespace) -> int:
             for key, value in payload.items()
         )
         print(f"gaon-production-promotion-target-consistency-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-promotion-readiness-reachability-release-check":
+        from gaon.knowledge.research_mission import production_promotion_readiness_reachability_release_check
+
+        payload = production_promotion_readiness_reachability_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-promotion-readiness-reachability-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-binance-adapter-read-only-release-check":
+        from gaon.adapters.binance import production_binance_adapter_read_only_release_check
+
+        payload = production_binance_adapter_read_only_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-binance-adapter-read-only-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-web-chat-api-release-check":
+        from gaon.runtime.web_api import production_gaon_web_chat_api_release_check
+
+        payload = production_gaon_web_chat_api_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-web-chat-api-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-research-status-api-release-check":
+        from gaon.runtime.web_api import production_gaon_research_status_api_release_check
+
+        payload = production_gaon_research_status_api_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-research-status-api-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-storage-status-api-release-check":
+        from gaon.runtime.web_api import production_gaon_storage_status_api_release_check
+
+        payload = production_gaon_storage_status_api_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-storage-status-api-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-deployment-artifacts-no-pc-dependency-release-check":
+        payload = production_deployment_artifacts_no_pc_dependency_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-deployment-artifacts-no-pc-dependency-release-check: PASS {details}")
 
     elif args.command == "gaon-production-economic-viability-gate-release-check":
         from gaon.knowledge.strategy_candidate import production_economic_viability_gate_release_check

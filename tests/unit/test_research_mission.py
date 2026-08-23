@@ -1404,5 +1404,84 @@ class TypoTolerantContinuationReleaseCheckTests(unittest.TestCase):
         self.assertEqual(dict(first), dict(second))
 
 
+class PromotionReadinessReachabilityReleaseCheckTests(unittest.TestCase):
+    """Production has never emitted a single promotion-ready candidate. This
+    proves that `promotion-ready` is reachable end-to-end through the real
+    candidate-level gate chain (breadth -> robustness stages -> independent
+    economic-viability re-check -> RANK_CANDIDATES -> mark_promotion_ready)
+    for three distinct candidates, not just mission-level bookkeeping (see
+    PromotionTargetConsistencyReleaseCheckTests above, which only exercises
+    record_promotion_candidate directly). A duplicate-fingerprint replay must
+    not inflate the distinct count, and the terminal AWAITING_HUMAN_APPROVAL
+    state must survive a JSON restart round-trip. Following the exact
+    caller-wiring convention this codebase already had to retrofit once (see
+    EconomicViabilityGateReleaseCheckTests in test_strategy_candidate.py) -
+    this test IS the caller, so the assertions actually execute under
+    `python -m unittest discover` / scripts/verify_release.py."""
+
+    def test_three_distinct_candidates_reach_awaiting_human_approval(self) -> None:
+        from gaon.knowledge.research_mission import production_promotion_readiness_reachability_release_check
+
+        payload = production_promotion_readiness_reachability_release_check()
+        for key in (
+            "starts_at_zero_of_three",
+            "candidate_a_economic_viability_pass",
+            "candidate_a_reaches_rank_candidates",
+            "one_of_three_after_candidate_a",
+            "candidate_a_promotion_ready",
+            "candidate_b_economic_viability_pass",
+            "candidate_b_reaches_rank_candidates",
+            "two_of_three_after_candidate_b",
+            "duplicate_fingerprint_not_counted",
+            "candidate_c_economic_viability_pass",
+            "candidate_c_reaches_rank_candidates",
+            "three_of_three_awaits_human_approval",
+            "restart_persists_terminal_state",
+            "no_order_or_promote_symbol_in_source",
+        ):
+            self.assertTrue(payload[key], key)
+        self.assertEqual(payload["final_status"], "awaiting_human_approval")
+        self.assertEqual(payload["distinct_promotion_ready_count"], 3)
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["champion_promoted"])
+        self.assertFalse(payload["approval_bypassed"])
+        self.assertEqual(payload["safety"], "pass")
+
+    def test_release_check_is_deterministic_across_runs(self) -> None:
+        from gaon.knowledge.research_mission import production_promotion_readiness_reachability_release_check
+
+        first = production_promotion_readiness_reachability_release_check()
+        second = production_promotion_readiness_reachability_release_check()
+        self.assertEqual(dict(first), dict(second))
+
+
+class PromotionReadinessReachabilityCliWiringTests(unittest.TestCase):
+    """CLI wiring for production_promotion_readiness_reachability_release_check,
+    following the exact existing gaon-production-*-release-check pattern
+    (see EconomicViabilityGateCliWiringTests in test_strategy_candidate.py).
+    Calls the SAME existing implementation via the CLI - no parallel/duplicate
+    release-check logic is introduced here."""
+
+    def test_promotion_readiness_reachability_release_check_cli_passes(self) -> None:
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from gaon.runtime.cli import main as cli_main
+
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = cli_main(["gaon-production-promotion-readiness-reachability-release-check"])
+        self.assertEqual(exit_code, 0)
+        printed = output.getvalue()
+        self.assertIn("gaon-production-promotion-readiness-reachability-release-check: PASS", printed)
+        self.assertIn("final_status=awaiting_human_approval", printed)
+        self.assertIn("distinct_promotion_ready_count=3", printed)
+        self.assertIn("strategy_mutated=false", printed)
+        self.assertIn("order_executed=false", printed)
+        self.assertIn("champion_promoted=false", printed)
+        self.assertIn("approval_bypassed=false", printed)
+
+
 if __name__ == "__main__":
     unittest.main()
