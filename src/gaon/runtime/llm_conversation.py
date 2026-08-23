@@ -73,6 +73,7 @@ from gaon.knowledge.research_mission import (
     is_diversity_request,
     is_generic_continuation_request,
     is_mission_candidate_read_request,
+    is_stop_or_negation_request,
     is_provider_acquisition_blocker,
     mission_awaiting_approval_message,
     mission_blocked_message,
@@ -774,6 +775,27 @@ class LLMConversationBrain:
     def _try_conversational_mvp(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if not _is_conversational_mvp_source(request):
             return None
+        # KR-ST-008 production bug fix: STOP/negation ("연구 계속하지
+        # 마세요", "연구 중단해주세요") has absolute priority over every
+        # other routing path here - typo-tolerant continuation, read-only,
+        # legacy autonomous research, everything. Checked first,
+        # unconditionally, before route classification or mission
+        # extraction/update even happen, so a stop request can never be
+        # reinterpreted as any kind of research-execution request and
+        # never mutates mission state. A pure read
+        # (self._mission_for, not extract_or_update_mission) so this turn
+        # itself changes nothing.
+        if is_stop_or_negation_request(request.text):
+            mission = self._mission_for(request.session_id)
+            status = f"\n\n{mission_status_block(mission)}" if mission is not None else ""
+            return (
+                f"영하님, 알겠습니다. 추가 연구를 실행하지 않았습니다.{status}",
+                "conversation_research_stopped",
+                _dedupe((*warnings, "explicit stop/negation request; zero research tool calls, no state mutation")),
+                references,
+                "deterministic",
+                (),
+            )
         route = classify_conversational_route(request.text)
         if route.intent is ConversationalMVPIntent.UNKNOWN and _is_stored_research_explanation_followup(request.text):
             context = self._mvp_context_for(request.session_id)
@@ -1955,6 +1977,42 @@ class LLMConversationBrain:
             tool_calls,
         )
 
+    def _mission_aware_continuation_fail_safe(
+        self,
+        request: LLMConversationRequest,
+        route,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """Item 7 fail-safe: a market-wide/selected-symbol mission with a
+        real active candidate must never silently fall through into the
+        LEGACY single-symbol autonomous-research path and resolve its
+        target symbol from STALE per-session conversational context - the
+        exact mechanism behind the KR-ST-008 production defect. Called at
+        every point in ``_try_autonomous_research_conversation`` that is
+        about to do that (i.e. some legacy mode/learning_mode was
+        detected and ``route.symbols`` is empty, so symbol resolution
+        would fall back to ``context.last_symbols``).
+
+        Returns the canonical mission continuation cycle instead - the
+        legacy classifier already detected SOME continuation/research-
+        shaped signal to reach this point, so redirecting to the real
+        mission-driven cycle (rather than guessing with a stale symbol,
+        or refusing outright) is the correct behavior. Returns ``None``
+        when this fail-safe does not apply (no active mission/candidate,
+        or the message explicitly names a different symbol), so the
+        caller proceeds with its own logic unchanged.
+        """
+        if route.symbols:
+            return None
+        mission = self._mission_for(request.session_id)
+        if mission is None or mission.universe_scope is MissionUniverseScope.SINGLE_SYMBOL:
+            return None
+        active_candidate = get_active_candidate(mission)
+        if active_candidate is None:
+            return None
+        return self._try_mission_driven_research_cycle(request, mission, warnings, references)
+
     def _try_autonomous_research_conversation(self, request: LLMConversationRequest, route, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
             return None
@@ -1992,6 +2050,9 @@ class LLMConversationBrain:
                 legacy_cycle_request
                 or legacy_cycle_continuation
             ):
+                fail_safe = self._mission_aware_continuation_fail_safe(request, route, warnings, references)
+                if fail_safe is not None:
+                    return fail_safe
                 return self._try_autonomous_learning_v2_conversation(request, route, context, learning_mode, warnings, references)
         if mode is None:
             return None
@@ -2018,6 +2079,9 @@ class LLMConversationBrain:
             text = _format_tool_response("multi_symbol_research", result.output, request.text)
             self._remember_mvp_context(request, ConversationalMVPIntent.COMPARE_SYMBOLS, self._payloads_from_multi_symbol_result(result.output), text)
             return text, "conversation_autonomous_compare", _dedupe((*warnings, "autonomous compare routed to multi-symbol research")), _dedupe((*references, "tool:multi_symbol_research")), "deterministic", ("multi_symbol_research",)
+        fail_safe = self._mission_aware_continuation_fail_safe(request, route, warnings, references)
+        if fail_safe is not None:
+            return fail_safe
         symbol = _resolve_autonomous_symbol(route, context)
         original_text = previous_request_text(context, request.text) if context is not None else request.text
         tool_args: dict[str, object] = {"request_text": original_text, "symbol": symbol, "mode": mode}
@@ -3215,6 +3279,20 @@ def _autonomous_request_mode(text: str) -> str | None:
     normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
     if not normalized:
         return None
+    if is_stop_or_negation_request(text):
+        # Independent-review fix: this classifier's own "continue_terms"
+        # below includes bare "연구계속"/"계속해" - substrings that a STOP
+        # message like "연구 계속하지 마세요" ALSO contains (as a prefix),
+        # so this function used to independently misclassify a stop
+        # request as mode="continue" even after
+        # is_generic_continuation_request correctly rejected it - a
+        # second, separate path into research execution for the exact
+        # defect this module's read-only/continuation fix closes. The
+        # top-level STOP gate in
+        # LLMConversationBrain._try_conversational_mvp already intercepts
+        # this before this function is ever called; this guard is
+        # defense-in-depth for any other caller.
+        return None
     if _has_fresh_research_execution_markers(text):
         return "validate"
     learning = ("지금까지무엇을배웠", "지금까지뭘배웠", "무엇을배웠", "뭘배웠", "학습기록", "learningmemory", "whatlearned")
@@ -3245,6 +3323,12 @@ def _autonomous_request_mode(text: str) -> str | None:
 def _autonomous_learning_request_mode(text: str) -> str | None:
     normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
     if not normalized:
+        return None
+    if is_stop_or_negation_request(text):
+        # See the matching guard in _autonomous_request_mode above - this
+        # classifier's "continuation" tuple also contains bare "연구계속"/
+        # "계속해", which a STOP message like "연구 계속하지 마세요" also
+        # contains as a prefix.
         return None
     if any(token in normalized for token in (
         "다중종목", "여러종목", "복수종목", "모든종목",

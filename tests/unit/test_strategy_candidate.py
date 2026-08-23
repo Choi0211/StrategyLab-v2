@@ -1471,7 +1471,7 @@ class EconomicViabilitySampleFloorTests(unittest.TestCase):
 
         viability = evaluate_economic_viability(candidate)
         self.assertIs(viability.status, EconomicViabilityStatus.NEEDS_MORE_EVIDENCE)
-        self.assertEqual(viability.reason, "insufficient_breadth_for_economic_decision")
+        self.assertEqual(viability.reason, "insufficient_performance_sample_for_economic_decision")
         # Must never be forced into a decisive verdict off 3 real data
         # points, even though those 3 symbols are unanimously and
         # decisively unprofitable.
