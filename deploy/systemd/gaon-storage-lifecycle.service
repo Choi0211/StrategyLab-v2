@@ -1,0 +1,17 @@
+[Unit]
+Description=StrategyLab storage lifecycle report (HOT/WARM/COLD, disk-usage warnings)
+
+[Service]
+Type=oneshot
+User=strategylab
+Group=strategylab
+WorkingDirectory=/opt/strategylab-v2
+# --report is read-only: it never moves, deletes, or otherwise modifies any
+# file. Deliberately does NOT run --cleanup on a timer - COLD-tier deletion
+# only ever happens when a human runs --cleanup by hand against a verified
+# manifest from the PC-side archive client (see storage_lifecycle_manager.py
+# module docstring).
+ExecStart=/opt/strategylab-v2/.venv/bin/python /opt/strategylab-v2/deploy/scripts/storage_lifecycle_manager.py --report
+StandardOutput=journal
+NoNewPrivileges=true
+PrivateTmp=true
