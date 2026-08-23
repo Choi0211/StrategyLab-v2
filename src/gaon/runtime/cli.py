@@ -263,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-autonomous-external-research-execution-release-check")
     sub.add_parser("gaon-external-research-memory-release-check")
     sub.add_parser("gaon-evidence-backed-hypothesis-release-check")
+    sub.add_parser("gaon-price-action-knowledge-seed-release-check")
     sub.add_parser("gaon-strategy-experiment-builder-release-check")
     sub.add_parser("gaon-authoritative-experiment-execution-release-check")
     sub.add_parser("gaon-validation-loop-v2-release-check")
@@ -349,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-sample-exhaustion-candidate-decision-release-check")
     sub.add_parser("gaon-production-promotion-target-consistency-release-check")
     sub.add_parser("gaon-production-promotion-readiness-reachability-release-check")
+    sub.add_parser("gaon-production-binance-adapter-read-only-release-check")
     sub.add_parser("gaon-production-economic-viability-gate-release-check")
     sub.add_parser("gaon-production-candidate-read-only-routing-release-check")
     sub.add_parser("gaon-production-typo-tolerant-research-continuation-release-check")
@@ -2023,6 +2025,16 @@ def _run(args: argparse.Namespace) -> int:
             "strategy_mutated=false order_executed=false safety=pass"
         )
 
+    elif args.command == "gaon-price-action-knowledge-seed-release-check":
+        from gaon.knowledge.price_action_knowledge import production_price_action_knowledge_seed_release_check
+
+        payload = production_price_action_knowledge_seed_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-price-action-knowledge-seed-release-check: PASS {details}")
+
     elif args.command == "gaon-strategy-experiment-builder-release-check":
         from gaon.knowledge.strategy_experiment import strategy_experiment_builder_release_check
 
@@ -2964,6 +2976,16 @@ def _run(args: argparse.Namespace) -> int:
             for key, value in payload.items()
         )
         print(f"gaon-production-promotion-readiness-reachability-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-binance-adapter-read-only-release-check":
+        from gaon.adapters.binance import production_binance_adapter_read_only_release_check
+
+        payload = production_binance_adapter_read_only_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-binance-adapter-read-only-release-check: PASS {details}")
 
     elif args.command == "gaon-production-economic-viability-gate-release-check":
         from gaon.knowledge.strategy_candidate import production_economic_viability_gate_release_check
