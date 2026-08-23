@@ -38,6 +38,14 @@ server {
 
     # Gaon web chat / research-status API.
     location /gaon/ {
+        # Single-operator gate - uncomment after running
+        # deploy/scripts/setup_basic_auth.sh (creates the password file this
+        # points at). Both location blocks share ONE .htpasswd file/realm by
+        # default; use two separate auth_basic_user_file paths instead if
+        # you ever want different credentials per backend.
+        # auth_basic "StrategyLab/Gaon";
+        # auth_basic_user_file /etc/nginx/.htpasswd-strategylab;
+
         proxy_pass http://127.0.0.1:8765/gaon/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -49,6 +57,9 @@ server {
     # Binance trading dashboard (separate deployment - see the
     # binance_ai_bot repo's own deploy docs for its systemd unit).
     location / {
+        # auth_basic "StrategyLab/Gaon";
+        # auth_basic_user_file /etc/nginx/.htpasswd-strategylab;
+
         proxy_pass http://127.0.0.1:5000/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

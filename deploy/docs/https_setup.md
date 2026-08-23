@@ -38,13 +38,21 @@ automatically by any script in this repo.
 
 ## Access control (do this before relying on the reverse proxy alone)
 
-The example nginx config only rate-limits; it does not authenticate anyone.
-Before exposing this publicly, add ONE of:
+The example nginx config only rate-limits; it does not authenticate anyone
+by default. Before exposing this publicly, add ONE of:
 
-- HTTP basic auth on the `location /gaon/` block (`htpasswd` + `auth_basic`
-  directives) for a minimal single-operator gate.
+- **HTTP basic auth (ready to use)**: run
+  `deploy/scripts/setup_basic_auth.sh <username>` (idempotent - creates
+  `/etc/nginx/.htpasswd-strategylab` the first time, adds/updates a user on
+  later runs, never prints the password), then uncomment the two
+  `auth_basic`/`auth_basic_user_file` line pairs already present (commented
+  out) in `deploy/nginx/strategylab-binance.conf.example` under BOTH the
+  `/gaon/` and `/` location blocks, then `nginx -t && systemctl reload nginx`.
+  This is the minimal single-operator gate and the one this repo actually
+  provides tooling for.
 - An IP allowlist (`allow <your-ip>; deny all;`) if you only ever access
-  this from known networks.
+  this from known networks - add this yourself to each `location` block,
+  no script provided since "your IP" isn't something this repo can know.
 - A proper auth layer in front of the Binance dashboard if it doesn't
   already have one - check `binance_ai_bot`'s own deploy docs.
 
