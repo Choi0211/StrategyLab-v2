@@ -194,6 +194,10 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("run")
     run.add_argument("--db", default=":memory:")
     run.add_argument("--once", action="store_true", default=False)
+    web_serve = sub.add_parser("gaon-web-serve")
+    web_serve.add_argument("--db", default=":memory:")
+    web_serve.add_argument("--host", default=None)
+    web_serve.add_argument("--port", type=int, default=None)
     status_cmd = sub.add_parser("status")
     status_cmd.add_argument("--db", default=":memory:")
     assistant_status = sub.add_parser("assistant-status")
@@ -351,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-promotion-target-consistency-release-check")
     sub.add_parser("gaon-production-promotion-readiness-reachability-release-check")
     sub.add_parser("gaon-production-binance-adapter-read-only-release-check")
+    sub.add_parser("gaon-production-web-chat-api-release-check")
     sub.add_parser("gaon-production-economic-viability-gate-release-check")
     sub.add_parser("gaon-production-candidate-read-only-routing-release-check")
     sub.add_parser("gaon-production-typo-tolerant-research-continuation-release-check")
@@ -1049,6 +1054,17 @@ def _run(args: argparse.Namespace) -> int:
             print(f"running={status.running} ticks={status.ticks} active_workers={status.active_workers}")
         except KeyboardInterrupt:
             print("runtime service stopped")
+        finally:
+            store.close()
+    elif args.command == "gaon-web-serve":
+        from gaon.runtime.web_api import run_server
+
+        config = load_runtime_config(os.environ)
+        store = RuntimeStateStore(args.db)
+        try:
+            run_server(config, store, host=args.host, port=args.port)
+        except KeyboardInterrupt:
+            print("gaon web API stopped")
         finally:
             store.close()
     elif args.command == "assistant-status":
@@ -2986,6 +3002,16 @@ def _run(args: argparse.Namespace) -> int:
             for key, value in payload.items()
         )
         print(f"gaon-production-binance-adapter-read-only-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-web-chat-api-release-check":
+        from gaon.runtime.web_api import production_gaon_web_chat_api_release_check
+
+        payload = production_gaon_web_chat_api_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-web-chat-api-release-check: PASS {details}")
 
     elif args.command == "gaon-production-economic-viability-gate-release-check":
         from gaon.knowledge.strategy_candidate import production_economic_viability_gate_release_check
