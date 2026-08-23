@@ -40,13 +40,21 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Mapping
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
+from gaon.knowledge.research_mission import ResearchMission, candidate_records, get_candidate
+from gaon.knowledge.strategy_candidate import (
+    StrategyCandidateRecord,
+    evaluate_economic_viability,
+    next_blocker_driven_research_action,
+)
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.conversation_context import ConversationContextOrchestrator
 from gaon.runtime.event_store import SQLiteEventStore
@@ -61,6 +69,8 @@ from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, 
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.research_failures import classify_exception, warning_for_failure
 from gaon.runtime.storage import RuntimeStateStore
+
+_CANDIDATE_DETAIL_PATH = re.compile(r"^/gaon/research/candidates/(?P<candidate_id>[^/]+)$")
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +106,7 @@ class GaonWebChatAdapter:
         repository = SQLiteConversationRepository(connection)
         context = ConversationContextOrchestrator(connection, repository)
         self._metrics = metrics or MetricsCollector()
+        self._repository = repository
         self._brain = LLMConversationBrain(
             config,
             repository,
@@ -105,6 +116,31 @@ class GaonWebChatAdapter:
             event_store=SQLiteEventStore(connection),
             metrics=self._metrics,
         )
+
+    def mission_for(self, session_ref: str) -> ResearchMission | None:
+        """Read-only: the ResearchMission (if any) persisted for this
+        session. A mission is scoped to the conversation session that
+        created it - there is no single global "the" mission - so this
+        mirrors exactly how gaon.runtime.llm_conversation.
+        LLMConversationBrain._mission_for reads it (same repository, same
+        session metadata key, same ResearchMission.from_json), just
+        exposed as a public, testable read for the HTTP layer. Never
+        writes anything."""
+        session_id = f"web:{session_ref}"
+        try:
+            session = self._repository.get_session(session_id)
+        except KeyError:
+            return None
+        root = session.metadata.get("conversation_mvp")
+        if not isinstance(root, dict):
+            return None
+        raw = root.get("research_mission")
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return ResearchMission.from_json(raw)
+        except (KeyError, ValueError, TypeError):
+            return None
 
     def handle(
         self,
@@ -197,9 +233,13 @@ def dispatch_request(
     both the real HTTP handler and the release check/tests call, so the
     release check never needs to open a real port to prove the contract
     end to end."""
-    if method == "GET" and path == "/gaon/health":
+    split = urlsplit(path)
+    route_path = split.path
+    query = parse_qs(split.query)
+
+    if method == "GET" and route_path == "/gaon/health":
         return 200, {"schema_version": WEB_API_SCHEMA_VERSION, "status": "ok"}
-    if method == "POST" and path == "/gaon/chat":
+    if method == "POST" and route_path == "/gaon/chat":
         if not isinstance(body, Mapping) or not str(body.get("message", "")).strip():
             return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "message is required"}
         session_ref = str(body.get("session_ref") or uuid4().hex)
@@ -214,7 +254,124 @@ def dispatch_request(
             received_at=received_at,
         )
         return 200, payload
+    if method == "GET" and route_path == "/gaon/research/mission":
+        return _handle_mission_status(adapter, query)
+    if method == "GET" and route_path == "/gaon/research/candidates":
+        return _handle_candidates_list(adapter, query)
+    detail_match = _CANDIDATE_DETAIL_PATH.match(route_path)
+    if method == "GET" and detail_match:
+        return _handle_candidate_detail(adapter, query, detail_match.group("candidate_id"))
     return 404, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "not found"}
+
+
+def _session_ref_from_query(query: Mapping[str, list[str]]) -> str | None:
+    values = query.get("session_ref")
+    if not values or not values[0].strip():
+        return None
+    return values[0].strip()
+
+
+def _mission_payload(mission: ResearchMission | None) -> Mapping[str, object]:
+    if mission is None:
+        return {"schema_version": WEB_API_SCHEMA_VERSION, "exists": False}
+    return {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "exists": True,
+        "mission_id": mission.mission_id,
+        "market": mission.market,
+        "status": mission.status.value,
+        "progress_label": mission.progress_label,
+        "target_promotion_ready_candidates": mission.target_promotion_ready_candidates,
+        "current_promotion_ready_candidates": mission.current_promotion_ready_candidates,
+        "active_candidate_id": mission.active_candidate_id,
+        "candidate_count": len(mission.candidates),
+        "cycles_completed": mission.cycles_completed,
+        "blocked_reason": mission.blocked_reason,
+        "created_at": mission.created_at,
+        "updated_at": mission.updated_at,
+    }
+
+
+def _candidate_payload(candidate: StrategyCandidateRecord) -> Mapping[str, object]:
+    """Pure read of already-persisted candidate state, plus two cheap
+    deterministic derivations (both pure functions over that same
+    persisted evidence, no I/O, no new research): the economic-viability
+    verdict and the next blocker-driven action - the same two functions
+    gaon.knowledge.strategy_candidate already uses internally to decide
+    what happens next, exposed here read-only for a status UI."""
+    viability = evaluate_economic_viability(candidate)
+    next_action, next_action_reason = next_blocker_driven_research_action(candidate)
+    return {
+        "candidate_id": candidate.candidate_id,
+        "strategy_fingerprint": candidate.strategy_fingerprint,
+        "strategy_family": candidate.strategy_family,
+        "status": candidate.status.value,
+        "validation_stage_status": dict(candidate.validation_stage_status),
+        "economic_viability": {"status": viability.status.value, "reason": viability.reason},
+        "next_action": next_action,
+        "next_action_reason": next_action_reason,
+        "trade_count": candidate.trade_count,
+        "attempted_symbols": candidate.attempted_symbols,
+        "valid_symbols": candidate.valid_symbols,
+        "rejected_reason": candidate.rejected_reason,
+        "promotion_ready_at": candidate.promotion_ready_at,
+        "created_at": candidate.created_at,
+        "updated_at": candidate.updated_at,
+    }
+
+
+def _handle_mission_status(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    session_ref = _session_ref_from_query(query)
+    if session_ref is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "session_ref query parameter is required"}
+    mission = adapter.mission_for(session_ref)
+    return 200, {
+        **_mission_payload(mission),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
+
+
+def _handle_candidates_list(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    session_ref = _session_ref_from_query(query)
+    if session_ref is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "session_ref query parameter is required"}
+    mission = adapter.mission_for(session_ref)
+    candidates = [] if mission is None else [_candidate_payload(c) for c in candidate_records(mission)]
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "exists": mission is not None,
+        "mission_id": mission.mission_id if mission is not None else None,
+        "candidates": candidates,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
+
+
+def _handle_candidate_detail(
+    adapter: GaonWebChatAdapter, query: Mapping[str, list[str]], candidate_id: str
+) -> tuple[int, Mapping[str, object]]:
+    session_ref = _session_ref_from_query(query)
+    if session_ref is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "session_ref query parameter is required"}
+    mission = adapter.mission_for(session_ref)
+    candidate = None if mission is None else get_candidate(mission, candidate_id)
+    if candidate is None:
+        return 404, {"schema_version": WEB_API_SCHEMA_VERSION, "exists": False, "error": "candidate not found"}
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "exists": True,
+        "mission_id": mission.mission_id,
+        **_candidate_payload(candidate),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
 
 
 def _utc_now() -> str:
@@ -342,6 +499,124 @@ def production_gaon_web_chat_api_release_check() -> Mapping[str, object]:
         "schema_version": WEB_API_SCHEMA_VERSION,
         **checks,
         "sample_route": chat_payload.get("route"),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_gaon_research_status_api_release_check() -> Mapping[str, object]:
+    """Regression guard for the read-only KR research-status endpoints
+    (/gaon/research/mission, /gaon/research/candidates,
+    /gaon/research/candidates/<id>): with a real ResearchMission +
+    StrategyCandidateRecord persisted through the SAME production
+    functions research_mission.py/strategy_candidate.py already use
+    everywhere else (never fabricated JSON), the endpoints return the
+    correct data; against an empty database (no session for this
+    session_ref at all) they return well-shaped empty responses rather
+    than erroring; a missing session_ref is rejected with 400; an
+    unknown candidate_id is 404; every response still carries the
+    standard non-mutation invariants."""
+    from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+    from gaon.knowledge.strategy_candidate import new_candidate
+    from gaon.runtime.llm_conversation import LLMConversationSession
+
+    now = "2026-08-23T00:00:00Z"
+    store = RuntimeStateStore(":memory:")
+    try:
+        config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+        adapter = GaonWebChatAdapter(config, store._connection)
+
+        empty_mission_status, empty_mission_payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/mission?session_ref=release-check", body=None
+        )
+        empty_candidates_status, empty_candidates_payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/candidates?session_ref=release-check", body=None
+        )
+        missing_session_ref_status, _ = dispatch_request(
+            adapter, method="GET", path="/gaon/research/mission", body=None
+        )
+
+        # A real chat turn creates the session row, exactly as any real
+        # caller would trigger it.
+        adapter.handle(
+            message="가온 상태 알려줘 readonly", session_ref="release-check", user_ref="release-check-user",
+            read_only=True, received_at=now,
+        )
+
+        # Seed a real mission + real candidate through the SAME production
+        # functions used everywhere else in this codebase (not a parallel
+        # storage mechanism), then persist it into the session exactly the
+        # way LLMConversationBrain._remember_mission does (same
+        # repository, same session metadata key) - this is test setup via
+        # the real write path, not fabricated JSON handed to the reader.
+        mission = extract_or_update_mission(
+            "대한민국 장에 맞는 단타 매매 전략을 연구해줘. 승격 준비 후보 3개가 준비될 때까지 계속해줘.",
+            existing=None, now=now,
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=now)
+        mission = add_candidate(mission, candidate, now=now)
+
+        session = adapter._repository.get_session("web:release-check")
+        metadata = dict(session.metadata)
+        metadata["conversation_mvp"] = {"research_mission": mission.to_json()}
+        adapter._repository.upsert_session(
+            LLMConversationSession(
+                session.session_id, session.user_ref, session.source, session.status,
+                session.created_at, now, metadata,
+            )
+        )
+
+        mission_status, mission_payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/mission?session_ref=release-check", body=None
+        )
+        candidates_status, candidates_payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/candidates?session_ref=release-check", body=None
+        )
+        detail_status, detail_payload = dispatch_request(
+            adapter, method="GET",
+            path=f"/gaon/research/candidates/{candidate.candidate_id}?session_ref=release-check", body=None,
+        )
+        missing_detail_status, _ = dispatch_request(
+            adapter, method="GET", path="/gaon/research/candidates/NOT-REAL?session_ref=release-check", body=None,
+        )
+    finally:
+        store.close()
+
+    candidates_list = candidates_payload.get("candidates", [])
+    checks = {
+        "empty_mission_status_ok": empty_mission_status == 200,
+        "empty_mission_not_exists": empty_mission_payload.get("exists") is False,
+        "empty_candidates_status_ok": empty_candidates_status == 200,
+        "empty_candidates_list_is_empty": empty_candidates_payload.get("candidates") == [],
+        "missing_session_ref_is_400": missing_session_ref_status == 400,
+        "mission_status_ok": mission_status == 200,
+        "mission_exists": mission_payload.get("exists") is True,
+        "mission_progress_label_correct": mission_payload.get("progress_label") == "0/3",
+        "mission_candidate_count_correct": mission_payload.get("candidate_count") == 1,
+        "candidates_status_ok": candidates_status == 200,
+        "candidates_list_has_one": len(candidates_list) == 1,
+        "candidate_id_matches": bool(candidates_list) and candidates_list[0].get("candidate_id") == candidate.candidate_id,
+        "candidate_has_validation_stage_status": bool(candidates_list) and "validation_stage_status" in candidates_list[0],
+        "detail_status_ok": detail_status == 200,
+        "detail_candidate_id_matches": detail_payload.get("candidate_id") == candidate.candidate_id,
+        "detail_has_economic_viability": "economic_viability" in detail_payload,
+        "missing_detail_is_404": missing_detail_status == 404,
+        "no_strategy_mutation": mission_payload.get("strategy_mutated") is False and detail_payload.get("strategy_mutated") is False,
+        "no_order_execution": mission_payload.get("order_executed") is False and detail_payload.get("order_executed") is False,
+        "no_champion_promotion": mission_payload.get("champion_promoted") is False and detail_payload.get("champion_promoted") is False,
+        "no_approval_bypass": mission_payload.get("approval_bypassed") is False and detail_payload.get("approval_bypassed") is False,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"gaon research status api release check failed: {failed}")
+
+    return {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        **checks,
+        "sample_progress_label": mission_payload.get("progress_label"),
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,

@@ -14,14 +14,40 @@ import unittest
 import urllib.error
 import urllib.request
 
+from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+from gaon.knowledge.strategy_candidate import new_candidate
 from gaon.runtime.config import GaonRuntimeConfig
+from gaon.runtime.llm_conversation import LLMConversationSession
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.web_api import (
     GaonWebChatAdapter,
     dispatch_request,
+    production_gaon_research_status_api_release_check,
     production_gaon_web_chat_api_release_check,
     run_server,
 )
+
+_MISSION_TEXT = "대한민국 장에 맞는 단타 매매 전략을 연구해줘. 승격 준비 후보 3개가 준비될 때까지 계속해줘."
+_NOW = "2026-08-23T00:00:00Z"
+
+
+def _seed_mission_with_one_candidate(adapter: GaonWebChatAdapter, session_ref: str):
+    """Creates the session (a real chat turn, same as any real caller),
+    then persists a real ResearchMission + StrategyCandidateRecord built
+    through the same production functions used everywhere else in this
+    codebase, into that session's metadata - exactly how
+    LLMConversationBrain._remember_mission does it. Returns the candidate."""
+    adapter.handle(message="가온 상태 알려줘 readonly", session_ref=session_ref, user_ref="u1", read_only=True, received_at=_NOW)
+    mission = extract_or_update_mission(_MISSION_TEXT, existing=None, now=_NOW)
+    candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=_NOW)
+    mission = add_candidate(mission, candidate, now=_NOW)
+    session = adapter._repository.get_session(f"web:{session_ref}")
+    metadata = dict(session.metadata)
+    metadata["conversation_mvp"] = {"research_mission": mission.to_json()}
+    adapter._repository.upsert_session(
+        LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, _NOW, metadata)
+    )
+    return candidate
 
 
 def _adapter() -> GaonWebChatAdapter:
@@ -213,6 +239,139 @@ class GaonWebChatApiCliWiringTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         printed = output.getvalue()
         self.assertIn("gaon-production-web-chat-api-release-check: PASS", printed)
+        self.assertIn("strategy_mutated=false", printed)
+        self.assertIn("order_executed=false", printed)
+        self.assertIn("champion_promoted=false", printed)
+        self.assertIn("approval_bypassed=false", printed)
+        self.assertIn("safety=pass", printed)
+
+
+class ResearchStatusEndpointsTests(unittest.TestCase):
+    def test_mission_status_missing_session_ref_is_400(self) -> None:
+        adapter = _adapter()
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/research/mission", body=None)
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
+
+    def test_mission_status_for_unknown_session_is_a_well_shaped_empty_response(self) -> None:
+        adapter = _adapter()
+        status, payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/mission?session_ref=nobody-home", body=None
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["exists"])
+
+    def test_candidates_list_for_unknown_session_is_empty_not_an_error(self) -> None:
+        adapter = _adapter()
+        status, payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/candidates?session_ref=nobody-home", body=None
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["candidates"], [])
+
+    def test_mission_and_candidates_reflect_real_persisted_state(self) -> None:
+        adapter = _adapter()
+        candidate = _seed_mission_with_one_candidate(adapter, "kr-status")
+
+        mission_status, mission_payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/mission?session_ref=kr-status", body=None
+        )
+        self.assertEqual(mission_status, 200)
+        self.assertTrue(mission_payload["exists"])
+        self.assertEqual(mission_payload["progress_label"], "0/3")
+        self.assertEqual(mission_payload["candidate_count"], 1)
+        self.assertFalse(mission_payload["strategy_mutated"])
+        self.assertFalse(mission_payload["order_executed"])
+        self.assertFalse(mission_payload["champion_promoted"])
+        self.assertFalse(mission_payload["approval_bypassed"])
+
+        list_status, list_payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/candidates?session_ref=kr-status", body=None
+        )
+        self.assertEqual(list_status, 200)
+        self.assertEqual(len(list_payload["candidates"]), 1)
+        self.assertEqual(list_payload["candidates"][0]["candidate_id"], candidate.candidate_id)
+        self.assertIn("validation_stage_status", list_payload["candidates"][0])
+        self.assertIn("economic_viability", list_payload["candidates"][0])
+
+    def test_candidate_detail_matches_list_entry_and_404s_for_unknown_id(self) -> None:
+        adapter = _adapter()
+        candidate = _seed_mission_with_one_candidate(adapter, "kr-detail")
+
+        found_status, found_payload = dispatch_request(
+            adapter, method="GET", path=f"/gaon/research/candidates/{candidate.candidate_id}?session_ref=kr-detail", body=None
+        )
+        self.assertEqual(found_status, 200)
+        self.assertEqual(found_payload["candidate_id"], candidate.candidate_id)
+        self.assertEqual(found_payload["strategy_family"], candidate.strategy_family)
+
+        missing_status, missing_payload = dispatch_request(
+            adapter, method="GET", path="/gaon/research/candidates/NOT-A-REAL-ID?session_ref=kr-detail", body=None
+        )
+        self.assertEqual(missing_status, 404)
+        self.assertFalse(missing_payload["exists"])
+
+    def test_candidate_detail_missing_session_ref_is_400(self) -> None:
+        adapter = _adapter()
+        status, _ = dispatch_request(adapter, method="GET", path="/gaon/research/candidates/KR-ST-001", body=None)
+        self.assertEqual(status, 400)
+
+
+class ResearchStatusApiReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes(self) -> None:
+        payload = production_gaon_research_status_api_release_check()
+        for key in (
+            "empty_mission_status_ok",
+            "empty_mission_not_exists",
+            "empty_candidates_status_ok",
+            "empty_candidates_list_is_empty",
+            "missing_session_ref_is_400",
+            "mission_status_ok",
+            "mission_exists",
+            "mission_progress_label_correct",
+            "mission_candidate_count_correct",
+            "candidates_status_ok",
+            "candidates_list_has_one",
+            "candidate_id_matches",
+            "candidate_has_validation_stage_status",
+            "detail_status_ok",
+            "detail_candidate_id_matches",
+            "detail_has_economic_viability",
+            "missing_detail_is_404",
+            "no_strategy_mutation",
+            "no_order_execution",
+            "no_champion_promotion",
+            "no_approval_bypass",
+        ):
+            self.assertTrue(payload[key], key)
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["champion_promoted"])
+        self.assertFalse(payload["approval_bypassed"])
+        self.assertEqual(payload["safety"], "pass")
+
+    def test_release_check_is_deterministic_in_shape_across_runs(self) -> None:
+        first = production_gaon_research_status_api_release_check()
+        second = production_gaon_research_status_api_release_check()
+        self.assertEqual(first, second)
+
+
+class ResearchStatusApiCliWiringTests(unittest.TestCase):
+    """CLI wiring for production_gaon_research_status_api_release_check,
+    following the exact existing gaon-production-*-release-check pattern."""
+
+    def test_research_status_api_release_check_cli_passes(self) -> None:
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from gaon.runtime.cli import main as cli_main
+
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = cli_main(["gaon-production-research-status-api-release-check"])
+        self.assertEqual(exit_code, 0)
+        printed = output.getvalue()
+        self.assertIn("gaon-production-research-status-api-release-check: PASS", printed)
         self.assertIn("strategy_mutated=false", printed)
         self.assertIn("order_executed=false", printed)
         self.assertIn("champion_promoted=false", printed)

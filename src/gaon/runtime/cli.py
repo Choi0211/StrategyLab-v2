@@ -356,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-promotion-readiness-reachability-release-check")
     sub.add_parser("gaon-production-binance-adapter-read-only-release-check")
     sub.add_parser("gaon-production-web-chat-api-release-check")
+    sub.add_parser("gaon-production-research-status-api-release-check")
     sub.add_parser("gaon-production-economic-viability-gate-release-check")
     sub.add_parser("gaon-production-candidate-read-only-routing-release-check")
     sub.add_parser("gaon-production-typo-tolerant-research-continuation-release-check")
@@ -3012,6 +3013,16 @@ def _run(args: argparse.Namespace) -> int:
             for key, value in payload.items()
         )
         print(f"gaon-production-web-chat-api-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-research-status-api-release-check":
+        from gaon.runtime.web_api import production_gaon_research_status_api_release_check
+
+        payload = production_gaon_research_status_api_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-research-status-api-release-check: PASS {details}")
 
     elif args.command == "gaon-production-economic-viability-gate-release-check":
         from gaon.knowledge.strategy_candidate import production_economic_viability_gate_release_check
