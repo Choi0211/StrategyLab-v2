@@ -14,6 +14,17 @@
   auto-promotion, approval bypass, strategy mutation, destructive cleanup,
   or fabricated data added.
 
+## Integration: Gaon Binance Conversation Dashboard
+
+- Added a read-only `GET /` service discovery response to the Gaon Web
+  API root used behind the production `:8443` endpoint.
+- Preserved the shared Telegram/Web conversation brain path through
+  `LLMConversationBrain`.
+- Added `gaon-production-web-api-root-release-check`.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, strategy mutation, service restart, or
+  destructive storage action added.
+
 ## Hotfix: Terminal Validation Retry Boundary
 
 - Fixed a production planner regression where `RUN_OOS` could be planned

@@ -24,6 +24,7 @@ from gaon.runtime.web_api import (
     dispatch_request,
     production_gaon_research_status_api_release_check,
     production_gaon_storage_status_api_release_check,
+    production_gaon_web_api_root_release_check,
     production_gaon_web_chat_api_release_check,
     run_server,
 )
@@ -63,6 +64,16 @@ class DispatchRequestTests(unittest.TestCase):
         status, payload = dispatch_request(adapter, method="GET", path="/gaon/health", body=None)
         self.assertEqual(status, 200)
         self.assertEqual(payload["status"], "ok")
+
+    def test_root_is_read_only_service_discovery(self) -> None:
+        adapter = _adapter()
+        status, payload = dispatch_request(adapter, method="GET", path="/", body=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["service"], "Gaon Web API")
+        self.assertEqual(payload["health"], "/gaon/health")
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["approval_bypassed"])
 
     def test_chat_request_reuses_the_real_conversation_brain(self) -> None:
         adapter = _adapter()
@@ -419,6 +430,26 @@ class StorageStatusApiCliWiringTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         printed = output.getvalue()
         self.assertIn("gaon-production-storage-status-api-release-check: PASS", printed)
+
+
+class WebApiRootReleaseCheckTests(unittest.TestCase):
+    def test_root_release_check_passes(self) -> None:
+        payload = production_gaon_web_api_root_release_check()
+        self.assertEqual(payload["service"], "Gaon Web API")
+        self.assertEqual(payload["safety"], "pass")
+
+    def test_root_release_check_cli_passes(self) -> None:
+        from gaon.runtime.cli import main as cli_main
+        import contextlib
+        import io
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = cli_main(["gaon-production-web-api-root-release-check"])
+
+        printed = buffer.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("gaon-production-web-api-root-release-check: PASS", printed)
         self.assertIn("strategy_mutated=false", printed)
         self.assertIn("safety=pass", printed)
 

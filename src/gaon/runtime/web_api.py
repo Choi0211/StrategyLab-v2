@@ -257,6 +257,20 @@ def dispatch_request(
     route_path = split.path
     query = parse_qs(split.query)
 
+    if method == "GET" and route_path == "/":
+        return 200, {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "service": "Gaon Web API",
+            "status": "ok",
+            "health": "/gaon/health",
+            "chat": "/gaon/chat",
+            "research_mission": "/gaon/research/mission",
+            "storage_status": "/gaon/storage/status",
+            "strategy_mutated": False,
+            "order_executed": False,
+            "champion_promoted": False,
+            "approval_bypassed": False,
+        }
     if method == "GET" and route_path == "/gaon/health":
         return 200, {"schema_version": WEB_API_SCHEMA_VERSION, "status": "ok"}
     if method == "POST" and route_path == "/gaon/chat":
@@ -739,6 +753,42 @@ def production_gaon_storage_status_api_release_check() -> Mapping[str, object]:
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_gaon_web_api_root_release_check() -> Mapping[str, object]:
+    """Regression guard for the Gaon API root behind :8443.
+
+    GET / is service discovery only. It must make the API look healthy
+    without running chat, research, approval, storage cleanup, orders, or
+    strategy mutation.
+    """
+    store = RuntimeStateStore(":memory:")
+    try:
+        adapter = GaonWebChatAdapter(GaonRuntimeConfig(), store._connection)
+        status, payload = dispatch_request(adapter, method="GET", path="/", body=None)
+    finally:
+        store.close()
+    checks = {
+        "root_status_ok": status == 200,
+        "service_named": payload.get("service") == "Gaon Web API",
+        "health_linked": payload.get("health") == "/gaon/health",
+        "chat_linked": payload.get("chat") == "/gaon/chat",
+        "strategy_mutated_false": payload.get("strategy_mutated") is False,
+        "order_executed_false": payload.get("order_executed") is False,
+        "approval_bypassed_false": payload.get("approval_bypassed") is False,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"gaon web api root release check failed: {failed}")
+    return {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        **checks,
+        "service": payload.get("service"),
+        "strategy_mutated": False,
+        "order_executed": False,
         "approval_bypassed": False,
         "safety": "pass",
     }
