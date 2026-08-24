@@ -1,5 +1,19 @@
 # Changelog
 
+## Unified Dashboard Storage Filesystem Dedup
+
+- Fixed the StrategyLab storage lifecycle report to group capacity by
+  filesystem device identity instead of resolved root path.
+- Added `filesystem_usage` as an additive dashboard-friendly list while
+  preserving the existing `disk_usage` object for compatibility.
+- Preserved per-directory HOT/WARM/COLD byte accounting separately from
+  filesystem capacity.
+- Strengthened storage lifecycle and Gaon web storage status tests for
+  same-filesystem root de-duplication.
+- Schema unchanged (v36); no live trading, orders, Champion
+  auto-promotion, approval bypass, strategy mutation, destructive cleanup,
+  or fabricated data added.
+
 ## Hotfix: Terminal Validation Retry Boundary
 
 - Fixed a production planner regression where `RUN_OOS` could be planned

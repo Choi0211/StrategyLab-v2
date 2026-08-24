@@ -257,6 +257,31 @@ class ReportTests(unittest.TestCase):
             self.assertGreater(len(report["warnings"]), 0, "a 0% threshold must always be crossed")
             self.assertFalse(report["destructive_action_taken"], "a report warning must never itself trigger a destructive action")
 
+    def test_disk_usage_deduplicates_roots_on_the_same_filesystem(self) -> None:
+        """Two configured roots on the same VPS filesystem must not render
+        as two independent 10GB/23GB capacity cards. The report should keep
+        both root paths, but expose one filesystem capacity entry."""
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            opt_root = base / "opt" / "strategylab-v2"
+            var_root = base / "var" / "lib" / "strategylab"
+            opt_root.mkdir(parents=True)
+            var_root.mkdir(parents=True)
+
+            import io
+            from contextlib import redirect_stdout
+            out = io.StringIO()
+            with redirect_stdout(out):
+                slm.main(["--root", str(opt_root), "--root", str(var_root), "--report"])
+            report = json.loads(out.getvalue())
+
+            self.assertEqual(len(report["disk_usage"]), 1)
+            self.assertEqual(len(report["filesystem_usage"]), 1)
+            fs = report["filesystem_usage"][0]
+            self.assertEqual(set(fs["paths"]), {str(opt_root), str(var_root)})
+            self.assertIn("mount_point", fs)
+            self.assertIn("device_id", fs)
+
     def test_no_warning_at_an_unreachable_threshold(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp) / "strategylab"

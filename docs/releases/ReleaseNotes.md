@@ -3,6 +3,21 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Unified Dashboard Storage Filesystem Dedup
+
+The Gaon storage status backend now de-duplicates filesystem capacity by
+device identity instead of by resolved root path. This prevents a unified
+dashboard from showing the same VPS filesystem capacity twice when
+`/opt/strategylab-v2` and `/var/lib/strategylab` live on the same
+filesystem.
+
+The report preserves HOT/WARM/COLD directory bytes separately from
+filesystem capacity and adds a dashboard-friendly `filesystem_usage` list
+with all included root paths.
+
+No destructive cleanup, trading action, order path, strategy mutation,
+Champion promotion, or approval bypass is introduced.
+
 ## Hotfix: Terminal Validation Retry Boundary
 
 Production KR-ST-007 progression showed `RUN_OOS` being planned again
