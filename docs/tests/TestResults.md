@@ -2,6 +2,23 @@
 
 Status: Passed
 
+## Integration: Gaon Binance Conversation Dashboard
+
+- Targeted local verification:
+  - `python -m unittest tests.unit.test_web_api -q`: PASS, 26 tests
+  - `python -m gaon.runtime.cli gaon-production-web-api-root-release-check`: PASS
+- Required full verification:
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1298 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 260 tests
+  - `python scripts\verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS
+- Production verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion
+  promotion, no strategy mutation, no approval bypass, no service restart,
+  no fabricated evidence.
+
 ## Hotfix: Terminal Validation Retry Boundary
 
 - Targeted local verification:

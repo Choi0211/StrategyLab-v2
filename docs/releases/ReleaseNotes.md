@@ -3,6 +3,21 @@
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 
+## Integration: Gaon Binance Conversation Dashboard
+
+Telegram and Web continue to share the same `LLMConversationBrain`
+response path. The Gaon Web API now exposes a read-only `GET /` service
+discovery response for the `:8443` API root, so the root endpoint no
+longer looks like a broken service when the API itself is healthy.
+
+New release check:
+
+```bash
+python -m gaon.runtime.cli gaon-production-web-api-root-release-check
+```
+
+Schema remains v36 and safety boundaries are unchanged.
+
 ## Hotfix: Terminal Validation Retry Boundary
 
 Production KR-ST-007 progression showed `RUN_OOS` being planned again
