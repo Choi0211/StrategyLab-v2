@@ -179,22 +179,58 @@ def classify(root_paths: list[Path], *, warm_days: int, warm_dir_name: str, cold
 def _disk_usage_for(root_paths: list[Path]) -> dict[str, object]:
     """Reports usage per distinct filesystem among the given roots (multiple
     root paths commonly share one filesystem on a single VPS, so this
-    de-duplicates by resolved mount rather than double-counting)."""
+    de-duplicates by device identity rather than double-counting every
+    configured root path)."""
     seen: dict[str, dict[str, object]] = {}
     for root in root_paths:
         probe = root if root.exists() else root.parent
         if not probe.exists():
             continue
+        try:
+            stat = probe.stat()
+        except OSError:
+            continue
         usage = shutil.disk_usage(probe)
-        key = str(probe.resolve())
-        seen.setdefault(key, {
+        key = f"device:{stat.st_dev}"
+        entry = seen.setdefault(key, {
+            "filesystem_id": key,
+            "device_id": stat.st_dev,
+            "mount_point": str(_mount_point_for(probe)),
             "probed_path": str(root),
+            "probed_paths": [],
+            "paths": [],
             "total_bytes": usage.total,
             "used_bytes": usage.used,
             "free_bytes": usage.free,
             "used_pct": round(usage.used / usage.total * 100, 1) if usage.total else 0.0,
         })
+        entry["probed_paths"].append(str(probe))
+        entry["paths"].append(str(root))
     return seen
+
+
+def _mount_point_for(path: Path) -> Path:
+    """Best-effort mount root for presentation only.
+
+    The actual de-duplication key is ``st_dev``. The mount path gives the
+    dashboard a stable human-readable label while staying deterministic on
+    Windows and Linux without shelling out to platform-specific tools.
+    """
+    current = path.resolve()
+    try:
+        current_dev = current.stat().st_dev
+    except OSError:
+        return current
+    while True:
+        parent = current.parent
+        if parent == current:
+            return current
+        try:
+            if parent.stat().st_dev != current_dev:
+                return current
+        except OSError:
+            return current
+        current = parent
 
 
 def _sha256_of(path: Path) -> str:
@@ -245,6 +281,7 @@ def cmd_report(args: argparse.Namespace) -> int:
             "cold": sum(1 for f in classification.files if f.tier == "cold"),
         },
         "disk_usage": disk,
+        "filesystem_usage": list(disk.values()),
         "warnings": warnings,
         "destructive_action_taken": False,
     }

@@ -713,13 +713,15 @@ def production_gaon_storage_status_api_release_check() -> Mapping[str, object]:
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "strategylab"
+        sibling_root = Path(tmp) / "binance-trading"
         (root / "backups").mkdir(parents=True)
+        sibling_root.mkdir(parents=True)
         (root / "backups" / "sample.bak").write_bytes(b"sample backup content")
 
         original_default = _default_storage_root_paths
         original_script = globals()["_STORAGE_LIFECYCLE_SCRIPT"]
         try:
-            globals()["_default_storage_root_paths"] = lambda: [str(root)]
+            globals()["_default_storage_root_paths"] = lambda: [str(root), str(sibling_root)]
             status, payload = _handle_storage_status()
         finally:
             globals()["_default_storage_root_paths"] = original_default
@@ -736,6 +738,8 @@ def production_gaon_storage_status_api_release_check() -> Mapping[str, object]:
         "report_status_ok": status == 200,
         "report_has_tier_bytes": isinstance(payload.get("tier_bytes"), dict),
         "report_has_disk_usage": isinstance(payload.get("disk_usage"), dict),
+        "report_has_filesystem_usage": isinstance(payload.get("filesystem_usage"), list),
+        "same_filesystem_deduped": isinstance(payload.get("filesystem_usage"), list) and len(payload["filesystem_usage"]) == 1,
         "report_never_destructive": payload.get("destructive_action_taken") is False,
         "missing_script_is_clean_error": missing_status == 502 and "error" in missing_payload,
     }
