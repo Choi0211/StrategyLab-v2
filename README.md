@@ -16,6 +16,9 @@ StrategyLab v2 is currently a Gaon Phase B v3.0 Research Brain Release Candidate
 
 Included foundations:
 
+- Unified Dashboard storage status backend fix with filesystem-capacity
+  de-duplication by device identity, separate HOT/WARM/COLD data bytes,
+  additive `filesystem_usage`, and preserved read-only safety.
 - Gaon Learning Engine package boundary
 - Sprint 12-A Learning Memory domain contracts
 - Sprint 12-B in-memory Learning Repository, duplicate/conflict detection, audit workflow, UTC timestamp guard, and golden JSON fixtures

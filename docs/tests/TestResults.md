@@ -2,6 +2,25 @@
 
 Status: Passed
 
+## Unified Dashboard Storage Filesystem Dedup
+
+- Targeted local verification:
+  - `python -m py_compile deploy\scripts\storage_lifecycle_manager.py src\gaon\runtime\web_api.py tests\unit\test_storage_lifecycle_manager.py tests\unit\test_web_api.py`: PASS
+  - `python -m unittest tests.unit.test_storage_lifecycle_manager tests.unit.test_web_api.StorageStatusApiReleaseCheckTests tests.unit.test_web_api.StorageStatusApiCliWiringTests -q`: PASS, 16 tests
+  - `python -m gaon.runtime.cli gaon-production-storage-status-api-release-check`: PASS, including `same_filesystem_deduped=true`
+  - `python -m unittest tests.unit.test_llm_tools tests.unit.test_deterministic_tool_routing -q`: PASS, 22 tests
+- Required full verification:
+  - `python -m unittest discover -s tests\unit -q`: PASS, 1296 tests
+  - `python -m unittest discover -s tests\integration -q`: PASS, 260 tests
+  - `python scripts\verify_release.py`: PASS
+  - `python -m gaon.runtime.cli deployment-import-path-check --expected-source .\src\gaon`: PASS
+  - `git diff --check`: PASS; Windows line-ending warnings only
+- Binance dashboard repository verification:
+  - BLOCKED: local checkout is absent and GitHub returned 401 for unauthenticated `Choi0211/binance_ai_bot` clone; GitHub CLI config is not readable in this sandbox.
+- Production verification: PENDING PRODUCTION VERIFICATION.
+- Schema: v36 unchanged.
+- Safety: no live trading, no KIS/Broker orders, no automatic Champion promotion, no strategy mutation, no approval bypass, no destructive cleanup, no fabricated data.
+
 ## Hotfix: Terminal Validation Retry Boundary
 
 - Targeted local verification:
