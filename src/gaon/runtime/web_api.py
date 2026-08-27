@@ -16,16 +16,11 @@ instead. The actual routing/dispatch logic (``dispatch_request``) is a
 plain function with no socket dependency, so it can be - and is -
 tested in-process without opening a real port.
 
-Deliberately single-threaded (``http.server.HTTPServer``, not
-``ThreadingHTTPServer``): the underlying ``sqlite3.Connection`` this
-adapter is built on is not safe to use from more than one thread (a
-real, reproduced bug during development - a threaded server handling
-one request per thread raised
-``sqlite3.ProgrammingError: SQLite objects created in a thread can
-only be used in that same thread``). This is a low-traffic
-single-operator chat API, not a public multi-tenant service, so
-serializing requests is the correct trade-off rather than adding a
-connection pool or per-request connection for no real benefit.
+File-backed runtimes use bounded request workers with a SQLite connection
+created and closed in each worker. Chat execution remains serialized with
+nonblocking admission, while health/read requests can finish independently.
+In-memory runtimes retain the single-threaded server. Browser identity is
+conversation scoping, not authentication; this is not a public multi-tenant API.
 
 Safety: every response carries the same
 strategy_mutated/order_executed/champion_promoted/approval_bypassed
@@ -45,6 +40,9 @@ import re
 import sqlite3
 import subprocess
 import sys
+from contextlib import contextmanager
+from socketserver import ThreadingMixIn
+from threading import BoundedSemaphore
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -170,6 +168,7 @@ class GaonWebChatAdapter:
         user_ref: str,
         read_only: bool,
         received_at: str,
+        structured_context: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
         session_id = f"web:{session_ref}"
         text = message.strip()
@@ -185,6 +184,7 @@ class GaonWebChatAdapter:
                     text=text,
                     received_at=received_at,
                     message_id=message_id,
+                    structured_context=structured_context,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - the HTTP caller must get a safe fallback, not a 500 leak.
@@ -277,15 +277,19 @@ def dispatch_request(
         if not isinstance(body, Mapping) or not str(body.get("message", "")).strip():
             return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "message is required"}
         session_ref = str(body.get("session_ref") or uuid4().hex)
-        user_ref = str(body.get("user_ref") or "anonymous")
+        user_ref = str(body.get("user_ref") or session_ref)
         read_only = bool(body.get("read_only", False))
         received_at = _utc_now()
+        extras = {}
+        if isinstance(body.get("structured_context"), dict):
+            extras["structured_context"] = body["structured_context"]
         payload = adapter.handle(
             message=str(body["message"]),
             session_ref=session_ref,
             user_ref=user_ref,
             read_only=read_only,
             received_at=received_at,
+            **extras,
         )
         return 200, payload
     if method == "GET" and route_path == "/gaon/research/mission":
@@ -453,13 +457,28 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def build_request_handler(adapter: GaonWebChatAdapter) -> type[BaseHTTPRequestHandler]:
+def build_request_handler(adapter: GaonWebChatAdapter | None, *, adapter_factory=None) -> type[BaseHTTPRequestHandler]:
     """Builds a BaseHTTPRequestHandler subclass bound to one adapter
     instance via closure - kept separate from dispatch_request so the
     dispatch contract itself stays testable without a socket."""
 
+    chat_slot = BoundedSemaphore(1)
+
     class _Handler(BaseHTTPRequestHandler):
         server_version = "GaonWebAPI/1"
+
+        def _dispatch(self, method, body):
+            is_chat = method == "POST" and urlsplit(self.path).path == "/gaon/chat"
+            if is_chat and not chat_slot.acquire(blocking=False):
+                return 503, {"error": "conversation_busy", "text": "다른 대화를 처리 중입니다. 잠시 후 다시 요청해주세요."}
+            try:
+                if adapter_factory is None:
+                    return dispatch_request(adapter, method=method, path=self.path, body=body)
+                with adapter_factory() as scoped_adapter:
+                    return dispatch_request(scoped_adapter, method=method, path=self.path, body=body)
+            finally:
+                if is_chat:
+                    chat_slot.release()
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - stdlib signature
             logger.info("gaon-web-api " + format, *args)
@@ -473,11 +492,15 @@ def build_request_handler(adapter: GaonWebChatAdapter) -> type[BaseHTTPRequestHa
             self.wfile.write(body)
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib method name
-            status, payload = dispatch_request(adapter, method="GET", path=self.path, body=None)
+            status, payload = self._dispatch("GET", None)
             self._write(status, payload)
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib method name
-            length = int(self.headers.get("Content-Length", "0") or "0")
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                self._write(400, {"error": "invalid request body size"})
+                return
             if length <= 0 or length > MAX_REQUEST_BODY_BYTES:
                 self._write(400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "invalid request body size"})
                 return
@@ -487,10 +510,55 @@ def build_request_handler(adapter: GaonWebChatAdapter) -> type[BaseHTTPRequestHa
             except (UnicodeDecodeError, json.JSONDecodeError):
                 self._write(400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "invalid JSON body"})
                 return
-            status, payload = dispatch_request(adapter, method="POST", path=self.path, body=body)
+            status, payload = self._dispatch("POST", body)
             self._write(status, payload)
 
     return _Handler
+
+
+class BoundedWebServer(ThreadingMixIn, HTTPServer):
+    """Reject overload; never share a SQLite connection across worker threads."""
+    daemon_threads = False
+
+    def __init__(self, address, handler):
+        self._slots = BoundedSemaphore(4)
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address):
+        request.settimeout(45)
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def build_server(config, store, *, host=DEFAULT_HOST, port=DEFAULT_PORT):
+    if store.path == ":memory:":
+        return HTTPServer((host, port), build_request_handler(GaonWebChatAdapter(config, store._connection)))
+
+    @contextmanager
+    def scoped_adapter():
+        connection = sqlite3.connect(store.path, timeout=5)
+        connection.execute("PRAGMA foreign_keys=ON")
+        try:
+            yield GaonWebChatAdapter(config, connection)
+        finally:
+            connection.close()
+
+    return BoundedWebServer((host, port), build_request_handler(None, adapter_factory=scoped_adapter))
 
 
 def run_server(
@@ -504,11 +572,9 @@ def run_server(
     server. Binds to localhost by default - this sits behind a reverse
     proxy in production (a separate, later deployment concern), not
     exposed to the public internet directly by this module."""
-    adapter = GaonWebChatAdapter(config, store._connection)
-    handler_cls = build_request_handler(adapter)
     bind_host = host or DEFAULT_HOST
     bind_port = port or DEFAULT_PORT
-    httpd = HTTPServer((bind_host, bind_port), handler_cls)
+    httpd = build_server(config, store, host=bind_host, port=bind_port)
     logger.info("gaon web API listening on %s:%s", bind_host, bind_port)
     try:
         httpd.serve_forever()

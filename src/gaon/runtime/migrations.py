@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -54,6 +54,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         33: _upgrade_v33_to_v34,
         34: _upgrade_v34_to_v35,
         35: _upgrade_v35_to_v36,
+        36: _upgrade_v36_to_v37,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1250,6 +1251,21 @@ def _upgrade_v35_to_v36(connection: sqlite3.Connection) -> None:
             ON multi_symbol_universe_snapshots(universe_type, created_at);
         """
     )
+
+
+def _upgrade_v36_to_v37(connection: sqlite3.Connection) -> None:
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS cognitive_records (
+            record_id TEXT PRIMARY KEY, record_type TEXT NOT NULL,
+            namespace TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL,
+            payload_json TEXT NOT NULL, source_refs_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL, confidence REAL NOT NULL,
+            verification_state TEXT NOT NULL, related_goal TEXT, supersedes TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cognitive_namespace_type
+            ON cognitive_records(namespace, record_type, updated_at);
+    """)
 
 
 def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

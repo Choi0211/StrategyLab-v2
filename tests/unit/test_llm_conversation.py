@@ -34,7 +34,9 @@ class LLMConversationBrainTests(unittest.TestCase):
 
         self.assertEqual(response.intent, Intent.GREETING)
         self.assertIn("영하님", response.text)
-        self.assertEqual(response.route, "rule_based")
+        self.assertEqual(response.route, "conversation_greeting")
+        self.assertEqual(response.tool_calls, ())
+        self.assertEqual(response.references, ())
         self.assertEqual(len(self.repository.list_messages("telegram:1")), 2)
 
     def test_approval_boundary_bypasses_provider(self) -> None:

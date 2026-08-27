@@ -1,5 +1,18 @@
 # Changelog
 
+## Cognitive Core and Unified Conversation v1 - Local Only
+
+- Add namespace-scoped cognitive records (schema v37), durable user feedback,
+  goals, reflections, proposed learning/conflict checks and operational metadata.
+- Preserve the existing research/planner authority; no new execution gate.
+- Isolate greetings and unrelated context; reuse preferences during rendering.
+- Use worker-owned SQLite connections and bounded admission for file-backed Web
+  servers; serialize chat mutation and allow concurrent read/health requests.
+- Preserve raw Web text and optional bounded, unverified Binance snapshot data.
+- Add deterministic cognitive/unified release checks. Advanced learning input
+  acquisition, all-source memory federation and general proactive execution
+  remain partial/foundation scope, not completed production capabilities.
+
 ## Unified Dashboard Storage Filesystem Dedup
 
 - Fixed the StrategyLab storage lifecycle report to group capacity by

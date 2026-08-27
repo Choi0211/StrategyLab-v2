@@ -1,5 +1,14 @@
 # StrategyLab-v2
 
+## Cognitive Core / Unified Conversation v1 (local implementation)
+
+The shared Telegram/Web brain now supports scoped durable feedback, goals and
+reflection, with an additive v37 runtime migration and bounded Web workers.
+See [implementation scope and limitations](docs/architecture/GaonCognitiveCoreUnifiedConversationV1.md).
+This is not a production deployment or a claim that autonomous general-purpose
+learning is complete. Run `gaon-cognitive-core-v1-release-check` and
+`gaon-unified-conversation-release-check` through `python -m gaon.runtime.cli`.
+
 AI-assisted quantitative strategy research platform.
 
 StrategyLab v2 is the first research lab inside the Gaon Platform. Gaon is Youngha's AI Engineering Partner: a partner for research, development, learning, validation, and project memory.
