@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -303,6 +303,7 @@ class LLMConversationRequest:
     text: str
     received_at: str
     message_id: str | None = None
+    structured_context: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -484,6 +485,13 @@ class LLMConversationBrain:
         self._event_store = event_store
         self._metrics = metrics or MetricsCollector()
         self._mvp_contexts: dict[str, ConversationalMVPContext] = {}
+        self._cognitive = None
+        connection = getattr(repository, "_connection", None)
+        if connection is not None and connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cognitive_records'"
+        ).fetchone():
+            from gaon.cognitive.orchestrator import CognitiveOrchestrator
+            self._cognitive = CognitiveOrchestrator(connection)
 
     def respond(self, request: LLMConversationRequest) -> LLMConversationResponse:
         text = request.text.strip()
@@ -499,8 +507,36 @@ class LLMConversationBrain:
         self._repository.add_message(
             LLMConversationMessage(user_message_id, session.session_id, "user", text, intent.value, "input", (), (), (), now)
         )
-        context = self._context_orchestrator.build(request.session_id) if self._context_orchestrator is not None else None
-        response_text, route, warnings, references, provider, tool_calls = self._generate(request, intent, approval_required, context)
+        context = None
+        if self._context_orchestrator is not None and text.casefold().rstrip(".!?") not in {
+            "안녕", "안녕하세요", "가온아 안녕", "hello", "hi",
+        }:
+            contextual_build = getattr(self._context_orchestrator, "build_for_query", None)
+            context = (contextual_build(request.session_id, text) if contextual_build
+                       else self._context_orchestrator.build(request.session_id))
+        response_text, route, warnings, references, provider, tool_calls = self._generate(
+            replace(request, message_id=user_message_id), intent, approval_required, context,
+        )
+        if self._cognitive is not None and not approval_required:
+            response_text = self._cognitive.render_with_preferences(
+                namespace=request.user_ref, query=request.text, text=response_text, now=now,
+            )
+            mission = self._mission_for(request.session_id)
+            if mission is not None and tool_calls:
+                goal = self._cognitive.create_goal(
+                    namespace=request.session_id, title=f"Research mission {mission.mission_id}",
+                    description=mission.originating_request, reason="user research instruction",
+                    success_criteria=("existing ResearchMission acceptance and human approval boundary",),
+                    next_action="연구를 계속해주세요", source_ref=mission.mission_id, now=now,
+                )
+                from gaon.cognitive.models import GoalStatus
+                state = {
+                    "blocked": GoalStatus.BLOCKED,
+                    "awaiting_human_approval": GoalStatus.BLOCKED,
+                    "completed": GoalStatus.COMPLETED,
+                    "cancelled": GoalStatus.ABANDONED,
+                }.get(mission.status.value, GoalStatus.ACTIVE)
+                self._cognitive.transition_goal(goal.record_id, namespace=request.session_id, status=state, now=now)
         response_text = normalize_final_response(response_text, request.text)
         generated_at = now
         response_id = f"conversation-assistant:{uuid4().hex}"
@@ -556,6 +592,28 @@ class LLMConversationBrain:
             return session
 
     def _generate(self, request: LLMConversationRequest, intent: Intent, approval_required: bool, context) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+        if not approval_required and request.structured_context:
+            from gaon.cognitive.presentation import binance_snapshot_reply
+            snapshot = binance_snapshot_reply(request.text, request.structured_context)
+            if snapshot is not None:
+                return snapshot, "conversation_binance_snapshot", (), ("dashboard_state_snapshot",), "deterministic", ()
+        # Pure greetings never inherit stale research intent or execute tools.
+        if not approval_required and request.text.strip().casefold().rstrip(".!?") in {
+            "안녕", "안녕하세요", "가온아 안녕", "hello", "hi"
+        }:
+            return render_greeting(), "conversation_greeting", (), (), "deterministic", ()
+        if self._cognitive is not None and not approval_required:
+            observed = self._cognitive.observe_user_message(
+                namespace=request.user_ref, message=request.text,
+                source_ref=request.message_id or f"feedback:{uuid4().hex}", now=request.received_at,
+            )
+            if observed:
+                return ("같은 상태 설명을 반복하지 않도록 선호를 저장했습니다. 이후 진행상황은 변경점을 중심으로 알려드리겠습니다.",
+                        "cognitive_feedback", (), observed, "deterministic", ())
+            if request.text.strip().rstrip(".!?") in {"계속해주세요", "계속해줘", "그 방향으로 해주세요"}:
+                goals = self._cognitive.retrieve(namespace=request.session_id, query=request.text).active_goals
+                if goals and self._mission_for(request.session_id) is not None:
+                    request = replace(request, text="연구를 계속해주세요")
         warnings: tuple[str, ...] = ()
         references: tuple[str, ...] = tuple(context.references) if context is not None else ()
         if context is not None:

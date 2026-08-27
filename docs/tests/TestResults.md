@@ -1,5 +1,16 @@
 # StrategyLab v2 Test Results
 
+## Cognitive Core / Unified Conversation v1 - 2026-08-27
+
+- Full verify_release.py: PASS (1,304 unit / 262 integration; CLI import and required files).
+- Final provenance adjustment: 41 focused tests PASS; see exact run ordering in
+  [the verification record](GaonCognitiveUnifiedConversationV1Results.md).
+- New cognitive/unified release checks and deployment-import-path-check: PASS.
+- Existing web-chat/research-status/web-root/storage-status/canonical-handoff checks: PASS.
+- Additive v36-to-v37 preservation/idempotence, restart, namespace and bounded
+  concurrency tests: PASS. Dashboard 20 tests and static mobile layout: PASS.
+- No VPS/Telegram live acceptance claim; advanced cognitive scope remains partial.
+
 Status: Passed
 
 ## Unified Dashboard Storage Filesystem Dedup

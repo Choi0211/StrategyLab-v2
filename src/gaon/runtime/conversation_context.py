@@ -116,6 +116,16 @@ class ConversationContextOrchestrator:
             warnings.append("no verified context available")
         return ConversationContextBundle(session_id=session_id, items=tuple(bounded), warnings=tuple(warnings), max_chars=self._max_chars)
 
+    def build_for_query(self, session_id: str, query: str) -> ConversationContextBundle:
+        """Do not attach global research snapshots to unrelated conversation."""
+        lowered = query.casefold()
+        if any(token in lowered for token in (
+            "연구", "전략", "시장", "주식", "삼성", "종목", "검증", "research", "strategy", "candidate",
+        )):
+            return self.build(session_id)
+        items = self._fit_budget(self._recent_conversation(session_id))
+        return ConversationContextBundle(session_id, tuple(items), (), self._max_chars)
+
     def _recent_conversation(self, session_id: str) -> list[ContextItem]:
         messages = self._conversation_repository.list_messages(session_id, limit=self._recent_message_limit)
         return [

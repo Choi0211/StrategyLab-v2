@@ -1,5 +1,20 @@
 # StrategyLab v2.1 Release Candidate Notes
 
+## Cognitive Core / Unified Conversation v1
+
+Local-only delivery; no push, deployment, service restart or orders performed.
+Runtime schema advances from v36 to v37 by adding `cognitive_records`; existing
+tables remain unchanged. Back up before a later authorized deployment. Older
+v36 binaries reject a v37 DB: rollback requires a pre-migration backup, not a
+schema-version edit or deletion of cognitive records.
+
+Browser continuity IDs are not authentication. Web API must remain behind the
+existing trusted access boundary. Chat overload returns 503 without replay;
+client timeout never automatically repeats a research request.
+
+See the architecture document for IMPLEMENTED/PARTIAL/FOUNDATION ONLY/DEFERRED
+capabilities. Real provider, Telegram and VPS acceptance remain pending.
+
 Status: v2.1 Release Candidate  
 Base: StrategyLab v1.0 Stable Release
 

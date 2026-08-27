@@ -432,6 +432,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-binance-adapter-read-only-release-check")
     sub.add_parser("gaon-production-web-chat-api-release-check")
     sub.add_parser("gaon-production-web-api-root-release-check")
+    sub.add_parser("gaon-cognitive-core-v1-release-check")
+    sub.add_parser("gaon-unified-conversation-release-check")
     sub.add_parser("gaon-production-research-status-api-release-check")
     sub.add_parser("gaon-production-storage-status-api-release-check")
     sub.add_parser("gaon-production-deployment-artifacts-no-pc-dependency-release-check")
@@ -3091,6 +3093,11 @@ def _run(args: argparse.Namespace) -> int:
             for key, value in payload.items()
         )
         print(f"gaon-production-web-chat-api-release-check: PASS {details}")
+
+    elif args.command in {"gaon-cognitive-core-v1-release-check", "gaon-unified-conversation-release-check"}:
+        from gaon.cognitive.release_check import cognitive_release_check
+        payload = cognitive_release_check()
+        print(f"{args.command}: PASS {dumps_json(payload)}")
 
     elif args.command == "gaon-production-web-api-root-release-check":
         from gaon.runtime.web_api import production_gaon_web_api_root_release_check
