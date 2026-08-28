@@ -27,6 +27,7 @@ from gaon.runtime.conversational_mvp import (
     render_reasoning_from_payloads,
     render_rerun_boundary,
     render_follow_up,
+    render_general_conversation,
     render_greeting,
     render_help,
     render_missing_context,
@@ -172,6 +173,7 @@ _MISSION_HOOK_EXCLUDED_INTENTS = frozenset(
         ConversationalMVPIntent.RECOMMENDATION_REQUEST,
         ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
         ConversationalMVPIntent.STATUS_QUERY,
+        ConversationalMVPIntent.RESOURCE_NEEDS_QUERY,
     }
 )
 
@@ -304,6 +306,18 @@ class LLMConversationRequest:
     received_at: str
     message_id: str | None = None
     structured_context: Mapping[str, object] | None = None
+    # Production hotfix: True only for a synthetic, system/background-
+    # originated continuation turn (see
+    # gaon.runtime.autonomous_research_runtime), never for a real Telegram/
+    # web user message. Routing (_is_conversational_mvp_source and the
+    # real mission-driven research cycle) is unaffected - this only
+    # suppresses provenance-sensitive side effects that must never be
+    # attributed to a human: the turn is not persisted as a "user"/
+    # "assistant" conversation_messages row, and it never feeds cognitive
+    # feedback/preference learning or creates/mutates a cognitive Goal
+    # record. ResearchMission state itself is unaffected: it is persisted
+    # separately (conversation_sessions.metadata) regardless of this flag.
+    is_system_turn: bool = False
 
 
 @dataclass(frozen=True)
@@ -504,9 +518,10 @@ class LLMConversationBrain:
         intent = parse_intent(text)
         approval_required = _requires_manual_boundary(text)
         user_message_id = request.message_id or f"conversation-user:{uuid4().hex}"
-        self._repository.add_message(
-            LLMConversationMessage(user_message_id, session.session_id, "user", text, intent.value, "input", (), (), (), now)
-        )
+        if not request.is_system_turn:
+            self._repository.add_message(
+                LLMConversationMessage(user_message_id, session.session_id, "user", text, intent.value, "input", (), (), (), now)
+            )
         context = None
         if self._context_orchestrator is not None and text.casefold().rstrip(".!?") not in {
             "안녕", "안녕하세요", "가온아 안녕", "hello", "hi",
@@ -517,7 +532,7 @@ class LLMConversationBrain:
         response_text, route, warnings, references, provider, tool_calls = self._generate(
             replace(request, message_id=user_message_id), intent, approval_required, context,
         )
-        if self._cognitive is not None and not approval_required:
+        if self._cognitive is not None and not approval_required and not request.is_system_turn:
             response_text = self._cognitive.render_with_preferences(
                 namespace=request.user_ref, query=request.text, text=response_text, now=now,
             )
@@ -553,20 +568,21 @@ class LLMConversationBrain:
             provider=provider,
             tool_calls=tool_calls,
         )
-        self._repository.add_message(
-            LLMConversationMessage(
-                response_id,
-                session.session_id,
-                "assistant",
-                response.text,
-                intent.value,
-                route,
-                response.references,
-                response.warnings,
-                response.tool_calls,
-                generated_at,
+        if not request.is_system_turn:
+            self._repository.add_message(
+                LLMConversationMessage(
+                    response_id,
+                    session.session_id,
+                    "assistant",
+                    response.text,
+                    intent.value,
+                    route,
+                    response.references,
+                    response.warnings,
+                    response.tool_calls,
+                    generated_at,
+                )
             )
-        )
         session = self._repository.get_session(session.session_id)
         self._repository.upsert_session(
             LLMConversationSession(session.session_id, session.user_ref, session.source, "active", session.created_at, generated_at, session.metadata)
@@ -602,7 +618,7 @@ class LLMConversationBrain:
             "안녕", "안녕하세요", "가온아 안녕", "hello", "hi"
         }:
             return render_greeting(), "conversation_greeting", (), (), "deterministic", ()
-        if self._cognitive is not None and not approval_required:
+        if self._cognitive is not None and not approval_required and not request.is_system_turn:
             observed = self._cognitive.observe_user_message(
                 namespace=request.user_ref, message=request.text,
                 source_ref=request.message_id or f"feedback:{uuid4().hex}", now=request.received_at,
@@ -855,7 +871,7 @@ class LLMConversationBrain:
                 (),
             )
         route = classify_conversational_route(request.text)
-        if route.intent is ConversationalMVPIntent.UNKNOWN and _is_stored_research_explanation_followup(request.text):
+        if route.intent in {ConversationalMVPIntent.UNKNOWN, ConversationalMVPIntent.GENERAL_CONVERSATION} and _is_stored_research_explanation_followup(request.text):
             context = self._mvp_context_for(request.session_id)
             if context is not None:
                 route = ConversationalRoute(ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, route.symbols)
@@ -1165,10 +1181,30 @@ class LLMConversationBrain:
             # a more precise gate for this intent than the blanket token
             # list.
             ConversationalMVPIntent.STATUS_QUERY,
+            # Production hotfix: this same blanket-token gate was blocking
+            # capability ("뭘 할 수 있나요?" - HELP matches on "뭘 할 수",
+            # not the literal "도움말" this gate's token list hard-codes),
+            # feedback/general conversation (GENERAL_CONVERSATION), and
+            # resource/blocker questions (RESOURCE_NEEDS_QUERY) from ever
+            # reaching their own dedicated, already-narrow structural
+            # classifiers below - falling through to the legacy
+            # UNKNOWN persona fallback instead. Each of these three
+            # already has its own precise route classifier in
+            # classify_conversational_route; growing the token list above
+            # is not the fix (see routing precedence note in
+            # gaon.runtime.conversational_mvp).
+            ConversationalMVPIntent.HELP,
+            ConversationalMVPIntent.GENERAL_CONVERSATION,
+            ConversationalMVPIntent.RESOURCE_NEEDS_QUERY,
         }:
             return None
         existing_tool = route_read_only_tool(request.text)
-        if existing_tool in {"research_retest", "multi_symbol_research", "multi_symbol_research_status", "multi_symbol_research_history", "champion_status", "runtime_status", "v5_pipeline_history"}:
+        # Runtime deployment questions require structured runtime evidence.
+        # Do not let an assistant provider infer VPS/service state from the
+        # wording alone; the existing read-only tool is the authority.
+        if existing_tool == "runtime_status":
+            return self._try_deterministic_tool(request, warnings, references)
+        if existing_tool in {"research_retest", "multi_symbol_research", "multi_symbol_research_status", "multi_symbol_research_history", "champion_status", "v5_pipeline_history"}:
             context = self._mvp_context_for(request.session_id)
             contextual_generalization = (
                 existing_tool == "multi_symbol_research"
@@ -1208,6 +1244,27 @@ class LLMConversationBrain:
         if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text):
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_status")
             return render_status(), "conversation_mvp_status", _dedupe(warnings), references, "deterministic", ()
+        if route.intent is ConversationalMVPIntent.GENERAL_CONVERSATION:
+            self._remember_mvp_response_context(request, route.intent, "conversation_mvp_general")
+            return (
+                render_general_conversation(),
+                "conversation_mvp_general",
+                _dedupe((*warnings, "general conversation; zero research tool calls")),
+                references,
+                "deterministic",
+                (),
+            )
+        if route.intent is ConversationalMVPIntent.RESOURCE_NEEDS_QUERY:
+            text = self._render_resource_needs(self._mission_for(request.session_id))
+            self._remember_mvp_response_context(request, route.intent, "conversation_resource_needs")
+            return (
+                text,
+                "conversation_resource_needs",
+                _dedupe((*warnings, "resource needs answered from mission/runtime state; zero research tool calls")),
+                references,
+                "deterministic",
+                (),
+            )
         if route.intent in reasoning_followup_intents:
             context = self._mvp_context_for(request.session_id)
             if context is None:
@@ -2611,6 +2668,34 @@ class LLMConversationBrain:
             updated_at=request.received_at,
         )
         self._store_mvp_context(request.session_id, self._mvp_contexts[request.session_id], request, route="conversation_autonomous_learning_query")
+
+    def _render_resource_needs(self, mission: ResearchMission | None) -> str:
+        """Answers "어떤 자원이 필요한가요" from real mission/blocker state
+        only - never a provider-invented claim about compute or data
+        access. See ``gaon.knowledge.strategy_candidate.
+        candidate_remaining_blockers``/``next_blocker_driven_research_
+        action`` (the same read models the mission-driven research cycle
+        itself already consults) and ``mission_blocked_message`` (the
+        existing honest BLOCKED-mission explanation)."""
+        if mission is None:
+            return "영하님, 현재 활성 Research Mission이 없어 특별히 필요한 자원이 없습니다. 연구를 시작하시려면 원하시는 종목이나 전략을 말씀해 주세요."
+        if mission.status is MissionStatus.BLOCKED:
+            return mission_blocked_message(mission)
+        if mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
+            return mission_awaiting_approval_message(mission)
+        active = get_active_candidate(mission)
+        if active is None:
+            return "영하님, 현재 Research Mission은 진행 중이며 아직 특별한 blocker는 없습니다. 다음 연구 사이클에서 첫 전략 후보를 생성합니다."
+        blockers = candidate_remaining_blockers(active)
+        action, reason = next_blocker_driven_research_action(active)
+        if not blockers:
+            return f"영하님, 현재 활성 후보 {active.candidate_id}에 남은 blocker는 없습니다. 다음 단계: {action} ({reason})."
+        return (
+            f"영하님, 현재 활성 후보 {active.candidate_id}에 필요한 것은 다음 검증 단계를 위한 real 데이터/평가입니다.\n"
+            f"- 남은 검증 항목: {', '.join(blockers)}\n"
+            f"- 다음 연구 action: {action} ({reason})\n"
+            "이 외에 추가로 부족한 계산/데이터 자원은 현재 확인된 바 없습니다."
+        )
 
     def _mission_for(self, session_id: str) -> ResearchMission | None:
         try:

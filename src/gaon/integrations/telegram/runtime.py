@@ -22,7 +22,15 @@ class TelegramRuntime:
         if self._allowed_chat_ids and message.chat.chat_id not in self._allowed_chat_ids:
             raise AuthorizationError("telegram chat is not allowed")
         if len(message.text) > MAX_INPUT_TEXT_LENGTH:
-            return (TelegramResponse(message.chat.chat_id, TOO_LONG_TEXT, dry_run=dry_run, correlation_id=f"response:{message.message_id}"),)
+            return (
+                TelegramResponse(
+                    message.chat.chat_id,
+                    TOO_LONG_TEXT,
+                    dry_run=dry_run,
+                    correlation_id=f"response:{message.message_id}",
+                    in_reply_to=message.message_id,
+                ),
+            )
         response = self._conversation.handle(
             ConversationInput(
                 source="telegram",
@@ -34,7 +42,13 @@ class TelegramRuntime:
             )
         )
         return tuple(
-            TelegramResponse(message.chat.chat_id, part, dry_run=dry_run, correlation_id=response.response_id)
+            TelegramResponse(
+                message.chat.chat_id,
+                part,
+                dry_run=dry_run,
+                correlation_id=response.response_id,
+                in_reply_to=message.message_id,
+            )
             for part in split_message(response.text)
         )
 
@@ -87,7 +101,7 @@ def _send_with_retry(client: TelegramClient, response: TelegramResponse, *, max_
     while True:
         attempt += 1
         try:
-            return client.send_message(response.chat_id, response.text)
+            return client.send_message(response.chat_id, response.text, reply_to_message_id=response.in_reply_to)
         except (ExternalServiceError, RateLimitError, TransportError) as exc:
             if isinstance(exc, TransportError) and not _is_retryable_transport(exc):
                 raise

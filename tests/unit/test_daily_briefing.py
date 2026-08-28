@@ -16,6 +16,7 @@ from gaon.runtime.daily_briefing import (
     latest_research_mission_from_connection,
     production_daily_briefing_release_check,
     production_morning_briefing_research_state_consistency_release_check,
+    ResearchMissionBriefingState,
     render_post_market_briefing_ko,
     render_pre_market_briefing_ko,
     render_unresolved_research_review_ko,
@@ -29,9 +30,11 @@ from gaon.runtime.scheduled_automation import ScheduledJobRepository
 class _FakeTelegramClient:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.reply_to: list[str | None] = []
 
     def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None):
         self.sent.append((chat_id, text))
+        self.reply_to.append(reply_to_message_id)
         return TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"sent:{len(self.sent)}", message_id=str(len(self.sent)))
 
 
@@ -247,6 +250,36 @@ class DailyBriefingTests(unittest.TestCase):
         text = render_post_market_briefing_ko(briefing)
         self.assertIn("후속 연구가 필요합니다", text)
 
+    def test_post_market_and_unresolved_review_do_not_contradict_active_mission(self) -> None:
+        from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+        from gaon.knowledge.strategy_candidate import new_candidate
+
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 3개의 단타 전략이 나올 때까지 연구해주세요",
+            existing=None,
+            now="2026-08-22T00:00:05Z",
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now="2026-08-22T00:00:05Z")
+        mission = add_candidate(mission, candidate, now="2026-08-22T00:00:05Z")
+
+        post_market_text = render_post_market_briefing_ko(
+            compose_post_market_briefing(
+                generated_at="2026-08-22T00:00:05Z", market="KOSPI", live_feedback_json={}, research_mission=mission
+            )
+        )
+        self.assertNotIn("추가 연구 없이 관찰을 계속합니다", post_market_text)
+        self.assertIn("[Research Mission]", post_market_text)
+        self.assertIn("research status: 진행 중", post_market_text)
+
+        unresolved_text = render_unresolved_research_review_ko(
+            {"unresolved_count": 0, "unresolved": []},
+            generated_at="2026-08-22T00:00:05Z",
+            research_mission=ResearchMissionBriefingState.from_mission(mission),
+        )
+        self.assertNotIn("현재 후속 조치가 필요한 연구가 없습니다.", unresolved_text)
+        self.assertIn("[Research Mission]", unresolved_text)
+        self.assertIn("research status: 진행 중", unresolved_text)
+
     def test_schedule_daily_briefing_jobs_reuses_existing_scheduler(self) -> None:
         connection = sqlite3.connect(":memory:")
         self.addCleanup(connection.close)
@@ -301,6 +334,16 @@ class SendDailyBriefingTests(unittest.TestCase):
         self.assertEqual(len(client.sent), 1)
         self.assertEqual(client.sent[0], ("12345", "짧은 브리핑"))
         self.assertFalse(sent[0].dry_run)
+
+    def test_scheduled_briefing_never_threads_as_a_reply(self) -> None:
+        # A proactive scheduled briefing must never look like a reply to the
+        # user's last message: it is not answering any specific inbound
+        # Telegram message, so reply_to_message_id must stay unset (unlike a
+        # real conversation turn's response - see
+        # TelegramRuntime.handle_message / test_telegram_production_connection).
+        client = _FakeTelegramClient()
+        send_daily_briefing(client, "12345", "브리핑", kind="pre_market", dry_run=False)
+        self.assertEqual(client.reply_to, [None])
 
     def test_long_briefing_reuses_the_existing_chunking_infrastructure(self) -> None:
         long_text = "\n".join(f"- 항목 {i}: 자세한 연구 근거 설명 텍스트입니다." for i in range(400))
@@ -389,7 +432,7 @@ class ComposeUnresolvedResearchReviewTests(unittest.TestCase):
     def test_no_records_is_honestly_empty(self) -> None:
         review = compose_unresolved_research_review(())
         self.assertEqual(review["unresolved_count"], 0)
-        self.assertEqual(render_unresolved_research_review_ko(review, generated_at="2026-08-16T09:00:00Z"), "[가온 미해결 연구 점검 - 2026-08-16T09:00:00Z]\n\n현재 후속 조치가 필요한 연구가 없습니다.")
+        self.assertEqual(render_unresolved_research_review_ko(review, generated_at="2026-08-16T09:00:00Z"), "[가온 미해결 연구 점검 - 2026-08-16T09:00:00Z]\n\n뉴스 기반 후속 조치가 필요한 연구는 없습니다.")
 
 
 class DailyBriefingSchedulerTests(unittest.TestCase):

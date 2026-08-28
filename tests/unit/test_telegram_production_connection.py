@@ -84,6 +84,22 @@ class TelegramProductionConnectionTest(unittest.TestCase):
         self.assertEqual(fake.requests[2][1]["text"], "hello")
         self.assertNotIn("synthetic-token", repr(client))
 
+    def test_send_message_threads_reply_to_message_id_when_provided(self) -> None:
+        fake = FakeTelegramHttp([{"ok": True, "result": {"message_id": 78}}])
+        client = TelegramBotApiClient("synthetic-token", opener=fake)
+
+        client.send_message("100", "answer", reply_to_message_id="42")
+
+        self.assertEqual(fake.requests[0][1]["reply_to_message_id"], "42")
+
+    def test_send_message_omits_reply_to_message_id_for_proactive_sends(self) -> None:
+        fake = FakeTelegramHttp([{"ok": True, "result": {"message_id": 79}}])
+        client = TelegramBotApiClient("synthetic-token", opener=fake)
+
+        client.send_message("100", "briefing")
+
+        self.assertNotIn("reply_to_message_id", fake.requests[0][1])
+
     def test_http_and_payload_errors_are_mapped_safely(self) -> None:
         cases = (
             (HTTPError("https://example.invalid", 401, "unauthorized", {}, BytesIO(b"{}")), AuthenticationError),
@@ -242,6 +258,31 @@ class TelegramProductionConnectionTest(unittest.TestCase):
         self.assertEqual(len(responses), 2)
         self.assertTrue(all(response.chat_id == "100" for response in responses))
         self.assertTrue(all(response.dry_run is False for response in responses))
+        self.assertTrue(all(response.in_reply_to == "1" for response in responses))
+
+    def test_user_turn_reply_is_threaded_to_the_inbound_message(self) -> None:
+        class EchoConversation:
+            def handle(self, message):
+                return SimpleNamespace(response_id="response:echo", text="ok")
+
+        runtime = TelegramRuntime(EchoConversation(), allowed_chat_ids=("100",))
+        message = TelegramMessage("77", TelegramChat("100"), TelegramUser("200"), "/help", "2026-07-17T00:00:00Z")
+
+        (response,) = runtime.handle_message(message, dry_run=False)
+
+        self.assertEqual(response.in_reply_to, "77")
+
+    def test_too_long_input_reply_is_also_threaded_to_the_inbound_message(self) -> None:
+        class UnreachedConversation:
+            def handle(self, message):
+                raise AssertionError("handle() must not be called for an over-length message")
+
+        runtime = TelegramRuntime(UnreachedConversation(), allowed_chat_ids=("100",))
+        message = TelegramMessage("78", TelegramChat("100"), TelegramUser("200"), "x" * (MAX_INPUT_TEXT_LENGTH + 1), "2026-07-17T00:00:00Z")
+
+        (response,) = runtime.handle_message(message, dry_run=False)
+
+        self.assertEqual(response.in_reply_to, "78")
 
     def test_discover_chats_helper_uses_fake_client_without_network(self) -> None:
         client = FakeTelegramClient(({"update_id": 1, "message": {"message_id": 1, "chat": {"id": 100}, "from": {"id": 1, "first_name": "Youngha"}, "text": "/start"}},))

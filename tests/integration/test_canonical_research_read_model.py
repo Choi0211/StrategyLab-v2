@@ -119,6 +119,43 @@ class CanonicalResearchReadModelTests(unittest.TestCase):
             for name in ("multi_symbol_research", "autonomous_learning_research", "autonomous_research_cycle")
         )
 
+    def test_short_strategy_status_reads_canonical_mission_without_research(self) -> None:
+        self._send(20, "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. 현재 등록되어있는 전략보다 수익면에서 안전성 면에서 뛰어나야합니다.")
+        self._send(21, "삼성전자말고 국내 주식 전체를 대상으로 연구해주세요")
+        self._send(22, "증거가 충분할 때까지 다양한 방식으로 전략을 연구해주세요")
+        mission = self._mission()
+        self.assertIsNotNone(mission)
+        candidate = candidate_records(mission)[0]
+
+        before = self._research_tool_call_count()
+        text = self._send(23, "단타전략은 잘 연구되고잇나요?")
+        self.assertEqual(self._research_tool_call_count(), before)
+        self.assertIn(candidate.candidate_id, text)
+        self.assertIn(candidate.strategy_fingerprint[:16], text)
+        self.assertNotIn("unknown", text.casefold())
+
+    def test_bounded_multi_faceted_continuation_stays_on_the_same_active_mission(self) -> None:
+        self._send(20, "대한민국 장에 맞는 단타 매매 전략을 연구해주세요. 현재 등록되어있는 전략보다 수익면에서 안전성 면에서 뛰어나야합니다.")
+        self._send(21, "삼성전자말고 국내 주식 전체를 대상으로 연구해주세요")
+        self._send(22, "증거가 충분할 때까지 다양한 방식으로 전략을 연구해주세요")
+        mission_before = self._mission()
+        candidate_before = candidate_records(mission_before)[0]
+
+        before = self._research_tool_call_count()
+        self._send(23, "여러방면으로 테스트 및 연구 진행해주세요")
+        after_h = self._research_tool_call_count()
+        self.assertEqual(after_h, before + 1, "여러방면으로 request must be a single bounded cycle")
+        mission_after_h = self._mission()
+        self.assertEqual(mission_after_h.mission_id, mission_before.mission_id, "must not create a new unrelated mission")
+        self.assertEqual(candidate_records(mission_after_h)[0].candidate_id, candidate_before.candidate_id)
+
+        self._send(24, "연구 계속해주세요")
+        after_i = self._research_tool_call_count()
+        self.assertEqual(after_i, after_h + 1, "연구 계속해주세요 must also be a single bounded cycle")
+        mission_after_i = self._mission()
+        self.assertEqual(mission_after_i.mission_id, mission_before.mission_id)
+        self.assertEqual(candidate_records(mission_after_i)[0].candidate_id, candidate_before.candidate_id)
+
     def test_six_turn_production_sequence_never_regresses_candidate_state(self) -> None:
         # ------------------------------------------------------------
         # Turn 1: establish a market-wide ResearchMission with a real
