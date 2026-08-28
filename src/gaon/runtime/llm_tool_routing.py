@@ -391,6 +391,10 @@ def _runtime_status(value: str) -> bool:
     return (
         (_contains_any(value, ("가온", "gaon", "runtime", "런타임", "서버")) and _contains_any(value, ("상태", "status", "알려줘")))
         or "gaonruntime상태" in value
+        # "VPS 기반으로 구동되고 있나요?" is a structured runtime question.
+        # It must use the read-only runtime probe rather than invite a
+        # provider to invent deployment state.
+        or ("vps" in value and _contains_any(value, ("구동", "동작", "상태", "연결", "가능")))
     )
 
 

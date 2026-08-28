@@ -30,6 +30,7 @@ class FakeTelegramClient:
     def __init__(self, updates: tuple[dict, ...]) -> None:
         self.updates = updates
         self.sent: list[tuple[str, str]] = []
+        self.reply_to: list[str | None] = []
         self.calls: list[int | None] = []
 
     def get_updates(self, *, offset=None, timeout=0, limit=100):
@@ -38,6 +39,7 @@ class FakeTelegramClient:
 
     def send_message(self, chat_id: str, text: str, parse_mode=None, reply_to_message_id=None):
         self.sent.append((chat_id, text))
+        self.reply_to.append(reply_to_message_id)
         return TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"sent:{len(self.sent)}", message_id=str(len(self.sent)))
 
 
@@ -53,6 +55,102 @@ class TelegramConversationAgentTests(unittest.TestCase):
             messages = store.conversations.list_messages("telegram:100")
             self.assertEqual(len(messages), 2)
             self.assertEqual(store.telegram_conversations.resolve("100", now="2026-07-19T00:00:01Z").session_id, "telegram:100")
+        finally:
+            store.close()
+
+    def test_production_conversation_routes_capability_status_and_feedback_without_research(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(
+            tuple(
+                _update(100 + index, 100 + index, text)
+                for index, text in enumerate(
+                    (
+                        "뭘 할 수 있나요?",
+                        "현재 동작을 하고 있나요?",
+                        "Vps기반으로 구동되고있나요?",
+                        "대화가 가능한가요?",
+                        "맨날 없네요",
+                        "제가 업데이트를 잘못했나봐요 이상해졌넹",
+                    ),
+                    1,
+                )
+            )
+        )
+        try:
+            result = poll_once(client, _config(assistant_enabled=True), offset=None, received_at="2026-08-28T00:00:00Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual([item.status for item in result], ["sent"] * 6)
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(len(assistant), 6)
+            # Strong, per-turn route assertions matched against the sent
+            # reply text (send order, not DB row order - assistant
+            # message_ids are random uuids so same-timestamp batched
+            # replies are not guaranteed to sort back into request order)
+            # - not merely "not literally conversation_mvp_unknown" (a
+            # legacy rule_based/persona fallback also satisfies that
+            # weaker check while still being the wrong, uninformative
+            # UNKNOWN boilerplate response).
+            sent_texts = [text for _chat_id, text in client.sent]
+            self.assertEqual(len(sent_texts), 6)
+            self.assertIn("다음 요청을 안전하게 지원할 수 있습니다", sent_texts[0])  # 뭘 할 수 있나요?
+            self.assertIn("이 대화에는 현재 응답할 수 있습니다", sent_texts[1])  # 현재 동작을 하고 있나요?
+            self.assertIn("가온 Runtime은", sent_texts[2])  # Vps기반으로 구동되고있나요?
+            self.assertIn("이 대화에는 현재 응답할 수 있습니다", sent_texts[3])  # 대화가 가능한가요?
+            self.assertIn("말씀해 주신 불편을 확인했습니다", sent_texts[4])  # 맨날 없네요
+            self.assertIn("말씀해 주신 불편을 확인했습니다", sent_texts[5])  # 제가 업데이트를 잘못했나봐요
+            for text in sent_texts:
+                self.assertNotIn("이해하지 못했습니다", text)
+            expected_routes = {
+                "conversation_mvp_help": 1,
+                "conversation_mvp_status": 2,
+                "tool_read_only": 1,
+                "conversation_mvp_general": 2,
+            }
+            from collections import Counter
+
+            self.assertEqual(Counter(message.route for message in assistant), Counter(expected_routes))
+            self.assertTrue(all(message.route != "rule_based" for message in assistant))
+            self.assertEqual(len(store.tool_audit.list(tool_name="runtime_status")), 1)
+            self.assertEqual(
+                sum(len(store.tool_audit.list(tool_name=name)) for name in ("krx_real_research", "research_retest", "multi_symbol_research", "autonomous_learning_research")),
+                0,
+            )
+            self.assertNotIn("도움말이라고 말씀", "\n".join(text for _chat_id, text in client.sent))
+        finally:
+            store.close()
+
+    def test_resource_needs_question_answers_from_mission_state_without_research(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            client = FakeTelegramClient((_update(210, 210, "어떤 자원이 필요한가요"),))
+            result = poll_once(client, _config(assistant_enabled=True), offset=None, received_at="2026-08-28T00:00:00Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual([item.status for item in result], ["sent"])
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "conversation_resource_needs")
+            self.assertNotIn("이해하지 못했습니다", assistant[-1].content)
+            self.assertNotIn("계산 자원", assistant[-1].content)
+            self.assertNotIn("시장 데이터 권한", assistant[-1].content)
+            self.assertEqual(
+                sum(len(store.tool_audit.list(tool_name=name)) for name in ("krx_real_research", "research_retest", "multi_symbol_research", "autonomous_learning_research")),
+                0,
+            )
+        finally:
+            store.close()
+
+    def test_production_conversation_reply_is_threaded_to_the_inbound_message(self) -> None:
+        # A user-turn response must be visually distinguishable in Telegram
+        # from a later, unrelated scheduled briefing or delayed research
+        # result: it must be sent as a reply to the exact inbound message it
+        # answers (see gaon.integrations.telegram.runtime), never a bare
+        # send_message indistinguishable from a proactive notification.
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient((_update(200, 55, "가온 상태 알려줘"),))
+        try:
+            result = poll_once(client, _config(assistant_enabled=True), offset=None, received_at="2026-08-28T00:00:00Z", state=store.telegram, runtime_store=store)
+
+            self.assertEqual(result[0].status, "sent")
+            self.assertEqual(client.reply_to, ["55"])
         finally:
             store.close()
 
@@ -774,6 +872,56 @@ class TelegramConversationAgentTests(unittest.TestCase):
             self.assertIn("기간을 지정", client.sent[-1][1])
             assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
             self.assertEqual(assistant[-1].route, "conversation_research_execution_clarification")
+        finally:
+            store.close()
+
+    def test_bare_backtest_followup_preserves_real_context_without_fixture_fallback(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(6010, 6010, "삼성전자 분석해줘"), received_at="2026-08-28T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(6011, 6011, "백테스트해주세요"), received_at="2026-08-28T00:00:01Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="krx_real_research")), 1)
+            self.assertEqual(len(store.tool_audit.list(tool_name="backtest_strategy")), 0)
+            self.assertIn("기간을 지정", client.sent[-1][1])
+            self.assertNotIn("fixture", client.sent[-1][1].casefold())
+            assistant = [message for message in store.conversations.list_messages("telegram:100") if message.role == "assistant"]
+            self.assertEqual(assistant[-1].route, "conversation_research_execution_clarification")
+            self.assertEqual(assistant[-1].tool_calls, ())
+        finally:
+            store.close()
+
+    def test_explicit_non_curated_symbol_context_is_never_replaced_by_default_fixture_symbol(self) -> None:
+        """Production hotfix regression: an explicit symbol outside the five
+        curated blue-chip names (005930/000660/005380/035420/051910) - here
+        071055, the exact symbol from the real production incident - was
+        invisible to route.symbols (extract_symbol_entities gated 6-digit
+        code recognition on SYMBOL_NAMES membership), so a bare follow-up
+        like "백테스트해주세요" could silently fall back to a DIFFERENT,
+        unrelated, fixture-backed default symbol (005930) instead of
+        staying on the real symbol the user actually established."""
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(6020, 6020, "071055 분석해줘"), received_at="2026-08-28T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(6021, 6021, "071055 트레이드 표본이 몇 건인가요"), received_at="2026-08-28T00:00:01Z"), runtime, client)
+            process_update(parse_update_result(_update(6022, 6022, "백테스트해주세요"), received_at="2026-08-28T00:00:02Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="backtest_strategy")), 0)
+            final_text = client.sent[-1][1]
+            self.assertNotIn("005930", final_text)
+            self.assertNotIn("fixture", final_text.casefold())
+            for audit in store.tool_audit.list(tool_name="krx_real_research"):
+                self.assertEqual(audit.request.get("arguments", {}).get("symbol"), "071055")
         finally:
             store.close()
 

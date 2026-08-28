@@ -410,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-daily-briefing-telegram-delivery-release-check")
     sub.add_parser("gaon-production-daily-briefing-scheduler-release-check")
     sub.add_parser("gaon-production-daily-briefing-runtime-wiring-release-check")
+    sub.add_parser("gaon-production-autonomous-research-runtime-release-check")
     sub.add_parser("gaon-production-morning-briefing-research-state-consistency-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
     sub.add_parser("gaon-production-strategy-centric-autonomous-research-release-check")
@@ -3194,6 +3195,23 @@ def _run(args: argparse.Namespace) -> int:
             f"long_briefing_chunks={payload['long_briefing_chunks']} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-autonomous-research-runtime-release-check":
+        from gaon.runtime.autonomous_research_runtime import production_autonomous_research_runtime_release_check
+
+        payload = production_autonomous_research_runtime_release_check()
+        print(
+            "gaon-production-autonomous-research-runtime-release-check: PASS "
+            f"active_mission_advanced={str(payload['active_mission_advanced']).lower()} "
+            f"awaiting_human_approval_stop={str(payload['awaiting_human_approval_stop']).lower()} "
+            f"blocked_recovery_honest={str(payload['blocked_recovery_honest']).lower()} "
+            f"service_idempotent={str(payload['service_idempotent']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
             "safety=pass"
         )
 
@@ -6138,6 +6156,7 @@ def _runtime_tick(
     briefing_client_factory=_telegram_client,
     briefing_now_factory=None,
 ):
+    from gaon.runtime.autonomous_research_runtime import AutonomousResearchRuntimeService
     from gaon.runtime.daily_briefing import DailyBriefingRuntimeWorker
 
     telegram_worker = TelegramPollingWorker(config, store, client_factory=telegram_client_factory, metrics=metrics)
@@ -6148,11 +6167,22 @@ def _runtime_tick(
         metrics=metrics,
         now_factory=briefing_now_factory,
     )
+    autonomous_research_service = AutonomousResearchRuntimeService(
+        config,
+        ScheduledJobRepository(store._connection),
+        metrics=metrics,
+        now_factory=briefing_now_factory,
+    )
 
     def _tick():
         telegram_result = telegram_worker.tick()
         briefing_result = briefing_worker.tick()
-        return {"telegram": telegram_result, "daily_briefing": briefing_result}
+        autonomous_research_result = autonomous_research_service.tick()
+        return {
+            "telegram": telegram_result,
+            "daily_briefing": briefing_result,
+            "autonomous_research": autonomous_research_result,
+        }
 
     return _tick
 

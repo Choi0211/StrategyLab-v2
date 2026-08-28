@@ -57,6 +57,18 @@ class ConversationalMVPTests(unittest.TestCase):
         self.assertEqual(route.intent, ConversationalMVPIntent.GREETING)
         self.assertEqual(route.symbols, ())
 
+    def test_production_capability_availability_and_feedback_are_not_unknown(self) -> None:
+        self.assertEqual(classify_conversational_route("뭘 할 수 있나요?").intent, ConversationalMVPIntent.HELP)
+        for text in ("현재 동작을 하고 있나요?", "대화가 가능한가요?", "지금은 대화가 가능한가요"):
+            with self.subTest(text=text):
+                self.assertEqual(classify_conversational_route(text).intent, ConversationalMVPIntent.STATUS_QUERY)
+        for text in ("맨날 없네요", "제가 업데이트를 잘못했나봐요 이상해졌넹"):
+            with self.subTest(text=text):
+                self.assertEqual(classify_conversational_route(text).intent, ConversationalMVPIntent.GENERAL_CONVERSATION)
+
+    def test_contextual_backtest_request_is_not_unrelated_tool_fallback(self) -> None:
+        self.assertEqual(classify_conversational_route("백테스트해주세요").intent, ConversationalMVPIntent.RERUN_REQUEST)
+
     def test_followup_typo_is_narrowly_classified_as_explanation(self) -> None:
         route = classify_conversational_route("왜 그절? 판간했어?")
 

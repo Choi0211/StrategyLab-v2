@@ -132,6 +132,7 @@ class PostMarketBriefing:
     open_position_count: int
     execution_classifications: tuple[str, ...]
     research_followup_actions: tuple[ResearchDirectorDecision, ...]
+    research_mission: ResearchMissionBriefingState | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -147,6 +148,7 @@ class PostMarketBriefing:
             "open_position_count": self.open_position_count,
             "execution_classifications": list(self.execution_classifications),
             "research_followup_actions": [decision.to_json() for decision in self.research_followup_actions],
+            "research_mission": self.research_mission.to_json() if self.research_mission else None,
             "strategy_mutated": False,
             "order_executed": False,
         }
@@ -178,6 +180,7 @@ def compose_post_market_briefing(
     market: str,
     live_feedback_json: Mapping[str, object],
     research_decisions: tuple[ResearchDirectorDecision, ...] = (),
+    research_mission: ResearchMission | Mapping[str, object] | None = None,
 ) -> PostMarketBriefing:
     _validate_utc(generated_at)
     return PostMarketBriefing(
@@ -191,6 +194,7 @@ def compose_post_market_briefing(
         open_position_count=int(live_feedback_json.get("open_position_count", 0) or 0),
         execution_classifications=tuple(str(item) for item in live_feedback_json.get("classifications", ()) or ()),
         research_followup_actions=research_decisions,
+        research_mission=_research_mission_briefing_state(research_mission),
     )
 
 
@@ -243,11 +247,14 @@ def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
     followups = tuple(decision for decision in briefing.research_followup_actions if _needs_followup(decision))
     lines.append("")
     if followups:
-        lines.append("후속 연구가 필요합니다:")
+        lines.append("장중 실행 이슈에서 파생된 후속 연구가 필요합니다:")
         for decision in followups:
             lines.append(f"- {decision.action.value}: {decision.reason}")
     else:
-        lines.append("추가 연구 없이 관찰을 계속합니다.")
+        lines.append("장중 실행 이슈에서 파생된 후속 연구 항목은 없습니다.")
+    if briefing.research_mission is not None:
+        lines.extend(("", "[Research Mission]"))
+        lines.extend(_render_research_mission_briefing_lines(briefing.research_mission))
     return "\n".join(lines)
 
 
@@ -420,15 +427,23 @@ def compose_unresolved_research_review(audit_records: tuple[object, ...]) -> dic
     return {"schema_version": DAILY_BRIEFING_SCHEMA_VERSION, "unresolved_count": len(unresolved), "unresolved": unresolved}
 
 
-def render_unresolved_research_review_ko(review: Mapping[str, object], *, generated_at: str) -> str:
+def render_unresolved_research_review_ko(
+    review: Mapping[str, object],
+    *,
+    generated_at: str,
+    research_mission: ResearchMissionBriefingState | None = None,
+) -> str:
     lines = [f"[가온 미해결 연구 점검 - {generated_at}]", ""]
     items = review.get("unresolved") or []
     if not items:
-        lines.append("현재 후속 조치가 필요한 연구가 없습니다.")
-        return "\n".join(lines)
-    lines.append(f"후속 조치가 필요한 연구 {len(items)}건:")
-    for item in items:
-        lines.append(f"- {item.get('symbol')}: {item.get('action')} - {item.get('reason')}")
+        lines.append("뉴스 기반 후속 조치가 필요한 연구는 없습니다.")
+    else:
+        lines.append(f"후속 조치가 필요한 연구 {len(items)}건:")
+        for item in items:
+            lines.append(f"- {item.get('symbol')}: {item.get('action')} - {item.get('reason')}")
+    if research_mission is not None:
+        lines.extend(("", "[Research Mission]"))
+        lines.extend(_render_research_mission_briefing_lines(research_mission))
     return "\n".join(lines)
 
 
@@ -619,8 +634,8 @@ class DailyBriefingRuntimeWorker:
                 client,
                 chat_id=self._config.telegram_allowed_chat_ids[0],
                 compose_pre_market=lambda: _compose_runtime_pre_market(now, research_mission_provider=self._research_mission_provider),
-                compose_post_market=lambda: _compose_runtime_post_market(now),
-                compose_unresolved_review=lambda: _compose_runtime_unresolved_review(now),
+                compose_post_market=lambda: _compose_runtime_post_market(now, research_mission_provider=self._research_mission_provider),
+                compose_unresolved_review=lambda: _compose_runtime_unresolved_review(now, research_mission_provider=self._research_mission_provider),
                 dry_run=self._config.dry_run,
             )
             results = scheduler.run_due(now=now)
@@ -739,7 +754,11 @@ def _compose_runtime_pre_market(
     return render_pre_market_briefing_ko(compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=mission))
 
 
-def _compose_runtime_post_market(now: str) -> str:
+def _compose_runtime_post_market(
+    now: str,
+    *,
+    research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+) -> str:
     feedback_json: Mapping[str, object] = {"classifications": ("live_feedback_unavailable",)}
     try:
         from gaon.research.live_trading_intelligence import production_feedback
@@ -749,13 +768,23 @@ def _compose_runtime_post_market(now: str) -> str:
             feedback_json = feedback.to_json()
     except Exception:
         feedback_json = {"classifications": ("live_feedback_unavailable",)}
+    mission = research_mission_provider() if research_mission_provider else None
     return render_post_market_briefing_ko(
-        compose_post_market_briefing(generated_at=now, market="KOSPI", live_feedback_json=feedback_json)
+        compose_post_market_briefing(generated_at=now, market="KOSPI", live_feedback_json=feedback_json, research_mission=mission)
     )
 
 
-def _compose_runtime_unresolved_review(now: str) -> str:
-    return render_unresolved_research_review_ko({"unresolved_count": 0, "unresolved": []}, generated_at=now)
+def _compose_runtime_unresolved_review(
+    now: str,
+    *,
+    research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+) -> str:
+    mission = research_mission_provider() if research_mission_provider else None
+    return render_unresolved_research_review_ko(
+        {"unresolved_count": 0, "unresolved": []},
+        generated_at=now,
+        research_mission=_research_mission_briefing_state(mission),
+    )
 
 
 def _utc_now() -> str:
@@ -954,6 +983,14 @@ def production_morning_briefing_research_state_consistency_release_check() -> Ma
     active_text = render_pre_market_briefing_ko(
         compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=mission)
     )
+    active_post_market_text = render_post_market_briefing_ko(
+        compose_post_market_briefing(generated_at=now, market="KOSPI", live_feedback_json={}, research_mission=mission)
+    )
+    active_unresolved_text = render_unresolved_research_review_ko(
+        {"unresolved_count": 0, "unresolved": []},
+        generated_at=now,
+        research_mission=_research_mission_briefing_state(mission),
+    )
 
     approval_mission = mission
     for index in range(3):
@@ -1002,6 +1039,14 @@ def production_morning_briefing_research_state_consistency_release_check() -> Ma
         "awaiting_human_approval_visible": "promotion-ready: 3/3" in approval_text and "research status: 승격 승인 대기" in approval_text,
         "restart_reads_canonical_mission": "promotion-ready: 0/3" in restart_text and f"active candidate: {active.candidate_id}" in restart_text,
         "kst_user_facing_time": "기준 시각: 2026-08-22 09:00 KST" in active_text,
+        "post_market_shows_active_mission_not_contradictory": (
+            "research status: 진행 중" in active_post_market_text
+            and "추가 연구 없이 관찰을 계속합니다" not in active_post_market_text
+        ),
+        "unresolved_review_shows_active_mission_not_contradictory": (
+            "research status: 진행 중" in active_unresolved_text
+            and "후속 조치가 필요한 연구가 없습니다" not in active_unresolved_text
+        ),
         "strategy_not_mutated": True,
         "order_not_executed": True,
         "champion_not_promoted": True,

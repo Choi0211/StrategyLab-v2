@@ -37,6 +37,16 @@ class TelegramResponse:
     dry_run: bool
     correlation_id: str
     message_id: str | None = None
+    in_reply_to: str | None = None
+    """The inbound Telegram message_id this response answers, if any.
+
+    Set only for replies to a real user turn (see
+    ``TelegramRuntime.handle_message``); left ``None`` for proactive sends
+    such as scheduled briefings (``send_proactive_message``), so a scheduled
+    notification never renders as a reply to the user's last message and a
+    delayed research result cannot be mistaken for the answer to an
+    unrelated later question.
+    """
 
 
 @dataclass(frozen=True)

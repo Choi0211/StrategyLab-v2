@@ -33,7 +33,7 @@ class DeterministicToolRoutingTests(unittest.TestCase):
                 self.assertEqual(route_read_only_tool(text), "champion_status")
 
     def test_runtime_status_mappings(self) -> None:
-        for text in ("가온 상태 알려줘", "현재 가온 상태", "런타임 상태 알려줘", "서버 상태 알려줘", "gaon runtime 상태"):
+        for text in ("가온 상태 알려줘", "현재 가온 상태", "런타임 상태 알려줘", "서버 상태 알려줘", "gaon runtime 상태", "Vps기반으로 구동되고있나요?"):
             with self.subTest(text=text):
                 self.assertEqual(route_read_only_tool(text), "runtime_status")
 
@@ -59,6 +59,13 @@ class DeterministicToolRoutingTests(unittest.TestCase):
         response = self.brain.respond(_request("가온 상태 알려줘"))
 
         self.assertEqual(response.tool_calls, ("runtime_status",))
+        self.assertIn(f"Schema: v{SCHEMA_VERSION}", response.text)
+
+    def test_vps_question_uses_grounded_runtime_tool(self) -> None:
+        response = self.brain.respond(_request("Vps기반으로 구동되고있나요?"))
+
+        self.assertEqual(response.tool_calls, ("runtime_status",))
+        self.assertEqual(response.provider, "deterministic")
         self.assertIn(f"Schema: v{SCHEMA_VERSION}", response.text)
 
     def test_pipeline_history_executes_tool(self) -> None:

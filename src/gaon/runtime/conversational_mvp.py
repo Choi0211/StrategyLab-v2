@@ -26,6 +26,8 @@ class ConversationalMVPIntent(str, Enum):
     RECOMMENDATION_REQUEST = "recommendation_request"
     CONTEXTUAL_FOLLOWUP = "contextual_followup"
     STATUS_QUERY = "status_query"
+    GENERAL_CONVERSATION = "general_conversation"
+    RESOURCE_NEEDS_QUERY = "resource_needs_query"
     UNKNOWN = "unknown"
 
 
@@ -326,8 +328,18 @@ def extract_symbol_entities(text: str) -> tuple[SymbolEntity, ...]:
     normalized = text.casefold()
     found: list[SymbolEntity] = []
     for token in re.findall(r"(?<!\d)(\d{6})(?!\d)", text):
-        if token in SYMBOL_NAMES and token not in [item.symbol for item in found]:
-            found.append(SymbolEntity(token, SYMBOL_NAMES[token]))
+        # Production context-integrity fix: a well-formed 6-digit KRX code
+        # is an unambiguous explicit symbol reference on its own - it must
+        # be recognized (and therefore pin conversational context/scope-
+        # regression guards to it) even when SYMBOL_NAMES has no curated
+        # display name for it. Gating recognition on SYMBOL_NAMES
+        # membership silently made every symbol outside the five curated
+        # blue-chip names invisible to route.symbols, which is the root
+        # cause behind a real production regression where an explicit
+        # symbol (e.g. 071055) got silently replaced by stale/default
+        # context in a later turn.
+        if token not in [item.symbol for item in found]:
+            found.append(SymbolEntity(token, SYMBOL_NAMES.get(token, token)))
     for symbol, aliases in SYMBOL_ALIASES.items():
         if symbol in [item.symbol for item in found]:
             continue
@@ -348,6 +360,17 @@ def classify_conversational_route(text: str) -> ConversationalRoute:
         return ConversationalRoute(ConversationalMVPIntent.GREETING, ())
     if any(token in normalized for token in ("도움말", "뭘 할 수", "무엇을 할 수", "help", "/help", "/start")):
         return ConversationalRoute(ConversationalMVPIntent.HELP, symbols)
+    # Availability questions are safe read-only conversation status, not
+    # research requests.  Keep the predicate structural so ordinary Korean
+    # phrasing does not have to be maintained as a large exact-phrase list.
+    if _is_availability_question(normalized):
+        return ConversationalRoute(ConversationalMVPIntent.STATUS_QUERY, symbols)
+    # "어떤 자원이 필요한가요" - a question about blockers/requirements must
+    # be answered from real mission/runtime state (see
+    # LLMConversationBrain's RESOURCE_NEEDS_QUERY handling), never
+    # fabricated by a provider or left to fall through to UNKNOWN.
+    if _is_resource_needs_question(normalized):
+        return ConversationalRoute(ConversationalMVPIntent.RESOURCE_NEEDS_QUERY, symbols)
     if any(token in normalized for token in PRESENTATION_STYLE_TOKENS):
         if any(token in normalized for token in ("\ubcf4\uace0\uc11c", "\ud45c\ub85c", "\uc790\uc138", "\uc0c1\uc138")):
             return ConversationalRoute(ConversationalMVPIntent.SHOW_DETAILS, symbols)
@@ -369,6 +392,8 @@ def classify_conversational_route(text: str) -> ConversationalRoute:
         return ConversationalRoute(ConversationalMVPIntent.TIMEFRAME_CHANGE_REQUEST, symbols)
     if any(token in normalized for token in RERUN_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.RERUN_REQUEST, symbols)
+    if _is_contextual_backtest_request(normalized):
+        return ConversationalRoute(ConversationalMVPIntent.RERUN_REQUEST, symbols)
     if any(token in normalized for token in RISK_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.RISK_QUESTION, symbols)
     if any(token in normalized for token in STRATEGY_TOKENS) and not any(token in normalized for token in ANALYSIS_TOKENS):
@@ -387,6 +412,15 @@ def classify_conversational_route(text: str) -> ConversationalRoute:
         return ConversationalRoute(ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS, symbols)
     if any(token in normalized for token in STATUS_TOKENS):
         return ConversationalRoute(ConversationalMVPIntent.STATUS_QUERY, symbols)
+    # Preserve the established provider path for conversational greetings
+    # that are longer than the intentionally narrow deterministic greeting
+    # matcher (for example, "안녕하세요 가온").
+    if normalized.startswith(("안녕", "hello", "hi")):
+        return ConversationalRoute(ConversationalMVPIntent.UNKNOWN, symbols)
+    # Preserve UNKNOWN for malformed/uninterpretable input, while treating a
+    # complete natural-language utterance as a safe, non-executing response.
+    if _looks_like_natural_language(normalized):
+        return ConversationalRoute(ConversationalMVPIntent.GENERAL_CONVERSATION, symbols)
     return ConversationalRoute(ConversationalMVPIntent.UNKNOWN, symbols)
 
 
@@ -416,7 +450,35 @@ def render_unknown(symbols: tuple[SymbolEntity, ...] = ()) -> str:
 
 
 def render_status() -> str:
-    return "가온은 현재 응답 가능합니다, 영하님. 다만 실제 연구는 데이터 품질 검증과 safe tool 경계를 통과한 결과만 말씀드립니다."
+    return "이 대화에는 현재 응답할 수 있습니다, 영하님. 실제 연구 결과는 데이터 품질 검증과 safe tool 경계를 통과한 경우에만 말씀드립니다."
+
+
+def render_general_conversation() -> str:
+    return "말씀해 주신 불편을 확인했습니다, 영하님. 이 대화에서 확인 가능한 상태와 연구 기록은 사실에 근거해 안내하고, 요청하지 않은 연구는 실행하지 않겠습니다."
+
+
+def _is_availability_question(normalized: str) -> bool:
+    subject = ("대화", "가온", "시스템", "runtime", "런타임", "vps", "서버")
+    state = ("가능", "동작", "구동", "연결", "응답", "상태")
+    return (
+        any(token in normalized for token in subject)
+        or "현재" in normalized
+    ) and any(token in normalized for token in state)
+
+
+def _is_resource_needs_question(normalized: str) -> bool:
+    subject = ("자원", "리소스", "resource")
+    ask = ("필요", "부족", "있어야", "요구")
+    return any(token in normalized for token in subject) and any(token in normalized for token in ask)
+
+
+def _is_contextual_backtest_request(normalized: str) -> bool:
+    return any(token in normalized for token in ("백테스트해", "backtest해"))
+
+
+def _looks_like_natural_language(normalized: str) -> bool:
+    words = re.findall(r"[\w가-힣]+", normalized, flags=re.UNICODE)
+    return len(words) >= 2 and any(re.search(r"[가-힣a-z]", word, flags=re.IGNORECASE) for word in words)
 
 
 def render_missing_context() -> str:
