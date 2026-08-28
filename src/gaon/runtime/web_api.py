@@ -59,6 +59,13 @@ from gaon.knowledge.strategy_candidate import (
 )
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.conversation_context import ConversationContextOrchestrator
+from gaon.runtime.conversation_lifecycle import (
+    archive_conversation,
+    delete_conversation_messages,
+    list_conversations,
+    list_messages_page,
+    unarchive_conversation,
+)
 from gaon.runtime.event_store import SQLiteEventStore
 from gaon.runtime.llm_conversation import (
     LLMConversationBrain,
@@ -159,6 +166,40 @@ class GaonWebChatAdapter:
             return ResearchMission.from_json(raw)
         except (KeyError, ValueError, TypeError):
             return None
+
+    def list_conversations(self, *, user_ref: str, include_archived: bool = True) -> tuple:
+        return list_conversations(self._repository._connection, user_ref=f"web-user:{user_ref}", include_archived=include_archived)
+
+    def _owns_session(self, session_ref: str, *, user_ref: str) -> bool:
+        session_id = f"web:{session_ref}"
+        try:
+            session = self._repository.get_session(session_id)
+        except KeyError:
+            return False
+        return session.user_ref == f"web-user:{user_ref}"
+
+    def archive_conversation(self, *, session_ref: str, user_ref: str, now: str) -> bool:
+        if not self._owns_session(session_ref, user_ref=user_ref):
+            return False
+        return archive_conversation(self._repository._connection, session_id=f"web:{session_ref}", now=now)
+
+    def unarchive_conversation(self, *, session_ref: str, user_ref: str, now: str) -> bool:
+        if not self._owns_session(session_ref, user_ref=user_ref):
+            return False
+        return unarchive_conversation(self._repository._connection, session_id=f"web:{session_ref}", now=now)
+
+    def delete_conversation(self, *, session_ref: str, user_ref: str, now: str, confirm: bool) -> int | None:
+        """Returns the number of messages deleted, or None if the caller
+        does not own this session (never reveals whether an unowned
+        session_ref exists)."""
+        if not self._owns_session(session_ref, user_ref=user_ref):
+            return None
+        return delete_conversation_messages(self._repository._connection, session_id=f"web:{session_ref}", now=now, confirm=confirm)
+
+    def list_messages(self, *, session_ref: str, user_ref: str, limit: int, before: str | None) -> tuple | None:
+        if not self._owns_session(session_ref, user_ref=user_ref):
+            return None
+        return list_messages_page(self._repository._connection, session_id=f"web:{session_ref}", limit=limit, before_message_id=before)
 
     def handle(
         self,
@@ -301,7 +342,138 @@ def dispatch_request(
         return _handle_candidate_detail(adapter, query, detail_match.group("candidate_id"))
     if method == "GET" and route_path == "/gaon/storage/status":
         return _handle_storage_status()
+    if method == "GET" and route_path == "/gaon/chat/conversations":
+        return _handle_conversations_list(adapter, query)
+    if method == "GET" and route_path == "/gaon/chat/messages":
+        return _handle_messages_page(adapter, query)
+    if method == "POST" and route_path == "/gaon/chat/conversations/archive":
+        return _handle_conversation_archive(adapter, body, archived=True)
+    if method == "POST" and route_path == "/gaon/chat/conversations/unarchive":
+        return _handle_conversation_archive(adapter, body, archived=False)
+    if method == "POST" and route_path == "/gaon/chat/conversations/delete":
+        return _handle_conversation_delete(adapter, body)
     return 404, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "not found"}
+
+
+def _require_str_field(body: Mapping[str, object] | None, field: str) -> str | None:
+    if not isinstance(body, Mapping):
+        return None
+    value = str(body.get(field, "")).strip()
+    return value or None
+
+
+def _handle_conversations_list(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    values = query.get("user_ref")
+    user_ref = values[0].strip() if values and values[0].strip() else None
+    if user_ref is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "user_ref query parameter is required"}
+    include_archived = (query.get("include_archived") or ["true"])[0].strip().lower() != "false"
+    conversations = adapter.list_conversations(user_ref=user_ref, include_archived=include_archived)
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "conversations": [
+            {
+                "session_ref": c.session_id.split(":", 1)[1] if ":" in c.session_id else c.session_id,
+                "status": c.status,
+                "created_at": c.created_at,
+                "updated_at": c.updated_at,
+                "message_count": c.message_count,
+            }
+            for c in conversations
+        ],
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
+
+
+def _handle_messages_page(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    session_ref = _session_ref_from_query(query)
+    if session_ref is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "session_ref query parameter is required"}
+    user_values = query.get("user_ref")
+    user_ref = user_values[0].strip() if user_values and user_values[0].strip() else session_ref
+    limit_values = query.get("limit")
+    try:
+        limit = int(limit_values[0]) if limit_values and limit_values[0].strip() else 30
+    except ValueError:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "limit must be an integer"}
+    before_values = query.get("before")
+    before = before_values[0].strip() if before_values and before_values[0].strip() else None
+    try:
+        messages = adapter.list_messages(session_ref=session_ref, user_ref=user_ref, limit=limit, before=before)
+    except ValueError as exc:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": str(exc)}
+    if messages is None:
+        return 404, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "conversation not found"}
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "session_ref": session_ref,
+        "messages": [
+            {
+                "message_id": m.message_id,
+                "role": m.role,
+                "content": m.content,
+                "route": m.route,
+                "created_at": m.created_at,
+            }
+            for m in messages
+        ],
+        "has_more": len(messages) == limit,
+        "next_before": messages[0].message_id if messages and len(messages) == limit else None,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
+
+
+def _handle_conversation_archive(adapter: GaonWebChatAdapter, body: Mapping[str, object] | None, *, archived: bool) -> tuple[int, Mapping[str, object]]:
+    session_ref = _require_str_field(body, "session_ref")
+    user_ref = _require_str_field(body, "user_ref")
+    if session_ref is None or user_ref is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "session_ref and user_ref are required"}
+    now = _utc_now()
+    ok = adapter.archive_conversation(session_ref=session_ref, user_ref=user_ref, now=now) if archived else adapter.unarchive_conversation(session_ref=session_ref, user_ref=user_ref, now=now)
+    if not ok:
+        return 404, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "conversation not found"}
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "session_ref": session_ref,
+        "status": "archived" if archived else "active",
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
+
+
+def _handle_conversation_delete(adapter: GaonWebChatAdapter, body: Mapping[str, object] | None) -> tuple[int, Mapping[str, object]]:
+    session_ref = _require_str_field(body, "session_ref")
+    user_ref = _require_str_field(body, "user_ref")
+    if session_ref is None or user_ref is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "session_ref and user_ref are required"}
+    confirm = bool(isinstance(body, Mapping) and body.get("confirm") is True)
+    if not confirm:
+        return 400, {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "error": "explicit confirmation required: pass confirm=true to permanently delete this conversation's messages",
+        }
+    deleted_count = adapter.delete_conversation(session_ref=session_ref, user_ref=user_ref, now=_utc_now(), confirm=True)
+    if deleted_count is None:
+        return 404, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "conversation not found"}
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "session_ref": session_ref,
+        "deleted_message_count": deleted_count,
+        "research_mission_preserved": True,
+        "cognitive_state_preserved": True,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
 
 
 def _session_ref_from_query(query: Mapping[str, list[str]]) -> str | None:
@@ -855,6 +1027,125 @@ def production_gaon_web_api_root_release_check() -> Mapping[str, object]:
         "service": payload.get("service"),
         "strategy_mutated": False,
         "order_executed": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_conversation_lifecycle_durable_state_release_check() -> Mapping[str, object]:
+    """Hotfix #166 release check: conversation lifecycle actions (archive,
+    unconfirmed delete attempt, confirmed delete) never touch
+    ResearchMission/StrategyCandidate state (embedded in the SAME
+    conversation_sessions row's metadata_json) or Cognitive Core durable
+    state (the entirely separate cognitive_records table - including the
+    durable Sustainability & Growth system objective, gaon.cognitive.
+    sustainability). Also proves, via real repository before/after row
+    counts (not a by-construction constant), that none of this ever
+    reaches a strategy-mutation/order/champion-promotion/approval table.
+    """
+    from gaon.cognitive.orchestrator import CognitiveOrchestrator
+    from gaon.cognitive.sustainability import sustainability_objective
+    from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+    from gaon.knowledge.strategy_candidate import new_candidate
+
+    now = "2026-08-29T00:00:00Z"
+    observed_tables = (
+        "champion_registry",
+        "champion_history",
+        "promotion_requests",
+        "promotion_decisions",
+        "approvals",
+        "strategy_deployment_requests",
+        "strategy_deployment_runs",
+        "strategy_execution_plans",
+        "strategy_execution_runs",
+    )
+
+    def table_counts(connection) -> dict[str, int]:
+        return {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in observed_tables}
+
+    store = RuntimeStateStore(":memory:")
+    try:
+        config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic")
+        adapter = GaonWebChatAdapter(config, store._connection)
+
+        adapter.handle(message="가온 상태 알려줘 readonly", session_ref="release-check", user_ref="release-check-user", read_only=True, received_at=now)
+        mission = extract_or_update_mission(
+            "대한민국 장에 맞는 단타 매매 전략을 연구해줘. 승격 준비 후보 3개가 준비될 때까지 계속해줘.",
+            existing=None,
+            now=now,
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=now)
+        mission = add_candidate(mission, candidate, now=now)
+        session = adapter._repository.get_session("web:release-check")
+        metadata = dict(session.metadata)
+        metadata["conversation_mvp"] = {"research_mission": mission.to_json()}
+        from gaon.runtime.llm_conversation import LLMConversationSession
+
+        adapter._repository.upsert_session(
+            LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, now, metadata)
+        )
+
+        core = CognitiveOrchestrator(store._connection)
+        goal = core.create_goal(
+            namespace="web-user:release-check-user",
+            title="사용자 목표",
+            description="사용자 개인 목표",
+            reason="release check user goal",
+            success_criteria=(),
+            next_action="계속 진행",
+            source_ref="release-check",
+            now=now,
+        )
+        sustainability_before = sustainability_objective(store._connection)
+
+        counts_before = table_counts(store._connection)
+        messages_before = len(adapter._repository.list_messages("web:release-check", limit=1000))
+
+        archive_status, archive_payload = dispatch_request(
+            adapter, method="POST", path="/gaon/chat/conversations/archive", body={"session_ref": "release-check", "user_ref": "release-check-user"}
+        )
+        unconfirmed_status, unconfirmed_payload = dispatch_request(
+            adapter, method="POST", path="/gaon/chat/conversations/delete", body={"session_ref": "release-check", "user_ref": "release-check-user"}
+        )
+        messages_after_unconfirmed = len(adapter._repository.list_messages("web:release-check", limit=1000))
+        delete_status, delete_payload = dispatch_request(
+            adapter, method="POST", path="/gaon/chat/conversations/delete", body={"session_ref": "release-check", "user_ref": "release-check-user", "confirm": True}
+        )
+
+        mission_after = adapter.mission_for("release-check")
+        goal_after = core.retrieve(namespace="web-user:release-check-user", query="목표").active_goals
+        sustainability_after = sustainability_objective(store._connection)
+        messages_after_delete = len(adapter._repository.list_messages("web:release-check", limit=1000))
+        counts_after = table_counts(store._connection)
+    finally:
+        store.close()
+
+    checks = {
+        "archive_succeeded": archive_status == 200 and archive_payload.get("status") == "archived",
+        "unconfirmed_delete_rejected": unconfirmed_status == 400,
+        "unconfirmed_delete_removed_nothing": messages_after_unconfirmed == messages_before,
+        "confirmed_delete_succeeded": delete_status == 200 and delete_payload.get("deleted_message_count", 0) > 0,
+        "messages_actually_removed": messages_after_delete == 0,
+        "research_mission_preserved": mission_after is not None and mission_after.mission_id == mission.mission_id and len(mission_after.candidates) == 1,
+        "user_cognitive_goal_preserved": any(g.record_id == goal.record_id for g in goal_after),
+        "sustainability_objective_preserved": (
+            sustainability_before is not None
+            and sustainability_after is not None
+            and sustainability_before.record_id == sustainability_after.record_id
+            and sustainability_before.updated_at == sustainability_after.updated_at
+        ),
+        "no_repository_table_changed": counts_before == counts_after,
+    }
+    if not all(checks.values()):
+        failed = ",".join(name for name, ok in checks.items() if not ok)
+        raise RuntimeError(f"conversation lifecycle durable state release check failed: {failed}")
+    return {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        **checks,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
         "approval_bypassed": False,
         "safety": "pass",
     }

@@ -432,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-promotion-readiness-reachability-release-check")
     sub.add_parser("gaon-production-binance-adapter-read-only-release-check")
     sub.add_parser("gaon-production-web-chat-api-release-check")
+    sub.add_parser("gaon-production-conversation-lifecycle-durable-state-release-check")
     sub.add_parser("gaon-production-web-api-root-release-check")
     sub.add_parser("gaon-cognitive-core-v1-release-check")
     sub.add_parser("gaon-unified-conversation-release-check")
@@ -3094,6 +3095,16 @@ def _run(args: argparse.Namespace) -> int:
             for key, value in payload.items()
         )
         print(f"gaon-production-web-chat-api-release-check: PASS {details}")
+
+    elif args.command == "gaon-production-conversation-lifecycle-durable-state-release-check":
+        from gaon.runtime.web_api import production_conversation_lifecycle_durable_state_release_check
+
+        payload = production_conversation_lifecycle_durable_state_release_check()
+        details = " ".join(
+            f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+            for key, value in payload.items()
+        )
+        print(f"gaon-production-conversation-lifecycle-durable-state-release-check: PASS {details}")
 
     elif args.command in {"gaon-cognitive-core-v1-release-check", "gaon-unified-conversation-release-check"}:
         from gaon.cognitive.release_check import cognitive_release_check

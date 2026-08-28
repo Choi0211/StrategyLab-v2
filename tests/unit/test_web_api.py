@@ -22,6 +22,7 @@ from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.web_api import (
     GaonWebChatAdapter,
     dispatch_request,
+    production_conversation_lifecycle_durable_state_release_check,
     production_gaon_research_status_api_release_check,
     production_gaon_storage_status_api_release_check,
     production_gaon_web_api_root_release_check,
@@ -451,6 +452,172 @@ class WebApiRootReleaseCheckTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("gaon-production-web-api-root-release-check: PASS", printed)
         self.assertIn("strategy_mutated=false", printed)
+        self.assertIn("safety=pass", printed)
+
+
+class ConversationLifecycleEndpointsTests(unittest.TestCase):
+    """Hotfix #166: new/archive/delete/list/paginate for web conversations,
+    kept strictly separate from ResearchMission/StrategyCandidate/
+    Cognitive Core durable state (see gaon.runtime.conversation_lifecycle
+    module docstring)."""
+
+    def test_list_conversations_orders_most_recently_updated_first(self) -> None:
+        adapter = _adapter()
+        dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": "안녕하세요", "session_ref": "a", "user_ref": "u1"})
+        dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": "안녕하세요", "session_ref": "b", "user_ref": "u1"})
+
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/chat/conversations?user_ref=u1", body=None)
+
+        self.assertEqual(status, 200)
+        refs = [c["session_ref"] for c in payload["conversations"]]
+        self.assertEqual(refs, ["b", "a"])
+        self.assertEqual(payload["conversations"][0]["message_count"], 2)
+        self.assertFalse(payload["strategy_mutated"])
+
+    def test_list_conversations_requires_user_ref(self) -> None:
+        adapter = _adapter()
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/chat/conversations", body=None)
+        self.assertEqual(status, 400)
+
+    def test_list_conversations_is_scoped_per_user(self) -> None:
+        adapter = _adapter()
+        dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": "안녕하세요", "session_ref": "a", "user_ref": "u1"})
+        dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": "안녕하세요", "session_ref": "c", "user_ref": "u2"})
+
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/chat/conversations?user_ref=u1", body=None)
+        self.assertEqual([c["session_ref"] for c in payload["conversations"]], ["a"])
+
+    def test_messages_pagination_returns_oldest_first_within_a_page_and_cursor_for_next(self) -> None:
+        adapter = _adapter()
+        for i in range(5):
+            dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": f"메시지 {i}", "session_ref": "a", "user_ref": "u1"})
+        # 5 turns -> 10 messages (user+assistant each)
+
+        status, page1 = dispatch_request(adapter, method="GET", path="/gaon/chat/messages?session_ref=a&user_ref=u1&limit=4", body=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(page1["messages"]), 4)
+        self.assertTrue(page1["has_more"])
+        created_ats = [m["created_at"] for m in page1["messages"]]
+        self.assertEqual(created_ats, sorted(created_ats))
+
+        status, page2 = dispatch_request(
+            adapter, method="GET", path=f"/gaon/chat/messages?session_ref=a&user_ref=u1&limit=4&before={page1['next_before']}", body=None
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(page2["messages"]), 4)
+        page1_ids = {m["message_id"] for m in page1["messages"]}
+        page2_ids = {m["message_id"] for m in page2["messages"]}
+        self.assertEqual(page1_ids & page2_ids, set())
+
+    def test_messages_endpoint_for_unknown_conversation_is_404(self) -> None:
+        adapter = _adapter()
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/chat/messages?session_ref=nope&user_ref=u1", body=None)
+        self.assertEqual(status, 404)
+
+    def test_archive_and_unarchive_round_trip(self) -> None:
+        adapter = _adapter()
+        dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": "안녕하세요", "session_ref": "a", "user_ref": "u1"})
+
+        status, payload = dispatch_request(adapter, method="POST", path="/gaon/chat/conversations/archive", body={"session_ref": "a", "user_ref": "u1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "archived")
+
+        status, listed = dispatch_request(adapter, method="GET", path="/gaon/chat/conversations?user_ref=u1&include_archived=false", body=None)
+        self.assertEqual(listed["conversations"], [])
+
+        status, payload = dispatch_request(adapter, method="POST", path="/gaon/chat/conversations/unarchive", body={"session_ref": "a", "user_ref": "u1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "active")
+        status, listed = dispatch_request(adapter, method="GET", path="/gaon/chat/conversations?user_ref=u1&include_archived=false", body=None)
+        self.assertEqual(len(listed["conversations"]), 1)
+
+    def test_archive_by_a_different_user_is_rejected_as_not_found(self) -> None:
+        adapter = _adapter()
+        dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": "안녕하세요", "session_ref": "a", "user_ref": "u1"})
+        status, payload = dispatch_request(adapter, method="POST", path="/gaon/chat/conversations/archive", body={"session_ref": "a", "user_ref": "someone-else"})
+        self.assertEqual(status, 404)
+
+    def test_delete_requires_explicit_confirmation(self) -> None:
+        adapter = _adapter()
+        dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": "안녕하세요", "session_ref": "a", "user_ref": "u1"})
+
+        status, payload = dispatch_request(adapter, method="POST", path="/gaon/chat/conversations/delete", body={"session_ref": "a", "user_ref": "u1"})
+        self.assertEqual(status, 400)
+        status, payload = dispatch_request(adapter, method="POST", path="/gaon/chat/conversations/delete", body={"session_ref": "a", "user_ref": "u1", "confirm": False})
+        self.assertEqual(status, 400)
+
+        status, listed = dispatch_request(adapter, method="GET", path="/gaon/chat/messages?session_ref=a&user_ref=u1", body=None)
+        self.assertEqual(len(listed["messages"]), 2, "unconfirmed delete attempts must not remove anything")
+
+    def test_delete_removes_messages_but_preserves_research_mission_and_candidate(self) -> None:
+        adapter = _adapter()
+        candidate = _seed_mission_with_one_candidate(adapter, "a")
+        mission_before = adapter.mission_for("a")
+        self.assertIsNotNone(mission_before)
+
+        status, payload = dispatch_request(adapter, method="POST", path="/gaon/chat/conversations/delete", body={"session_ref": "a", "user_ref": "u1", "confirm": True})
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["research_mission_preserved"])
+        self.assertGreater(payload["deleted_message_count"], 0)
+
+        status, messages = dispatch_request(adapter, method="GET", path="/gaon/chat/messages?session_ref=a&user_ref=u1", body=None)
+        self.assertEqual(messages["messages"], [])
+
+        mission_after = adapter.mission_for("a")
+        self.assertIsNotNone(mission_after)
+        self.assertEqual(mission_after.mission_id, mission_before.mission_id)
+        self.assertEqual(len(mission_after.candidates), 1)
+        self.assertEqual(mission_after.candidates[0]["candidate_id"], candidate.candidate_id)
+
+    def test_deleted_conversation_is_excluded_from_the_list_but_session_survives(self) -> None:
+        adapter = _adapter()
+        _seed_mission_with_one_candidate(adapter, "a")
+        dispatch_request(adapter, method="POST", path="/gaon/chat/conversations/delete", body={"session_ref": "a", "user_ref": "u1", "confirm": True})
+
+        status, listed = dispatch_request(adapter, method="GET", path="/gaon/chat/conversations?user_ref=u1", body=None)
+        self.assertEqual(listed["conversations"], [])
+        # the session row itself (and its mission state) still exists -
+        # only its message-list visibility changed.
+        self.assertIsNotNone(adapter.mission_for("a"))
+
+    def test_delete_by_a_different_user_is_rejected_and_changes_nothing(self) -> None:
+        adapter = _adapter()
+        dispatch_request(adapter, method="POST", path="/gaon/chat", body={"message": "안녕하세요", "session_ref": "a", "user_ref": "u1"})
+
+        status, payload = dispatch_request(adapter, method="POST", path="/gaon/chat/conversations/delete", body={"session_ref": "a", "user_ref": "someone-else", "confirm": True})
+        self.assertEqual(status, 404)
+
+        status, listed = dispatch_request(adapter, method="GET", path="/gaon/chat/messages?session_ref=a&user_ref=u1", body=None)
+        self.assertEqual(len(listed["messages"]), 2)
+
+
+class ConversationLifecycleDurableStateReleaseCheckTests(unittest.TestCase):
+    def test_release_check_passes(self) -> None:
+        payload = production_conversation_lifecycle_durable_state_release_check()
+        self.assertEqual(payload["safety"], "pass")
+        self.assertTrue(payload["research_mission_preserved"])
+        self.assertTrue(payload["user_cognitive_goal_preserved"])
+        self.assertTrue(payload["sustainability_objective_preserved"])
+        self.assertTrue(payload["no_repository_table_changed"])
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["champion_promoted"])
+        self.assertFalse(payload["approval_bypassed"])
+
+    def test_release_check_cli_passes(self) -> None:
+        import contextlib
+        import io
+
+        from gaon.runtime.cli import main as cli_main
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = cli_main(["gaon-production-conversation-lifecycle-durable-state-release-check"])
+
+        self.assertEqual(exit_code, 0)
+        printed = buffer.getvalue()
+        self.assertIn("gaon-production-conversation-lifecycle-durable-state-release-check: PASS", printed)
         self.assertIn("safety=pass", printed)
 
 
