@@ -306,6 +306,18 @@ class LLMConversationRequest:
     received_at: str
     message_id: str | None = None
     structured_context: Mapping[str, object] | None = None
+    # Production hotfix: True only for a synthetic, system/background-
+    # originated continuation turn (see
+    # gaon.runtime.autonomous_research_runtime), never for a real Telegram/
+    # web user message. Routing (_is_conversational_mvp_source and the
+    # real mission-driven research cycle) is unaffected - this only
+    # suppresses provenance-sensitive side effects that must never be
+    # attributed to a human: the turn is not persisted as a "user"/
+    # "assistant" conversation_messages row, and it never feeds cognitive
+    # feedback/preference learning or creates/mutates a cognitive Goal
+    # record. ResearchMission state itself is unaffected: it is persisted
+    # separately (conversation_sessions.metadata) regardless of this flag.
+    is_system_turn: bool = False
 
 
 @dataclass(frozen=True)
@@ -506,9 +518,10 @@ class LLMConversationBrain:
         intent = parse_intent(text)
         approval_required = _requires_manual_boundary(text)
         user_message_id = request.message_id or f"conversation-user:{uuid4().hex}"
-        self._repository.add_message(
-            LLMConversationMessage(user_message_id, session.session_id, "user", text, intent.value, "input", (), (), (), now)
-        )
+        if not request.is_system_turn:
+            self._repository.add_message(
+                LLMConversationMessage(user_message_id, session.session_id, "user", text, intent.value, "input", (), (), (), now)
+            )
         context = None
         if self._context_orchestrator is not None and text.casefold().rstrip(".!?") not in {
             "안녕", "안녕하세요", "가온아 안녕", "hello", "hi",
@@ -519,7 +532,7 @@ class LLMConversationBrain:
         response_text, route, warnings, references, provider, tool_calls = self._generate(
             replace(request, message_id=user_message_id), intent, approval_required, context,
         )
-        if self._cognitive is not None and not approval_required:
+        if self._cognitive is not None and not approval_required and not request.is_system_turn:
             response_text = self._cognitive.render_with_preferences(
                 namespace=request.user_ref, query=request.text, text=response_text, now=now,
             )
@@ -555,20 +568,21 @@ class LLMConversationBrain:
             provider=provider,
             tool_calls=tool_calls,
         )
-        self._repository.add_message(
-            LLMConversationMessage(
-                response_id,
-                session.session_id,
-                "assistant",
-                response.text,
-                intent.value,
-                route,
-                response.references,
-                response.warnings,
-                response.tool_calls,
-                generated_at,
+        if not request.is_system_turn:
+            self._repository.add_message(
+                LLMConversationMessage(
+                    response_id,
+                    session.session_id,
+                    "assistant",
+                    response.text,
+                    intent.value,
+                    route,
+                    response.references,
+                    response.warnings,
+                    response.tool_calls,
+                    generated_at,
+                )
             )
-        )
         session = self._repository.get_session(session.session_id)
         self._repository.upsert_session(
             LLMConversationSession(session.session_id, session.user_ref, session.source, "active", session.created_at, generated_at, session.metadata)
@@ -604,7 +618,7 @@ class LLMConversationBrain:
             "안녕", "안녕하세요", "가온아 안녕", "hello", "hi"
         }:
             return render_greeting(), "conversation_greeting", (), (), "deterministic", ()
-        if self._cognitive is not None and not approval_required:
+        if self._cognitive is not None and not approval_required and not request.is_system_turn:
             observed = self._cognitive.observe_user_message(
                 namespace=request.user_ref, message=request.text,
                 source_ref=request.message_id or f"feedback:{uuid4().hex}", now=request.received_at,

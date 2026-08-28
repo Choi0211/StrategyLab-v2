@@ -104,6 +104,57 @@ class AutonomousResearchWorkerAdvancesActiveMissionTests(_ResearchPatchedTestCas
         mission_after = self._mission()
         self.assertGreaterEqual(mission_after.cycles_completed, cycles_before)
 
+    def _conversation_message_count(self, session_id: str = "telegram:100") -> int:
+        return len(self.store.conversations.list_messages(session_id, limit=1000))
+
+    def _cognitive_record_count(self) -> int:
+        return self.store._connection.execute("SELECT COUNT(*) FROM cognitive_records").fetchone()[0]
+
+    def test_autonomous_tick_advances_mission_without_polluting_user_conversation_or_cognitive_memory(self) -> None:
+        self._send(40, "국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요")
+        mission_before = self._mission()
+        cycles_before = mission_before.cycles_completed
+        messages_before = self._conversation_message_count()
+        cognitive_before = self._cognitive_record_count()
+
+        worker = AutonomousResearchRuntimeWorker(_config(), self.store._connection, now_factory=lambda: "2026-08-18T00:10:00Z")
+        with self._patched(41):
+            result = worker.tick()
+
+        self.assertEqual(result.action, "cycle_executed")
+        mission_after = self._mission()
+        self.assertGreaterEqual(mission_after.cycles_completed, cycles_before, "autonomous tick must still advance the real ResearchMission")
+        self.assertEqual(
+            self._conversation_message_count(),
+            messages_before,
+            "autonomous tick must not be recorded as a user/assistant conversation_messages row",
+        )
+        self.assertEqual(
+            self._cognitive_record_count(),
+            cognitive_before,
+            "autonomous tick must not create/mutate any cognitive feedback/preference/goal record",
+        )
+
+    def test_real_telegram_continuation_still_persists_and_updates_cognitive_goal_normally(self) -> None:
+        self._send(50, "국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요")
+        messages_before = self._conversation_message_count()
+        cognitive_before = self._cognitive_record_count()
+
+        self._send(51, "연구 계속해주세요")
+
+        self.assertGreater(
+            self._conversation_message_count(),
+            messages_before,
+            "a real Telegram user turn must still be recorded normally",
+        )
+        self.assertGreaterEqual(
+            self._cognitive_record_count(),
+            cognitive_before,
+            "a real Telegram user turn must still be free to update cognitive memory (goal tracking) as before",
+        )
+        messages = self.store.conversations.list_messages("telegram:100", limit=1000)
+        self.assertTrue(any(message.role == "user" and message.content == "연구 계속해주세요" for message in messages))
+
     def test_awaiting_human_approval_mission_is_never_advanced(self) -> None:
         self._send(30, "국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요")
         mission = self._mission()
@@ -115,12 +166,16 @@ class AutonomousResearchWorkerAdvancesActiveMissionTests(_ResearchPatchedTestCas
         self.assertEqual(mission.status, MissionStatus.AWAITING_HUMAN_APPROVAL)
 
         calls_before = self._research_tool_call_count()
+        messages_before = self._conversation_message_count()
+        cognitive_before = self._cognitive_record_count()
         worker = AutonomousResearchRuntimeWorker(_config(), self.store._connection, now_factory=lambda: "2026-08-18T00:10:00Z")
         result = worker.tick()
 
         self.assertEqual(result.action, "skipped_awaiting_human_or_terminal")
         self.assertEqual(result.mission_status, MissionStatus.AWAITING_HUMAN_APPROVAL.value)
         self.assertEqual(self._research_tool_call_count(), calls_before)
+        self.assertEqual(self._conversation_message_count(), messages_before)
+        self.assertEqual(self._cognitive_record_count(), cognitive_before)
 
 
 def _fake_request():

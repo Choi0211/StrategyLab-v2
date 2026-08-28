@@ -221,6 +221,16 @@ def _continuation_request(session_id: str, chat_id: str, now: str, *, suffix: st
     mission for ``session_id``. ``user_ref`` stays distinct from any real
     Telegram user id so audit/log readers can always tell a background tick
     apart from a live user turn.
+
+    ``is_system_turn=True`` marks this as a synthetic, system-originated
+    continuation rather than a real human message: ``LLMConversationBrain.
+    respond()`` uses it to suppress provenance-sensitive side effects that
+    must never be attributed to a human - the turn is not persisted as a
+    "user"/"assistant" ``conversation_messages`` row, and it never feeds
+    cognitive feedback/preference learning or creates/mutates a cognitive
+    Goal record. Routing and the real ResearchMission-driven research cycle
+    itself are unaffected by this flag; only conversation-history/cognitive-
+    memory side effects are suppressed.
     """
     return LLMConversationRequest(
         session_id=session_id,
@@ -229,6 +239,7 @@ def _continuation_request(session_id: str, chat_id: str, now: str, *, suffix: st
         text=_CONTINUATION_REQUEST_TEXT,
         received_at=now,
         message_id=f"telegram:{chat_id}:autonomous-worker:{suffix}:{now}",
+        is_system_turn=True,
     )
 
 
@@ -454,9 +465,52 @@ def production_autonomous_research_runtime_release_check() -> dict[str, object]:
     _llm_conversation_source = inspect.getsource(_llm_conversation_module)
     _no_forbidden_reference = not any(name in _llm_conversation_source for name in _forbidden_module_names)
 
+    # Real repository before/after observation (not a constant-True
+    # assertion): every table a strategy mutation, order execution,
+    # champion promotion, or approval decision would have to land in.
+    # Snapshotting row counts across the whole flow below (mission
+    # creation, an autonomous cycle, an AWAITING_HUMAN_APPROVAL tick, a
+    # BLOCKED tick, and two durable service ticks) and asserting they are
+    # unchanged is a real, repository-state-grounded proof - not a
+    # by-construction claim.
+    _observed_tables = (
+        "champion_registry",
+        "champion_history",
+        "promotion_requests",
+        "promotion_decisions",
+        "approvals",
+        "research_approval_decisions",
+        "research_config_approvals",
+        "strategy_deployment_requests",
+        "strategy_deployment_runs",
+        "strategy_deployment_backups",
+        "strategy_execution_plans",
+        "strategy_execution_runs",
+    )
+
+    def _table_counts(conn: sqlite3.Connection) -> dict[str, int]:
+        return {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in _observed_tables}
+
+    _forbidden_tool_names = frozenset(
+        {
+            "order_place",
+            "order_execute",
+            "broker_order",
+            "kis_order",
+            "binance_order",
+            "champion_promote",
+            "champion_apply",
+            "strategy_apply",
+            "strategy_deploy",
+            "approval_approve",
+            "approval_bypass",
+        }
+    )
+
     connection = sqlite3.connect(":memory:")
     try:
         migrate(connection)
+        counts_before = _table_counts(connection)
         agent = TelegramConversationAgent(config, connection)
         runtime = TelegramRuntime(agent, allowed_chat_ids=("100",))
         client = _ReleaseCheckTelegramClient()
@@ -502,6 +556,16 @@ def production_autonomous_research_runtime_release_check() -> dict[str, object]:
         service = AutonomousResearchRuntimeService(config, service_repository, now_factory=lambda: now)
         service_first = service.tick()
         service_second = service.tick()
+
+        counts_after = _table_counts(connection)
+        non_read_only_tool_calls = connection.execute(
+            "SELECT COUNT(*) FROM llm_tool_audit WHERE risk_level != 'read_only'"
+        ).fetchone()[0]
+        forbidden_tool_calls = connection.execute(
+            f"SELECT COUNT(*) FROM llm_tool_audit WHERE tool_name IN ({','.join('?' for _ in _forbidden_tool_names)})",
+            tuple(_forbidden_tool_names),
+        ).fetchone()[0]
+        total_tool_calls = connection.execute("SELECT COUNT(*) FROM llm_tool_audit").fetchone()[0]
     finally:
         connection.close()
 
@@ -518,10 +582,33 @@ def production_autonomous_research_runtime_release_check() -> dict[str, object]:
         ),
         "service_tick_idempotent": service_first.jobs_registered is True and service_second.jobs_registered is False,
         "no_broker_or_promotion_module_referenced": _no_forbidden_reference,
-        "strategy_not_mutated": True,
-        "order_not_executed": True,
-        "champion_not_promoted": True,
-        "approval_not_bypassed": True,
+        # Real observation, not a by-construction constant: the whole flow
+        # above (mission creation, an autonomous cycle, an AWAITING_HUMAN_
+        # APPROVAL tick, a BLOCKED tick, two durable service ticks) did
+        # exercise real tool calls, and every single one of them was
+        # risk_level=read_only in llm_tool_audit - not merely "no tool
+        # named X ran", but "nothing the executor logged was ever
+        # anything but read-only".
+        "observation_window_exercised_tool_calls": total_tool_calls > 0,
+        "strategy_not_mutated": (
+            counts_before["strategy_deployment_requests"] == counts_after["strategy_deployment_requests"]
+            and counts_before["strategy_deployment_runs"] == counts_after["strategy_deployment_runs"]
+            and counts_before["strategy_deployment_backups"] == counts_after["strategy_deployment_backups"]
+            and counts_before["strategy_execution_plans"] == counts_after["strategy_execution_plans"]
+            and counts_before["strategy_execution_runs"] == counts_after["strategy_execution_runs"]
+        ),
+        "order_not_executed": non_read_only_tool_calls == 0 and forbidden_tool_calls == 0,
+        "champion_not_promoted": (
+            counts_before["champion_registry"] == counts_after["champion_registry"]
+            and counts_before["champion_history"] == counts_after["champion_history"]
+            and counts_before["promotion_requests"] == counts_after["promotion_requests"]
+            and counts_before["promotion_decisions"] == counts_after["promotion_decisions"]
+        ),
+        "approval_not_bypassed": (
+            counts_before["approvals"] == counts_after["approvals"]
+            and counts_before["research_approval_decisions"] == counts_after["research_approval_decisions"]
+            and counts_before["research_config_approvals"] == counts_after["research_config_approvals"]
+        ),
     }
     _raise_if_failed("production autonomous research runtime", checks)
     return {
