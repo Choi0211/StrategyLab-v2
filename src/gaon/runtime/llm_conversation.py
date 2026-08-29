@@ -22,6 +22,7 @@ from gaon.runtime.conversational_mvp import (
     PresentationPreference,
     classify_conversational_route,
     explanation_level_for_text,
+    is_availability_question,
     presentation_preference_for_text,
     render_presentation_from_payloads,
     render_reasoning_from_payloads,
@@ -505,7 +506,15 @@ class LLMConversationBrain:
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cognitive_records'"
         ).fetchone():
             from gaon.cognitive.orchestrator import CognitiveOrchestrator
+            from gaon.cognitive.sustainability import ensure_sustainability_objective
+
             self._cognitive = CognitiveOrchestrator(connection)
+            # Durable, restart/new-conversation-independent system objective
+            # (Hotfix #166) - idempotent (a no-op after the first call ever
+            # made against this database), reserved-namespace, never a
+            # per-user goal/preference write. See gaon.cognitive.
+            # sustainability module docstring for the full contract.
+            ensure_sustainability_objective(connection, now=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     def respond(self, request: LLMConversationRequest) -> LLMConversationResponse:
         text = request.text.strip()
@@ -1087,6 +1096,28 @@ class LLMConversationBrain:
         # and fails closed with an honest not-found message rather than
         # ever falling back to single-symbol research when that id does
         # not exist.
+        # Hotfix #166 production bug fix: a research-status question
+        # ("단타 전략은 잘 연구되고 있나요?") is real, honest-answerable
+        # read-only vocabulary (is_mission_candidate_read_request already
+        # recognizes it - confirmed for both spacing variants and the
+        # "있나요"/"잇나요" typo) - it must never depend on a mission
+        # already existing to be recognized as a research-status question
+        # in the first place. Before this fix, the check below only ran
+        # when ``mission is not None``, so the exact same question asked
+        # before any mission existed fell all the way through to the
+        # generic natural-language GENERAL_CONVERSATION fallback
+        # ("말씀해 주신 불편을 확인했습니다...") - a feedback response to
+        # what was actually a research-status question.
+        if mission is None and is_mission_candidate_read_request(request.text):
+            return (
+                "영하님, 현재 진행 중인 Research Mission이 없습니다. 연구를 시작하시려면 "
+                "원하시는 종목이나 전략, 시장 범위를 말씀해 주세요.",
+                "conversation_research_status_no_mission",
+                _dedupe((*warnings, "no active research mission; zero research tool calls")),
+                references,
+                "deterministic",
+                (),
+            )
         if (
             mission is not None
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
@@ -1225,7 +1256,29 @@ class LLMConversationBrain:
         if route.intent is ConversationalMVPIntent.HELP:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_help")
             return render_help(), "conversation_mvp_help", _dedupe(warnings), references, "deterministic", ()
-        if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text) and mission is not None and mission.candidates:
+        if (
+            route.intent is ConversationalMVPIntent.STATUS_QUERY
+            and _is_simple_conversational_status_request(request.text)
+            and mission is not None
+            and mission.candidates
+            # Hotfix #166: research status vs. runtime status must be
+            # distinguished (e.g. "현재 동작 하고 있나요?" is a runtime/
+            # availability question, not "지금 뭐 연구하고 있어?" style
+            # research status) - an availability-shaped question must
+            # always fall through to the grounded runtime/conversational
+            # status render below, never be reinterpreted as a mission/
+            # candidate status question just because a mission happens to
+            # exist. Only excluded when the text carries NO research
+            # subject word either - "상태" alone is genuinely ambiguous
+            # ("동작 상태" vs "연구 상태"), so a message naming a research
+            # subject ("연구 상태 보여줘", "지금 뭐 연구하고 있어?") must
+            # still reach this branch even though it also satisfies
+            # is_availability_question's broader "상태" match.
+            and not (
+                is_availability_question(request.text.strip().casefold())
+                and not any(token in request.text for token in ("연구", "전략", "미션", "mission", "후보", "candidate"))
+            )
+        ):
             # "지금 뭐 연구하고 있어?" with an active Research Mission answers
             # from the actual strategy candidate portfolio (Patch 8.2)
             # instead of the generic runtime-status renderer.

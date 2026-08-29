@@ -1089,12 +1089,29 @@ def extract_or_update_mission(
     strategy_family = _extract_strategy_family(text)
     normalized = _norm(text)
     continuation = is_generic_continuation_request(text)
+    # Hotfix #166 production bug fix: a read-only status question about
+    # research already in progress ("단타 전략은 잘 연구되고 있나요?")
+    # mentions a research verb ("연구") and a strategy family ("단타") for
+    # the exact same reason a real research INSTRUCTION would - but it is
+    # a question, not an instruction, and must never itself conjure a new
+    # mission into existence (silently mutating mission/strategy context
+    # from a pure read). ``is_mission_candidate_read_request`` is the
+    # existing, already-narrow read-only-question classifier; excluding
+    # it here only affects the verb+family inference below - it never
+    # weakens the unambiguous explicit-scope signals (market-wide,
+    # explicit multi-symbol, target count, generic continuation) that
+    # independently establish real research intent regardless of phrasing.
+    verb_and_family_signals_research_intent = (
+        _mentions_research_verb(normalized)
+        and (objective["improve_return"] or objective["improve_safety"] or strategy_family is not None)
+        and not is_mission_candidate_read_request(text)
+    )
     research_intent = (
         kr_market_wide
         or len(explicit_symbols) >= 2
         or target is not None
         or continuation
-        or (_mentions_research_verb(normalized) and (objective["improve_return"] or objective["improve_safety"] or strategy_family is not None))
+        or verb_and_family_signals_research_intent
     )
 
     if existing is None and not research_intent:

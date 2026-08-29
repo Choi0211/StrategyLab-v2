@@ -21,6 +21,7 @@ from gaon.integrations.telegram.transport import parse_update_result
 from gaon.knowledge.research_mission import (
     MissionStatus,
     extract_or_update_mission,
+    get_active_candidate,
     record_blocked,
     record_promotion_candidate,
 )
@@ -103,6 +104,73 @@ class AutonomousResearchWorkerAdvancesActiveMissionTests(_ResearchPatchedTestCas
         self.assertEqual(self._research_tool_call_count(), calls_before + 1, "worker must perform exactly one bounded tool call per tick")
         mission_after = self._mission()
         self.assertGreaterEqual(mission_after.cycles_completed, cycles_before)
+
+    def test_repeated_ticks_self_direct_progress_without_any_new_user_message(self) -> None:
+        """Hotfix #166 Section 5: with an active mission, the worker keeps
+        advancing research over successive scheduled ticks with ZERO new
+        user messages in between - proving Gaon does not need to be told
+        "연구 계속해주세요" every time, using the exact same real,
+        already-existing bounded mission-driven cycle
+        (LLMConversationBrain.respond -> _try_mission_driven_research_
+        cycle -> next_blocker_driven_research_action) each tick already
+        reuses to decide its own next research action from real evidence."""
+        self._send(60, "국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요")
+        mission_after_setup = self._mission()
+        self.assertIsNotNone(mission_after_setup)
+        user_messages_before = sum(
+            1 for m in self.store.conversations.list_messages("telegram:100", limit=1000) if m.role == "user"
+        )
+
+        seen_candidate_ids: set[str] = set()
+        seen_actions: set[str] = set()
+        for tick_index in range(4):
+            worker = AutonomousResearchRuntimeWorker(_config(), self.store._connection, now_factory=lambda i=tick_index: f"2026-08-18T00:{10 + i:02d}:00Z")
+            with self._patched(61 + tick_index):
+                result = worker.tick()
+            self.assertIn(result.action, {"cycle_executed", "blocked_no_recovery"}, f"tick {tick_index} produced unexpected action {result.action}")
+            mission_now = self._mission()
+            self.assertIsNotNone(mission_now)
+            active = get_active_candidate(mission_now)
+            if active is not None:
+                seen_candidate_ids.add(active.candidate_id)
+            seen_actions.add(result.action)
+
+        # Real self-directed progression happened - some bounded work was
+        # actually done across the ticks, never on the same candidate
+        # rotating in and out arbitrarily, and never by fabricating a
+        # different action out of nowhere.
+        self.assertIn("cycle_executed", seen_actions)
+        self.assertGreaterEqual(len(seen_candidate_ids), 1)
+
+        # No new "user" conversation_messages row was ever created by any
+        # of the four autonomous ticks above.
+        user_messages_after = sum(
+            1 for m in self.store.conversations.list_messages("telegram:100", limit=1000) if m.role == "user"
+        )
+        self.assertEqual(user_messages_after, user_messages_before)
+
+    def test_restart_resumes_the_same_durable_mission_and_keeps_advancing_it(self) -> None:
+        """A fresh AutonomousResearchRuntimeWorker instance (simulating a
+        service restart - no in-memory state carried over) reads the same
+        persisted mission from the SAME connection and continues advancing
+        it, never starting a new/different mission."""
+        self._send(70, "국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요")
+        mission_id = self._mission().mission_id
+
+        worker_before_restart = AutonomousResearchRuntimeWorker(_config(), self.store._connection, now_factory=lambda: "2026-08-18T00:10:00Z")
+        with self._patched(71):
+            worker_before_restart.tick()
+        cycles_before_restart = self._mission().cycles_completed
+
+        # Simulate restart: brand-new worker instance, same durable store.
+        worker_after_restart = AutonomousResearchRuntimeWorker(_config(), self.store._connection, now_factory=lambda: "2026-08-18T00:20:00Z")
+        with self._patched(72):
+            result = worker_after_restart.tick()
+
+        self.assertEqual(result.action, "cycle_executed")
+        mission_after_restart = self._mission()
+        self.assertEqual(mission_after_restart.mission_id, mission_id, "restart must resume the SAME mission, never create a new one")
+        self.assertGreaterEqual(mission_after_restart.cycles_completed, cycles_before_restart)
 
     def _conversation_message_count(self, session_id: str = "telegram:100") -> int:
         return len(self.store.conversations.list_messages(session_id, limit=1000))

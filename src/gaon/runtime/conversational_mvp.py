@@ -363,7 +363,7 @@ def classify_conversational_route(text: str) -> ConversationalRoute:
     # Availability questions are safe read-only conversation status, not
     # research requests.  Keep the predicate structural so ordinary Korean
     # phrasing does not have to be maintained as a large exact-phrase list.
-    if _is_availability_question(normalized):
+    if is_availability_question(normalized):
         return ConversationalRoute(ConversationalMVPIntent.STATUS_QUERY, symbols)
     # "어떤 자원이 필요한가요" - a question about blockers/requirements must
     # be answered from real mission/runtime state (see
@@ -457,13 +457,57 @@ def render_general_conversation() -> str:
     return "말씀해 주신 불편을 확인했습니다, 영하님. 이 대화에서 확인 가능한 상태와 연구 기록은 사실에 근거해 안내하고, 요청하지 않은 연구는 실행하지 않겠습니다."
 
 
-def _is_availability_question(normalized: str) -> bool:
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    previous = list(range(len(b) + 1))
+    for i, char_a in enumerate(a, 1):
+        current = [i] + [0] * len(b)
+        for j, char_b in enumerate(b, 1):
+            current[j] = min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + (char_a != char_b),
+            )
+        previous = current
+    return previous[-1]
+
+
+def _typo_tolerant_contains(text: str, token: str, *, max_distance: int = 1) -> bool:
+    """True if ``token`` appears verbatim in ``text``, or if some
+    equal-length window of ``text`` is within ``max_distance`` single-
+    character edits of it - a small, bounded, structural typo-tolerance
+    mechanism (same idea as research_mission.py's continuation-phrase typo
+    tolerance) rather than hand-enumerating every observed misspelling.
+    Only meant for short (2-4 char) Korean tokens, where the O(n*k) scan
+    below stays cheap."""
+    if token in text:
+        return True
+    window = len(token)
+    if window == 0 or len(text) < window:
+        return False
+    return any(_levenshtein(text[start : start + window], token) <= max_distance for start in range(len(text) - window + 1))
+
+
+def is_availability_question(normalized: str) -> bool:
     subject = ("대화", "가온", "시스템", "runtime", "런타임", "vps", "서버")
-    state = ("가능", "동작", "구동", "연결", "응답", "상태")
+    # Exact-match state tokens: broad, safe substring checks.
+    state_exact = ("가능", "구동", "연결", "응답", "상태")
+    # Typo-tolerant state tokens: kept to a small, individually-vetted set
+    # (not the whole state list) - "가능" in particular sits exactly one
+    # edit away from "가온" (Gaon's own name, also a subject token above),
+    # so blanket fuzzy-matching every state token against the whole
+    # message would misfire on ordinary greetings like "안녕하세요 가온".
+    # "동작" has no such nearby collision and is the token real production
+    # typos ("동적", "동잔" etc.) actually need tolerance for.
+    state_typo_tolerant = ("동작",)
+    has_state = any(token in normalized for token in state_exact) or any(
+        _typo_tolerant_contains(normalized, token) for token in state_typo_tolerant
+    )
     return (
         any(token in normalized for token in subject)
         or "현재" in normalized
-    ) and any(token in normalized for token in state)
+    ) and has_state
 
 
 def _is_resource_needs_question(normalized: str) -> bool:
