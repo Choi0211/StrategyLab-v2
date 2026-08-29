@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 38
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -55,6 +55,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         34: _upgrade_v34_to_v35,
         35: _upgrade_v35_to_v36,
         36: _upgrade_v36_to_v37,
+        37: _upgrade_v37_to_v38,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1265,6 +1266,52 @@ def _upgrade_v36_to_v37(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_cognitive_namespace_type
             ON cognitive_records(namespace, record_type, updated_at);
+    """)
+
+
+def _upgrade_v37_to_v38(connection: sqlite3.Connection) -> None:
+    """Hotfix #168: durable, evidence-grounded research-direction planning
+    for a mission BLOCKED on ``strategy_hypothesis_space_exhausted`` once
+    the existing bounded stagnation recovery has no eligible candidate.
+    Both tables are read/written only by ``gaon.research.research_direction``
+    - never by any strategy-mutation, order, or promotion code path."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS research_failure_analyses (
+            analysis_id TEXT PRIMARY KEY,
+            session_ref TEXT NOT NULL,
+            mission_id TEXT NOT NULL,
+            blocked_reason TEXT NOT NULL,
+            dominant_failure_class TEXT NOT NULL,
+            failure_breakdown_json TEXT NOT NULL,
+            evidence_candidate_ids_json TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_failure_analyses_session
+            ON research_failure_analyses(session_ref, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_failure_analyses_fingerprint
+            ON research_failure_analyses(fingerprint);
+        CREATE TABLE IF NOT EXISTS research_directions (
+            direction_id TEXT PRIMARY KEY,
+            session_ref TEXT NOT NULL,
+            mission_id TEXT NOT NULL,
+            source_blocker TEXT NOT NULL,
+            failure_analysis_id TEXT NOT NULL,
+            priority_json TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            evidence_requirements_json TEXT NOT NULL,
+            allowed_research_scope_json TEXT NOT NULL,
+            prohibited_actions_json TEXT NOT NULL,
+            next_research_action TEXT NOT NULL,
+            status TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_directions_session
+            ON research_directions(session_ref, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_directions_fingerprint
+            ON research_directions(fingerprint);
     """)
 
 

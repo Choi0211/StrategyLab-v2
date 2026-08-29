@@ -411,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-daily-briefing-scheduler-release-check")
     sub.add_parser("gaon-production-daily-briefing-runtime-wiring-release-check")
     sub.add_parser("gaon-production-autonomous-research-runtime-release-check")
+    sub.add_parser("gaon-production-autonomous-research-direction-release-check")
     sub.add_parser("gaon-production-morning-briefing-research-state-consistency-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
     sub.add_parser("gaon-production-strategy-centric-autonomous-research-release-check")
@@ -3219,6 +3220,27 @@ def _run(args: argparse.Namespace) -> int:
             f"awaiting_human_approval_stop={str(payload['awaiting_human_approval_stop']).lower()} "
             f"blocked_recovery_honest={str(payload['blocked_recovery_honest']).lower()} "
             f"service_idempotent={str(payload['service_idempotent']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-autonomous-research-direction-release-check":
+        from gaon.runtime.autonomous_research_runtime import production_autonomous_research_direction_release_check
+
+        payload = production_autonomous_research_direction_release_check()
+        print(
+            "gaon-production-autonomous-research-direction-release-check: PASS "
+            f"exhausted_space_detected={str(payload['exhausted_space_detected']).lower()} "
+            f"failure_analysis_grounded={str(payload['failure_analysis_grounded']).lower()} "
+            f"research_priority_selected={str(payload['research_priority_selected']).lower()} "
+            f"direction_created={str(payload['direction_created']).lower()} "
+            f"direction_idempotent={str(payload['direction_idempotent']).lower()} "
+            f"bounded_execution={str(payload['bounded_execution']).lower()} "
+            f"awaiting_human_approval_stop={str(payload['awaiting_human_approval_stop']).lower()} "
+            f"provider_failure_honest={str(payload['provider_failure_honest']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "

@@ -27,6 +27,18 @@ mission that has reached ``MissionStatus.AWAITING_HUMAN_APPROVAL`` (the
 codebase's name for the spec's READY_FOR_APPROVAL gate) is never advanced
 further by this worker - approval, promotion, and deployment all remain
 exclusively human-initiated conversational actions.
+
+Hotfix #168: bounded strategy-hypothesis-space exhaustion is no longer a
+silent terminal BLOCKED that repeats forever. Once the existing narrow
+``attempt_bounded_stagnation_recovery`` finds no eligible candidate for a
+mission BLOCKED on ``strategy_hypothesis_space_exhausted``, this worker
+hands off to ``gaon.research.research_direction`` for one bounded, evidence-
+grounded FAILURE ANALYSIS -> RESEARCH PRIORITY -> RESEARCH DIRECTION pass
+(see that module for detail) instead of a bare no-op. This is research-
+space *planning*, not trading authority: a ``ResearchDirection`` record can
+never mutate strategy config, create/promote a candidate, create an
+approval, or execute an order - research autonomy and capital/trading
+authority remain strictly separate, exactly as before this hotfix.
 """
 
 from __future__ import annotations
@@ -47,7 +59,15 @@ from gaon.knowledge.strategy_candidate import (
     StrategyCandidateStatus,
     candidate_remaining_blockers,
     evaluate_economic_viability,
+    next_untried_family,
 )
+from gaon.research.research_direction import (
+    ResearchDirectionRepository,
+    ResearchDirectionStatus,
+    analyze_mission_failure,
+    plan_research_direction,
+)
+from gaon.research.research_priority import propose_research_priority
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest
 from gaon.runtime.metrics import MetricsCollector
@@ -128,6 +148,18 @@ class AutonomousResearchTickResult:
     route: str | None = None
     blocker: str | None = None
     error_type: str | None = None
+    # Hotfix #168 observability fields (Section 10) - populated only on the
+    # BLOCKED + strategy_hypothesis_space_exhausted + narrow-recovery-
+    # ineligible path (see AutonomousResearchRuntimeWorker._plan_research_
+    # direction); None on every other action. Never reports work that did
+    # not actually happen - a "planned"/"awaiting_evidence" action always
+    # corresponds to a real read/plan/persist call that just ran.
+    recovery_eligible: bool | None = None
+    failure_class: str | None = None
+    research_priority: str | None = None
+    direction_id: str | None = None
+    direction_status: str | None = None
+    next_research_action: str | None = None
 
 
 class AutonomousResearchRuntimeWorker:
@@ -185,12 +217,15 @@ class AutonomousResearchRuntimeWorker:
             if mission.status is MissionStatus.BLOCKED:
                 recovered_mission, recovered = attempt_bounded_stagnation_recovery(mission, now=now)
                 if not recovered:
+                    if (mission.blocked_reason or "").startswith("strategy_hypothesis_space_exhausted"):
+                        return self._plan_research_direction(mission, session_id, now)
                     self._metrics.increment("autonomous_research_runtime_ticks", status="blocked")
                     return AutonomousResearchTickResult(
                         attempted=True,
                         action="blocked_no_recovery",
                         mission_status=mission.status.value,
                         blocker=mission.blocked_reason,
+                        recovery_eligible=False,
                     )
                 request = _continuation_request(session_id, chat_id, now, suffix="recovery")
                 brain._remember_mission(request, recovered_mission)
@@ -207,6 +242,73 @@ class AutonomousResearchRuntimeWorker:
         except Exception as exc:  # noqa: BLE001 - a mission cycle failure must never take down the runtime tick.
             self._metrics.increment("autonomous_research_runtime_ticks", status="failed")
             return AutonomousResearchTickResult(attempted=True, action="failed", error_type=exc.__class__.__name__)
+
+    def _plan_research_direction(self, mission: ResearchMission, session_id: str, now: str) -> AutonomousResearchTickResult:
+        """Hotfix #168: the one new stage reachable only when the mission is
+        BLOCKED on ``strategy_hypothesis_space_exhausted`` AND the existing
+        narrow ``attempt_bounded_stagnation_recovery`` found no eligible
+        candidate. Performs a bounded, single-pass FAILURE ANALYSIS ->
+        RESEARCH PRIORITY -> RESEARCH DIRECTION over the mission's already-
+        persisted candidate history (never re-running research, never
+        calling ``respond()``), then persists both records idempotently
+        (see ``gaon.research.research_direction`` - a second call against an
+        unchanged mission state is a cheap no-op read, never a duplicate
+        row or unbounded work). No candidate/strategy/order/approval state
+        is ever touched here.
+        """
+        priority = propose_research_priority(mission, _binance_config_from_env())
+        analysis = analyze_mission_failure(mission, session_ref=session_id, now=now)
+        has_untried_family = next_untried_family(candidate_records(mission)) is not None
+        direction = plan_research_direction(
+            analysis,
+            priority,
+            has_untried_family=has_untried_family,
+            has_recoverable_candidate=False,  # already re-checked False by the caller this tick
+            now=now,
+        )
+        repository = ResearchDirectionRepository(self._connection)
+        repository.put_failure_analysis(analysis)
+        existing = repository.find_direction_by_fingerprint(direction.fingerprint)
+        if existing is None:
+            repository.put_direction(direction)
+            action = "research_direction_planned"
+        else:
+            direction = existing
+            action = (
+                "research_direction_awaiting_evidence"
+                if direction.status is ResearchDirectionStatus.AWAITING_EVIDENCE
+                else "research_direction_active"
+            )
+        self._metrics.increment("autonomous_research_runtime_ticks", status=action)
+        return AutonomousResearchTickResult(
+            attempted=True,
+            action=action,
+            mission_status=mission.status.value,
+            blocker=mission.blocked_reason,
+            recovery_eligible=False,
+            failure_class=analysis.dominant_failure_class.value,
+            research_priority=",".join(priority.flagged_domains) or "none",
+            direction_id=direction.direction_id,
+            direction_status=direction.status.value,
+            next_research_action=direction.next_research_action.value,
+        )
+
+
+def _binance_config_from_env():
+    """Best-effort, read-only Binance research context for
+    ``propose_research_priority`` - reused, never duplicated, from
+    ``gaon.adapters.binance.build_binance_adapter_config_from_env``. Returns
+    ``None`` (never raises) when unavailable; ``propose_research_priority``
+    already reports an honest ``not_configured``/``read_error`` flag for
+    that case rather than fabricating Binance evidence."""
+    import os
+
+    try:
+        from gaon.adapters.binance import build_binance_adapter_config_from_env
+
+        return build_binance_adapter_config_from_env(os.environ)
+    except Exception:  # noqa: BLE001 - Binance context is optional read-only input, never fatal.
+        return None
 
 
 def _continuation_request(session_id: str, chat_id: str, now: str, *, suffix: str) -> LLMConversationRequest:
@@ -297,7 +399,17 @@ def run_due_autonomous_research(
                 run,
                 ScheduledRunStatus.SUCCEEDED,
                 completed_at=now,
-                result={"action": result.action, "mission_status": result.mission_status or ""},
+                result={
+                    "action": result.action,
+                    "mission_status": result.mission_status or "",
+                    "blocker": result.blocker or "",
+                    "recovery_eligible": result.recovery_eligible,
+                    "failure_class": result.failure_class or "",
+                    "research_priority": result.research_priority or "",
+                    "direction_id": result.direction_id or "",
+                    "direction_status": result.direction_status or "",
+                    "next_research_action": result.next_research_action or "",
+                },
             )
         except Exception as exc:  # noqa: BLE001 - one tick's failure must not block rescheduling.
             result = AutonomousResearchTickResult(attempted=True, action="failed", error_type=exc.__class__.__name__)
@@ -617,6 +729,197 @@ def production_autonomous_research_runtime_release_check() -> dict[str, object]:
         "awaiting_human_approval_stop": True,
         "blocked_recovery_honest": True,
         "service_idempotent": True,
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+        "safety": "pass",
+    }
+
+
+def production_autonomous_research_direction_release_check() -> dict[str, object]:
+    """Release check proving Hotfix #168's research-direction planning stage
+    end-to-end: a mission genuinely BLOCKED on
+    ``strategy_hypothesis_space_exhausted`` with no narrow-recovery-eligible
+    candidate is diagnosed (FAILURE ANALYSIS), prioritized (RESEARCH
+    PRIORITY), and recorded (RESEARCH DIRECTION) exactly once - a second
+    tick against the unchanged mission state is a durable idempotent no-op,
+    never a duplicate row or new work - and that an unrelated BLOCKED reason
+    (``provider_unavailable``) is never diverted into this new path. Proves,
+    via real repository before/after observation (not a by-construction
+    constant), that none of this ever mutates strategy config, executes an
+    order, promotes a champion, or bypasses approval.
+    """
+    import sqlite3
+    from dataclasses import replace
+
+    from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, record_blocked
+    from gaon.knowledge.strategy_candidate import (
+        STRATEGY_FAMILY_TEMPLATES,
+        STRATEGY_SPACE_EXPANSION_TEMPLATES,
+        StrategyCandidateStatus,
+        new_candidate,
+    )
+    from gaon.runtime.llm_conversation import LLMConversationSession
+    from gaon.runtime.migrations import migrate
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    def _seed_session(agent: "TelegramConversationAgent", session_id: str) -> None:
+        agent._brain._repository.upsert_session(
+            LLMConversationSession(session_id, "release-check", "telegram", "active", now, now, {})
+        )
+
+    now = "2026-08-29T00:00:05Z"
+    config = GaonRuntimeConfig(
+        mode="execute",
+        dry_run=False,
+        telegram_enabled=True,
+        telegram_bot_token="synthetic-token",
+        telegram_allowed_chat_ids=("100",),
+        approval_signing_secret="synthetic-approval-secret",
+    )
+    session_id = "telegram:100"
+
+    _observed_tables = (
+        "champion_registry",
+        "champion_history",
+        "promotion_requests",
+        "promotion_decisions",
+        "approvals",
+        "research_approval_decisions",
+        "research_config_approvals",
+        "strategy_deployment_requests",
+        "strategy_deployment_runs",
+        "strategy_execution_plans",
+        "strategy_execution_runs",
+    )
+
+    def _table_counts(conn: sqlite3.Connection) -> dict[str, int]:
+        return {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in _observed_tables}
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        migrate(connection)
+        agent = TelegramConversationAgent(config, connection)
+        request = _continuation_request(session_id, "100", now, suffix="release-check")
+
+        # Every one of the bounded 9-family declarative grammar's families,
+        # each already tried and terminal - the only real way
+        # strategy_hypothesis_space_exhausted can fire (next_untried_family
+        # only returns None once all four base families are represented,
+        # and expand_strategy_space_candidate only returns candidate=None
+        # once all five expansion families are also represented).
+        _reason_cycle = (
+            ("economic_viability_failed:non_positive_median_return_and_minority_profitable_symbols", StrategyCandidateStatus.REJECTED),
+            ("sample_pool_exhausted_no_untried_robustness_symbol", StrategyCandidateStatus.STAGNANT),
+        )
+        exhausted_families = tuple(
+            (template.family, *_reason_cycle[index % len(_reason_cycle)])
+            for index, template in enumerate((*STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_TEMPLATES))
+        )
+        mission = extract_or_update_mission("국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요", existing=None, now=now)
+        for sequence, (family, reason, status) in enumerate(exhausted_families, start=1):
+            candidate = new_candidate(family, sequence=sequence, now=now)
+            candidate = replace(candidate, status=status, rejected_reason=reason)
+            mission = add_candidate(mission, candidate, now=now)
+        mission = record_blocked(
+            mission, reason="strategy_hypothesis_space_exhausted: bounded declarative strategy expansion budget exhausted", now=now
+        )
+        _seed_session(agent, session_id)
+        agent._brain._remember_mission(request, mission)
+
+        counts_before = _table_counts(connection)
+        tool_calls_before = connection.execute("SELECT COUNT(*) FROM llm_tool_audit").fetchone()[0]
+
+        worker = AutonomousResearchRuntimeWorker(config, connection, now_factory=lambda: now)
+        first_tick = worker.tick()
+        second_tick = worker.tick()
+
+        counts_after = _table_counts(connection)
+        tool_calls_after = connection.execute("SELECT COUNT(*) FROM llm_tool_audit").fetchone()[0]
+        direction_rows = connection.execute("SELECT COUNT(*) FROM research_directions").fetchone()[0]
+        analysis_rows = connection.execute("SELECT COUNT(*) FROM research_failure_analyses").fetchone()[0]
+
+        # An unrelated blocked reason must never be diverted into this new
+        # planning stage - proves the wiring is scoped exactly to
+        # strategy_hypothesis_space_exhausted, per Section 7.
+        provider_mission = record_blocked(
+            extract_or_update_mission("국내 주식 전체를 대상으로 3개의 단타 전략이 나올 때까지 연구해주세요", existing=None, now=now),
+            reason="provider_unavailable: no data source responded",
+            now=now,
+        )
+        _seed_session(agent, "telegram:101")
+        agent._brain._remember_mission(
+            _continuation_request("telegram:101", "101", now, suffix="provider"), provider_mission
+        )
+        provider_worker = AutonomousResearchRuntimeWorker(
+            GaonRuntimeConfig(
+                mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="t",
+                telegram_allowed_chat_ids=("101",), approval_signing_secret="s",
+            ),
+            connection,
+            now_factory=lambda: now,
+        )
+        provider_tick = provider_worker.tick()
+
+        # AWAITING_HUMAN_APPROVAL must still be a hard stop even for a
+        # mission that separately carries a research-direction history.
+        from gaon.knowledge.research_mission import record_promotion_candidate
+
+        approval_mission = mission
+        for index in range(3):
+            approval_mission = record_promotion_candidate(
+                approval_mission, strategy_fingerprint=f"release-check-direction-{index}", candidate_id=f"KR-ST-10{index}", now=now
+            )
+        agent._brain._remember_mission(request, approval_mission)
+        approval_tick = worker.tick()
+    finally:
+        connection.close()
+
+    checks = {
+        "exhausted_space_detected": first_tick.blocker is not None and first_tick.blocker.startswith("strategy_hypothesis_space_exhausted"),
+        "failure_analysis_grounded": analysis_rows == 1 and first_tick.failure_class is not None,
+        "research_priority_selected": first_tick.research_priority is not None,
+        "direction_created": (
+            first_tick.action == "research_direction_planned"
+            and first_tick.direction_id is not None
+            and first_tick.next_research_action == "wait_for_required_data"
+            and first_tick.direction_status == "awaiting_evidence"
+        ),
+        "direction_idempotent": second_tick.action != "research_direction_planned" and direction_rows == 1,
+        "bounded_execution": tool_calls_after == tool_calls_before,
+        "awaiting_human_approval_stop": approval_tick.action == "skipped_awaiting_human_or_terminal",
+        "provider_failure_honest": provider_tick.action == "blocked_no_recovery" and provider_tick.blocker == "provider_unavailable: no data source responded",
+        "strategy_not_mutated": (
+            counts_before["strategy_deployment_requests"] == counts_after["strategy_deployment_requests"]
+            and counts_before["strategy_deployment_runs"] == counts_after["strategy_deployment_runs"]
+            and counts_before["strategy_execution_plans"] == counts_after["strategy_execution_plans"]
+            and counts_before["strategy_execution_runs"] == counts_after["strategy_execution_runs"]
+        ),
+        "order_not_executed": tool_calls_after == tool_calls_before,
+        "champion_not_promoted": (
+            counts_before["champion_registry"] == counts_after["champion_registry"]
+            and counts_before["champion_history"] == counts_after["champion_history"]
+            and counts_before["promotion_requests"] == counts_after["promotion_requests"]
+            and counts_before["promotion_decisions"] == counts_after["promotion_decisions"]
+        ),
+        "approval_not_bypassed": (
+            counts_before["approvals"] == counts_after["approvals"]
+            and counts_before["research_approval_decisions"] == counts_after["research_approval_decisions"]
+            and counts_before["research_config_approvals"] == counts_after["research_config_approvals"]
+        ),
+    }
+    _raise_if_failed("production autonomous research direction", checks)
+    return {
+        "schema_version": 1,
+        "exhausted_space_detected": True,
+        "failure_analysis_grounded": True,
+        "research_priority_selected": True,
+        "direction_created": True,
+        "direction_idempotent": True,
+        "bounded_execution": True,
+        "awaiting_human_approval_stop": True,
+        "provider_failure_honest": True,
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,
