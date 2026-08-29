@@ -1160,6 +1160,41 @@ class LLMConversationBrain:
                     "deterministic",
                     (),
                 )
+            # Hotfix #167 production bug fix: a read-only research-status
+            # question about a mission that HAS no active candidate (e.g.
+            # blocked_reason="strategy_hypothesis_space_exhausted..." -
+            # which, by construction, only ever fires when there is no
+            # active candidate - see record_blocked's call site in
+            # _try_mission_driven_research_cycle) used to have no branch
+            # here at all: falling through silently past this whole `if`
+            # block, eventually landing on the GENERAL_CONVERSATION
+            # feedback fallback ("말씀해 주신 불편을 확인했습니다...") -
+            # a feedback response to what was actually an honestly-
+            # answerable research-status question about a mission that
+            # DOES exist. Reuses the exact same mission_blocked_message
+            # the BLOCKED-mission continuation path
+            # (_try_mission_driven_research_cycle) and _render_resource_
+            # needs already render for this state - no new blocked-state
+            # text is introduced.
+            self._remember_mission(request, mission)
+            if mission.status is MissionStatus.BLOCKED:
+                return (
+                    mission_blocked_message(mission),
+                    "conversation_mission_blocked",
+                    _dedupe((*warnings, "mission blocked; no active candidate; read-only; no research tool executed")),
+                    references,
+                    "deterministic",
+                    (),
+                )
+            return (
+                f"영하님, 현재 Research Mission은 진행 중이지만 아직 생성된 전략 후보가 없습니다.\n\n"
+                f"{mission_status_block(mission)}",
+                "conversation_mission_no_active_candidate",
+                _dedupe((*warnings, "mission has no active candidate yet; read-only; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
 
         if (
             existing_tool == "multi_symbol_research"
