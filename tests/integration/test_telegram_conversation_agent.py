@@ -9,8 +9,9 @@ from gaon.integrations.telegram.transport import parse_update_result
 from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall
 from gaon.runtime.cli import TELEGRAM_POLL_OFFSET_KEY, _failure_tool_executor, _strict_real_research_payload, main as cli_main, poll_once
 from gaon.runtime.config import GaonRuntimeConfig
-from gaon.knowledge.research_mission import candidate_records
+from gaon.knowledge.research_mission import MissionStatus, candidate_records, extract_or_update_mission, record_blocked
 from gaon.runtime.conversational_mvp import render_single_symbol_summary
+from gaon.runtime.llm_conversation import LLMConversationRequest
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolDefinition, ToolRegistry, ToolRiskLevel, default_tool_registry
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
@@ -2150,6 +2151,189 @@ class TelegramConversationAgentTests(unittest.TestCase):
 
     def test_hotfix1522_telegram_followup_release_check_passes(self) -> None:
         self.assertEqual(cli_main(["gaon-telegram-followup-release-check", "--db", ":memory:"]), 0)
+
+    # ------------------------------------------------------------------
+    # Hotfix #167: a research-status question about a mission that HAS no
+    # active candidate (get_active_candidate(mission) is None) used to
+    # fall through the Patch 8.8 read-only mission-candidate-read block
+    # with no return statement, eventually landing on the
+    # GENERAL_CONVERSATION feedback fallback - a feedback response to an
+    # honestly-answerable research-status question about a mission that
+    # DOES exist. Reproduced through the real production path:
+    # TelegramConversationAgent -> process_update -> LLMConversationBrain,
+    # with the same assistant_enabled=True/assistant_provider=deterministic
+    # configuration production runs.
+    # ------------------------------------------------------------------
+
+    _HOTFIX167_NOW = "2026-08-29T00:00:00Z"
+    _HOTFIX167_QUESTION = "단타 전략은 잘 연구되고 있나요?"
+
+    def _hotfix167_table_counts(self, store: RuntimeStateStore) -> dict:
+        tables = (
+            "champion_registry",
+            "champion_history",
+            "promotion_requests",
+            "promotion_decisions",
+            "approvals",
+            "strategy_deployment_requests",
+            "strategy_deployment_runs",
+            "strategy_execution_plans",
+            "strategy_execution_runs",
+        )
+        return {table: store._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
+
+    def _hotfix167_seed_mission(self, store: RuntimeStateStore, mission) -> tuple:
+        config = _config(assistant_enabled=True)
+        agent = TelegramConversationAgent(config, store._connection)
+        runtime = TelegramRuntime(agent, allowed_chat_ids=("100",))
+        client = FakeTelegramClient((_update(1, 1, "안녕하세요"),))
+        poll_once(client, config, offset=None, received_at=self._HOTFIX167_NOW, state=store.telegram, runtime_store=store)
+        agent._brain._remember_mission(
+            LLMConversationRequest(
+                session_id="telegram:100",
+                user_ref="telegram-user:200",
+                source="telegram",
+                text="x",
+                received_at=self._HOTFIX167_NOW,
+            ),
+            mission,
+        )
+        return agent, runtime
+
+    def test_hotfix167_blocked_mission_with_no_active_candidate_answers_honestly(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission = extract_or_update_mission(
+                "국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요", existing=None, now=self._HOTFIX167_NOW
+            )
+            self.assertIsNone(mission.active_candidate_id)
+            blocked_reason = "strategy_hypothesis_space_exhausted: bounded declarative strategy expansion budget exhausted"
+            mission = record_blocked(mission, reason=blocked_reason, now=self._HOTFIX167_NOW)
+            agent, runtime = self._hotfix167_seed_mission(store, mission)
+            counts_before = self._hotfix167_table_counts(store)
+
+            client = FakeTelegramClient((_update(10, 10, self._HOTFIX167_QUESTION),))
+            process_update(parse_update_result(_update(10, 10, self._HOTFIX167_QUESTION), received_at=self._HOTFIX167_NOW), runtime, client)
+            first_text = client.sent[-1][1]
+
+            client2 = FakeTelegramClient((_update(11, 11, self._HOTFIX167_QUESTION),))
+            process_update(parse_update_result(_update(11, 11, self._HOTFIX167_QUESTION), received_at=self._HOTFIX167_NOW), runtime, client2)
+            second_text = client2.sent[-1][1]
+
+            for text in (first_text, second_text):
+                self.assertNotIn("말씀해 주신 불편을 확인했습니다", text, "must not fall back to GENERAL_CONVERSATION feedback")
+                self.assertIn(blocked_reason, text, "the real blocked_reason must be shown honestly")
+            self.assertEqual(first_text, second_text, "the same question must produce the same honest answer both times")
+
+            assistant_messages = [m for m in store.conversations.list_messages("telegram:100", limit=1000) if m.role == "assistant"]
+            matching = [m for m in assistant_messages if m.content == first_text]
+            self.assertTrue(matching, "response message must be persisted")
+            self.assertEqual(matching[-1].tool_calls, (), "no research tool call for a read-only status question")
+
+            mission_after = agent._brain._mission_for("telegram:100")
+            self.assertEqual(mission_after.status, MissionStatus.BLOCKED)
+            self.assertEqual(mission_after.blocked_reason, blocked_reason)
+            self.assertEqual(mission_after.candidates, (), "no candidate must be fabricated/created")
+            self.assertIsNone(mission_after.active_candidate_id)
+
+            self.assertEqual(self._hotfix167_table_counts(store), counts_before)
+            self.assertEqual(
+                sum(len(store.tool_audit.list(tool_name=name)) for name in ("krx_real_research", "research_retest", "multi_symbol_research", "autonomous_learning_research")),
+                0,
+            )
+        finally:
+            store.close()
+
+    def test_hotfix167_active_mission_with_no_active_candidate_answers_honestly(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission = extract_or_update_mission(
+                "국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요", existing=None, now=self._HOTFIX167_NOW
+            )
+            self.assertEqual(mission.status, MissionStatus.ACTIVE)
+            self.assertIsNone(mission.active_candidate_id)
+            self.assertEqual(mission.candidates, ())
+            agent, runtime = self._hotfix167_seed_mission(store, mission)
+            counts_before = self._hotfix167_table_counts(store)
+
+            client = FakeTelegramClient((_update(20, 20, self._HOTFIX167_QUESTION),))
+            process_update(parse_update_result(_update(20, 20, self._HOTFIX167_QUESTION), received_at=self._HOTFIX167_NOW), runtime, client)
+            text = client.sent[-1][1]
+
+            self.assertNotIn("말씀해 주신 불편을 확인했습니다", text, "must not fall back to GENERAL_CONVERSATION feedback")
+            self.assertIn("아직 생성된 전략 후보가 없습니다", text)
+            self.assertIn("Research Mission", text)
+
+            assistant_messages = [m for m in store.conversations.list_messages("telegram:100", limit=1000) if m.role == "assistant"]
+            matching = [m for m in assistant_messages if m.content == text]
+            self.assertTrue(matching)
+            self.assertEqual(matching[-1].tool_calls, ())
+
+            mission_after = agent._brain._mission_for("telegram:100")
+            self.assertEqual(mission_after.status, MissionStatus.ACTIVE)
+            self.assertEqual(mission_after.candidates, (), "no candidate must be fabricated/created")
+            self.assertIsNone(mission_after.active_candidate_id)
+
+            self.assertEqual(self._hotfix167_table_counts(store), counts_before)
+            self.assertEqual(
+                sum(len(store.tool_audit.list(tool_name=name)) for name in ("krx_real_research", "research_retest", "multi_symbol_research", "autonomous_learning_research")),
+                0,
+            )
+        finally:
+            store.close()
+
+    def test_hotfix167_hotfix166_routing_sentences_still_pass(self) -> None:
+        """#166 regression sentences must still route correctly after the
+        #167 fix (mission-less state, exercised without seeding any
+        mission - the #167 fix only touches the "mission exists, no
+        active candidate" branch, never the "mission is None" branch)."""
+        store = RuntimeStateStore(":memory:")
+        try:
+            config = _config(assistant_enabled=True)
+            agent = TelegramConversationAgent(config, store._connection)
+            runtime = TelegramRuntime(agent, allowed_chat_ids=("100",))
+            client = FakeTelegramClient(())
+            sentences = (
+                "뭘 할 수 있나요?",
+                "현재 동작 하고 있나요?",
+                "현재 동적 허고 있나요?",
+                "VPS 기반으로 구동되고 있나요?",
+                "단타 전략은 잘 연구되고 있나요?",
+                "단타전략은 잘 연구되고 있나요?",
+                "어떤 자원이 필요한가요?",
+            )
+            for index, text in enumerate(sentences, start=30):
+                process_update(parse_update_result(_update(index, index, text), received_at=self._HOTFIX167_NOW), runtime, client)
+                sent_text = client.sent[-1][1]
+                self.assertNotIn("말씀해 주신 불편을 확인했습니다", sent_text, text)
+                self.assertNotIn("죄송하지만 요청을 정확히 이해하지 못했습니다", sent_text, text)
+        finally:
+            store.close()
+
+    def test_hotfix167_071055_context_provenance_still_preserved(self) -> None:
+        """#166's fixture-leak regression guard must still hold after the
+        #167 fix (this exercises a completely different routing branch -
+        SINGLE_SYMBOL_ANALYSIS / follow-up clarification - never the
+        Patch 8.8 mission-candidate-read block #167 touched)."""
+        store = RuntimeStateStore(":memory:")
+        client = FakeTelegramClient(())
+        try:
+            runtime = TelegramRuntime(
+                TelegramConversationAgent(_config(assistant_enabled=True), store._connection, tool_executor=_sprint152_tool_executor(store, fixture_backed=False)),
+                allowed_chat_ids=("100",),
+            )
+            process_update(parse_update_result(_update(6020, 6020, "071055 분석해줘"), received_at="2026-08-28T00:00:00Z"), runtime, client)
+            process_update(parse_update_result(_update(6021, 6021, "071055 트레이드 표본이 몇 건인가요"), received_at="2026-08-28T00:00:01Z"), runtime, client)
+            process_update(parse_update_result(_update(6022, 6022, "백테스트해주세요"), received_at="2026-08-28T00:00:02Z"), runtime, client)
+
+            self.assertEqual(len(store.tool_audit.list(tool_name="backtest_strategy")), 0)
+            final_text = client.sent[-1][1]
+            self.assertNotIn("005930", final_text)
+            self.assertNotIn("fixture", final_text.casefold())
+            for audit in store.tool_audit.list(tool_name="krx_real_research"):
+                self.assertEqual(audit.request.get("arguments", {}).get("symbol"), "071055")
+        finally:
+            store.close()
 
 
 class _FakeOllamaToolProvider:
