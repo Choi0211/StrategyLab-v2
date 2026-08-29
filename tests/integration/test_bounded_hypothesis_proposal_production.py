@@ -112,6 +112,10 @@ class BoundedHypothesisProposalProductionTests(unittest.TestCase):
         fields = {mutation.field for p in proposals for mutation in p.mutations}
         self.assertTrue(fields.issubset(set(CANONICAL_MUTATION_POLICY.keys())))
         self.assertTrue(fields.isdisjoint(PROHIBITED_DIMENSION_NAMES))
+        # Hotfix #169A final policy audit hardening: channel_exit_lookback has
+        # no code-grounded turnover/cost mechanism and was removed from the
+        # cost_slippage_fragility mapping - only breakout_lookback remains.
+        self.assertEqual(fields, {"breakout_lookback"})
 
     def test_proposal_generation_and_persistence_never_touches_strategy_order_champion_approval_state(self) -> None:
         mission = self._seed_production_shaped_exhausted_mission()
@@ -169,6 +173,19 @@ class BoundedHypothesisProposalProductionTests(unittest.TestCase):
         # are, or can become, real allowlist entries.
         for name in PROHIBITED_DIMENSION_NAMES:
             self.assertNotIn(name, CANONICAL_MUTATION_POLICY)
+
+        # Third line of defense (Hotfix #169A final policy audit hardening):
+        # even a field that IS a real, structurally-safe allowlist entry
+        # (protective_stop_pct directly sets per-trade max-loss magnitude)
+        # is machine-gated REVIEW_REQUIRED and never autonomously mutated,
+        # regardless of what any failure-class policy - Sustainability-
+        # influenced or otherwise - might name.
+        from gaon.research.hypothesis_proposal import MutationAutonomyClass
+
+        self.assertEqual(
+            CANONICAL_MUTATION_POLICY["protective_stop_pct"].autonomy_class,
+            MutationAutonomyClass.REVIEW_REQUIRED,
+        )
 
 
 if __name__ == "__main__":

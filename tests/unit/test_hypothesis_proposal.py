@@ -11,6 +11,7 @@ from gaon.research.hypothesis_proposal import (
     FAILURE_CLASS_MUTATION_SUPPORT,
     PROHIBITED_DIMENSION_NAMES,
     BoundedHypothesisProposalRepository,
+    MutationAutonomyClass,
     MutationBudget,
     MutationMethod,
     ProposalStatus,
@@ -244,7 +245,7 @@ class GenerateBoundedProposalsTests(unittest.TestCase):
         # breakout_lookback already at the historical maximum (40) - no
         # further HISTORICAL_NEIGHBOR_GRID value exists; must never invent one.
         mission = _mission()
-        candidate = new_candidate("breakout_wide_standard", sequence=1, now=_NOW)  # lookback=40, exit_lookback=20 (both already max)
+        candidate = new_candidate("breakout_wide_standard", sequence=1, now=_NOW)  # lookback=40 (already max)
         candidate = replace(candidate, status=StrategyCandidateStatus.STAGNANT, rejected_reason=_DEFAULT_STAGNANT_REASON, validation_stage_status={"transaction_cost_stress": "fail_underperformed_baseline"})
         mission = add_candidate(mission, candidate, now=_NOW)
         mission = record_blocked(mission, reason="strategy_hypothesis_space_exhausted: x", now=_NOW)
@@ -252,9 +253,120 @@ class GenerateBoundedProposalsTests(unittest.TestCase):
         self.assertEqual(analysis.dominant_failure_class, FailureClass.COST_SLIPPAGE_FRAGILITY)
 
         proposals = generate_bounded_proposals(direction, analysis, candidate_records(mission), now=_NOW)
-        # Both allowed dimensions (breakout_lookback=40, channel_exit_lookback=20) are already at their
-        # historical maximum, so no candidate value exists for either - must resolve honestly, never invent one.
+        # The one allowed dimension for this failure class (breakout_lookback=40)
+        # is already at its historical maximum - must resolve honestly, never invent one.
         self.assertTrue(all(p.status == ProposalStatus.UNSUPPORTED for p in proposals))
+
+
+class PolicyHardeningTests(unittest.TestCase):
+    """Hotfix #169A final policy audit hardening: channel_exit_lookback
+    removed from the cost_slippage_fragility mapping (no code-grounded
+    turnover mechanism), protective_stop_pct machine-gated as
+    REVIEW_REQUIRED (a genuine per-trade risk parameter), boolean filters
+    left unmapped (BOOLEAN_TOGGLE is direction-agnostic)."""
+
+    def setUp(self) -> None:
+        self.mission = _production_shaped_exhausted_mission()
+        self.direction, self.analysis = _direction_and_analysis(self.mission)
+        self.candidate_history = candidate_records(self.mission)
+
+    def test_A_cost_slippage_fragility_still_produces_breakout_lookback_proposal(self) -> None:
+        proposals = generate_bounded_proposals(self.direction, self.analysis, self.candidate_history, now=_NOW)
+        fields = {mutation.field for p in proposals for mutation in p.mutations}
+        self.assertIn("breakout_lookback", fields)
+
+    def test_B_cost_slippage_fragility_never_produces_channel_exit_lookback_proposal(self) -> None:
+        self.assertNotIn("channel_exit_lookback", FAILURE_CLASS_MUTATION_SUPPORT.get(FailureClass.COST_SLIPPAGE_FRAGILITY, ()))
+        proposals = generate_bounded_proposals(self.direction, self.analysis, self.candidate_history, now=_NOW)
+        fields = {mutation.field for p in proposals for mutation in p.mutations}
+        self.assertNotIn("channel_exit_lookback", fields)
+
+    def test_C_protective_stop_pct_never_generated_even_if_failure_mapping_names_it(self) -> None:
+        malicious_support = {FailureClass.COST_SLIPPAGE_FRAGILITY: ("protective_stop_pct", "breakout_lookback")}
+        proposals = generate_bounded_proposals(
+            self.direction, self.analysis, self.candidate_history, failure_class_support=malicious_support, now=_NOW
+        )
+        fields = {mutation.field for p in proposals for mutation in p.mutations}
+        self.assertNotIn("protective_stop_pct", fields)
+        # breakout_lookback (AUTONOMOUS_ALLOWED) in the same malicious mapping must still work normally.
+        self.assertIn("breakout_lookback", fields)
+
+    def test_C2_protective_stop_pct_alone_resolves_unsupported_not_silently_empty(self) -> None:
+        only_stop_support = {FailureClass.COST_SLIPPAGE_FRAGILITY: ("protective_stop_pct",)}
+        proposals = generate_bounded_proposals(
+            self.direction, self.analysis, self.candidate_history, failure_class_support=only_stop_support, now=_NOW
+        )
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0].status, ProposalStatus.UNSUPPORTED)
+        self.assertEqual(proposals[0].mutations, ())
+
+    def test_D_protective_stop_pct_is_classified_review_required(self) -> None:
+        self.assertEqual(CANONICAL_MUTATION_POLICY["protective_stop_pct"].autonomy_class, MutationAutonomyClass.REVIEW_REQUIRED)
+        for field in ("breakout_lookback", "channel_exit_lookback", "close_gt_ma20", "ma20_gt_ma60", "volume_gte_ma20"):
+            self.assertEqual(CANONICAL_MUTATION_POLICY[field].autonomy_class, MutationAutonomyClass.AUTONOMOUS_ALLOWED)
+
+    def test_E_boolean_fields_not_activated_by_this_hardening(self) -> None:
+        for failure_class, fields in FAILURE_CLASS_MUTATION_SUPPORT.items():
+            for boolean_field in ("close_gt_ma20", "ma20_gt_ma60", "volume_gte_ma20"):
+                self.assertNotIn(boolean_field, fields, f"{boolean_field} must not be wired to {failure_class} by this hardening pass")
+
+    def test_F_arbitrary_forbidden_fields_still_blocked(self) -> None:
+        malicious_support = {FailureClass.COST_SLIPPAGE_FRAGILITY: ("leverage", "position_size", "breakout_lookback")}
+        proposals = generate_bounded_proposals(
+            self.direction, self.analysis, self.candidate_history, failure_class_support=malicious_support, now=_NOW
+        )
+        fields = {mutation.field for p in proposals for mutation in p.mutations}
+        self.assertNotIn("leverage", fields)
+        self.assertNotIn("position_size", fields)
+
+    def test_G_budget_dedup_lineage_durability_unchanged_by_hardening(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            migrate(connection)
+            repository = BoundedHypothesisProposalRepository(connection)
+            proposals = generate_bounded_proposals(self.direction, self.analysis, self.candidate_history, now=_NOW)
+            for proposal in proposals:
+                self.assertLessEqual(proposal.mutation_count, MutationBudget().max_dimensions_changed_per_proposal)
+                self.assertEqual(proposal.mission_id, self.mission.mission_id)
+                self.assertEqual(proposal.research_direction_id, self.direction.direction_id)
+                self.assertEqual(proposal.source_failure_analysis_id, self.analysis.analysis_id)
+                repository.put(proposal)
+            existing_fps = repository.existing_fingerprints_for_session(_SESSION_REF)
+            regenerated = generate_bounded_proposals(
+                self.direction, self.analysis, self.candidate_history, existing_proposal_fingerprints=existing_fps, now=_NOW
+            )
+            self.assertTrue(all(p.status == ProposalStatus.DUPLICATE for p in regenerated))
+            reloaded = repository.list_for_direction(self.direction.direction_id)
+            self.assertEqual(len(reloaded), len(proposals))
+        finally:
+            connection.close()
+
+    def test_H_proposal_generation_leaves_all_safety_tables_untouched(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            migrate(connection)
+            tables = (
+                "champion_registry", "champion_history", "promotion_requests", "promotion_decisions",
+                "approvals", "research_approval_decisions", "research_config_approvals",
+                "strategy_deployment_requests", "strategy_deployment_runs",
+                "strategy_execution_plans", "strategy_execution_runs",
+            )
+
+            def _counts():
+                return {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
+
+            before = _counts()
+            candidates_before = len(self.mission.candidates)
+            repository = BoundedHypothesisProposalRepository(connection)
+            proposals = generate_bounded_proposals(self.direction, self.analysis, self.candidate_history, now=_NOW)
+            for proposal in proposals:
+                repository.put(proposal)
+            after = _counts()
+
+            self.assertEqual(before, after)
+            self.assertEqual(len(self.mission.candidates), candidates_before)
+        finally:
+            connection.close()
 
 
 class MigrationTests(unittest.TestCase):

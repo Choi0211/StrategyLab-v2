@@ -43,6 +43,23 @@ a policy table (``FAILURE_CLASS_MUTATION_SUPPORT``, itself human-authored
 and versioned, never LLM-derived) says is worth researching for a given
 failure class. Raw external text is never executed as a strategy rule,
 now or in any planned future phase.
+
+Policy hardening (post-implementation audit): being one of the six
+allowlisted fields does not by itself mean a field is safe to mutate
+autonomously - ``MutationPolicyEntry.autonomy_class`` is a second,
+independent, machine-enforced gate ``generate_bounded_proposals`` checks
+for every candidate mutation, regardless of what ``FAILURE_CLASS_MUTATION_
+SUPPORT`` names. ``protective_stop_pct`` (a genuine per-trade maximum-loss
+parameter, not merely an entry/exit threshold) is marked
+``REVIEW_REQUIRED`` and can never be autonomously mutated as a result, even
+if a future failure-class policy mistakenly references it - see
+``CANONICAL_MUTATION_POLICY``'s own comment on that entry for the exact
+code-grounded reasoning. The audit also found no code-grounded mechanism
+connecting ``channel_exit_lookback`` to ``cost_slippage_fragility`` (this
+repository's cost model charges per round-trip trade, never per day held,
+and ``channel_exit_lookback`` does not affect trade count) - it was removed
+from that failure class's mapping while remaining a legitimate,
+unmapped canonical field.
 """
 
 from __future__ import annotations
@@ -84,6 +101,32 @@ class ProposalStatus(str, Enum):
     DUPLICATE = "duplicate"
     UNSUPPORTED = "unsupported"
     READY_FOR_EVIDENCE = "ready_for_evidence"
+
+
+class MutationAutonomyClass(str, Enum):
+    """Independent, machine-enforced second gate on top of the six-field
+    allowlist itself (Hotfix #169A policy hardening, post-implementation
+    audit). Being a real, structurally-safe CanonicalStrategySpec field
+    (category A/B from the #169 investigation) does not automatically mean
+    a field is safe for THIS module to mutate autonomously without further
+    review:
+
+    - ``AUTONOMOUS_ALLOWED``: ``generate_bounded_proposals`` may produce a
+      mutation for this field whenever a failure-class policy names it.
+    - ``REVIEW_REQUIRED``: the field is a genuine, code-confirmed risk-
+      magnitude parameter (changes maximum loss per trade, not merely an
+      entry/exit threshold) - ``generate_bounded_proposals`` NEVER produces
+      a mutation for it, even if a future ``FAILURE_CLASS_MUTATION_SUPPORT``
+      entry mistakenly names it. This is defense-in-depth: process review
+      of the policy table is not trusted alone.
+    - ``FORBIDDEN``: reserved for a field this module later confirms must
+      never be touched at all, autonomously or otherwise; unused today
+      (the six real fields are all either ALLOWED or REVIEW_REQUIRED).
+    """
+
+    AUTONOMOUS_ALLOWED = "autonomous_allowed"
+    REVIEW_REQUIRED = "review_required"
+    FORBIDDEN = "forbidden"
 
 
 # Concepts that must never become a mutation dimension - CanonicalStrategySpec
@@ -141,6 +184,7 @@ class MutationPolicyEntry:
     allowed_values: tuple[object, ...]
     risk_class: MutationRiskClass | None
     evidence_requirement: str
+    autonomy_class: MutationAutonomyClass = MutationAutonomyClass.AUTONOMOUS_ALLOWED
     prohibited_reason: str | None = None
 
     def to_json(self) -> dict[str, object]:
@@ -152,6 +196,7 @@ class MutationPolicyEntry:
             "allowed_values": list(self.allowed_values),
             "risk_class": self.risk_class.value if self.risk_class else None,
             "evidence_requirement": self.evidence_requirement,
+            "autonomy_class": self.autonomy_class.value,
             "prohibited_reason": self.prohibited_reason,
         }
 
@@ -160,9 +205,19 @@ class MutationPolicyEntry:
 # gaon.research.krx_real_pipeline.RuleBasedBacktestEngine actually
 # interprets (confirmed exhaustively by the #169 architecture
 # investigation: no other entry/exit/filters key is ever assigned anywhere
-# in this repository). Every entry is "allowed" because none of the six
-# touch risk sizing, leverage, or capital - that category of field does not
-# exist in CanonicalStrategySpec at all (see PROHIBITED_DIMENSION_NAMES).
+# in this repository). Every entry is "allowed" (able in principle to be a
+# mutation target at all) because none of the six touch risk sizing,
+# leverage, or capital - that category of field does not exist in
+# CanonicalStrategySpec at all (see PROHIBITED_DIMENSION_NAMES). "allowed"
+# is NOT the same thing as "safe to mutate autonomously" - see
+# ``autonomy_class`` on each entry, and the post-implementation policy
+# audit this hardening pass resolves (Hotfix #169A final policy audit):
+# ``protective_stop_pct`` directly sets ``stop_price = entry_price *
+# (1 - abs(stop_pct)/100)`` in ``RuleBasedBacktestEngine.run`` - a genuine
+# per-trade maximum-loss (risk-magnitude) parameter, not merely an entry/
+# exit threshold like the other five - so it is marked REVIEW_REQUIRED and
+# ``generate_bounded_proposals`` refuses to ever produce a mutation for it
+# (enforced below, independent of what any failure-class policy names).
 CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
     "breakout_lookback": MutationPolicyEntry(
         field_name="breakout_lookback",
@@ -172,6 +227,7 @@ CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
         allowed_values=_historical_values("entry", "breakout_lookback"),
         risk_class=MutationRiskClass.ENTRY_THRESHOLD,
         evidence_requirement="evidence that the parent candidate's entry signal frequency/turnover contributed to its failure",
+        autonomy_class=MutationAutonomyClass.AUTONOMOUS_ALLOWED,
     ),
     "channel_exit_lookback": MutationPolicyEntry(
         field_name="channel_exit_lookback",
@@ -180,7 +236,14 @@ CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
         mutation_method=MutationMethod.HISTORICAL_NEIGHBOR_GRID,
         allowed_values=_historical_values("exit", "channel_exit_lookback"),
         risk_class=MutationRiskClass.EXIT_THRESHOLD,
-        evidence_requirement="evidence that the parent candidate's holding-period/exit timing contributed to its failure",
+        evidence_requirement=(
+            "evidence that the parent candidate's channel-exit trigger timing specifically contributed to its "
+            "failure - NOT currently justified as a turnover/cost-reduction lever: exit_n only changes which exit "
+            "path fires (channel-low vs stop vs end-of-dataset), never entry frequency, and this repository's cost "
+            "model charges per round-trip trade, not per day held, so no code-grounded mechanism connects this "
+            "field to transaction_cost_stress today (see Hotfix169A doc, Known Limitations)"
+        ),
+        autonomy_class=MutationAutonomyClass.AUTONOMOUS_ALLOWED,
     ),
     "protective_stop_pct": MutationPolicyEntry(
         field_name="protective_stop_pct",
@@ -190,6 +253,15 @@ CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
         allowed_values=_historical_values("exit", "protective_stop_pct"),
         risk_class=MutationRiskClass.EXIT_THRESHOLD,
         evidence_requirement="evidence that the parent candidate's stop-loss placement contributed to its failure",
+        autonomy_class=MutationAutonomyClass.REVIEW_REQUIRED,
+        prohibited_reason=(
+            "directly controls per-trade maximum loss magnitude (stop_price = entry_price * (1 - abs(stop_pct)/100), "
+            "RuleBasedBacktestEngine.run) - a genuine risk parameter, not an entry/exit threshold. "
+            "HISTORICAL_NEIGHBOR_GRID's generic ascend-to-next-value direction happens to move toward a tighter "
+            "stop only because today's fixed historical domain {-8,-6,-5,-4} makes ascending numerically equal to "
+            "risk-decreasing - a coincidence of the current domain, not a property this module verifies. Never "
+            "autonomously mutated until a field-aware direction review is done."
+        ),
     ),
     "close_gt_ma20": MutationPolicyEntry(
         field_name="close_gt_ma20",
@@ -198,7 +270,13 @@ CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
         mutation_method=MutationMethod.BOOLEAN_TOGGLE,
         allowed_values=(False, True),
         risk_class=MutationRiskClass.ENTRY_FILTER,
-        evidence_requirement="evidence relating trend-filter presence/absence to the parent candidate's failure",
+        evidence_requirement=(
+            "evidence relating trend-filter presence/absence to the parent candidate's failure - NOT yet mapped to "
+            "any failure class: BOOLEAN_TOGGLE is direction-agnostic (a blind flip), so wiring this to a failure "
+            "class requires direction-aware logic first (toggling an already-True filter off would loosen entry "
+            "selectivity, the wrong direction for a turnover-reduction hypothesis)"
+        ),
+        autonomy_class=MutationAutonomyClass.AUTONOMOUS_ALLOWED,
     ),
     "ma20_gt_ma60": MutationPolicyEntry(
         field_name="ma20_gt_ma60",
@@ -207,7 +285,11 @@ CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
         mutation_method=MutationMethod.BOOLEAN_TOGGLE,
         allowed_values=(False, True),
         risk_class=MutationRiskClass.ENTRY_FILTER,
-        evidence_requirement="evidence relating trend-filter presence/absence to the parent candidate's failure",
+        evidence_requirement=(
+            "evidence relating trend-filter presence/absence to the parent candidate's failure - NOT yet mapped to "
+            "any failure class; same BOOLEAN_TOGGLE direction-agnostic caveat as close_gt_ma20"
+        ),
+        autonomy_class=MutationAutonomyClass.AUTONOMOUS_ALLOWED,
     ),
     "volume_gte_ma20": MutationPolicyEntry(
         field_name="volume_gte_ma20",
@@ -216,7 +298,11 @@ CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
         mutation_method=MutationMethod.BOOLEAN_TOGGLE,
         allowed_values=(False, True),
         risk_class=MutationRiskClass.LIQUIDITY_FILTER,
-        evidence_requirement="evidence relating liquidity/volume-filter presence/absence to the parent candidate's failure",
+        evidence_requirement=(
+            "evidence relating liquidity/volume-filter presence/absence to the parent candidate's failure - NOT yet "
+            "mapped to any failure class; same BOOLEAN_TOGGLE direction-agnostic caveat as close_gt_ma20"
+        ),
+        autonomy_class=MutationAutonomyClass.AUTONOMOUS_ALLOWED,
     ),
 }
 
@@ -225,13 +311,26 @@ CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
 # CanonicalStrategySpec semantics, as a research target for a given failure
 # class - deliberately conservative for #169A (only the failure class
 # actually observed in production, cost_slippage_fragility, is mapped).
-# "direction" is +1 (move to the next larger historical value / toggle
-# True) when evidence-directed reasoning supports that direction, per the
-# #169 architecture investigation's Evidence -> Mutation Mapping findings:
-# a larger breakout_lookback/channel_exit_lookback means fewer, more
-# selective signals and longer holds, i.e. lower turnover under the fixed
-# cost assumption - never re-derived at runtime, this is the versioned,
-# human-authored policy itself.
+#
+# Hotfix #169A final policy audit (post-implementation): only
+# ``breakout_lookback`` is retained here. ``prior_high = max(...)`` over an
+# expanding window (RuleBasedBacktestEngine.run) is provably monotonic
+# non-decreasing as breakout_lookback grows, so the entry condition never
+# becomes easier - a code-grounded, directional hypothesis worth
+# investigating for a cost-fragile candidate, since this repository's cost
+# model charges per round-trip trade. This does NOT mean increasing
+# breakout_lookback is proven to resolve cost_slippage_fragility for any
+# specific candidate - only that it is a legitimate, code-grounded
+# direction to propose for evidence-gathering (READY_FOR_EVIDENCE, never
+# READY_FOR_APPROVAL). Failure class alone never proves causal resolution.
+#
+# ``channel_exit_lookback`` was removed from this mapping by the audit:
+# exit_n only changes which exit path fires, never entry frequency/trade
+# count, and the cost model has no time-based (holding-period) cost
+# component - so "increases holding period, therefore reduces turnover/
+# cost" does not hold for this field's actual code semantics. It remains a
+# legitimate canonical research field (see CANONICAL_MUTATION_POLICY) but
+# is not wired to any failure class today.
 #
 # economic_viability_failure and robustness_failure are deliberately NOT
 # mapped: the investigation found no CanonicalStrategySpec field that
@@ -240,7 +339,7 @@ CANONICAL_MUTATION_POLICY: Mapping[str, MutationPolicyEntry] = {
 # explicit "don't invent meaning" instruction. Any failure class not a key
 # of this mapping resolves to ProposalStatus.UNSUPPORTED, honestly.
 FAILURE_CLASS_MUTATION_SUPPORT: Mapping[FailureClass, tuple[str, ...]] = {
-    FailureClass.COST_SLIPPAGE_FRAGILITY: ("breakout_lookback", "channel_exit_lookback"),
+    FailureClass.COST_SLIPPAGE_FRAGILITY: ("breakout_lookback",),
 }
 
 
@@ -467,6 +566,13 @@ def generate_bounded_proposals(
         policy = mutation_policy.get(field)
         if policy is None or not policy.allowed:
             continue
+        if policy.autonomy_class is not MutationAutonomyClass.AUTONOMOUS_ALLOWED:
+            # Defense-in-depth (Hotfix #169A policy hardening): even if a
+            # future failure-class mapping mistakenly names a
+            # REVIEW_REQUIRED/FORBIDDEN field (e.g. protective_stop_pct),
+            # this generator refuses to produce a mutation for it -
+            # process review of the policy table is never trusted alone.
+            continue
         current = dict(base_strategy_spec.get(policy.dict_name) or {}).get(field, {}).get("value")
         if current is None:
             continue
@@ -488,8 +594,10 @@ def generate_bounded_proposals(
             rationale=(
                 f"failure class '{failure_analysis.dominant_failure_class.value}' observed on "
                 f"{len(failure_analysis.evidence_candidate_ids)} terminal candidate(s); "
-                f"{field} moved from {current!r} to {proposed_value!r} per the versioned "
-                "cost/turnover-direction policy for this failure class"
+                f"{field} moved from {current!r} to {proposed_value!r} - a code-grounded, directional "
+                "hypothesis worth investigating for this failure class, per the versioned mutation policy; "
+                "this does NOT assert the mutation resolves the failure for this or any candidate, only that "
+                "it is a legitimate direction to gather validation evidence on"
             ),
             evidence_requirement=policy.evidence_requirement,
         )
@@ -785,6 +893,14 @@ def production_bounded_hypothesis_proposal_release_check() -> dict[str, object]:
         unsupported_proposals = generate_bounded_proposals(
             unsupported_direction, unsupported_analysis, candidate_records(unsupported_mission), now=now
         )
+
+        # Defense-in-depth: even a misconfigured/malicious failure-class
+        # policy naming the risk-sensitive protective_stop_pct field must
+        # never produce an autonomous mutation for it.
+        risk_sensitive_support = {FailureClass.COST_SLIPPAGE_FRAGILITY: ("protective_stop_pct", "breakout_lookback")}
+        risk_sensitive_proposals = generate_bounded_proposals(
+            direction, analysis, candidate_history, failure_class_support=risk_sensitive_support, now=now
+        )
     finally:
         connection.close()
 
@@ -845,6 +961,14 @@ def production_bounded_hypothesis_proposal_release_check() -> dict[str, object]:
             and counts_before["research_approval_decisions"] == counts_after["research_approval_decisions"]
             and counts_before["research_config_approvals"] == counts_after["research_config_approvals"]
         ),
+        "cost_mapping_grounded": FAILURE_CLASS_MUTATION_SUPPORT.get(FailureClass.COST_SLIPPAGE_FRAGILITY) == ("breakout_lookback",),
+        "unsupported_exit_mapping_rejected": (
+            "channel_exit_lookback" not in FAILURE_CLASS_MUTATION_SUPPORT.get(FailureClass.COST_SLIPPAGE_FRAGILITY, ())
+            and all(mutation.field != "channel_exit_lookback" for p in first_proposals for mutation in p.mutations)
+        ),
+        "risk_sensitive_mutation_guarded": all(
+            mutation.field != "protective_stop_pct" for p in risk_sensitive_proposals for mutation in p.mutations
+        ),
     }
     _raise_if_failed("production bounded hypothesis proposal", checks)
     return {
@@ -858,6 +982,9 @@ def production_bounded_hypothesis_proposal_release_check() -> dict[str, object]:
         "unsupported_failure_honest": True,
         "lineage_preserved": True,
         "proposal_durable": True,
+        "cost_mapping_grounded": True,
+        "unsupported_exit_mapping_rejected": True,
+        "risk_sensitive_mutation_guarded": True,
         "candidate_created": False,
         "strategy_mutated": False,
         "order_executed": False,
