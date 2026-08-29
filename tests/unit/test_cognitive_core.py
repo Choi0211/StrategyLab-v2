@@ -20,7 +20,7 @@ class CognitiveCoreTests(unittest.TestCase):
             migrations.migrate(connection)
             migrations.migrate(connection)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM conversation_sessions WHERE session_id='existing'").fetchone()[0], 1)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM schema_version WHERE version=38").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM schema_version WHERE version=39").fetchone()[0], 1)
         finally:
             connection.close()
 

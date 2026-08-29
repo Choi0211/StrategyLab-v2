@@ -412,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-daily-briefing-runtime-wiring-release-check")
     sub.add_parser("gaon-production-autonomous-research-runtime-release-check")
     sub.add_parser("gaon-production-autonomous-research-direction-release-check")
+    sub.add_parser("gaon-production-bounded-hypothesis-proposal-release-check")
     sub.add_parser("gaon-production-morning-briefing-research-state-consistency-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
     sub.add_parser("gaon-production-strategy-centric-autonomous-research-release-check")
@@ -3241,6 +3242,29 @@ def _run(args: argparse.Namespace) -> int:
             f"bounded_execution={str(payload['bounded_execution']).lower()} "
             f"awaiting_human_approval_stop={str(payload['awaiting_human_approval_stop']).lower()} "
             f"provider_failure_honest={str(payload['provider_failure_honest']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-bounded-hypothesis-proposal-release-check":
+        from gaon.research.hypothesis_proposal import production_bounded_hypothesis_proposal_release_check
+
+        payload = production_bounded_hypothesis_proposal_release_check()
+        print(
+            "gaon-production-bounded-hypothesis-proposal-release-check: PASS "
+            f"canonical_only={str(payload['canonical_only']).lower()} "
+            f"free_text_generation={str(payload['free_text_generation']).lower()} "
+            f"mutation_bounded={str(payload['mutation_bounded']).lower()} "
+            f"deterministic_values={str(payload['deterministic_values']).lower()} "
+            f"forbidden_mutation_rejected={str(payload['forbidden_mutation_rejected']).lower()} "
+            f"duplicate_rejected={str(payload['duplicate_rejected']).lower()} "
+            f"unsupported_failure_honest={str(payload['unsupported_failure_honest']).lower()} "
+            f"lineage_preserved={str(payload['lineage_preserved']).lower()} "
+            f"proposal_durable={str(payload['proposal_durable']).lower()} "
+            f"candidate_created={str(payload['candidate_created']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "

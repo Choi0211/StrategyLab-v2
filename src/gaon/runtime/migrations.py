@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 38
+SCHEMA_VERSION = 39
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -56,6 +56,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         35: _upgrade_v35_to_v36,
         36: _upgrade_v36_to_v37,
         37: _upgrade_v37_to_v38,
+        38: _upgrade_v38_to_v39,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1312,6 +1313,41 @@ def _upgrade_v37_to_v38(connection: sqlite3.Connection) -> None:
             ON research_directions(session_ref, created_at);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_research_directions_fingerprint
             ON research_directions(fingerprint);
+    """)
+
+
+def _upgrade_v38_to_v39(connection: sqlite3.Connection) -> None:
+    """Hotfix #169A: durable, bounded strategy-hypothesis mutation proposals
+    - a proposal is never a StrategyCandidateRecord, never mutates strategy
+    config, and is written/read only by
+    ``gaon.research.hypothesis_proposal``. Single additive table, no
+    existing table touched."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS research_hypothesis_proposals (
+            proposal_id TEXT PRIMARY KEY,
+            session_ref TEXT NOT NULL,
+            mission_id TEXT NOT NULL,
+            research_direction_id TEXT NOT NULL,
+            source_failure_analysis_id TEXT NOT NULL,
+            parent_candidate_ids_json TEXT NOT NULL,
+            base_strategy_spec_json TEXT NOT NULL,
+            mutations_json TEXT NOT NULL,
+            mutation_count INTEGER NOT NULL,
+            mutation_budget INTEGER NOT NULL,
+            novelty_fingerprint TEXT NOT NULL,
+            validation_requirements_json TEXT NOT NULL,
+            prohibited_dimensions_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hypothesis_proposals_direction
+            ON research_hypothesis_proposals(research_direction_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_research_hypothesis_proposals_session
+            ON research_hypothesis_proposals(session_ref, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_hypothesis_proposals_novelty
+            ON research_hypothesis_proposals(session_ref, novelty_fingerprint);
     """)
 
 
