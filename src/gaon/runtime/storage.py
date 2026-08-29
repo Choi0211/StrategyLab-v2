@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 import os
 
-from gaon.runtime.migrations import SCHEMA_VERSION, migrate
+from gaon.runtime.migrations import SCHEMA_VERSION, check_schema_version_compatible, migrate
 from gaon.runtime.conversation_context import SQLiteConversationSummaryRepository
 from gaon.runtime.llm_conversation import SQLiteConversationRepository, SQLiteConversationToolResultRepository
 from gaon.runtime.llm_tools import SQLiteToolAuditRepository
@@ -15,6 +15,7 @@ from gaon.runtime.telegram_agent import SQLiteTelegramConversationLinkRepository
 from gaon.runtime.agent_planner import SQLiteAgentPlanRepository
 from gaon.runtime.repositories import SQLiteAuditEventRepository, SQLiteTelegramStateRepository
 from gaon.runtime.serialization import loads_json
+from gaon.runtime.sqlite_lock import DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS, retry_on_lock
 
 
 @dataclass(frozen=True)
@@ -25,10 +26,36 @@ class RuntimeDatabaseStatus:
 
 
 class RuntimeStateStore:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, owns_migration: bool = True) -> None:
+        """``owns_migration=True`` (default, preserves prior behavior for
+        every existing caller): this process is the schema migration
+        owner - ``migrate()`` runs, retried with bounded backoff if it
+        hits lock contention from a concurrent migration attempt (Section:
+        Migration Ownership), and fails closed (the lock error propagates)
+        if contention never clears within the retry budget.
+
+        ``owns_migration=False`` (used by ``gaon-web-serve`` only): this
+        process is NOT the migration owner - it never writes to the
+        schema, only performs a read-only version check
+        (``check_schema_version_compatible``) and fails closed
+        (``SchemaVersionMismatchError``) if the schema is missing, older,
+        or newer than expected, rather than starting against a
+        potentially-stale or in-progress schema."""
         self.path = path
-        self._connection = sqlite3.connect(path)
-        migrate(self._connection)
+        self._connection = sqlite3.connect(path, timeout=DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS)
+        try:
+            self._connection.execute(f"PRAGMA busy_timeout = {int(DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS * 1000)}")
+            if owns_migration:
+                retry_on_lock(lambda: migrate(self._connection))
+            else:
+                check_schema_version_compatible(self._connection)
+        except BaseException:
+            # Never leak an open file handle when construction fails
+            # (fail-closed schema mismatch, or a lock error exhausting the
+            # retry budget) - the caller never gets a RuntimeStateStore
+            # back to call .close() on.
+            self._connection.close()
+            raise
         self.telegram = SQLiteTelegramStateRepository(self._connection)
         self.audit = SQLiteAuditEventRepository(self._connection)
         self.conversations = SQLiteConversationRepository(self._connection)

@@ -413,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-autonomous-research-runtime-release-check")
     sub.add_parser("gaon-production-autonomous-research-direction-release-check")
     sub.add_parser("gaon-production-bounded-hypothesis-proposal-release-check")
+    sub.add_parser("gaon-production-sqlite-lock-stability-release-check")
     sub.add_parser("gaon-production-morning-briefing-research-state-consistency-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
     sub.add_parser("gaon-production-strategy-centric-autonomous-research-release-check")
@@ -1145,7 +1146,12 @@ def _run(args: argparse.Namespace) -> int:
         from gaon.runtime.web_api import run_server
 
         config = load_runtime_config(os.environ)
-        store = RuntimeStateStore(args.db)
+        # Migration ownership (Production SQLite Lock Stability hotfix):
+        # strategylab-gaon (the "run" command below) is the sole schema
+        # migration owner. gaon-web-serve never migrates - it only checks
+        # schema compatibility and fails closed if it's stale/ahead, so it
+        # can never race the owner's migration with a concurrent write.
+        store = RuntimeStateStore(args.db, owns_migration=False)
         try:
             run_server(config, store, host=args.host, port=args.port)
         except KeyboardInterrupt:
@@ -3268,6 +3274,28 @@ def _run(args: argparse.Namespace) -> int:
             f"unsupported_exit_mapping_rejected={str(payload['unsupported_exit_mapping_rejected']).lower()} "
             f"risk_sensitive_mutation_guarded={str(payload['risk_sensitive_mutation_guarded']).lower()} "
             f"candidate_created={str(payload['candidate_created']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-sqlite-lock-stability-release-check":
+        from gaon.runtime.sqlite_lock import production_sqlite_lock_stability_release_check
+
+        payload = production_sqlite_lock_stability_release_check()
+        print(
+            "gaon-production-sqlite-lock-stability-release-check: PASS "
+            f"telemetry_lock_isolated={str(payload['telemetry_lock_isolated']).lower()} "
+            f"unexpected_db_error_propagated={str(payload['unexpected_db_error_propagated']).lower()} "
+            f"critical_event_failure_propagated={str(payload['critical_event_failure_propagated']).lower()} "
+            f"busy_timeout_explicit={str(payload['busy_timeout_explicit']).lower()} "
+            f"busy_timeout_bounded={str(payload['busy_timeout_bounded']).lower()} "
+            f"migration_single_owner_or_serialized={str(payload['migration_single_owner_or_serialized']).lower()} "
+            f"schema_mismatch_fail_closed={str(payload['schema_mismatch_fail_closed']).lower()} "
+            f"schema_version={payload['schema_version']} "
+            f"wal_enabled={str(payload['wal_enabled']).lower()} "
             f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "
