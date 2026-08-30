@@ -888,7 +888,10 @@ def production_candidate_independent_evidence_release_check() -> dict[str, objec
         "durable": durable,
         "idempotent": idempotent,
         "lineage_preserved": lineage_preserved,
-        "schema_version_is_40": schema_version == 40 == SCHEMA_VERSION,
+        # Checked against the live SCHEMA_VERSION import, not a hardcoded
+        # literal - a later, additive schema bump (e.g. #169C's v41) must
+        # never break this release check.
+        "schema_version_matches_current": schema_version == SCHEMA_VERSION,
         "no_forbidden_imports": no_forbidden_imports,
         # These represent the safety INVARIANT holding (nothing in this
         # module can ever create a candidate/mutate strategy/execute a
