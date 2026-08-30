@@ -71,7 +71,7 @@ class MultiSymbolResearchTests(unittest.TestCase):
         self.connection.close()
 
     def test_schema_migrates_to_v36(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 39)
+        self.assertEqual(SCHEMA_VERSION, 40)
         tables = {row[0] for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertIn("multi_symbol_research_runs", tables)
         self.assertIn("multi_symbol_symbol_evidence", tables)

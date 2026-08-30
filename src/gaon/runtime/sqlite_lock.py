@@ -237,7 +237,7 @@ def production_sqlite_lock_stability_release_check() -> dict[str, object]:
         "busy_timeout_bounded": busy_timeout_bounded,
         "migration_single_owner_or_serialized": non_owner_schema_ok and non_owner_wrote_nothing,
         "schema_mismatch_fail_closed": schema_mismatch_fail_closed,
-        "schema_version_is_39": SCHEMA_VERSION == 39,
+        "schema_version_is_current": SCHEMA_VERSION == 40,
         "wal_not_enabled": wal_enabled is False,
         # No tool executor is even constructed anywhere in this release
         # check - there is no reachable code path to place an order at

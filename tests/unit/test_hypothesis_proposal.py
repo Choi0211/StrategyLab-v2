@@ -375,10 +375,10 @@ class MigrationTests(unittest.TestCase):
         try:
             migrate(connection)
             migrate(connection)  # idempotent re-run
-            self.assertEqual(SCHEMA_VERSION, 39)
+            self.assertEqual(SCHEMA_VERSION, 40)
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertIn("research_hypothesis_proposals", tables)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM schema_version WHERE version=39").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM schema_version WHERE version=40").fetchone()[0], 1)
         finally:
             connection.close()
 

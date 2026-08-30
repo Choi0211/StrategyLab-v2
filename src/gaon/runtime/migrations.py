@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 39
+SCHEMA_VERSION = 40
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -86,6 +86,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         36: _upgrade_v36_to_v37,
         37: _upgrade_v37_to_v38,
         38: _upgrade_v38_to_v39,
+        39: _upgrade_v39_to_v40,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1377,6 +1378,40 @@ def _upgrade_v38_to_v39(connection: sqlite3.Connection) -> None:
             ON research_hypothesis_proposals(session_ref, created_at);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_research_hypothesis_proposals_novelty
             ON research_hypothesis_proposals(session_ref, novelty_fingerprint);
+    """)
+
+
+def _upgrade_v39_to_v40(connection: sqlite3.Connection) -> None:
+    """Hotfix #169B: durable, direction-level (candidate-independent)
+    external evidence acquisition records. A row here is never a
+    ``StrategyCandidateRecord`` and is never mutated into strategy config -
+    written/read only by ``gaon.research.direction_evidence``. Single
+    additive aggregate table, no existing table touched. Uniqueness is
+    scoped to ``(session_ref, fingerprint)``, not a bare fingerprint, to
+    avoid cross-session fingerprint collisions (the same convention
+    ``research_hypothesis_proposals`` already uses)."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS research_direction_evidence (
+            evidence_acquisition_id TEXT PRIMARY KEY,
+            session_ref TEXT NOT NULL,
+            mission_id TEXT NOT NULL,
+            research_direction_id TEXT NOT NULL,
+            failure_analysis_id TEXT NOT NULL,
+            failure_class TEXT NOT NULL,
+            research_question_id TEXT,
+            query_fingerprint TEXT NOT NULL,
+            requirement_results_json TEXT NOT NULL,
+            overall_state TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_direction_evidence_direction
+            ON research_direction_evidence(research_direction_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_research_direction_evidence_session
+            ON research_direction_evidence(session_ref, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_direction_evidence_fingerprint
+            ON research_direction_evidence(session_ref, fingerprint);
     """)
 
 
