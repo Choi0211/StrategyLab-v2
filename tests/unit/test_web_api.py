@@ -14,7 +14,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+from gaon.knowledge.research_mission import MissionStatus, add_candidate, extract_or_update_mission, next_candidate_sequence, record_promotion_candidate
 from gaon.knowledge.strategy_candidate import new_candidate
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_conversation import LLMConversationSession
@@ -328,6 +328,91 @@ class ResearchStatusEndpointsTests(unittest.TestCase):
         adapter = _adapter()
         status, _ = dispatch_request(adapter, method="GET", path="/gaon/research/candidates/KR-ST-001", body=None)
         self.assertEqual(status, 400)
+
+
+def _seed_pending_approval_session(adapter: GaonWebChatAdapter, *, session_id: str, source: str, user_ref: str) -> "tuple":
+    """Persists a real session (any source prefix - "telegram:...",
+    "web:...", or otherwise) carrying a real ResearchMission already at
+    MissionStatus.AWAITING_HUMAN_APPROVAL, exactly the shape
+    LLMConversationBrain._remember_mission already produces. Returns the
+    (mission, candidate)."""
+    adapter._repository.upsert_session(LLMConversationSession(session_id, user_ref, source, "active", _NOW, _NOW, {}))
+    mission = extract_or_update_mission(_MISSION_TEXT, existing=None, now=_NOW)
+    candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=_NOW)
+    mission = add_candidate(mission, candidate, now=_NOW)
+    for index in range(3):
+        mission = record_promotion_candidate(
+            mission, strategy_fingerprint=candidate.strategy_fingerprint if index == 0 else f"pending-other-{index}",
+            candidate_id=candidate.candidate_id if index == 0 else f"KR-ST-88{index}", now=_NOW,
+        )
+    session = adapter._repository.get_session(session_id)
+    metadata = dict(session.metadata)
+    metadata["conversation_mvp"] = {"research_mission": mission.to_json()}
+    adapter._repository.upsert_session(
+        LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, _NOW, metadata)
+    )
+    return mission, candidate
+
+
+class PendingApprovalsCrossSessionDiscoveryTests(unittest.TestCase):
+    def test_no_session_ref_required(self) -> None:
+        adapter = _adapter()
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["pending_approvals"], [])
+
+    def test_telegram_originated_mission_discoverable_without_knowing_session_ref(self) -> None:
+        adapter = _adapter()
+        mission, candidate = _seed_pending_approval_session(adapter, session_id="telegram:900", source="telegram", user_ref="telegram-user:900")
+        self.assertEqual(mission.status, MissionStatus.AWAITING_HUMAN_APPROVAL)
+
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["pending_approvals"]), 1)
+        entry = payload["pending_approvals"][0]
+        self.assertEqual(entry["session_ref"], "telegram:900")
+        self.assertEqual(entry["source"], "telegram")
+        self.assertEqual(entry["status"], "awaiting_human_approval")
+        self.assertTrue(any(c["candidate_id"] == candidate.candidate_id for c in entry["candidates"]))
+
+    def test_web_originated_mission_also_discoverable(self) -> None:
+        adapter = _adapter()
+        mission, candidate = _seed_pending_approval_session(adapter, session_id="web:900", source="web", user_ref="web-user:900")
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        self.assertEqual(status, 200)
+        entry = payload["pending_approvals"][0]
+        self.assertEqual(entry["session_ref"], "web:900")
+        self.assertEqual(entry["source"], "web")
+
+    def test_active_and_completed_missions_are_not_pending_approval(self) -> None:
+        adapter = _adapter()
+        candidate = _seed_mission_with_one_candidate(adapter, "still-active")  # mission stays ACTIVE (no target reached)
+        status, payload = dispatch_request(adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["pending_approvals"], [])
+
+    def test_no_new_session_is_created_by_discovery(self) -> None:
+        adapter = _adapter()
+        _seed_pending_approval_session(adapter, session_id="telegram:901", source="telegram", user_ref="telegram-user:901")
+        before = adapter._repository._connection.execute("SELECT COUNT(*) FROM conversation_sessions").fetchone()[0]
+        dispatch_request(adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        after = adapter._repository._connection.execute("SELECT COUNT(*) FROM conversation_sessions").fetchone()[0]
+        self.assertEqual(before, after)
+
+    def test_root_advertises_pending_approvals_endpoint(self) -> None:
+        adapter = _adapter()
+        status, payload = dispatch_request(adapter, method="GET", path="/", body=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["pending_approvals"], "/gaon/research/pending-approvals")
+
+    def test_repeated_discovery_is_not_duplicated(self) -> None:
+        adapter = _adapter()
+        _seed_pending_approval_session(adapter, session_id="telegram:902", source="telegram", user_ref="telegram-user:902")
+        _, first = dispatch_request(adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        _, second = dispatch_request(adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        self.assertEqual(len(first["pending_approvals"]), 1)
+        self.assertEqual(len(second["pending_approvals"]), 1)
+        self.assertEqual(len(first["pending_approvals"][0]["candidates"]), len(second["pending_approvals"][0]["candidates"]))
 
 
 class ResearchStatusApiReleaseCheckTests(unittest.TestCase):

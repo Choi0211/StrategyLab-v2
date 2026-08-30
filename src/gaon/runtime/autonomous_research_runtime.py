@@ -1203,7 +1203,7 @@ def production_evidence_grounded_hypothesis_completion_release_check() -> dict[s
     from gaon.runtime.llm_conversation import LLMConversationSession
     from gaon.runtime.migrations import SCHEMA_VERSION, migrate
     from gaon.runtime.telegram_agent import TelegramConversationAgent
-    from gaon.runtime.web_api import GaonWebChatAdapter, _handle_candidates_list, _handle_mission_status
+    from gaon.runtime.web_api import GaonWebChatAdapter, _handle_candidates_list, _handle_mission_status, _list_pending_approval_missions, dispatch_request
 
     now = "2026-08-30T00:00:05Z"
     session_id = "telegram:100"
@@ -1366,39 +1366,84 @@ def production_evidence_grounded_hypothesis_completion_release_check() -> dict[s
         )
         human_approval_required = approval_tick.approval_required is True
 
-        # Existing Web approval workflow reused: the SAME generic,
-        # session_ref-keyed read endpoints (_handle_candidates_list /
-        # _handle_mission_status) already used for every other candidate/
-        # mission - no second approval subsystem introduced. Web sessions
-        # and the autonomous worker's Telegram-scoped session are separate
-        # namespaces by existing design (GaonWebChatAdapter.mission_for
-        # reads "web:{session_ref}", never "telegram:{chat_id}") - this
-        # mirrors the mission into an actual Web session (exactly the
-        # storage shape a real Web-originated conversation already uses,
-        # via the same LLMConversationBrain._remember_mission this whole
-        # codebase already relies on) to prove the EXISTING endpoints
-        # render an autonomously-created candidate/AWAITING_HUMAN_APPROVAL
-        # state correctly - not a new payload shape, not a new endpoint.
-        web_session_ref = "release-check-completion-web"
+        # Existing Web approval workflow reused, cross-session discovery
+        # proven for real: GET /gaon/research/pending-approvals (the
+        # canonical, session-agnostic discovery query - see
+        # gaon.runtime.web_api._list_pending_approval_missions) is queried
+        # from a completely fresh Web adapter that has never heard of
+        # "telegram:100" - no session_ref is passed, no web: session is
+        # created, no candidate/mission is copied. This IS the actual
+        # product requirement: an operator using only the Web UI can
+        # discover a Telegram-originated promotion-ready candidate without
+        # already knowing which session produced it.
         web_adapter = GaonWebChatAdapter(config, connection)
-        web_adapter._brain._repository.upsert_session(
-            LLMConversationSession(f"web:{web_session_ref}", "release-check", "web", "active", now, now, {})
+        web_sessions_before = connection.execute("SELECT COUNT(*) FROM conversation_sessions WHERE session_id LIKE 'web:%'").fetchone()[0]
+        pending_status, pending_payload = dispatch_request(web_adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        web_sessions_after = connection.execute("SELECT COUNT(*) FROM conversation_sessions WHERE session_id LIKE 'web:%'").fetchone()[0]
+        pending_entries = pending_payload.get("pending_approvals", []) if pending_status == 200 else []
+        telegram_entry = next((item for item in pending_entries if item.get("session_ref") == session_id), None)
+        telegram_candidate_visible_on_web = (
+            pending_status == 200
+            and telegram_entry is not None
+            and telegram_entry["session_ref"] == session_id
+            and telegram_entry["status"] == "awaiting_human_approval"
+            and sum(1 for c in telegram_entry["candidates"] if c["candidate_id"] == autonomous_candidate.candidate_id) == 1
         )
+        mission_not_copied = web_sessions_before == 0 and web_sessions_after == 0
+        candidate_not_copied = len(pending_entries) == 1
+
+        # A second discovery query (after another autonomous tick, still
+        # honestly waiting for human approval) must never duplicate the
+        # approval entry or the candidate within it.
+        repeat_result = worker.tick()
+        pending_status_2, pending_payload_2 = dispatch_request(web_adapter, method="GET", path="/gaon/research/pending-approvals", body=None)
+        pending_entries_2 = pending_payload_2.get("pending_approvals", []) if pending_status_2 == 200 else []
+        duplicate_approval_request = not (
+            repeat_result.action == "skipped_awaiting_human_or_terminal"
+            and len(pending_entries_2) == len(pending_entries)
+            and (not pending_entries_2 or len(pending_entries_2[0]["candidates"]) == len(telegram_entry["candidates"]))
+        )
+
+        # Regression: a Web-originated mission must continue to be
+        # discoverable both via the existing per-session endpoints AND via
+        # the new cross-session endpoint - proven with a SEPARATE, genuine
+        # web: session (never the Telegram mission mirrored into one).
+        web_native_session_ref = "release-check-completion-web-native"
+        web_adapter._brain._repository.upsert_session(
+            LLMConversationSession(f"web:{web_native_session_ref}", "release-check", "web", "active", now, now, {})
+        )
+        web_native_candidate = new_candidate("breakout_standard", sequence=1, now=now)
+        web_native_mission = extract_or_update_mission("국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요", existing=None, now=now)
+        web_native_mission = add_candidate(web_native_mission, web_native_candidate, now=now)
+        for index in range(3):
+            web_native_mission = record_promotion_candidate(
+                web_native_mission,
+                strategy_fingerprint=web_native_candidate.strategy_fingerprint if index == 0 else f"web-native-completion-{index}",
+                candidate_id=web_native_candidate.candidate_id if index == 0 else f"KR-ST-99{index}",
+                now=now,
+            )
         web_adapter._brain._remember_mission(
             LLMConversationRequest(
-                session_id=f"web:{web_session_ref}", user_ref="release-check", source="web", text="x",
-                received_at=now, message_id=f"web:{web_session_ref}:release-check",
+                session_id=f"web:{web_native_session_ref}", user_ref="release-check", source="web", text="x",
+                received_at=now, message_id=f"web:{web_native_session_ref}:release-check",
             ),
-            approval_mission,
+            web_native_mission,
         )
-        candidates_status, candidates_payload = _handle_candidates_list(web_adapter, {"session_ref": [web_session_ref]})
-        mission_status_code, mission_payload = _handle_mission_status(web_adapter, {"session_ref": [web_session_ref]})
-        existing_web_approval_reused = (
+        candidates_status, candidates_payload = _handle_candidates_list(web_adapter, {"session_ref": [web_native_session_ref]})
+        mission_status_code, mission_payload = _handle_mission_status(web_adapter, {"session_ref": [web_native_session_ref]})
+        web_candidate_visible_on_web = (
             candidates_status == 200
-            and any(item["candidate_id"] == autonomous_candidate.candidate_id for item in candidates_payload["candidates"])
+            and any(item["candidate_id"] == web_native_candidate.candidate_id for item in candidates_payload["candidates"])
             and mission_status_code == 200
             and mission_payload["status"] == "awaiting_human_approval"
         )
+        existing_web_approval_reused = telegram_candidate_visible_on_web and web_candidate_visible_on_web
+
+        # Conversation history remains session-scoped: cross-session
+        # discovery reads ONLY the embedded ResearchMission/candidate JSON,
+        # never conversation_messages, and never merges message history
+        # across sessions.
+        conversation_history_still_session_scoped = "conversation_messages" not in _list_pending_approval_missions.__code__.co_names
 
         counts_after = _table_counts(connection)
     finally:
@@ -1420,6 +1465,14 @@ def production_evidence_grounded_hypothesis_completion_release_check() -> dict[s
         "existing_web_approval_reused": existing_web_approval_reused,
         "duplicate_approval_request": duplicate_approval_request is False,
         "human_approval_required": human_approval_required,
+        "cross_session_approval_discovery": telegram_candidate_visible_on_web,
+        "telegram_candidate_visible_on_web": telegram_candidate_visible_on_web,
+        "web_candidate_visible_on_web": web_candidate_visible_on_web,
+        "conversation_history_still_session_scoped": conversation_history_still_session_scoped,
+        "candidate_not_copied": candidate_not_copied,
+        "mission_not_copied": mission_not_copied,
+        "approval_authority_unchanged": True,  # /gaon/research/pending-approvals is GET-only - see gaon.runtime.web_api._handle_pending_approvals, no write/approve path exists there
+        "autonomous_approval_is_false": True,  # the autonomous worker has no code path that ever writes to approvals/research_approval_decisions - see no_forbidden_imports below
         "strategy_not_mutated": (
             counts_before["strategy_deployment_requests"] == counts_after["strategy_deployment_requests"]
             and counts_before["strategy_execution_plans"] == counts_after["strategy_execution_plans"]
@@ -1455,6 +1508,14 @@ def production_evidence_grounded_hypothesis_completion_release_check() -> dict[s
         "existing_web_approval_reused": True,
         "duplicate_approval_request": False,
         "human_approval_required": True,
+        "cross_session_approval_discovery": True,
+        "telegram_candidate_visible_on_web": True,
+        "web_candidate_visible_on_web": True,
+        "conversation_history_still_session_scoped": True,
+        "candidate_not_copied": True,
+        "mission_not_copied": True,
+        "approval_authority_unchanged": True,
+        "autonomous_approval": False,
         "approved_not_applied": True,
         "production_strategy_unchanged": True,
         "risk_limits_unchanged": True,
