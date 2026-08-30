@@ -413,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-autonomous-research-runtime-release-check")
     sub.add_parser("gaon-production-autonomous-research-direction-release-check")
     sub.add_parser("gaon-production-bounded-hypothesis-proposal-release-check")
+    sub.add_parser("gaon-production-candidate-independent-evidence-release-check")
     sub.add_parser("gaon-production-sqlite-lock-stability-release-check")
     sub.add_parser("gaon-production-morning-briefing-research-state-consistency-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
@@ -3278,6 +3279,34 @@ def _run(args: argparse.Namespace) -> int:
             f"order_executed={str(payload['order_executed']).lower()} "
             f"champion_promoted={str(payload['champion_promoted']).lower()} "
             f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-candidate-independent-evidence-release-check":
+        from gaon.research.direction_evidence import production_candidate_independent_evidence_release_check
+
+        payload = production_candidate_independent_evidence_release_check()
+        print(
+            "gaon-production-candidate-independent-evidence-release-check: PASS "
+            f"candidate_independent={str(payload['candidate_independent']).lower()} "
+            f"direction_grounded={str(payload['direction_grounded']).lower()} "
+            f"deterministic_query={str(payload['deterministic_query']).lower()} "
+            f"bounded_execution={str(payload['bounded_execution']).lower()} "
+            f"real_provenance_preserved={str(payload['real_provenance_preserved']).lower()} "
+            f"fixture_production_blocked={str(payload['fixture_production_blocked']).lower()} "
+            f"provider_failure_honest={str(payload['provider_failure_honest']).lower()} "
+            f"operational_requirement_separated={str(payload['operational_requirement_separated']).lower()} "
+            f"evidence_not_instruction={str(payload['evidence_not_instruction']).lower()} "
+            f"durable={str(payload['durable']).lower()} "
+            f"idempotent={str(payload['idempotent']).lower()} "
+            f"schema_version={payload['schema_version']} "
+            f"candidate_created={str(payload['candidate_created']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"backtest_executed={str(payload['backtest_executed']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            f"production_applied={str(payload['production_applied']).lower()} "
             "safety=pass"
         )
 
