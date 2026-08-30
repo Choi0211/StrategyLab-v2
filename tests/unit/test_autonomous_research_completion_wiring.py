@@ -100,6 +100,42 @@ def _config(chat_id: str = "100") -> GaonRuntimeConfig:
     return GaonRuntimeConfig(mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="t", telegram_allowed_chat_ids=(chat_id,), approval_signing_secret="s")
 
 
+def _seed_pre_upgrade_direction(connection: sqlite3.Connection, session_id: str = SESSION_ID):
+    """Persists a FailureAnalysis + ResearchDirection directly via the SAME
+    #168 functions ``_plan_research_direction`` itself uses - simulating a
+    direction that already existed BEFORE any #169D-F-aware worker tick
+    ever ran (exactly the real, confirmed production state: a #168-era
+    direction created by an OLDER deployment, now being continued by the
+    upgraded runtime). Returns (direction, analysis). Mirrors what a prior
+    ``research_direction_planned`` tick would have persisted, without
+    calling ``AutonomousResearchRuntimeWorker.tick()`` at all first."""
+    from gaon.knowledge.research_mission import candidate_records
+    from gaon.knowledge.strategy_candidate import next_untried_family
+    from gaon.research.research_direction import ResearchDirectionRepository, analyze_mission_failure, plan_research_direction
+    from gaon.research.research_priority import propose_research_priority
+    from gaon.runtime.llm_conversation import LLMConversationBrain
+    from gaon.runtime.telegram_agent import TelegramConversationAgent
+
+    config = _config(session_id.split(":")[-1])
+    mission = TelegramConversationAgent(config, connection)._brain._mission_for(session_id)
+    priority = propose_research_priority(mission, None)
+    analysis = analyze_mission_failure(mission, session_ref=session_id, now=NOW)
+    has_untried_family = next_untried_family(candidate_records(mission)) is not None
+    direction = plan_research_direction(analysis, priority, has_untried_family=has_untried_family, has_recoverable_candidate=False, now=NOW)
+    repo = ResearchDirectionRepository(connection)
+    repo.put_failure_analysis(analysis)
+    repo.put_direction(direction)
+    return direction, analysis
+
+
+def _table_counts(connection: sqlite3.Connection) -> dict:
+    tables = (
+        "research_directions", "research_direction_evidence", "research_evidence_mutation_decisions",
+        "research_hypothesis_proposals", "research_hypothesis_execution_lineage",
+    )
+    return {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
+
+
 class ChainProgressionTests(unittest.TestCase):
     def test_A_full_chain_progresses_direction_to_candidate(self) -> None:
         connection = sqlite3.connect(":memory:")
@@ -300,6 +336,237 @@ class ChainProgressionTests(unittest.TestCase):
         }
         self.assertEqual(before, after)
         connection.close()
+
+
+class PersistedPreUpgradeDirectionTests(unittest.TestCase):
+    """Reproduces the exact reported production state: a #168-era
+    ResearchDirection (status=AWAITING_EVIDENCE, dominant failure class
+    cost_slippage_fragility) already persisted BEFORE any #169D-F-aware
+    tick ever ran, with zero DirectionEvidenceAcquisition/policy decision/
+    proposal/lineage rows. Proves the upgraded runtime continues it
+    autonomously rather than treating its mere pre-existence as a
+    terminal, permanently-repeating "awaiting_evidence" state."""
+
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        migrate(self.connection)
+        self.config = _config()
+        _seed_exhausted_mission(self.connection, self.config)
+        self.direction, self.analysis = _seed_pre_upgrade_direction(self.connection)
+        self.assertEqual(self.direction.status.value, "awaiting_evidence")
+        self.assertEqual(self.analysis.dominant_failure_class.value, "cost_slippage_fragility")
+
+    def tearDown(self) -> None:
+        self.connection.close()
+
+    def test_first_tick_acquires_evidence_not_awaiting_evidence(self) -> None:
+        before = _table_counts(self.connection)
+        self.assertEqual(before["research_directions"], 1)
+        self.assertEqual(before["research_direction_evidence"], 0)
+
+        worker = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        result = worker.tick()
+
+        self.assertEqual(result.action, "direction_evidence_acquired")
+        self.assertNotEqual(result.action, "research_direction_awaiting_evidence")
+        self.assertIsNone(result.error_type)
+        self.assertEqual(result.direction_id, self.direction.direction_id)
+
+        after = _table_counts(self.connection)
+        self.assertEqual(after["research_directions"], 1)  # reused, never recreated
+        self.assertEqual(after["research_direction_evidence"], 1)
+        self.assertEqual(after["research_evidence_mutation_decisions"], 0)
+        self.assertEqual(after["research_hypothesis_proposals"], 0)
+        self.assertEqual(after["research_hypothesis_execution_lineage"], 0)
+
+    def test_second_tick_creates_policy_decision(self) -> None:
+        worker = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        worker.tick()  # direction_evidence_acquired
+        result = worker.tick()
+        self.assertEqual(result.action, "policy_decision_created")
+        counts = _table_counts(self.connection)
+        self.assertEqual(counts["research_direction_evidence"], 1)
+        self.assertEqual(counts["research_evidence_mutation_decisions"], 1)
+        self.assertEqual(counts["research_hypothesis_proposals"], 0)
+
+    def test_third_tick_creates_bounded_hypothesis_when_eligible(self) -> None:
+        worker = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        worker.tick()  # direction_evidence_acquired
+        worker.tick()  # policy_decision_created
+        result = worker.tick()
+        self.assertEqual(result.action, "bounded_hypothesis_created")
+        counts = _table_counts(self.connection)
+        self.assertEqual(counts["research_hypothesis_proposals"], 1)
+        self.assertEqual(counts["research_hypothesis_execution_lineage"], 1)
+
+    def test_fourth_tick_creates_candidate(self) -> None:
+        worker = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        for _ in range(3):
+            worker.tick()
+        result = worker.tick()
+        self.assertEqual(result.action, "candidate_created")
+        self.assertIsNotNone(result.candidate_id)
+
+    def test_direction_never_recreated_across_full_progression(self) -> None:
+        worker = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        for _ in range(4):
+            result = worker.tick()
+            self.assertEqual(result.direction_id, self.direction.direction_id)
+        self.assertEqual(_table_counts(self.connection)["research_directions"], 1)
+
+    def test_repeated_tick_over_unchanged_evidence_state_does_not_duplicate(self) -> None:
+        # Two SEPARATE workers both observing the SAME pre-existing,
+        # unchanged direction/evidence state must never double-insert -
+        # the durable fingerprint/list_for_direction check, not in-memory
+        # worker state, is what provides idempotency here.
+        worker_a = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        worker_a.tick()
+        evidence_count_after_first = _table_counts(self.connection)["research_direction_evidence"]
+        worker_b = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        result_b = worker_b.tick()
+        self.assertNotEqual(result_b.action, "direction_evidence_acquired")
+        self.assertEqual(_table_counts(self.connection)["research_direction_evidence"], evidence_count_after_first)
+
+    def test_repeated_tick_over_unchanged_policy_state_does_not_duplicate(self) -> None:
+        worker = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        worker.tick()
+        worker.tick()
+        policy_count_after_second = _table_counts(self.connection)["research_evidence_mutation_decisions"]
+        result_third_repeat = AutonomousResearchRuntimeWorker(
+            self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory
+        )
+        # A third tick genuinely progresses to bounded_hypothesis_created
+        # (the NEXT stage) rather than re-deciding policy - proves no
+        # duplicate policy decision is ever produced for unchanged state.
+        result_third_repeat.tick()
+        self.assertEqual(_table_counts(self.connection)["research_evidence_mutation_decisions"], policy_count_after_second)
+
+
+class PersistedPreUpgradeDirectionProviderUnavailableTests(unittest.TestCase):
+    """Same pre-existing #168-era direction, but the evidence provider is
+    unavailable (executor=None) - must resolve honestly at every stage,
+    never fabricate evidence, never create a candidate, never crash."""
+
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        migrate(self.connection)
+        self.config = _config()
+        _seed_exhausted_mission(self.connection, self.config)
+        self.direction, self.analysis = _seed_pre_upgrade_direction(self.connection)
+
+    def tearDown(self) -> None:
+        self.connection.close()
+
+    def test_provider_unavailable_never_fabricates_or_crashes(self) -> None:
+        worker = AutonomousResearchRuntimeWorker(self.config, self.connection, now_factory=lambda: NOW, evidence_executor_factory=lambda: None)
+
+        evidence_result = worker.tick()
+        self.assertEqual(evidence_result.action, "direction_evidence_acquired")
+        self.assertIsNone(evidence_result.error_type)
+
+        policy_result = worker.tick()
+        self.assertEqual(policy_result.action, "policy_decision_created")
+        self.assertEqual(policy_result.policy_status, "blocked_insufficient_evidence")
+
+        exhaustion_result = worker.tick()
+        self.assertEqual(exhaustion_result.action, "hypothesis_value_space_exhausted")
+
+        counts = _table_counts(self.connection)
+        self.assertEqual(counts["research_hypothesis_proposals"], 0)
+        self.assertEqual(counts["research_hypothesis_execution_lineage"], 0)
+
+        # A further repeated tick stays honestly exhausted - never crashes,
+        # never retroactively fabricates eligibility.
+        repeat_result = worker.tick()
+        self.assertEqual(repeat_result.action, "hypothesis_value_space_exhausted")
+        self.assertIsNone(repeat_result.error_type)
+
+
+def _seed_regime_sensitivity_mission(connection: sqlite3.Connection, config: GaonRuntimeConfig, session_id: str = SESSION_ID):
+    """Same shape as ``_seed_exhausted_mission`` but every STAGNANT
+    candidate fails ``regime_validation`` (never ``transaction_cost_stress``)
+    so the dominant failure class resolves to REGIME_SENSITIVITY - a class
+    ``FAILURE_CLASS_MUTATION_CONCEPT`` deliberately does not support. Used
+    only to reach the ``unsupported_failure_class`` diagnostic branch of
+    ``_advance_evidence_mutation_chain``."""
+    agent = TelegramConversationAgent(config, connection)
+    agent._brain._repository.upsert_session(LLMConversationSession(session_id, "test", "telegram", "active", NOW, NOW, {}))
+    mission = extract_or_update_mission("국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요", existing=None, now=NOW)
+    default_stagnant_reason = "stagnation: no measurable progress across bounded cycles"
+    specs = (({"regime_validation": "fail"}, StrategyCandidateStatus.STAGNANT),) * 8 + ((None, StrategyCandidateStatus.REJECTED),)
+    for sequence, (family, (stage_status, status)) in enumerate(zip((t.family for t in ALL_STRATEGY_FAMILY_TEMPLATES), specs), start=1):
+        candidate = new_candidate(family, sequence=sequence, now=NOW)
+        if stage_status is None:
+            candidate = replace(candidate, status=status, rejected_reason="economic_viability_failed:non_positive_median_return_and_minority_profitable_symbols")
+        else:
+            candidate = replace(candidate, status=status, rejected_reason=default_stagnant_reason, validation_stage_status=stage_status)
+        mission = add_candidate(mission, candidate, now=NOW)
+    mission = record_blocked(mission, reason="strategy_hypothesis_space_exhausted: bounded declarative strategy expansion budget exhausted", now=NOW)
+    agent._brain._remember_mission(_continuation_request(session_id, session_id.split(":")[-1], NOW, suffix="seed"), mission)
+    return agent
+
+
+class ChainDiagnosticTests(unittest.TestCase):
+    """The additive, read-only ``chain_diagnostic`` field must record the
+    exact reason ``_advance_evidence_mutation_chain`` fell through to the
+    legacy #168 awaiting_evidence/active branch - purely observational,
+    never itself changing any routing decision."""
+
+    def test_diagnostic_is_none_on_a_successful_stage_advance(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        migrate(connection)
+        config = _config()
+        _seed_exhausted_mission(connection, config)
+        _seed_pre_upgrade_direction(connection)
+        worker = AutonomousResearchRuntimeWorker(config, connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        result = worker.tick()
+        self.assertEqual(result.action, "direction_evidence_acquired")
+        self.assertIsNone(result.chain_diagnostic)
+
+    def test_diagnostic_reports_unsupported_failure_class(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        migrate(connection)
+        config = _config()
+        _seed_regime_sensitivity_mission(connection, config)
+        direction, analysis = _seed_pre_upgrade_direction(connection)
+        self.assertEqual(analysis.dominant_failure_class.value, "regime_sensitivity")
+
+        worker = AutonomousResearchRuntimeWorker(config, connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        result = worker.tick()
+
+        self.assertIn(result.action, ("research_direction_awaiting_evidence", "research_direction_active"))
+        self.assertEqual(result.chain_diagnostic, "unsupported_failure_class:regime_sensitivity")
+        # Purely diagnostic - never a fabricated evidence/policy/proposal row.
+        counts = _table_counts(connection)
+        self.assertEqual(counts["research_direction_evidence"], 0)
+        self.assertEqual(counts["research_evidence_mutation_decisions"], 0)
+
+    def test_diagnostic_reports_proposal_already_linked_to_candidate(self) -> None:
+        # advance_mission_with_candidate flips the mission out of BLOCKED
+        # (so a real candidate_created tick never re-enters
+        # _advance_evidence_mutation_chain again on this direction). To
+        # reach the "proposal already linked, nothing new to do" branch
+        # while the mission is STILL blocked, link the lineage row
+        # directly via the repository - exactly what a real candidate
+        # link leaves behind, without depending on the mission-status
+        # side effect that would otherwise short-circuit the next tick.
+        from gaon.research.bounded_hypothesis_generation import HypothesisExecutionLineageRepository
+
+        connection = sqlite3.connect(":memory:")
+        migrate(connection)
+        config = _config()
+        _seed_exhausted_mission(connection, config)
+        direction, _analysis = _seed_pre_upgrade_direction(connection)
+        worker = AutonomousResearchRuntimeWorker(config, connection, now_factory=lambda: NOW, evidence_executor_factory=_passing_executor_factory)
+        actions = [worker.tick().action for _ in range(3)]
+        self.assertEqual(actions[-1], "bounded_hypothesis_created")
+
+        lineage_repo = HypothesisExecutionLineageRepository(connection)
+        proposal_id = lineage_repo.list_for_direction(direction.direction_id)[0]["proposal_id"]
+        lineage_repo.set_candidate_id(proposal_id, "strategy-candidate:manual-fake-for-diagnostic-test", now=NOW)
+
+        repeat_result = worker.tick()
+        self.assertEqual(repeat_result.chain_diagnostic, "proposal_already_linked_to_candidate")
 
 
 if __name__ == "__main__":

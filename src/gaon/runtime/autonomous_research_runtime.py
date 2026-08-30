@@ -175,6 +175,14 @@ class AutonomousResearchTickResult:
     mutation_direction: str | None = None
     approval_required: bool | None = None
     autonomous_progression: bool | None = None
+    # Narrow, read-only diagnostic (no behavior change) - populated ONLY on
+    # the "research_direction_awaiting_evidence"/"research_direction_active"
+    # fallback (i.e. only when _advance_evidence_mutation_chain returned
+    # None), naming exactly WHICH of its early-exit conditions fired. Added
+    # specifically to make a production divergence from tested behavior
+    # diagnosable from the next persisted tick's own result payload,
+    # without changing any decision this worker makes.
+    chain_diagnostic: str | None = None
 
 
 class AutonomousResearchRuntimeWorker:
@@ -214,6 +222,11 @@ class AutonomousResearchRuntimeWorker:
         # per the Section 0 safety contract. Tests/release checks inject a
         # fixture-backed factory instead, never real network.
         self._evidence_executor_factory = evidence_executor_factory or self._default_evidence_executor_factory
+        # Set only by _advance_evidence_mutation_chain's own "return None"
+        # sites, read only by _plan_research_direction's fallback branch
+        # immediately afterward within the same tick() call - see
+        # AutonomousResearchTickResult.chain_diagnostic.
+        self._last_chain_diagnostic: str | None = None
 
     def _default_brain_factory(self) -> LLMConversationBrain:
         from gaon.runtime.telegram_agent import TelegramConversationAgent
@@ -359,6 +372,7 @@ class AutonomousResearchRuntimeWorker:
             direction_id=direction.direction_id,
             direction_status=direction.status.value,
             next_research_action=direction.next_research_action.value,
+            chain_diagnostic=self._last_chain_diagnostic,
         )
 
     def _advance_evidence_mutation_chain(
@@ -388,6 +402,7 @@ class AutonomousResearchRuntimeWorker:
         alone: each stage only proceeds once the PRIOR stage's durable
         record actually exists.
         """
+        self._last_chain_diagnostic = None  # cleared at the start of every call - never a stale value from a prior tick
         from gaon.research.bounded_hypothesis_generation import (
             HypothesisExecutionLineageRepository,
             generate_bounded_hypothesis,
@@ -403,6 +418,7 @@ class AutonomousResearchRuntimeWorker:
         from gaon.research.proposal_candidate_bridge import advance_mission_with_candidate
 
         if analysis.dominant_failure_class not in FAILURE_CLASS_MUTATION_CONCEPT:
+            self._last_chain_diagnostic = f"unsupported_failure_class:{analysis.dominant_failure_class.value}"
             return None  # #168 behavior unchanged for every other failure class
 
         evidence_repo = DirectionEvidenceRepository(self._connection)
@@ -487,6 +503,9 @@ class AutonomousResearchRuntimeWorker:
                         changed_dimension=mutation.field,
                         mutation_direction="increase_only" if mutation.proposed_value > mutation.old_value else "decrease_only",
                     )
+            self._last_chain_diagnostic = (
+                "proposal_not_ready_for_evidence" if proposal is not None else "pending_lineage_row_missing_proposal"
+            )
             return None  # already-linked or non-actionable proposal - let the normal ACTIVE cycle continue
 
         existing_proposals = proposal_repo.list_for_direction(direction.direction_id)
@@ -527,6 +546,7 @@ class AutonomousResearchRuntimeWorker:
                 proposal_id=last_proposal_id,
             )
 
+        self._last_chain_diagnostic = "proposal_already_linked_to_candidate"
         return None  # a proposal already exists and is already linked to a candidate - nothing new to do
 
 
@@ -652,6 +672,7 @@ def run_due_autonomous_research(
                     "candidate_id": result.candidate_id or "",
                     "changed_dimension": result.changed_dimension or "",
                     "mutation_direction": result.mutation_direction or "",
+                    "chain_diagnostic": result.chain_diagnostic or "",
                 },
             )
         except Exception as exc:  # noqa: BLE001 - one tick's failure must not block rescheduling.
@@ -1354,6 +1375,72 @@ def production_evidence_grounded_hypothesis_completion_release_check() -> dict[s
         exhaustion_action = provider_missing_worker.tick().action  # hypothesis_value_space_exhausted
         bounded_space_exhaustion_honest = evidence_action == "direction_evidence_acquired" and policy_action == "policy_decision_created" and exhaustion_action == "hypothesis_value_space_exhausted"
 
+        # Persisted pre-upgrade direction continuation: reproduces the
+        # EXACT real production upgrade scenario - a #168-era
+        # ResearchDirection (status=AWAITING_EVIDENCE, cost_slippage_
+        # fragility) persisted directly via analyze_mission_failure/
+        # plan_research_direction/ResearchDirectionRepository (the SAME
+        # functions a pre-#169D-F deployment already used), WITHOUT ever
+        # calling AutonomousResearchRuntimeWorker.tick() first - proving
+        # the upgraded runtime continues an already-existing direction
+        # rather than treating its mere persisted existence as a
+        # permanently-repeating terminal "awaiting_evidence" report.
+        from gaon.research.research_direction import ResearchDirectionRepository, analyze_mission_failure, plan_research_direction
+        from gaon.research.research_priority import propose_research_priority
+
+        pre_upgrade_mission = extract_or_update_mission("국내 주식 전체를 대상으로 단타 전략이 3개 나올 때까지 연구해주세요", existing=None, now=now)
+        for sequence, (family, (stage_status, status)) in enumerate(zip((t.family for t in ALL_STRATEGY_FAMILY_TEMPLATES), specs), start=1):
+            candidate = new_candidate(family, sequence=sequence, now=now)
+            if stage_status is None:
+                candidate = replace(candidate, status=status, rejected_reason="economic_viability_failed:non_positive_median_return_and_minority_profitable_symbols")
+            else:
+                candidate = replace(candidate, status=status, rejected_reason=default_stagnant_reason, validation_stage_status=stage_status)
+            pre_upgrade_mission = add_candidate(pre_upgrade_mission, candidate, now=now)
+        pre_upgrade_mission = record_blocked(pre_upgrade_mission, reason="strategy_hypothesis_space_exhausted: bounded declarative strategy expansion budget exhausted", now=now)
+        pre_upgrade_session_id = "telegram:102"
+        agent._brain._repository.upsert_session(LLMConversationSession(pre_upgrade_session_id, "release-check", "telegram", "active", now, now, {}))
+        agent._brain._remember_mission(_continuation_request(pre_upgrade_session_id, "102", now, suffix="seed"), pre_upgrade_mission)
+
+        pre_upgrade_priority = propose_research_priority(pre_upgrade_mission, None)
+        pre_upgrade_analysis = analyze_mission_failure(pre_upgrade_mission, session_ref=pre_upgrade_session_id, now=now)
+        pre_upgrade_direction = plan_research_direction(
+            pre_upgrade_analysis, pre_upgrade_priority, has_untried_family=False, has_recoverable_candidate=False, now=now
+        )
+        pre_upgrade_repo = ResearchDirectionRepository(connection)
+        pre_upgrade_repo.put_failure_analysis(pre_upgrade_analysis)
+        pre_upgrade_repo.put_direction(pre_upgrade_direction)
+        direction_rows_before_continuation = connection.execute("SELECT COUNT(*) FROM research_directions").fetchone()[0]
+        evidence_rows_before_continuation = connection.execute("SELECT COUNT(*) FROM research_direction_evidence").fetchone()[0]
+
+        pre_upgrade_worker = AutonomousResearchRuntimeWorker(
+            GaonRuntimeConfig(mode="execute", dry_run=False, telegram_enabled=True, telegram_bot_token="t", telegram_allowed_chat_ids=("102",), approval_signing_secret="s"),
+            connection, now_factory=lambda: now, evidence_executor_factory=_evidence_executor_factory,
+        )
+        continuation_result = pre_upgrade_worker.tick()
+        direction_rows_after_continuation = connection.execute("SELECT COUNT(*) FROM research_directions").fetchone()[0]
+        evidence_rows_after_continuation = connection.execute("SELECT COUNT(*) FROM research_direction_evidence").fetchone()[0]
+
+        existing_direction_reused = continuation_result.direction_id == pre_upgrade_direction.direction_id
+        # This connection already accumulated other sub-scenarios' own
+        # directions earlier in this same release check - the real proof
+        # is "unchanged before vs after this specific continuation tick",
+        # not an absolute count.
+        direction_not_recreated = direction_rows_after_continuation == direction_rows_before_continuation
+        evidence_acquired_from_existing_direction = (
+            continuation_result.action == "direction_evidence_acquired"
+            and continuation_result.action != "research_direction_awaiting_evidence"
+            and evidence_rows_after_continuation == evidence_rows_before_continuation + 1
+        )
+        # A second, immediate tick against the now-unchanged evidence state
+        # must not duplicate it - the NEXT stage (policy decision) is what
+        # should happen, never a repeated evidence acquisition.
+        second_continuation_result = pre_upgrade_worker.tick()
+        no_duplicate_evidence = (
+            connection.execute("SELECT COUNT(*) FROM research_direction_evidence").fetchone()[0] == evidence_rows_after_continuation
+            and second_continuation_result.action != "direction_evidence_acquired"
+        )
+        persisted_pre_upgrade_direction_continues = existing_direction_reused and direction_not_recreated and evidence_acquired_from_existing_direction
+
         # READY_FOR_APPROVAL stop: reuse the EXISTING promotion-candidate
         # mechanism (never invented here) to reach AWAITING_HUMAN_APPROVAL,
         # then prove the worker hard-stops and the Web endpoints already
@@ -1529,6 +1616,13 @@ def production_evidence_grounded_hypothesis_completion_release_check() -> dict[s
         # already guarantees by construction.
         "failed_candidate_research_can_continue": True,
         "bounded_space_exhaustion_honest": bounded_space_exhaustion_honest,
+        "persisted_pre_upgrade_direction_continues": persisted_pre_upgrade_direction_continues,
+        "existing_direction_reused": existing_direction_reused,
+        "evidence_acquired_from_existing_direction": evidence_acquired_from_existing_direction,
+        "direction_not_recreated": direction_not_recreated,
+        "one_stage_per_tick": second_continuation_result.action != "direction_evidence_acquired",
+        "provider_failure_honest": bounded_space_exhaustion_honest,
+        "no_duplicate_evidence": no_duplicate_evidence,
         "ready_for_approval_stop": ready_for_approval_stop,
         "existing_web_approval_reused": existing_web_approval_reused,
         "duplicate_approval_request": duplicate_approval_request is False,
@@ -1585,6 +1679,13 @@ def production_evidence_grounded_hypothesis_completion_release_check() -> dict[s
         "idempotent": True,
         "failed_candidate_research_can_continue": True,
         "bounded_space_exhaustion_honest": True,
+        "persisted_pre_upgrade_direction_continues": True,
+        "existing_direction_reused": True,
+        "evidence_acquired_from_existing_direction": True,
+        "direction_not_recreated": True,
+        "one_stage_per_tick": True,
+        "provider_failure_honest": True,
+        "no_duplicate_evidence": True,
         "ready_for_approval_stop": True,
         "existing_web_approval_reused": True,
         "duplicate_approval_request": False,
