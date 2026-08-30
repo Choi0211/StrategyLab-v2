@@ -14,7 +14,9 @@ satisfied before a candidate exists, and always resolves to
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
+import tempfile
 import unittest
 
 from gaon.knowledge.content_acquisition import ContentAcquisitionPolicy, FetchPayload
@@ -114,9 +116,23 @@ def _cost_slippage_direction() -> tuple[ResearchDirection, FailureAnalysis]:
 
 
 class CostSlippageFragilityAcceptanceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # A real, OS-independent temporary directory owned for the whole
+        # test method (created before the test body runs, removed after it
+        # finishes) - passed explicitly as storage_root everywhere below so
+        # the real executor/ingestion path never falls back to
+        # build_production_executor's production-root default, which would
+        # try to write to /var/lib/strategylab (Linux CI) or D:\Gaon
+        # (Windows) and is not owned by this test.
+        self.storage_root = tempfile.mkdtemp(prefix="gaon-169b-acceptance-")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.storage_root, ignore_errors=True)
+
     def test_evidence_available_never_yields_full_acquired(self) -> None:
         direction, analysis = _cost_slippage_direction()
         executor = build_production_executor(
+            storage_root=self.storage_root,
             discovery_transport=_CrossrefTransport((_PASSING_CROSSREF_ITEM,)),
             doi_resolution_transport=_DoiResolutionTransport(),
             content_transport=_ContentTransport(),
@@ -158,7 +174,7 @@ class CostSlippageFragilityAcceptanceTests(unittest.TestCase):
 
     def test_zero_academic_results_is_honest_and_still_never_acquired(self) -> None:
         direction, analysis = _cost_slippage_direction()
-        executor = build_production_executor(discovery_transport=_CrossrefTransport(()))
+        executor = build_production_executor(storage_root=self.storage_root, discovery_transport=_CrossrefTransport(()))
         result = acquire_direction_evidence(direction, analysis, executor=executor, now=NOW)
 
         academic = next(r for r in result.requirement_results if r.kind is EvidenceRequirementKind.ACADEMIC_EXTERNAL)
@@ -168,6 +184,7 @@ class CostSlippageFragilityAcceptanceTests(unittest.TestCase):
     def test_durable_persistence_survives_a_fresh_repository_instance(self) -> None:
         direction, analysis = _cost_slippage_direction()
         executor = build_production_executor(
+            storage_root=self.storage_root,
             discovery_transport=_CrossrefTransport((_PASSING_CROSSREF_ITEM,)),
             doi_resolution_transport=_DoiResolutionTransport(),
             content_transport=_ContentTransport(),
