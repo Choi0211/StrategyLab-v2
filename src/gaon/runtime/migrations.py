@@ -4,7 +4,36 @@ from __future__ import annotations
 
 import sqlite3
 
+from gaon.runtime.errors import SchemaVersionMismatchError
+
 SCHEMA_VERSION = 39
+
+
+def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
+    """Read-only schema-version check for a migration NON-OWNER process
+    (Production SQLite Lock Stability hotfix, Section: Migration
+    Ownership). Issues exactly one ``SELECT`` - no write, no lock
+    acquisition, safe to call from a process that must never race the
+    migration owner. Raises ``SchemaVersionMismatchError`` (fail-closed)
+    if the schema is missing, older, or newer than what this build
+    expects - never proceeds against a mismatched schema silently.
+    """
+    try:
+        row = connection.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).casefold():
+            raise SchemaVersionMismatchError(
+                "database has not been migrated yet (schema_version table does not exist) - "
+                "the migration owner process must start and complete migration first"
+            ) from exc
+        raise
+    actual = int(row[0]) if row is not None else None
+    if actual != SCHEMA_VERSION:
+        raise SchemaVersionMismatchError(
+            f"database schema version mismatch: expected {SCHEMA_VERSION}, found {actual!r} - "
+            "refusing to start against a stale/ahead schema (fail-closed); "
+            "the migration owner process must migrate first"
+        )
 
 
 def migrate(connection: sqlite3.Connection) -> None:

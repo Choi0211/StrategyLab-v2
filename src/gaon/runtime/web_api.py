@@ -77,6 +77,7 @@ from gaon.runtime.llm_conversation import (
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.research_failures import classify_exception, warning_for_failure
+from gaon.runtime.sqlite_lock import DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS
 from gaon.runtime.storage import RuntimeStateStore
 
 _CANDIDATE_DETAIL_PATH = re.compile(r"^/gaon/research/candidates/(?P<candidate_id>[^/]+)$")
@@ -723,7 +724,12 @@ def build_server(config, store, *, host=DEFAULT_HOST, port=DEFAULT_PORT):
 
     @contextmanager
     def scoped_adapter():
-        connection = sqlite3.connect(store.path, timeout=5)
+        # Explicit, shared bounded busy-timeout constant (Production SQLite
+        # Lock Stability hotfix) - same 5-second value this connection
+        # already passed before the hotfix, now sourced from one place
+        # instead of a locally-duplicated literal.
+        connection = sqlite3.connect(store.path, timeout=DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS)
+        connection.execute(f"PRAGMA busy_timeout = {int(DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS * 1000)}")
         connection.execute("PRAGMA foreign_keys=ON")
         try:
             yield GaonWebChatAdapter(config, connection)

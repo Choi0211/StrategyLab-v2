@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Callable, Protocol
@@ -12,7 +14,10 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.errors import GaonRuntimeError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.metrics import MetricsCollector
+from gaon.runtime.sqlite_lock import is_lock_or_busy_error
 from gaon.runtime.storage import RuntimeStateStore
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramPollingClient(Protocol):
@@ -89,25 +94,54 @@ class TelegramPollingWorker:
         self._append_event("TelegramPollingTickFailed", now, {"error_type": error_type})
         return TelegramPollingTickResult(enabled=True, attempted=True, error_type=error_type)
 
-    def _append_event(self, event_type: str, now: str, payload: dict[str, object]) -> None:
-        SQLiteEventStore(self._store._connection).append(
-            DurableEvent(
-                event_id=f"telegram-poll:{uuid4().hex}",
-                event_type=event_type,
-                occurred_at=now,
-                actor_ref="runtime:telegram-worker",
-                correlation_id="telegram-poll",
-                causation_id=None,
-                scope="runtime",
-                project="StrategyLab",
-                strategy="N/A",
-                market="N/A",
-                payload=payload,
-                evidence_refs=(),
-                audit_refs=(),
-                appended_at=now,
+    def _append_event(self, event_type: str, now: str, payload: dict[str, object]) -> bool:
+        """Appends a NON-CRITICAL Telegram polling telemetry event
+        (``TelegramPollingTickCompleted``/``TelegramPollingTickFailed`` -
+        both purely operational: by the time either is appended, the
+        tick's real work via ``poll_once`` has already fully completed and
+        separately committed its own writes). Production SQLite Lock
+        Stability hotfix: isolates ONLY genuine SQLite lock/busy
+        contention (``is_lock_or_busy_error``) so a transient lock never
+        crashes the whole ``strategylab-gaon`` process over a telemetry
+        write - a dropped event is observable (metric + structured log),
+        never silent, and this never attempts to write ANOTHER event to
+        record the drop (no recursive-failure DB write). Any other
+        exception - a non-lock ``OperationalError`` (corruption, schema
+        error, ...), or any non-SQLite exception (a programming error) -
+        is NEVER caught here and propagates exactly as before this hotfix.
+
+        Returns ``True`` if the event was durably appended, ``False`` if
+        it was dropped due to lock contention.
+        """
+        try:
+            SQLiteEventStore(self._store._connection).append(
+                DurableEvent(
+                    event_id=f"telegram-poll:{uuid4().hex}",
+                    event_type=event_type,
+                    occurred_at=now,
+                    actor_ref="runtime:telegram-worker",
+                    correlation_id="telegram-poll",
+                    causation_id=None,
+                    scope="runtime",
+                    project="StrategyLab",
+                    strategy="N/A",
+                    market="N/A",
+                    payload=payload,
+                    evidence_refs=(),
+                    audit_refs=(),
+                    appended_at=now,
+                )
             )
-        )
+        except sqlite3.OperationalError as exc:
+            if not is_lock_or_busy_error(exc):
+                raise
+            self._metrics.increment("telegram_telemetry_append_dropped", event_type=event_type, reason="lock_contention")
+            logger.warning(
+                "telegram polling telemetry event dropped due to SQLite lock contention",
+                extra={"event_type": event_type, "reason": "lock_contention"},
+            )
+            return False
+        return True
 
 
 def _status_counts(results: tuple[TelegramPollResult, ...]) -> dict[str, int]:

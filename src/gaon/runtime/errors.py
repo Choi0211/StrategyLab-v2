@@ -43,6 +43,13 @@ class CommandError(GaonRuntimeError):
     """Command failed."""
 
 
+class SchemaVersionMismatchError(GaonRuntimeError):
+    """A migration non-owner process (e.g. gaon-web-serve) found the
+    database schema does not match the version this build expects, and
+    refuses to start against it (fail-closed) - the migration owner
+    process must run first."""
+
+
 def mask_secret(value: str | None) -> str:
     if not value:
         return ""
