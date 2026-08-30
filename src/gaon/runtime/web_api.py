@@ -523,6 +523,14 @@ def _candidate_payload(candidate: StrategyCandidateRecord) -> Mapping[str, objec
         "economic_viability": {"status": viability.status.value, "reason": viability.reason},
         "next_action": next_action,
         "next_action_reason": next_action_reason,
+        # Safe, structured summary only - for an autonomously #169E-created
+        # candidate this is a machine-generated string built solely from
+        # already-audited fields (changed dimension, old/proposed value,
+        # research direction id - see gaon.research.proposal_candidate_
+        # bridge.create_candidate_from_proposal); never raw external
+        # evidence text, never executable as an instruction.
+        "hypothesis_summary": candidate.hypothesis_summary,
+        "parent_candidate_id": candidate.parent_candidate_id,
         "trade_count": candidate.trade_count,
         "attempted_symbols": candidate.attempted_symbols,
         "valid_symbols": candidate.valid_symbols,

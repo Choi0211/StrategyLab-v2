@@ -261,7 +261,7 @@ class DirectionEvidenceRepositoryTests(_TempStorageMixin, unittest.TestCase):
 
     def test_O_schema_v40_additive_and_idempotent(self) -> None:
         migrate(self.connection)  # idempotent re-run
-        self.assertEqual(SCHEMA_VERSION, 41)
+        self.assertEqual(SCHEMA_VERSION, 42)
         tables = {row[0] for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertIn("research_direction_evidence", tables)
 
@@ -339,7 +339,7 @@ class ReleaseCheckTests(unittest.TestCase):
     def test_V_release_check_passes(self) -> None:
         payload = production_candidate_independent_evidence_release_check()
         self.assertEqual(payload["safety"], "pass")
-        self.assertEqual(payload["schema_version"], 41)
+        self.assertEqual(payload["schema_version"], 42)
         self.assertFalse(payload["candidate_created"])
         self.assertFalse(payload["strategy_mutated"])
         self.assertFalse(payload["backtest_executed"])

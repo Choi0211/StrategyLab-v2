@@ -847,7 +847,10 @@ def production_evidence_mutation_policy_release_check() -> dict[str, object]:
         "durable": durable,
         "idempotent": idempotent,
         "policy_versioned": policy_versioned,
-        "schema_version_is_41": schema_version == 41 == SCHEMA_VERSION,
+        # Checked against the live SCHEMA_VERSION import, not a hardcoded
+        # literal - a later, additive schema bump (e.g. #169D-F's v42)
+        # must never break this release check.
+        "schema_version_matches_current": schema_version == SCHEMA_VERSION,
         "no_forbidden_imports": no_forbidden_imports,
         "no_generate_bounded_proposals_call": no_generate_bounded_proposals_call,
         "scheduler_not_wired": not scheduler_wired,
