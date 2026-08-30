@@ -12,6 +12,7 @@ uses.
 from __future__ import annotations
 
 import sqlite3
+import tempfile
 import unittest
 from dataclasses import replace
 
@@ -54,7 +55,17 @@ class _ContentTransport:
 
 
 def _passing_executor_factory():
-    return build_production_executor(discovery_transport=_CrossrefTransport(), doi_resolution_transport=_DoiTransport(), content_transport=_ContentTransport())
+    # storage_root MUST be an explicit, isolated temp directory - never
+    # omit it. build_production_executor()'s own default (storage_root=
+    # None) resolves to the REAL production data root (/var/lib/
+    # strategylab/gaon-data on Linux CI, D:\Gaon on a local Windows dev
+    # machine where it may already exist and silently mask this bug - see
+    # Hotfix #171, the prior incident of this exact class). A fresh temp
+    # dir per call keeps every tick's executor fully isolated.
+    return build_production_executor(
+        storage_root=tempfile.mkdtemp(prefix="gaon-169def-wiring-test-"),
+        discovery_transport=_CrossrefTransport(), doi_resolution_transport=_DoiTransport(), content_transport=_ContentTransport(),
+    )
 
 
 def _seed_exhausted_mission(connection: sqlite3.Connection, config: GaonRuntimeConfig, session_id: str = SESSION_ID):

@@ -21,6 +21,7 @@ Core acceptance criteria this proves:
 from __future__ import annotations
 
 import sqlite3
+import tempfile
 import unittest
 from dataclasses import replace
 
@@ -72,7 +73,15 @@ class _ContentTransport:
 
 
 def _passing_executor_factory():
-    return build_production_executor(discovery_transport=_CrossrefTransport(), doi_resolution_transport=_DoiTransport(), content_transport=_ContentTransport())
+    # storage_root MUST be an explicit, isolated temp directory - never
+    # omit it. build_production_executor()'s own default resolves to the
+    # REAL production data root - see Hotfix #171's prior incident of this
+    # exact class, and tests/unit/test_autonomous_research_completion_
+    # wiring.py's own identical fix.
+    return build_production_executor(
+        storage_root=tempfile.mkdtemp(prefix="gaon-169def-acceptance-"),
+        discovery_transport=_CrossrefTransport(), doi_resolution_transport=_DoiTransport(), content_transport=_ContentTransport(),
+    )
 
 
 def _config() -> GaonRuntimeConfig:
