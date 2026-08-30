@@ -51,7 +51,7 @@ from typing import Any, Mapping
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
-from gaon.knowledge.research_mission import ResearchMission, candidate_records, get_candidate
+from gaon.knowledge.research_mission import MissionStatus, ResearchMission, candidate_records, get_candidate
 from gaon.knowledge.strategy_candidate import (
     StrategyCandidateRecord,
     evaluate_economic_viability,
@@ -307,6 +307,7 @@ def dispatch_request(
             "health": "/gaon/health",
             "chat": "/gaon/chat",
             "research_mission": "/gaon/research/mission",
+            "pending_approvals": "/gaon/research/pending-approvals",
             "storage_status": "/gaon/storage/status",
             "strategy_mutated": False,
             "order_executed": False,
@@ -338,6 +339,8 @@ def dispatch_request(
         return _handle_mission_status(adapter, query)
     if method == "GET" and route_path == "/gaon/research/candidates":
         return _handle_candidates_list(adapter, query)
+    if method == "GET" and route_path == "/gaon/research/pending-approvals":
+        return _handle_pending_approvals(adapter, query)
     detail_match = _CANDIDATE_DETAIL_PATH.match(route_path)
     if method == "GET" and detail_match:
         return _handle_candidate_detail(adapter, query, detail_match.group("candidate_id"))
@@ -523,6 +526,14 @@ def _candidate_payload(candidate: StrategyCandidateRecord) -> Mapping[str, objec
         "economic_viability": {"status": viability.status.value, "reason": viability.reason},
         "next_action": next_action,
         "next_action_reason": next_action_reason,
+        # Safe, structured summary only - for an autonomously #169E-created
+        # candidate this is a machine-generated string built solely from
+        # already-audited fields (changed dimension, old/proposed value,
+        # research direction id - see gaon.research.proposal_candidate_
+        # bridge.create_candidate_from_proposal); never raw external
+        # evidence text, never executable as an instruction.
+        "hypothesis_summary": candidate.hypothesis_summary,
+        "parent_candidate_id": candidate.parent_candidate_id,
         "trade_count": candidate.trade_count,
         "attempted_symbols": candidate.attempted_symbols,
         "valid_symbols": candidate.valid_symbols,
@@ -580,6 +591,83 @@ def _handle_candidate_detail(
         "exists": True,
         "mission_id": mission.mission_id,
         **_candidate_payload(candidate),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
+
+
+_PENDING_APPROVAL_SCAN_LIMIT = 500
+
+
+def _list_pending_approval_missions(connection: sqlite3.Connection, *, limit: int = _PENDING_APPROVAL_SCAN_LIMIT) -> tuple[tuple[str, ResearchMission], ...]:
+    """Canonical, session-agnostic DISCOVERY of every persisted
+    ``ResearchMission`` currently at ``MissionStatus.AWAITING_HUMAN_
+    APPROVAL`` (the existing Hard Stop gate #169D-F/#168 already produce),
+    regardless of which session created it - ``telegram:<chat_id>``,
+    ``web:<ref>``, or any future source prefix.
+
+    This is DISCOVERY ONLY: it reads the exact same already-existing,
+    already-durable storage every other mission/candidate read in this
+    codebase already uses (``conversation_sessions.metadata_json``'s
+    ``conversation_mvp.research_mission`` key - see
+    ``LLMConversationBrain._mission_for``, whose parsing this mirrors
+    exactly rather than duplicating a second mission representation
+    anywhere). It never copies a mission or candidate into a new session,
+    never creates a second ResearchMission, and never grants any write/
+    approval authority - callers get read-only ``ResearchMission`` objects,
+    the exact same ones ``adapter.mission_for`` would return if you already
+    knew the session_ref.
+
+    Bounded by ``limit`` (most-recently-updated sessions first) - never an
+    unbounded full-table materialization, matching this codebase's
+    existing ``list_conversations`` convention
+    (``gaon.runtime.conversation_lifecycle``)."""
+    rows = connection.execute(
+        "SELECT session_id, metadata_json FROM conversation_sessions ORDER BY updated_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    pending: list[tuple[str, ResearchMission]] = []
+    for session_id, metadata_json in rows:
+        try:
+            metadata = json.loads(metadata_json)
+        except (TypeError, ValueError):
+            continue
+        root = metadata.get("conversation_mvp") if isinstance(metadata, dict) else None
+        raw_mission = root.get("research_mission") if isinstance(root, dict) else None
+        if not isinstance(raw_mission, dict):
+            continue
+        try:
+            mission = ResearchMission.from_json(raw_mission)
+        except (KeyError, ValueError, TypeError):
+            continue
+        if mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
+            pending.append((str(session_id), mission))
+    return tuple(pending)
+
+
+def _handle_pending_approvals(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    """GET /gaon/research/pending-approvals - the canonical cross-session
+    approval-discovery query (see ``_list_pending_approval_missions``).
+    Requires no ``session_ref`` - the whole point is that a Web caller does
+    not need to already know which session (Telegram-originated or
+    Web-originated) a promotion-ready candidate came from. Returns exactly
+    the same ``_mission_payload``/``_candidate_payload`` shapes the
+    existing per-session endpoints already return - no new payload
+    contract, no new approval state, no mutation."""
+    pending = _list_pending_approval_missions(adapter._repository._connection)
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "pending_approvals": [
+            {
+                "session_ref": session_id,
+                "source": session_id.split(":", 1)[0] if ":" in session_id else session_id,
+                **_mission_payload(mission),
+                "candidates": [_candidate_payload(c) for c in candidate_records(mission)],
+            }
+            for session_id, mission in pending
+        ],
         "strategy_mutated": False,
         "order_executed": False,
         "champion_promoted": False,

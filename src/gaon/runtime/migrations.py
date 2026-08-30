@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 41
+SCHEMA_VERSION = 42
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -88,6 +88,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         38: _upgrade_v38_to_v39,
         39: _upgrade_v39_to_v40,
         40: _upgrade_v40_to_v41,
+        41: _upgrade_v41_to_v42,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1454,6 +1455,43 @@ def _upgrade_v40_to_v41(connection: sqlite3.Connection) -> None:
             ON research_evidence_mutation_decisions(session_ref, created_at);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_research_evidence_mutation_decisions_fingerprint
             ON research_evidence_mutation_decisions(session_ref, fingerprint);
+    """)
+
+
+def _upgrade_v41_to_v42(connection: sqlite3.Connection) -> None:
+    """Hotfix #169D-F: durable execution lineage linking a
+    ``BoundedHypothesisProposal`` (#169A, unmodified) back to the
+    ``ResearchDirection``/``DirectionEvidenceAcquisition`` (#169B)/
+    ``EvidenceMutationPolicyDecision`` (#169C) that authorized it, and
+    forward to the ``StrategyCandidateRecord`` (JSON-encoded inside
+    ``ResearchMission.candidates``, not a separate SQL table) #169E later
+    creates from it. Neither #169A's ``research_hypothesis_proposals`` nor
+    any existing table can represent this cross-reference without
+    modifying #169A's own schema - kept untouched per this hotfix's own
+    scope boundary. Single additive table, no existing table touched.
+    ``candidate_id`` starts NULL and is set exactly once, by #169E, when
+    (and only when) a candidate is actually created from this proposal -
+    it is never speculative. Written/read only by
+    ``gaon.research.bounded_hypothesis_generation`` and
+    ``gaon.research.proposal_candidate_bridge``."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS research_hypothesis_execution_lineage (
+            proposal_id TEXT PRIMARY KEY,
+            session_ref TEXT NOT NULL,
+            mission_id TEXT NOT NULL,
+            research_direction_id TEXT NOT NULL,
+            evidence_acquisition_id TEXT,
+            policy_decision_id TEXT NOT NULL,
+            candidate_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_hypothesis_execution_lineage_direction
+            ON research_hypothesis_execution_lineage(research_direction_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_research_hypothesis_execution_lineage_session
+            ON research_hypothesis_execution_lineage(session_ref, created_at);
+        CREATE INDEX IF NOT EXISTS idx_research_hypothesis_execution_lineage_candidate
+            ON research_hypothesis_execution_lineage(candidate_id);
     """)
 
 

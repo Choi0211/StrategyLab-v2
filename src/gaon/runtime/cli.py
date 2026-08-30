@@ -415,6 +415,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-bounded-hypothesis-proposal-release-check")
     sub.add_parser("gaon-production-candidate-independent-evidence-release-check")
     sub.add_parser("gaon-production-evidence-mutation-policy-release-check")
+    sub.add_parser("gaon-production-bounded-hypothesis-generation-release-check")
+    sub.add_parser("gaon-production-autonomous-candidate-validation-release-check")
+    sub.add_parser("gaon-production-evidence-grounded-hypothesis-completion-release-check")
     sub.add_parser("gaon-production-sqlite-lock-stability-release-check")
     sub.add_parser("gaon-production-morning-briefing-research-state-consistency-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
@@ -3344,6 +3347,97 @@ def _run(args: argparse.Namespace) -> int:
             f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
             f"production_applied={str(payload['production_applied']).lower()} "
             f"scheduler_wired={str(payload['scheduler_wired']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-bounded-hypothesis-generation-release-check":
+        from gaon.research.bounded_hypothesis_generation import production_bounded_hypothesis_generation_release_check
+
+        payload = production_bounded_hypothesis_generation_release_check()
+        print(
+            "gaon-production-bounded-hypothesis-generation-release-check: PASS "
+            f"policy_decision_required={str(payload['policy_decision_required']).lower()} "
+            f"deterministic_value_selection={str(payload['deterministic_value_selection']).lower()} "
+            f"historical_grid_only={str(payload['historical_grid_only']).lower()} "
+            f"single_dimension={str(payload['single_dimension']).lower()} "
+            f"increase_only={str(payload['increase_only']).lower()} "
+            f"protective_stop_autonomous={str(payload['protective_stop_autonomous']).lower()} "
+            f"channel_exit_cost_mapping={str(payload['channel_exit_cost_mapping']).lower()} "
+            f"risk_leverage_forbidden={str(payload['risk_leverage_forbidden']).lower()} "
+            f"raw_evidence_inert={str(payload['raw_evidence_inert']).lower()} "
+            f"rationale_inert={str(payload['rationale_inert']).lower()} "
+            f"proposal_durable={str(payload['proposal_durable']).lower()} "
+            f"proposal_idempotent={str(payload['proposal_idempotent']).lower()} "
+            f"schema_version={payload['schema_version']} "
+            f"candidate_created={str(payload['candidate_created']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"backtest_executed={str(payload['backtest_executed']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-autonomous-candidate-validation-release-check":
+        from gaon.research.proposal_candidate_bridge import production_autonomous_candidate_validation_release_check
+
+        payload = production_autonomous_candidate_validation_release_check()
+        print(
+            "gaon-production-autonomous-candidate-validation-release-check: PASS "
+            f"proposal_required={str(payload['proposal_required']).lower()} "
+            f"candidate_research_only={str(payload['candidate_research_only']).lower()} "
+            f"canonical_mutation_exact={str(payload['canonical_mutation_exact']).lower()} "
+            f"production_strategy_unchanged={str(payload['production_strategy_unchanged']).lower()} "
+            f"existing_validation_reused={str(payload['existing_validation_reused']).lower()} "
+            f"provider_failure_honest={str(payload['provider_failure_honest']).lower()} "
+            f"rejection_preserved={str(payload['rejection_preserved']).lower()} "
+            f"promotion_gate_reused={str(payload['promotion_gate_reused']).lower()} "
+            f"ready_for_approval_possible={str(payload['ready_for_approval_possible']).lower()} "
+            f"champion_auto_promoted={str(payload['champion_auto_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            f"production_applied={str(payload['production_applied']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-evidence-grounded-hypothesis-completion-release-check":
+        from gaon.runtime.autonomous_research_runtime import production_evidence_grounded_hypothesis_completion_release_check
+
+        payload = production_evidence_grounded_hypothesis_completion_release_check()
+        print(
+            "gaon-production-evidence-grounded-hypothesis-completion-release-check: PASS "
+            f"direction_reused={str(payload['direction_reused']).lower()} "
+            f"evidence_reused={str(payload['evidence_reused']).lower()} "
+            f"policy_reused={str(payload['policy_reused']).lower()} "
+            f"bounded_proposal_generated={str(payload['bounded_proposal_generated']).lower()} "
+            f"candidate_generated={str(payload['candidate_generated']).lower()} "
+            f"validation_reused={str(payload['validation_reused']).lower()} "
+            f"bounded_tick={str(payload['bounded_tick']).lower()} "
+            f"durable={str(payload['durable']).lower()} "
+            f"idempotent={str(payload['idempotent']).lower()} "
+            f"failed_candidate_research_can_continue={str(payload['failed_candidate_research_can_continue']).lower()} "
+            f"bounded_space_exhaustion_honest={str(payload['bounded_space_exhaustion_honest']).lower()} "
+            f"ready_for_approval_stop={str(payload['ready_for_approval_stop']).lower()} "
+            f"existing_web_approval_reused={str(payload['existing_web_approval_reused']).lower()} "
+            f"duplicate_approval_request={str(payload['duplicate_approval_request']).lower()} "
+            f"human_approval_required={str(payload['human_approval_required']).lower()} "
+            f"cross_session_approval_discovery={str(payload['cross_session_approval_discovery']).lower()} "
+            f"telegram_candidate_visible_on_web={str(payload['telegram_candidate_visible_on_web']).lower()} "
+            f"web_candidate_visible_on_web={str(payload['web_candidate_visible_on_web']).lower()} "
+            f"conversation_history_still_session_scoped={str(payload['conversation_history_still_session_scoped']).lower()} "
+            f"candidate_not_copied={str(payload['candidate_not_copied']).lower()} "
+            f"mission_not_copied={str(payload['mission_not_copied']).lower()} "
+            f"approval_authority_unchanged={str(payload['approval_authority_unchanged']).lower()} "
+            f"autonomous_approval={str(payload['autonomous_approval']).lower()} "
+            f"approved_not_applied={str(payload['approved_not_applied']).lower()} "
+            f"production_strategy_unchanged={str(payload['production_strategy_unchanged']).lower()} "
+            f"risk_limits_unchanged={str(payload['risk_limits_unchanged']).lower()} "
+            f"leverage_unchanged={str(payload['leverage_unchanged']).lower()} "
+            f"position_sizing_unchanged={str(payload['position_sizing_unchanged']).lower()} "
+            f"champion_auto_promoted={str(payload['champion_auto_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            f"production_applied={str(payload['production_applied']).lower()} "
+            f"live_order_executed={str(payload['live_order_executed']).lower()} "
+            f"schema_version={payload['schema_version']} "
             "safety=pass"
         )
 
