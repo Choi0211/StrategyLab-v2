@@ -414,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gaon-production-autonomous-research-direction-release-check")
     sub.add_parser("gaon-production-bounded-hypothesis-proposal-release-check")
     sub.add_parser("gaon-production-candidate-independent-evidence-release-check")
+    sub.add_parser("gaon-production-evidence-mutation-policy-release-check")
     sub.add_parser("gaon-production-sqlite-lock-stability-release-check")
     sub.add_parser("gaon-production-morning-briefing-research-state-consistency-release-check")
     sub.add_parser("gaon-production-persistent-research-mission-release-check")
@@ -3307,6 +3308,42 @@ def _run(args: argparse.Namespace) -> int:
             f"champion_promoted={str(payload['champion_promoted']).lower()} "
             f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
             f"production_applied={str(payload['production_applied']).lower()} "
+            "safety=pass"
+        )
+
+    elif args.command == "gaon-production-evidence-mutation-policy-release-check":
+        from gaon.research.evidence_mutation_policy import production_evidence_mutation_policy_release_check
+
+        payload = production_evidence_mutation_policy_release_check()
+        print(
+            "gaon-production-evidence-mutation-policy-release-check: PASS "
+            f"evidence_structured_only={str(payload['evidence_structured_only']).lower()} "
+            f"llm_used={str(payload['llm_used']).lower()} "
+            f"failure_class_alone_insufficient={str(payload['failure_class_alone_insufficient']).lower()} "
+            f"partial_real_evidence_research_eligible={str(payload['partial_real_evidence_research_eligible']).lower()} "
+            f"provider_missing_blocked={str(payload['provider_missing_blocked']).lower()} "
+            f"unsupported_failure_blocked={str(payload['unsupported_failure_blocked']).lower()} "
+            f"mutation_concept_bounded={str(payload['mutation_concept_bounded']).lower()} "
+            f"canonical_dimensions_only={str(payload['canonical_dimensions_only']).lower()} "
+            f"breakout_increase_only={str(payload['breakout_increase_only']).lower()} "
+            f"channel_exit_cost_mapping_rejected={str(payload['channel_exit_cost_mapping_rejected']).lower()} "
+            f"protective_stop_review_required={str(payload['protective_stop_review_required']).lower()} "
+            f"risk_leverage_forbidden={str(payload['risk_leverage_forbidden']).lower()} "
+            f"external_text_inert={str(payload['external_text_inert']).lower()} "
+            f"rationale_inert={str(payload['rationale_inert']).lower()} "
+            f"durable={str(payload['durable']).lower()} "
+            f"idempotent={str(payload['idempotent']).lower()} "
+            f"policy_versioned={str(payload['policy_versioned']).lower()} "
+            f"schema_version={payload['schema_version']} "
+            f"candidate_created={str(payload['candidate_created']).lower()} "
+            f"strategy_mutated={str(payload['strategy_mutated']).lower()} "
+            f"parameter_value_selected={str(payload['parameter_value_selected']).lower()} "
+            f"backtest_executed={str(payload['backtest_executed']).lower()} "
+            f"order_executed={str(payload['order_executed']).lower()} "
+            f"champion_promoted={str(payload['champion_promoted']).lower()} "
+            f"approval_bypassed={str(payload['approval_bypassed']).lower()} "
+            f"production_applied={str(payload['production_applied']).lower()} "
+            f"scheduler_wired={str(payload['scheduler_wired']).lower()} "
             "safety=pass"
         )
 

@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 40
+SCHEMA_VERSION = 41
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -87,6 +87,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         37: _upgrade_v37_to_v38,
         38: _upgrade_v38_to_v39,
         39: _upgrade_v39_to_v40,
+        40: _upgrade_v40_to_v41,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1412,6 +1413,47 @@ def _upgrade_v39_to_v40(connection: sqlite3.Connection) -> None:
             ON research_direction_evidence(session_ref, created_at);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_research_direction_evidence_fingerprint
             ON research_direction_evidence(session_ref, fingerprint);
+    """)
+
+
+def _upgrade_v40_to_v41(connection: sqlite3.Connection) -> None:
+    """Hotfix #169C: durable evidence-mutation-policy decisions - normalized
+    #169B evidence -> allowed mutation concept/policy. A row here never
+    selects a parameter VALUE, never creates a ``BoundedHypothesisProposal``
+    or ``StrategyCandidateRecord``, and never mutates strategy config -
+    written/read only by ``gaon.research.evidence_mutation_policy``. Single
+    additive aggregate table, no existing table touched. Uniqueness is
+    scoped to ``(session_ref, fingerprint)``, the same convention
+    ``research_hypothesis_proposals``/``research_direction_evidence``
+    already use."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS research_evidence_mutation_decisions (
+            decision_id TEXT PRIMARY KEY,
+            session_ref TEXT NOT NULL,
+            mission_id TEXT NOT NULL,
+            research_direction_id TEXT NOT NULL,
+            evidence_acquisition_id TEXT,
+            failure_analysis_id TEXT NOT NULL,
+            failure_class TEXT NOT NULL,
+            policy_version INTEGER NOT NULL,
+            mutation_concepts_json TEXT NOT NULL,
+            allowed_dimensions_json TEXT NOT NULL,
+            allowed_dimension_policies_json TEXT NOT NULL,
+            review_required_dimensions_json TEXT NOT NULL,
+            forbidden_dimensions_json TEXT NOT NULL,
+            evidence_state_json TEXT NOT NULL,
+            policy_status TEXT NOT NULL,
+            rationale_code TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_evidence_mutation_decisions_direction
+            ON research_evidence_mutation_decisions(research_direction_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_research_evidence_mutation_decisions_session
+            ON research_evidence_mutation_decisions(session_ref, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_research_evidence_mutation_decisions_fingerprint
+            ON research_evidence_mutation_decisions(session_ref, fingerprint);
     """)
 
 
