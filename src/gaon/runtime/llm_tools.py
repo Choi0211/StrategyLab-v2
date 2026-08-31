@@ -10,6 +10,8 @@ from typing import Callable
 from uuid import uuid4
 
 from gaon.runtime.assistant_provider import AssistantToolDefinition
+from gaon.runtime.llm_tool_routing import has_explicit_research_execution_intent
+from gaon.runtime.research_grounding import is_strict_real_research_tool
 from gaon.runtime.external_research import ExternalResearchTool, structured_data
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.knowledge.telegram_autonomous_learning import telegram_autonomous_learning_payload
@@ -174,11 +176,23 @@ class SafeToolExecutor:
         return self._registry.list()
 
     def assistant_tool_definitions(self, request_text: str = "") -> tuple[AssistantToolDefinition, ...]:
+        # Conversation-layer safety boundary (hotfix/conversation-layer-safe-
+        # web-parity): a provider that can call tools natively must not even
+        # SEE the 5 strict real-research execution tools
+        # (is_strict_real_research_tool) for a status/read/general message -
+        # otherwise the provider's own judgment, not a deterministic
+        # boundary, decides whether "삼성전자 연구 상태 알려줘" starts a real
+        # research run. Only offer them once the message itself carries an
+        # explicit execution verb (has_explicit_research_execution_intent) -
+        # mirrors the same gate _try_authoritative_research_tool/
+        # _try_deterministic_tool enforce for the deterministic routes.
+        execution_intent = has_explicit_research_execution_intent(request_text)
         return tuple(
             _assistant_tool_definition(definition)
             for definition in self._registry.list()
             if definition.risk_level is ToolRiskLevel.READ_ONLY
             and (not definition.fixture_gated or _fixture_gate_allows(definition.name, request_text))
+            and (not is_strict_real_research_tool(definition.name) or execution_intent)
         )
 
     def _append_audit(self, request: ToolRequest, result: ToolResult) -> None:

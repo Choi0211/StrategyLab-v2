@@ -867,6 +867,52 @@ def is_mission_candidate_read_request(text: str) -> bool:
     return "?" in text or _contains_any(normalized, _MISSION_CANDIDATE_READ_QUERY_TOKENS)
 
 
+# hotfix/conversation-layer-safe-web-parity: is_mission_candidate_read_request
+# above only recognizes a fixed set of candidate-identity subject phrases
+# ("활성후보", "단타전략", ...), so a generic progress question that names a
+# topic in ordinary words - "단타 연구는 잘되가고 있나요?", "삼성전자 연구
+# 상태 알려줘", "후보가 나왔어?", "검증 끝났어?" - does not satisfy it and
+# used to fall all the way through to either the GENERAL_CONVERSATION
+# feedback fallback or (worse, on the web transport, which had no mission-
+# aware layer at all) straight into route_read_only_tool's topic-only
+# matchers, which could execute a real research tool for what is honestly a
+# read-only status question. This predicate is a narrower, additive sibling
+# of is_mission_candidate_read_request: it requires a research-shaped
+# SUBJECT word ("연구"/"검증"/"후보"/"전략"/"결과"/"진행") AND a progress/
+# state word ("잘돼"/"진행"/"상태"/"끝났"/"나왔"/"있어"/...), and - like
+# is_mission_candidate_read_request - a "?" or one of the same
+# _MISSION_CANDIDATE_READ_QUERY_TOKENS. It defers to
+# is_generic_continuation_request the same way is_mission_candidate_read_
+# request does, so it never reclassifies an actual continuation request
+# ("계속 연구해주세요") as a read-only status question.
+_RESEARCH_PROGRESS_SUBJECT_TOKENS: tuple[str, ...] = ("연구", "검증", "후보", "전략", "결과", "진행")
+_RESEARCH_PROGRESS_STATE_TOKENS: tuple[str, ...] = (
+    "잘되", "잘돼", "어떻게", "어디까지", "얼마나",
+    "진행상황", "진행상태", "상태",
+    "끝났", "끝난", "됐어", "됐나", "완료",
+    "나왔", "나온", "있어", "있나",
+)
+
+
+def is_research_progress_status_question(text: str) -> bool:
+    """True for a generic, honestly-answerable research-progress status
+    question ("단타 연구는 잘되가고 있나요?", "삼성전자 연구 상태 알려줘",
+    "후보가 나왔어?", "검증 끝났어?") that names no specific candidate
+    identity - see the module note above. Never true for a bare topic noun
+    phrase ("단타 연구") or an explicit execution request, since both are
+    missing the progress/state word this predicate requires."""
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    if is_generic_continuation_request(text):
+        return False
+    if not _contains_any(normalized, _RESEARCH_PROGRESS_SUBJECT_TOKENS):
+        return False
+    if not _contains_any(normalized, _RESEARCH_PROGRESS_STATE_TOKENS):
+        return False
+    return "?" in text or _contains_any(normalized, _MISSION_CANDIDATE_READ_QUERY_TOKENS)
+
+
 def mission_candidate_read_focus(text: str) -> str:
     """Which canonical read-model rendering ``is_mission_candidate_read_
     request`` should use for this text: "score" (an explicit score/point

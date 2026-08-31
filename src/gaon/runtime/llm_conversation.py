@@ -55,7 +55,7 @@ from gaon.runtime.provider_registry import build_assistant_provider
 from gaon.runtime.research_grounding import contains_fixture_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, normalize_final_response, sanitize_research_tool_output, strict_real_research_grounding_violations
 from gaon.runtime.research_failures import classify_tool_failure, warning_for_failure
 from gaon.runtime.serialization import dumps_json, loads_json
-from gaon.runtime.llm_tool_routing import route_read_only_tool
+from gaon.runtime.llm_tool_routing import has_explicit_research_execution_intent, route_read_only_tool
 from gaon.research.global_market import extract_market_symbols, resolve_market_scope
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
 from gaon.knowledge.research_mission import (
@@ -75,6 +75,7 @@ from gaon.knowledge.research_mission import (
     is_diversity_request,
     is_generic_continuation_request,
     is_mission_candidate_read_request,
+    is_research_progress_status_question,
     is_stop_or_negation_request,
     is_provider_acquisition_blocker,
     mission_awaiting_approval_message,
@@ -829,6 +830,14 @@ class LLMConversationBrain:
         tool_name = route_read_only_tool(request.text)
         if tool_name is None or not is_strict_real_research_tool(tool_name):
             return None
+        # Conversation-layer safety boundary: route_read_only_tool matches on
+        # research TOPIC (a symbol, "전략", "연구"), not on an execution
+        # verb. A status/read question like "삼성전자 연구 상태 알려줘" would
+        # otherwise satisfy this same tool_name and run real research
+        # synchronously before any LLM/mission-aware reasoning ever sees the
+        # message. Only an explicit execution-intent message may proceed.
+        if not has_explicit_research_execution_intent(request.text):
+            return None
         arguments = _default_tool_arguments(tool_name, request.text)
         result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
@@ -884,7 +893,47 @@ class LLMConversationBrain:
             context = self._mvp_context_for(request.session_id)
             if context is not None:
                 route = ConversationalRoute(ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, route.symbols)
-        mission = extract_or_update_mission(request.text, existing=self._mission_for(request.session_id), now=request.received_at)
+        existing_mission = self._mission_for(request.session_id)
+        # hotfix/conversation-layer-safe-web-parity: extract_or_update_
+        # mission recognizes a research-shaped SUBJECT (e.g. "단타") and
+        # unconditionally returns/persists a brand-new ACTIVE
+        # ResearchMission for it - it does not itself distinguish a status
+        # QUESTION ("단타 연구는 잘되가고 있나요?") from an execution
+        # REQUEST. Without this guard, a pure read-only status question
+        # about a mission that does not exist yet would silently manufacture
+        # one (mission would no longer be None below, so the "no active
+        # Research Mission" read-model a few lines down could never fire),
+        # in direct violation of "새 ResearchMission 생성 금지" for a
+        # STATUS_READ message. Only short-circuit when there is truly no
+        # existing mission AND the message carries no explicit execution
+        # verb AND it is shaped like a status/read question - a real
+        # execution/continuation request still reaches extract_or_update_
+        # mission exactly as before.
+        # Deliberately checks only is_research_progress_status_question
+        # here, NOT is_mission_candidate_read_request: that function's
+        # explicit-read-only-marker branch (is_explicit_read_only_query)
+        # satisfies its subject requirement on its own, so a general,
+        # non-research status question tagged read-only by the web
+        # dashboard's read_only flag (e.g. "가온 상태 알려줘" + the web
+        # read-only marker) would otherwise be misrouted here as a
+        # RESEARCH mission status question. is_research_progress_status_
+        # question always requires an actual research-domain subject
+        # token, so it does not have this false-positive.
+        if (
+            existing_mission is None
+            and not has_explicit_research_execution_intent(request.text)
+            and is_research_progress_status_question(request.text)
+        ):
+            return (
+                "영하님, 현재 진행 중인 Research Mission이 없습니다. 연구를 시작하시려면 "
+                "원하시는 종목이나 전략, 시장 범위를 말씀해 주세요.",
+                "conversation_research_status_no_mission",
+                _dedupe((*warnings, "no active research mission; zero research tool calls")),
+                references,
+                "deterministic",
+                (),
+            )
+        mission = extract_or_update_mission(request.text, existing=existing_mission, now=request.received_at)
         if mission is not None:
             self._remember_mission(request, mission)
 
@@ -1283,7 +1332,9 @@ class LLMConversationBrain:
                 and context is not None
             ):
                 return None
-        if route.intent in {ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS, ConversationalMVPIntent.COMPARE_SYMBOLS} and not _is_simple_conversational_research_request(request.text):
+        if route.intent in {ConversationalMVPIntent.SINGLE_SYMBOL_ANALYSIS, ConversationalMVPIntent.COMPARE_SYMBOLS} and not (
+            _is_simple_conversational_research_request(request.text) and has_explicit_research_execution_intent(request.text)
+        ):
             return None
         if route.intent is ConversationalMVPIntent.GREETING:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_greeting")
@@ -1333,6 +1384,22 @@ class LLMConversationBrain:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_status")
             return render_status(), "conversation_mvp_status", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.GENERAL_CONVERSATION:
+            # hotfix/conversation-layer-safe-web-parity: render_general_
+            # conversation()'s feedback-style apology ("말씀해 주신 불편을
+            # 확인했습니다...") is the right honest answer for genuinely
+            # uninterpretable input ("맨날 없네요") but the wrong one for an
+            # ambiguous research-topic noun phrase ("단타 연구") that merely
+            # lacks a clear question/verb shape - that deserves a real,
+            # contextual answer (which the recent-history-aware LLM path
+            # below can give), not a canned complaint-handling response.
+            # Only defer when a real LLM is actually available
+            # (assistant_enabled) so a degraded/deterministic-only config
+            # keeps today's honest, non-fabricating apology text instead of
+            # silently going quiet.
+            if self._config.assistant_enabled and (
+                route.symbols or any(token in request.text.casefold() for token in _AMBIGUOUS_RESEARCH_TOPIC_TOKENS)
+            ):
+                return None
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_general")
             return (
                 render_general_conversation(),
@@ -2916,6 +2983,14 @@ class LLMConversationBrain:
         tool_name = route_read_only_tool(request.text)
         if tool_name is None:
             return None
+        # Same conversation-layer safety boundary as
+        # _try_authoritative_research_tool - this fallback path is also
+        # reached with a real (non-"deterministic") assistant_provider on a
+        # provider timeout/error (see _generate's ProviderError handler), so
+        # it must not let a status/read-shaped message that merely mentions
+        # a strict real-research tool's topic execute that tool.
+        if is_strict_real_research_tool(tool_name) and not has_explicit_research_execution_intent(request.text):
+            return None
         arguments = _default_tool_arguments(tool_name, request.text)
         result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
@@ -3152,6 +3227,11 @@ def _requires_manual_boundary(text: str) -> bool:
     return any(token in normalized for token in blocked)
 
 
+# hotfix/conversation-layer-safe-web-parity: see the GENERAL_CONVERSATION
+# branch of _try_conversational_mvp above.
+_AMBIGUOUS_RESEARCH_TOPIC_TOKENS: tuple[str, ...] = ("연구", "전략", "후보", "검증", "단타", "스윙", "중장기")
+
+
 def _is_autonomous_learning_boundary_request(text: str) -> bool:
     normalized = text.casefold()
     if any(token in normalized for token in ("매수", "매도", "주문", "buy", "sell", "order", "broker", "kis", "shell", "powershell", "cmd", "sql", "secret")):
@@ -3165,9 +3245,41 @@ def _safe_boundary_negation(value: str) -> bool:
     return any(term in value for term in safety_terms) and any(term in value for term in negation_terms)
 
 
+_WEB_READ_ONLY_PROBE_MARKER_SUFFIX = " readonly"
+
+
 def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
+    # hotfix/conversation-layer-safe-web-parity: a real Web Dashboard human
+    # message (GaonWebChatAdapter.handle always stamps source="web" and a
+    # "web:"-prefixed message_id, mirroring Telegram's own "telegram:"
+    # prefix) is now admitted to the same conversational-MVP pipeline
+    # Telegram uses, so Web gets the same mission-aware STATUS/READ,
+    # availability, and multi-turn ConversationalMVPContext follow-up
+    # handling Telegram already has - transport should only change how a
+    # message arrives, not which conversation brain answers it. This is
+    # deliberately NOT done in isolation: _try_authoritative_research_tool,
+    # _try_deterministic_tool, and assistant_tool_definitions were first
+    # gated behind has_explicit_research_execution_intent so that widening
+    # this predicate cannot, by itself, let a Web status/read question reach
+    # a real research-execution tool it could not reach before.
+    #
+    # A web read_only=True diagnostic probe (GaonWebChatAdapter.handle
+    # appends its own _READ_ONLY_TEXT_MARKER, "readonly", as a text suffix -
+    # never sent by real dashboard chat traffic, which always defaults
+    # read_only=False) is deliberately excluded here: that literal suffix is
+    # ALSO one of research_mission._READ_ONLY_INTENT_TOKENS
+    # (is_explicit_read_only_query), a marker designed for Telegram natural
+    # language ("실행하지 말고 read-only로 알려주세요"), not for a bare
+    # runtime-status probe. Admitting it would let an unrelated status ping
+    # get reinterpreted as a research-mission read-only question. A
+    # read_only probe is meant to stay a side-effect-free diagnostic ping
+    # through the pre-existing deterministic-tool path, not gain
+    # ConversationalMVPContext state.
+    if request.source == "web" and request.text.casefold().endswith(_WEB_READ_ONLY_PROBE_MARKER_SUFFIX):
+        return False
     return (
         (request.source == "telegram" and str(request.message_id or "").startswith("telegram:"))
+        or (request.source == "web" and str(request.message_id or "").startswith("web:"))
         or request.session_id.startswith("gaon-conversation-release-check:")
         or request.session_id.startswith("gaon-conversation-context-release-check:")
         or request.session_id.startswith("gaon-conversational-reasoning-release-check:")
