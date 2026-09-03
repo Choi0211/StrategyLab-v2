@@ -70,6 +70,7 @@ from gaon.knowledge.research_mission import (
     extract_or_update_mission,
     get_active_candidate,
     get_candidate,
+    is_best_candidate_query,
     is_candidate_robustness_continuation_request,
     is_cycle_budget_exhausted,
     is_diversity_request,
@@ -86,6 +87,7 @@ from gaon.knowledge.research_mission import (
     mission_status_block,
     render_candidate_score_status,
     render_mission_candidate_detailed_status,
+    render_mission_candidates_overview,
     next_candidate_sequence,
     next_unexplored_symbols,
     record_blocked,
@@ -1240,6 +1242,35 @@ class LLMConversationBrain:
                 f"{mission_status_block(mission)}",
                 "conversation_mission_no_active_candidate",
                 _dedupe((*warnings, "mission has no active candidate yet; read-only; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
+
+        # hotfix/conversation-layer-safe-web-parity CASE C: "그중 제일 좋은
+        # 건 뭐야?" asks Gaon to compare the mission's WHOLE candidate
+        # portfolio - a different question from is_mission_candidate_read_
+        # request above, which only ever answers about the single CURRENT/
+        # ACTIVE candidate. See is_best_candidate_query/render_mission_
+        # candidates_overview in research_mission.py: this never fabricates
+        # a performance ranking, only reports each candidate's real
+        # persisted stage/evidence.
+        if mission is None and is_best_candidate_query(request.text):
+            return (
+                "영하님, 현재 진행 중인 Research Mission이 없습니다. 연구를 시작하시려면 "
+                "원하시는 종목이나 전략, 시장 범위를 말씀해 주세요.",
+                "conversation_research_status_no_mission",
+                _dedupe((*warnings, "no active research mission; zero research tool calls")),
+                references,
+                "deterministic",
+                (),
+            )
+        if mission is not None and is_best_candidate_query(request.text):
+            self._remember_mission(request, mission)
+            return (
+                render_mission_candidates_overview(mission),
+                "conversation_mission_candidates_overview",
+                _dedupe((*warnings, "read-only candidate comparison; no fabricated ranking; no research tool executed")),
                 references,
                 "deterministic",
                 (),

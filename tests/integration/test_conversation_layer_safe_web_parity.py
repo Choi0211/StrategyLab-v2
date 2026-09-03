@@ -42,7 +42,10 @@ import unittest
 
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import parse_update_result
+from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+from gaon.knowledge.strategy_candidate import new_candidate
 from gaon.runtime.config import GaonRuntimeConfig
+from gaon.runtime.llm_conversation import LLMConversationRequest
 from gaon.runtime.llm_tool_routing import has_explicit_research_execution_intent, route_read_only_tool
 from gaon.runtime.research_grounding import is_strict_real_research_tool
 from gaon.runtime.storage import RuntimeStateStore
@@ -91,6 +94,46 @@ def _telegram_send(store: RuntimeStateStore, text: str, *, chat_id: int = 100, c
 
 def _strict_tool_call_counts(store: RuntimeStateStore) -> dict[str, int]:
     return {name: len(store.tool_audit.list(tool_name=name)) for name in _STRICT_TOOLS}
+
+
+def _seeded_two_candidate_mission():
+    """Builds a real, already-persisted-shaped ResearchMission with two
+    distinct strategy candidates (not fabricated by the test turn under
+    assertion) - the fixture CASE C's "그중 제일 좋은 건 뭐야?" resolves
+    against."""
+    mission = extract_or_update_mission("국내 주식 전체를 대상으로 단타 전략을 연구해주세요", existing=None, now=NOW)
+    c1 = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=NOW)
+    mission = add_candidate(mission, c1, now=NOW)
+    c2 = new_candidate("breakout_trend_confirmed", sequence=next_candidate_sequence(mission), now=NOW)
+    mission = add_candidate(mission, c2, now=NOW)
+    return mission, c1, c2
+
+
+def _seed_web_mission(store: RuntimeStateStore, mission, *, session_ref: str, config: GaonRuntimeConfig | None = None) -> None:
+    # _remember_mission only updates an EXISTING session row (see
+    # LLMConversationBrain._remember_mission) - a harmless real turn must
+    # create the session first, exactly like
+    # TelegramConversationAgentTests._hotfix167_seed_mission does for
+    # Telegram below.
+    adapter = GaonWebChatAdapter(config or _config(), store._connection)
+    adapter.handle(message="안녕하세요", session_ref=session_ref, user_ref="web-u1", read_only=False, received_at=NOW)
+    adapter._brain._remember_mission(
+        LLMConversationRequest(session_id=f"web:{session_ref}", user_ref="web-u1", source="web", text="x", received_at=NOW),
+        mission,
+    )
+
+
+def _seed_telegram_mission(store: RuntimeStateStore, mission, *, chat_id: int = 100, config: GaonRuntimeConfig | None = None) -> None:
+    agent = TelegramConversationAgent(config or _config(), store._connection)
+    runtime = TelegramRuntime(agent, allowed_chat_ids=(str(chat_id),))
+    # update_id 0, distinct from _telegram_send's hardcoded update_id 1, so
+    # the seed turn's message_id never collides with the turn under test.
+    client = _FakeTelegramClient((_telegram_update(0, "안녕하세요", chat_id=chat_id),))
+    process_update(parse_update_result(client.updates[0], received_at=NOW), runtime, client)
+    agent._brain._remember_mission(
+        LLMConversationRequest(session_id=f"telegram:{chat_id}", user_ref="telegram-user:200", source="telegram", text="x", received_at=NOW),
+        mission,
+    )
 
 
 class StatusReadMustNotExecuteTests(unittest.TestCase):
@@ -321,6 +364,78 @@ class MultiTurnSubjectResolutionTests(unittest.TestCase):
             # separately (see the PR report's known-gap note) - what this
             # hotfix guarantees is that turn 1 itself never executed.
             self.assertEqual(turn1["route"], "conversation_research_status_no_mission")
+        finally:
+            store.close()
+
+
+class MissionCandidateComparisonTests(unittest.TestCase):
+    """CASE C (task spec section 21): "그중 제일 좋은 건 뭐야?" must resolve
+    "그중" against the mission's real, already-persisted candidate
+    portfolio - not fall through to the generic help/complaint fallback,
+    and never fabricate a performance-based "best" ranking (see
+    is_best_candidate_query / render_mission_candidates_overview in
+    research_mission.py). The mission+candidates here simulate what a
+    prior turn's real research would have produced; this test only proves
+    the FOLLOW-UP question resolves against it correctly on both
+    transports."""
+
+    def test_web_resolves_the_candidate_set_without_fabricating_a_best(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(store, mission, session_ref="cc1")
+            payload = _web_send(store, "그중 제일 좋은 건 뭐야?", session_ref="cc1")
+            self.assertEqual(payload["route"], "conversation_mission_candidates_overview")
+            self.assertIn(c1.candidate_id, payload["text"])
+            self.assertIn(c2.candidate_id, payload["text"])
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+            self.assertEqual(payload["tool_calls"], [])
+            self.assertFalse(payload["strategy_mutated"])
+        finally:
+            store.close()
+
+    def test_telegram_resolves_the_candidate_set_without_fabricating_a_best(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_telegram_mission(store, mission)
+            reply = _telegram_send(store, "그중 제일 좋은 건 뭐야?")
+            self.assertIn(c1.candidate_id, reply)
+            self.assertIn(c2.candidate_id, reply)
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_web_and_telegram_reach_the_same_candidate_set_for_the_same_followup(self) -> None:
+        web_store = RuntimeStateStore(":memory:")
+        telegram_store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(web_store, mission, session_ref="cc2")
+            _seed_telegram_mission(telegram_store, mission)
+            web_payload = _web_send(web_store, "그중 제일 좋은 건 뭐야?", session_ref="cc2")
+            telegram_reply = _telegram_send(telegram_store, "그중 제일 좋은 건 뭐야?")
+            for text_out in (web_payload["text"], telegram_reply):
+                self.assertIn(c1.candidate_id, text_out)
+                self.assertIn(c2.candidate_id, text_out)
+                # Neither transport asserts a fabricated performance
+                # ranking - both must carry the honest "cannot declare a
+                # best" disclaimer (same precedent as render_candidate_
+                # score_status's score_status=insufficient_evidence).
+                self.assertIn("가장 좋다", text_out)
+        finally:
+            web_store.close()
+            telegram_store.close()
+
+    def test_no_active_mission_still_gives_the_honest_no_mission_read_model(self) -> None:
+        # Without any prior research, "그중" has nothing to resolve against
+        # - this must give the same honest "no active mission" answer CASE
+        # A/B already guarantee, never a fabricated candidate list.
+        store = RuntimeStateStore(":memory:")
+        try:
+            payload = _web_send(store, "그중 제일 좋은 건 뭐야?")
+            self.assertEqual(payload["route"], "conversation_research_status_no_mission")
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
         finally:
             store.close()
 
