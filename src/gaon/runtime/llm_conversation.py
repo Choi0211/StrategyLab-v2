@@ -1670,16 +1670,33 @@ class LLMConversationBrain:
             return None
         kind = subject.get("kind")
         if kind == "candidates_overview":
+            # fix/conversation-unselected-candidate-followup production bug
+            # fix: the previous turn (CASE C, is_best_candidate_query)
+            # explicitly declined to pick a "best" candidate - it never
+            # selected any ONE candidate "그게" could refer to. Repeating
+            # the full render_mission_candidates_overview() table here
+            # answered a DIFFERENT question ("what are all my candidates
+            # again") than the one actually asked ("why is THAT one
+            # good") and read as verbose, evasive UX even though the
+            # underlying safety/subject-resolution was already correct
+            # (no fabricated ranking, no stale/unrelated candidate, zero
+            # tool calls). The honest, natural answer is simply that there
+            # is no single selected candidate for "그게" to name - and an
+            # invitation to name one, which then resolves through the
+            # EXACT SAME "kind == candidate" branch below on the next turn
+            # via is_mission_candidate_read_request's own candidate-id
+            # extraction (extract_candidate_id) - no new keyword handling
+            # needed here.
             self._remember_mission(request, mission)
             text = (
-                "영하님, 아직 후보들을 성능으로 서열화할 신뢰할 수 있는 deterministic 기준이 없어 "
-                "특정 후보가 다른 후보보다 '더 좋다'고 단정해서 설명드릴 수는 없습니다.\n\n"
-                + render_mission_candidates_overview(mission)
+                "영하님, 제가 특정 후보를 '가장 좋다'고 선택한 것은 아니어서, 지금 '그게'가 가리키는 "
+                "하나의 후보는 없습니다. 궁금하신 후보 ID나 이름을 말씀해 주시면 그 후보가 왜 그런 "
+                "상태인지 바로 설명해 드리겠습니다."
             )
             return (
                 text,
                 "conversation_mission_subject_explanation",
-                _dedupe((*warnings, "mission candidate subject continuity; no fabricated ranking; no research tool executed")),
+                _dedupe((*warnings, "no candidate was selected; declined to fabricate a selection; no research tool executed")),
                 references,
                 "deterministic",
                 (),
