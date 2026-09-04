@@ -85,8 +85,12 @@ def _web_send(store: RuntimeStateStore, text: str, *, session_ref: str = "w1", c
     return adapter.handle(message=text, session_ref=session_ref, user_ref="web-u1", read_only=False, received_at=received_at)
 
 
-def _telegram_send(store: RuntimeStateStore, text: str, *, chat_id: int = 100, config: GaonRuntimeConfig | None = None, received_at: str = NOW) -> str:
-    client = _FakeTelegramClient((_telegram_update(1, text, chat_id=chat_id),))
+def _telegram_send(store: RuntimeStateStore, text: str, *, chat_id: int = 100, config: GaonRuntimeConfig | None = None, received_at: str = NOW, update_id: int = 1) -> str:
+    # update_id must be unique per (chat_id, store) across a test's calls -
+    # conversation_messages.message_id is derived from it, so a second
+    # sequential turn on the SAME chat_id/store needs its own update_id
+    # (see _seed_telegram_mission's update_id=0 for the same reason).
+    client = _FakeTelegramClient((_telegram_update(update_id, text, chat_id=chat_id),))
     runtime = TelegramRuntime(TelegramConversationAgent(config or _config(), store._connection), allowed_chat_ids=(str(chat_id),))
     process_update(parse_update_result(client.updates[0], received_at=received_at), runtime, client)
     return client.sent[-1][1]
@@ -436,6 +440,162 @@ class MissionCandidateComparisonTests(unittest.TestCase):
             payload = _web_send(store, "그중 제일 좋은 건 뭐야?")
             self.assertEqual(payload["route"], "conversation_research_status_no_mission")
             self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+
+class SubjectIntentContinuityTests(unittest.TestCase):
+    """hotfix/conversation-layer-subject-intent-continuity regression
+    coverage for the production multi-turn defect this branch fixes:
+
+    Turn 4 "그중 제일 졸은 건 뭐야?" (a one-character typo of "좋은") used
+    to fall through every mission-aware branch straight to the generic
+    GENERAL_CONVERSATION complaint-handling fallback, because
+    is_best_candidate_query required an EXACT superlative token match.
+
+    Turn 5 "왜 그게 좋은데?", asked immediately after, then answered from
+    the stale, unrelated ConversationalMVPContext (a single-slot cache of
+    the last real TOOL result, entirely decoupled from the mission's own
+    candidate portfolio) instead of the mission/candidate subject the
+    conversation had actually just been discussing - reading exactly like
+    Gaon had spontaneously re-run research on an unrelated symbol, while
+    executing zero new tool calls.
+
+    Case 5 "그거 다시 연구해줘" (an execution request naming no concrete
+    subject, only a bare backward-reference pronoun) must only ever
+    proceed once a real subject is resolved (the mission's own active
+    candidate); with nothing to resolve against, it must ask for
+    clarification rather than silently default to an unrelated
+    hardcoded/placeholder symbol.
+    """
+
+    def test_web_typo_best_candidate_query_still_resolves_the_candidate_set(self) -> None:
+        # Case 3.
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(store, mission, session_ref="typo1")
+            payload = _web_send(store, "그중 제일 졸은 건 뭐야?", session_ref="typo1")
+            self.assertEqual(payload["route"], "conversation_mission_candidates_overview")
+            self.assertIn(c1.candidate_id, payload["text"])
+            self.assertIn(c2.candidate_id, payload["text"])
+            self.assertNotIn("말씀해 주신 불편을 확인했습니다", payload["text"])
+            self.assertEqual(payload["tool_calls"], [])
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_telegram_typo_best_candidate_query_never_executes_research(self) -> None:
+        # Case 3 + Case 6 (Web/Telegram parity for the typo-tolerant path).
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_telegram_mission(store, mission)
+            reply = _telegram_send(store, "그중 제일 졸은 건 뭐야?")
+            self.assertIn(c1.candidate_id, reply)
+            self.assertIn(c2.candidate_id, reply)
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_web_explain_followup_after_candidate_overview_uses_the_correct_subject_with_zero_tool_calls(self) -> None:
+        # Case 4 - the exact reported CRITICAL defect.
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(store, mission, session_ref="exp1")
+            _web_send(store, "그중 제일 좋은 건 뭐야?", session_ref="exp1")
+            payload = _web_send(store, "왜 그게 좋은데?", session_ref="exp1")
+            self.assertEqual(payload["route"], "conversation_mission_subject_explanation")
+            self.assertIn(c1.candidate_id, payload["text"])
+            self.assertIn(c2.candidate_id, payload["text"])
+            self.assertEqual(payload["tool_calls"], [])
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+            self.assertFalse(payload["strategy_mutated"])
+        finally:
+            store.close()
+
+    def test_telegram_explain_followup_after_candidate_overview_uses_the_correct_subject_with_zero_tool_calls(self) -> None:
+        # Case 4 + Case 6 (Web/Telegram parity).
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_telegram_mission(store, mission)
+            _telegram_send(store, "그중 제일 좋은 건 뭐야?", update_id=1)
+            reply = _telegram_send(store, "왜 그게 좋은데?", update_id=2)
+            self.assertIn(c1.candidate_id, reply)
+            self.assertIn(c2.candidate_id, reply)
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_explain_followup_chained_after_the_typo_overview_still_uses_the_correct_subject(self) -> None:
+        # Chains Case 3 -> Case 4 exactly as reported in production.
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, _c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(store, mission, session_ref="exp2")
+            _web_send(store, "그중 제일 졸은 건 뭐야?", session_ref="exp2")
+            payload = _web_send(store, "왜 그게 좋은데?", session_ref="exp2")
+            self.assertEqual(payload["route"], "conversation_mission_subject_explanation")
+            self.assertIn(c1.candidate_id, payload["text"])
+            self.assertEqual(payload["tool_calls"], [])
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_explain_followup_without_any_prior_subject_never_executes(self) -> None:
+        # No mission, no prior candidate read - "왜 그게 좋은데?" in
+        # isolation must stay a safe, non-executing response.
+        store = RuntimeStateStore(":memory:")
+        try:
+            payload = _web_send(store, "왜 그게 좋은데?")
+            self.assertEqual(payload["tool_calls"], [])
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_omitted_subject_rerun_request_resolves_the_mission_active_candidate(self) -> None:
+        # Case 5 (success path): "그거 다시 연구해줘" with a mission that has
+        # a real active candidate resolves and continues THAT candidate -
+        # never a hardcoded default symbol - instead of asking for
+        # clarification.
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, _c1, _c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(store, mission, session_ref="rerun1")
+            payload = _web_send(store, "그거 다시 연구해줘", session_ref="rerun1")
+            self.assertNotEqual(payload["route"], "conversation_research_subject_unresolved")
+        finally:
+            store.close()
+
+    def test_web_omitted_subject_rerun_request_without_any_mission_asks_for_clarification(self) -> None:
+        # Case 5 (fail-closed path).
+        store = RuntimeStateStore(":memory:")
+        try:
+            payload = _web_send(store, "그거 다시 연구해줘")
+            self.assertEqual(payload["route"], "conversation_research_subject_unresolved")
+            self.assertEqual(payload["tool_calls"], [])
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_telegram_omitted_subject_rerun_request_without_any_mission_never_executes(self) -> None:
+        # Case 5 + Case 6 (Web/Telegram parity for the fail-closed path).
+        store = RuntimeStateStore(":memory:")
+        try:
+            _telegram_send(store, "그거 다시 연구해줘")
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_explicit_symbol_rerun_request_is_unaffected_by_the_omitted_subject_guard(self) -> None:
+        # The omitted-subject guard must never block a request that already
+        # names a real, explicit subject.
+        store = RuntimeStateStore(":memory:")
+        try:
+            payload = _web_send(store, "삼성전자 전략을 처음부터 다시 연구해줘.")
+            self.assertEqual(payload["tool_calls"], ["autonomous_learning_research"])
         finally:
             store.close()
 
