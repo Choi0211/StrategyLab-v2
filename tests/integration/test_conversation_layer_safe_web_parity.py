@@ -444,6 +444,117 @@ class MissionCandidateComparisonTests(unittest.TestCase):
             store.close()
 
 
+class ExistingMissionStatusReadTests(unittest.TestCase):
+    """hotfix/conversation-layer-existing-mission-status-read regression
+    coverage for the production defect this branch fixes: with a real,
+    already-persisted active Research Mission, a plain research-progress
+    status QUESTION ("단타 연구는 잘되가고 있나요?" and its natural
+    variants) was classified as GENERAL_CONVERSATION and, because it also
+    names an ambiguous research-topic word ("단타"/"연구"), fell into that
+    branch's "defer to the raw LLM/provider" carve-out - which has no
+    access to the persisted mission/candidate state at all and answered
+    from its own guesswork ("백테스트 데이터가 존재하지 않습니다...").
+
+    is_research_progress_status_question was, before this fix, only ever
+    wired to the "no active mission yet" short-circuit - there was no
+    sibling branch for "a mission DOES exist, answer from its real
+    persisted state" unless the message also happened to satisfy the
+    narrower, identity-focused is_mission_candidate_read_request (which a
+    plain "단타 연구는 잘되가고 있나요?" does not)."""
+
+    MESSAGES = (
+        "단타 연구는 잘되가고 있나요?",
+        "단타 연구 잘되고 있어?",
+        "단타 연구 진행 상황 알려줘",
+        "단타 연구 어떻게 되고 있어?",
+    )
+
+    def test_web_existing_mission_status_questions_read_the_real_persisted_state(self) -> None:
+        for text in self.MESSAGES:
+            with self.subTest(text=text):
+                store = RuntimeStateStore(":memory:")
+                try:
+                    mission, c1, c2 = _seeded_two_candidate_mission()
+                    _seed_web_mission(store, mission, session_ref="ems1")
+                    payload = _web_send(store, text, session_ref="ems1")
+                    self.assertEqual(payload["route"], "conversation_mission_status_read")
+                    self.assertIn(c1.candidate_id, payload["text"])
+                    self.assertIn(c2.candidate_id, payload["text"])
+                    # Never the generic "no backtest data / give me a result
+                    # ID" guesswork the raw provider produced in production
+                    # with no persisted mission context at all.
+                    for forbidden in ("백테스트 데이터가 현재 존재하지 않습니다", "결과 ID", "result ID", "말씀해 주신 불편을 확인했습니다"):
+                        self.assertNotIn(forbidden, payload["text"])
+                    self.assertEqual(payload["tool_calls"], [])
+                    self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+                    self.assertFalse(payload["strategy_mutated"])
+                finally:
+                    store.close()
+
+    def test_telegram_existing_mission_status_questions_read_the_real_persisted_state(self) -> None:
+        for text in self.MESSAGES[:2]:
+            with self.subTest(text=text):
+                store = RuntimeStateStore(":memory:")
+                try:
+                    mission, c1, c2 = _seeded_two_candidate_mission()
+                    _seed_telegram_mission(store, mission)
+                    reply = _telegram_send(store, text)
+                    self.assertIn(c1.candidate_id, reply)
+                    self.assertIn(c2.candidate_id, reply)
+                    for forbidden in ("백테스트 데이터가 현재 존재하지 않습니다", "결과 ID", "result ID", "말씀해 주신 불편을 확인했습니다"):
+                        self.assertNotIn(forbidden, reply)
+                    self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+                finally:
+                    store.close()
+
+    def test_web_and_telegram_reach_the_same_mission_status_read_for_the_same_question(self) -> None:
+        text = "단타 연구는 잘되가고 있나요?"
+        web_store = RuntimeStateStore(":memory:")
+        telegram_store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(web_store, mission, session_ref="ems2")
+            _seed_telegram_mission(telegram_store, mission)
+            web_payload = _web_send(web_store, text, session_ref="ems2")
+            telegram_reply = _telegram_send(telegram_store, text)
+            self.assertEqual(web_payload["route"], "conversation_mission_status_read")
+            for text_out in (web_payload["text"], telegram_reply):
+                self.assertIn(c1.candidate_id, text_out)
+                self.assertIn(c2.candidate_id, text_out)
+        finally:
+            web_store.close()
+            telegram_store.close()
+
+    def test_no_active_mission_still_gives_the_honest_no_mission_read_model(self) -> None:
+        # Regression guard: without a real mission, PR #175's original
+        # "no active Research Mission" behavior must be unchanged - no new
+        # mission is manufactured, no research is executed.
+        for text in self.MESSAGES:
+            with self.subTest(text=text):
+                store = RuntimeStateStore(":memory:")
+                try:
+                    payload = _web_send(store, text)
+                    self.assertEqual(payload["route"], "conversation_research_status_no_mission")
+                    self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+                    self.assertFalse(payload["strategy_mutated"])
+                finally:
+                    store.close()
+
+    def test_explicit_execution_request_is_not_intercepted_by_the_new_status_read_branch(self) -> None:
+        # Case D: "단타 연구를 다시 실행해줘" carries an explicit execution
+        # verb (has_explicit_research_execution_intent) and must keep
+        # reaching its own existing execution-intent path, never the new
+        # read-only status branch this hotfix adds.
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, _c1, _c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(store, mission, session_ref="ems3")
+            payload = _web_send(store, "단타 연구를 다시 실행해줘", session_ref="ems3")
+            self.assertNotEqual(payload["route"], "conversation_mission_status_read")
+        finally:
+            store.close()
+
+
 class SubjectIntentContinuityTests(unittest.TestCase):
     """hotfix/conversation-layer-subject-intent-continuity regression
     coverage for the production multi-turn defect this branch fixes:
