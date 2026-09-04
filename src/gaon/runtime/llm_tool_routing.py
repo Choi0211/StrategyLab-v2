@@ -6,6 +6,64 @@ import re
 
 from gaon.research.global_market import is_market_research_request, is_market_universe_request, resolve_market_scope
 
+# Conversation-layer safety boundary (hotfix/conversation-layer-safe-web-parity):
+# route_read_only_tool()'s per-tool matchers below (e.g. _krx_real_research,
+# _autonomous_learning_research_explicit) were built to recognize a research
+# TOPIC (a symbol name, "전략", "연구", "검증"), not to require an actual
+# imperative action verb. That is correct for status/read-shaped tools, but
+# several of the topic matchers also route to the 5 tools real_research
+# execution tools name in ``gaon.runtime.research_grounding.
+# is_strict_real_research_tool`` - which ``LLMConversationBrain.
+# _try_authoritative_research_tool`` executes synchronously, before any LLM
+# reasoning, regardless of request.source. A read-only status question that
+# merely mentions a symbol and the word "연구" (e.g. "삼성전자 연구 상태
+# 알려줘") already satisfies ``_krx_real_research``'s topic matcher with no
+# verb requirement at all, so it was silently executing a real research
+# pipeline instead of answering the status question. This predicate is the
+# second, independent gate callers MUST require before treating a
+# ``route_read_only_tool`` match as ELIGIBLE TO EXECUTE one of the 5 strict
+# real-research tools (it is not required for the other, inherently
+# read-only tools such as ``runtime_status``/``champion_status``). It
+# requires an explicit Korean imperative action-verb ending attached to
+# "연구"/"검증"/"백테스트"/"테스트"/"실행"/"돌려" - a bare topic mention,
+# a status question ("~잘되고 있나요", "~상태 알려줘", "~끝났어?"), or an
+# ambiguous noun phrase ("단타", "단타 연구", "삼성전자") never matches.
+_RESEARCH_EXECUTION_INTENT_TOKENS: tuple[str, ...] = (
+    "연구해줘", "연구해주세요", "연구해줄래", "연구해봐", "연구를시작",
+    "검증해줘", "검증해주세요", "검증해줄래", "검증해봐",
+    "재검증해", "다시검증해",
+    "백테스트해줘", "백테스트해주세요", "백테스트해봐",
+    "테스트해줘", "테스트해주세요", "테스트해봐",
+    "재실행해", "재실행줘", "다시실행해",
+    "실행해줘", "실행해주세요",
+    "돌려줘", "돌려주세요", "돌려봐",
+    # Same "-해줘"/"-해주세요"/"-해봐" imperative family, for the other
+    # verbs already used by route_read_only_tool's own action-token lists
+    # (_multi_symbol_research_execution's "비교해줘"/"분석해줘"/"판단해줘"/
+    # "기록해줘") - a full authoritative research request commonly ends in
+    # one of these rather than "연구해줘"/"검증해줘" itself, e.g. "...백테스트
+    # 하고 약점을 분석한 뒤 개선 후보까지 비교해줘."
+    "비교해줘", "비교해주세요", "비교해봐",
+    "분석해줘", "분석해주세요", "분석해봐",
+    "판단해줘", "판단해주세요",
+    "기록해줘", "기록해주세요",
+    # English equivalents, matching the same "retest"/"re-test" vocabulary
+    # already used as an action signal by _autonomous_retest_execution_ascii
+    # / _autonomous_retest_ascii elsewhere in this module.
+    "retest", "re-test", "rerun", "re-run",
+)
+
+
+def has_explicit_research_execution_intent(text: str) -> bool:
+    """True only for an explicit imperative request to run/re-run research
+    or validation - never for a status/read question or a bare topic noun
+    phrase. See the module note above ``_RESEARCH_EXECUTION_INTENT_TOKENS``."""
+    normalized = _normalize(text)
+    if not normalized:
+        return False
+    return any(token in normalized for token in _RESEARCH_EXECUTION_INTENT_TOKENS)
+
+
 def route_read_only_tool(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized:

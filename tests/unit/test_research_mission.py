@@ -26,6 +26,7 @@ from gaon.knowledge.research_mission import (
     is_cycle_budget_exhausted,
     is_diversity_request,
     is_explicit_read_only_query,
+    is_best_candidate_query,
     is_generic_continuation_request,
     is_mission_candidate_read_request,
     is_provider_acquisition_blocker,
@@ -34,6 +35,7 @@ from gaon.knowledge.research_mission import (
     mission_budget_exhausted_message,
     mission_status_block,
     render_mission_candidate_detailed_status,
+    render_mission_candidates_overview,
     next_candidate_sequence,
     next_unexplored_symbols,
     record_blocked,
@@ -616,6 +618,72 @@ class MissionCandidatePortfolioTests(unittest.TestCase):
         self.assertEqual(restored.candidates, ())
         self.assertIsNone(restored.active_candidate_id)
         self.assertEqual(restored.candidate_sequence, 0)
+
+
+class BestCandidateQueryTests(unittest.TestCase):
+    """hotfix/conversation-layer-safe-web-parity CASE C: "그중 제일 좋은
+    건 뭐야?" style multi-turn follow-ups that ask Gaon to compare the
+    mission's whole candidate portfolio, without naming a specific
+    candidate id."""
+
+    def test_recognizes_the_reported_followup_phrasings(self) -> None:
+        for text in (
+            "그중 제일 좋은 건 뭐야?",
+            "그중에서 가장 좋은 후보가 뭐야?",
+            "이 중에 베스트 후보가 뭐야?",
+            "가장 좋은 전략이 뭐야?",
+        ):
+            self.assertTrue(is_best_candidate_query(text), text)
+
+    def test_bare_compliment_is_not_a_candidate_comparison(self) -> None:
+        # "최고" alone (no "그중"/"후보"/"전략" reference) must never be
+        # misread as a request to compare candidates.
+        self.assertFalse(is_best_candidate_query("가온 최고야"))
+
+    def test_plain_status_question_without_a_superlative_is_not_a_comparison(self) -> None:
+        self.assertFalse(is_best_candidate_query("단타 연구는 잘되가고 있나요?"))
+
+    def test_genuine_continuation_request_is_never_read_as_a_comparison(self) -> None:
+        # A continuation request must keep its own precedence, exactly like
+        # is_mission_candidate_read_request already guards against this.
+        text = "최고 성능이 나올 때까지 계속 연구해줘"
+        self.assertTrue(is_generic_continuation_request(text), "test setup: text must be a real continuation request")
+        self.assertFalse(is_best_candidate_query(text))
+
+    def test_overview_never_fabricates_a_best_candidate_and_lists_real_evidence(self) -> None:
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 단타 전략을 연구해주세요", existing=None, now=NOW
+        )
+        c1 = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=NOW)
+        m1 = add_candidate(mission, c1, now=NOW)
+        c1_progressed = record_breadth_progress(
+            c1, attempted=10, valid=8, trade_count=120,
+            evidence_symbols=("005930",), excluded_symbols=(), provider_blocked=False, now=LATER,
+        )
+        m1 = update_candidate(m1, c1_progressed, now=LATER)
+        c2 = new_candidate("breakout_trend_confirmed", sequence=next_candidate_sequence(m1), now=NOW)
+        m2 = add_candidate(m1, c2, now=NOW)
+
+        text = render_mission_candidates_overview(m2)
+
+        self.assertIn(c1.candidate_id, text)
+        self.assertIn(c2.candidate_id, text)
+        # The active candidate (c2, added last) is marked, but never as a
+        # performance-based "best".
+        self.assertIn(f"{c2.candidate_id} (현재 활성 후보)", text)
+        self.assertNotIn(f"{c1.candidate_id} (현재 활성 후보)", text)
+        for forbidden in ("가장 좋다고", "제일 좋습니다", "베스트 후보입니다"):
+            self.assertNotIn(forbidden, text)
+        self.assertIn("가장 좋다", text)  # the explicit "cannot declare a best" disclaimer
+        self.assertIn("검증 종목 8/10", text)
+        self.assertIn("누적 거래 120회", text)
+
+    def test_overview_with_no_candidates_is_honest_about_having_nothing_to_compare(self) -> None:
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 단타 전략을 연구해주세요", existing=None, now=NOW
+        )
+        text = render_mission_candidates_overview(mission)
+        self.assertIn("비교해 드릴 대상이 없습니다", text)
 
 
 class CumulativeSamplePersistenceReleaseCheckTests(unittest.TestCase):

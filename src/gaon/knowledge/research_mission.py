@@ -867,6 +867,52 @@ def is_mission_candidate_read_request(text: str) -> bool:
     return "?" in text or _contains_any(normalized, _MISSION_CANDIDATE_READ_QUERY_TOKENS)
 
 
+# hotfix/conversation-layer-safe-web-parity: is_mission_candidate_read_request
+# above only recognizes a fixed set of candidate-identity subject phrases
+# ("활성후보", "단타전략", ...), so a generic progress question that names a
+# topic in ordinary words - "단타 연구는 잘되가고 있나요?", "삼성전자 연구
+# 상태 알려줘", "후보가 나왔어?", "검증 끝났어?" - does not satisfy it and
+# used to fall all the way through to either the GENERAL_CONVERSATION
+# feedback fallback or (worse, on the web transport, which had no mission-
+# aware layer at all) straight into route_read_only_tool's topic-only
+# matchers, which could execute a real research tool for what is honestly a
+# read-only status question. This predicate is a narrower, additive sibling
+# of is_mission_candidate_read_request: it requires a research-shaped
+# SUBJECT word ("연구"/"검증"/"후보"/"전략"/"결과"/"진행") AND a progress/
+# state word ("잘돼"/"진행"/"상태"/"끝났"/"나왔"/"있어"/...), and - like
+# is_mission_candidate_read_request - a "?" or one of the same
+# _MISSION_CANDIDATE_READ_QUERY_TOKENS. It defers to
+# is_generic_continuation_request the same way is_mission_candidate_read_
+# request does, so it never reclassifies an actual continuation request
+# ("계속 연구해주세요") as a read-only status question.
+_RESEARCH_PROGRESS_SUBJECT_TOKENS: tuple[str, ...] = ("연구", "검증", "후보", "전략", "결과", "진행")
+_RESEARCH_PROGRESS_STATE_TOKENS: tuple[str, ...] = (
+    "잘되", "잘돼", "어떻게", "어디까지", "얼마나",
+    "진행상황", "진행상태", "상태",
+    "끝났", "끝난", "됐어", "됐나", "완료",
+    "나왔", "나온", "있어", "있나",
+)
+
+
+def is_research_progress_status_question(text: str) -> bool:
+    """True for a generic, honestly-answerable research-progress status
+    question ("단타 연구는 잘되가고 있나요?", "삼성전자 연구 상태 알려줘",
+    "후보가 나왔어?", "검증 끝났어?") that names no specific candidate
+    identity - see the module note above. Never true for a bare topic noun
+    phrase ("단타 연구") or an explicit execution request, since both are
+    missing the progress/state word this predicate requires."""
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    if is_generic_continuation_request(text):
+        return False
+    if not _contains_any(normalized, _RESEARCH_PROGRESS_SUBJECT_TOKENS):
+        return False
+    if not _contains_any(normalized, _RESEARCH_PROGRESS_STATE_TOKENS):
+        return False
+    return "?" in text or _contains_any(normalized, _MISSION_CANDIDATE_READ_QUERY_TOKENS)
+
+
 def mission_candidate_read_focus(text: str) -> str:
     """Which canonical read-model rendering ``is_mission_candidate_read_
     request`` should use for this text: "score" (an explicit score/point
@@ -1593,6 +1639,80 @@ def render_candidate_score_status(mission: ResearchMission, candidate: "Strategy
         "",
         render_mission_candidate_detailed_status(mission, candidate),
     ]
+    return "\n".join(lines)
+
+
+# hotfix/conversation-layer-safe-web-parity CASE C production bug fix: a
+# multi-turn follow-up like "그중 제일 좋은 건 뭐야?" that asks Gaon to
+# compare the mission's WHOLE candidate portfolio is a genuinely different
+# question from is_mission_candidate_read_request's subject-token list
+# above, which only ever answers about the single CURRENT/ACTIVE candidate
+# ("활성후보", "현재전략", ...). Before this fix there was no read model for
+# "which of the candidates you already told me about is best", so the
+# question fell through every mission-aware branch and landed on either the
+# stale single-tool-result ConversationalMVPContext (which turn 1's read-
+# only mission status answer never populates, since it executes no tool) or
+# the generic GENERAL_CONVERSATION feedback template. Never returns a
+# fabricated performance ranking - see render_mission_candidates_overview,
+# which follows the same score_status=insufficient_evidence precedent
+# render_candidate_score_status (Patch 8.8) already established.
+_BEST_CANDIDATE_SUPERLATIVE_TOKENS: tuple[str, ...] = ("제일좋", "가장좋", "가장나은", "제일나은", "베스트", "최고")
+_BEST_CANDIDATE_REFERENCE_TOKENS: tuple[str, ...] = ("그중", "그중에", "이중", "이중에", "후보", "전략", "candidate")
+
+
+def is_best_candidate_query(text: str) -> bool:
+    """True for "그중 제일 좋은 건 뭐야?" / "가장 좋은 후보가 뭐야?" style
+    follow-ups that ask which of the mission's candidates is best, without
+    naming a specific candidate id. Requires a superlative token (so a bare
+    compliment like "가온 최고야" never matches) AND either an explicit
+    "그중"/"이중" backward-reference or a research-subject word ("후보",
+    "전략", "candidate") - so it stays narrow to genuine candidate-
+    comparison questions. Defers to is_generic_continuation_request the
+    same way is_mission_candidate_read_request does, so a real continuation
+    request ("최고 성능이 나올 때까지 계속 연구해줘") is never reclassified
+    as a read query."""
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    if is_generic_continuation_request(text):
+        return False
+    if not _contains_any(normalized, _BEST_CANDIDATE_SUPERLATIVE_TOKENS):
+        return False
+    return _contains_any(normalized, _BEST_CANDIDATE_REFERENCE_TOKENS)
+
+
+def render_mission_candidates_overview(mission: ResearchMission) -> str:
+    """Answers "그중 제일 좋은 건 뭐야?" honestly: lists every real
+    candidate this mission has actually generated with its persisted
+    status/evidence, and explicitly declines to declare one "best" by
+    performance - no deterministic, tested scoring contract exists yet
+    (same precedent as render_candidate_score_status / Patch 8.8). Never
+    fabricates a ranking; only each candidate's own recorded stage/evidence
+    is shown, plus which one is currently active (a bookkeeping fact, not a
+    performance judgment)."""
+    records = candidate_records(mission)
+    if not records:
+        return (
+            "영하님, 현재 Research Mission은 진행 중이지만 아직 생성된 전략 후보가 없어 "
+            "비교해 드릴 대상이 없습니다.\n\n" + mission_status_block(mission)
+        )
+    lines = [
+        "[전략 후보 비교]",
+        "- 신뢰할 수 있는 deterministic 성능 점수 기준이 아직 없어, 후보 중 하나를 "
+        "'가장 좋다'고 단정해서 말씀드릴 수는 없습니다, 영하님.",
+        "- 대신 각 후보의 실제 진행 상태를 있는 그대로 보여드립니다.",
+        "",
+    ]
+    active_id = mission.active_candidate_id
+    for candidate in records:
+        promotion_ready = "예" if candidate.status is StrategyCandidateStatus.PROMOTION_READY else "아니오"
+        marker = " (현재 활성 후보)" if candidate.candidate_id == active_id else ""
+        lines.append(
+            f"- {candidate.candidate_id}{marker} ({candidate.hypothesis_summary}): "
+            f"stage={candidate.status.value}, "
+            f"검증 종목 {candidate.valid_symbols}/{candidate.attempted_symbols}, "
+            f"누적 거래 {candidate.trade_count}회, promotion-ready={promotion_ready}"
+        )
     return "\n".join(lines)
 
 
