@@ -1262,6 +1262,79 @@ class LLMConversationBrain:
                 (),
             )
 
+        # hotfix/conversation-layer-existing-mission-status-read production
+        # bug fix: is_research_progress_status_question ("단타 연구는
+        # 잘되가고 있나요?", "단타 연구 잘되고 있어?", "단타 연구 진행
+        # 상황 알려줘", "단타 연구 어떻게 되고 있어?") was only ever wired
+        # to the "existing_mission is None" short-circuit near the top of
+        # this method (see that block's own note) - there was no sibling
+        # branch for "a mission DOES exist, answer from its real persisted
+        # state" when the message does not also satisfy the narrower,
+        # identity-focused is_mission_candidate_read_request above (which
+        # requires a specific subject token like "활성후보"/"단타전략",
+        # never a plain "단타 연구는 잘되가고 있나요?"). Without this
+        # branch such a message fell through every mission-aware check
+        # here, reached the GENERAL_CONVERSATION branch's ambiguous-
+        # research-topic carve-out further below (it names "단타"/"연구",
+        # both in _AMBIGUOUS_RESEARCH_TOPIC_TOKENS), and was handed to the
+        # raw LLM provider with no persisted mission/candidate data at all
+        # - which then answered from its own guesswork ("백테스트
+        # 데이터가 존재하지 않습니다... 결과 ID를 제공해 주시면...").
+        #
+        # Reuses is_research_progress_status_question exactly as already
+        # defined (no new keyword list - it already recognizes all four
+        # phrasings above) and the SAME deterministic renderers the
+        # STATUS_QUERY/is_mission_candidate_read_request branches already
+        # use - never a new renderer, never a fabricated ranking/metric,
+        # zero research tool calls. has_explicit_research_execution_intent
+        # is checked first so an explicit execution request ("단타 연구를
+        # 다시 실행해줘") still reaches its own existing execution path,
+        # completely unaffected by this branch. Checks existing_mission
+        # (not the possibly-freshly-merged ``mission``) so this can only
+        # ever render a REAL, already-persisted mission's state - never one
+        # extract_or_update_mission might have just manufactured from some
+        # other, unrelated intent signal in this same turn.
+        if (
+            existing_mission is not None
+            and not has_explicit_research_execution_intent(request.text)
+            and is_research_progress_status_question(request.text)
+        ):
+            self._remember_mission(request, mission)
+            if mission.status is MissionStatus.BLOCKED:
+                return (
+                    mission_blocked_message(mission),
+                    "conversation_mission_status_read",
+                    _dedupe((*warnings, "mission blocked; read-only research-progress status question; no research tool executed")),
+                    references,
+                    "deterministic",
+                    (),
+                )
+            if not mission.candidates:
+                return (
+                    f"영하님, 현재 Research Mission은 진행 중이지만 아직 생성된 전략 후보가 없습니다.\n\n"
+                    f"{mission_status_block(mission)}",
+                    "conversation_mission_status_read",
+                    _dedupe((*warnings, "mission has no candidates yet; read-only research-progress status question; no research tool executed")),
+                    references,
+                    "deterministic",
+                    (),
+                )
+            summary_text = render_candidate_status_summary(
+                candidate_records(mission),
+                current=distinct_promotion_ready_strategy_count(mission),
+                target=mission.target_promotion_ready_candidates,
+            )
+            detailed_status = render_mission_candidate_detailed_status(mission, get_active_candidate(mission))
+            text = f"{summary_text}\n\n{detailed_status}"
+            return (
+                text,
+                "conversation_mission_status_read",
+                _dedupe((*warnings, "read-only research-progress status question; mission-aware candidate status; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
+
         # hotfix/conversation-layer-safe-web-parity CASE C: "그중 제일 좋은
         # 건 뭐야?" asks Gaon to compare the mission's WHOLE candidate
         # portfolio - a different question from is_mission_candidate_read_
