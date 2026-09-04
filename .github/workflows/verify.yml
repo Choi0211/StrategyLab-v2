@@ -1,11 +1,25 @@
-name: Verify
+name: PR Fast Verify
 
+# ci/optimize-pr-verification: PR-blocking critical path only. Real job
+# duration measurements (see PR body) showed Ubuntu 3.11/3.12 complete in
+# ~5-6 minutes each while Windows 3.11 alone routinely took 30-45 minutes -
+# the single dominant bottleneck for PR feedback time, since fail-fast:
+# false already runs every combo in parallel and the overall run duration
+# is bounded by the slowest job.
+#
+# Windows 3.11 compatibility coverage is NOT removed - see
+# verify-compatibility.yml, which runs the full 4-combo matrix (including
+# Windows 3.11) on every push to main/develop-v2, on a weekly schedule, and
+# on demand. This file keeps Windows coverage in the PR-blocking path via
+# 3.12 (the newer, still-supported interpreter) so a genuine Windows
+# regression is still caught before merge, just not gated on the one
+# consistently slow combination.
 on:
   pull_request:
-  push:
-    branches:
-      - develop-v2
-      - main
+
+concurrency:
+  group: pr-fast-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   PYTHONUTF8: "1"
@@ -18,8 +32,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
 
     steps:
       - name: Checkout
@@ -29,6 +48,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install package
         run: python -m pip install -e .
