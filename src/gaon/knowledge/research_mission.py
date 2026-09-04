@@ -578,6 +578,75 @@ def _levenshtein(a: str, b: str) -> int:
     return previous[-1]
 
 
+# Production hotfix: a real reported message ("그중 제일 졸은 건 뭐야?")
+# mistyped "좋은" ("good") as "졸은" - a final-consonant slip (좋 = ㅈ+ㅗ+ㅎ,
+# 졸 = ㅈ+ㅗ+ㄹ; only the trailing consonant differs, initial consonant and
+# vowel are identical). A generic Levenshtein edit-distance budget over
+# short Korean strings is NOT a safe way to tolerate this: two-and-three
+# character Korean words that are edit-distance 1 apart are frequently
+# unrelated words, not typos of each other - "많은" ("many/much") is also
+# edit-distance 1 from "좋은" ("good") merely because they share the
+# trailing syllable "은", yet they are opposite in meaning. Hangul
+# syllables decompose deterministically into (initial consonant, vowel,
+# final consonant); restricting tolerance to "same initial consonant AND
+# vowel, only the final consonant differs" captures the specific, narrow
+# typo class a trailing-consonant input slip produces while still
+# rejecting a different word that merely happens to be nearby in raw
+# edit-distance space.
+_HANGUL_SYLLABLE_BASE = 0xAC00
+_HANGUL_SYLLABLE_COUNT = 11172
+_HANGUL_JUNGSEONG_COUNT = 21
+_HANGUL_JONGSEONG_COUNT = 28
+
+
+def _decompose_hangul_syllable(char: str) -> tuple[int, int, int] | None:
+    code = ord(char) - _HANGUL_SYLLABLE_BASE
+    if not (0 <= code < _HANGUL_SYLLABLE_COUNT):
+        return None
+    jongseong = code % _HANGUL_JONGSEONG_COUNT
+    jungseong = (code // _HANGUL_JONGSEONG_COUNT) % _HANGUL_JUNGSEONG_COUNT
+    choseong = code // (_HANGUL_JONGSEONG_COUNT * _HANGUL_JUNGSEONG_COUNT)
+    return choseong, jungseong, jongseong
+
+
+def _is_final_consonant_typo(candidate: str, token: str) -> bool:
+    """True when ``candidate`` and ``token`` are the same length and
+    differ in exactly one character position, where that one differing
+    character pair shares the same initial consonant and vowel and
+    differs only in its final consonant (jongseong) - see the module note
+    above. False for any other kind of difference, including a different
+    initial consonant or vowel, more than one differing position, or a
+    non-Hangul character."""
+    if len(candidate) != len(token) or candidate == token:
+        return candidate == token
+    mismatches = 0
+    for left, right in zip(candidate, token):
+        if left == right:
+            continue
+        decomposed_left = _decompose_hangul_syllable(left)
+        decomposed_right = _decompose_hangul_syllable(right)
+        if decomposed_left is None or decomposed_right is None:
+            return False
+        if decomposed_left[0] != decomposed_right[0] or decomposed_left[1] != decomposed_right[1]:
+            return False
+        mismatches += 1
+        if mismatches > 1:
+            return False
+    return mismatches == 1
+
+
+def _contains_final_consonant_typo_of(normalized: str, token: str) -> bool:
+    """True if some window of ``normalized`` exactly ``len(token))``
+    characters wide is a final-consonant-only typo of ``token`` (see
+    ``_is_final_consonant_typo``). Fixed-width, never a variable-width
+    fuzzy scan, so this can only ever match the identical word shape with
+    one mistyped trailing consonant - nothing looser."""
+    width = len(token)
+    if width == 0 or len(normalized) < width:
+        return False
+    return any(_is_final_consonant_typo(normalized[start:start + width], token) for start in range(len(normalized) - width + 1))
+
+
 def _is_typo_tolerant_continuation_match(normalized: str) -> bool:
     """Bounded typo tolerance ONLY against known continuation ANCHOR+
     SUFFIX pairs (never the whole message, never a bare suffix alone):
@@ -1660,6 +1729,17 @@ _BEST_CANDIDATE_SUPERLATIVE_TOKENS: tuple[str, ...] = ("제일좋", "가장좋",
 _BEST_CANDIDATE_REFERENCE_TOKENS: tuple[str, ...] = ("그중", "그중에", "이중", "이중에", "후보", "전략", "candidate")
 
 
+def _is_typo_tolerant_best_candidate_superlative(normalized: str) -> bool:
+    """Final-consonant-only typo tolerance for
+    ``_BEST_CANDIDATE_SUPERLATIVE_TOKENS`` (e.g. "제일 졸은" for "제일
+    좋은" - see ``_is_final_consonant_typo``). Deliberately narrower than a
+    generic edit-distance budget so an unrelated word sharing only a
+    trailing syllable (e.g. "제일 많은") can never coincidentally qualify -
+    a new minor trailing-consonant typo never needs its own hand-added
+    literal keyword, without weakening what counts as a genuine typo."""
+    return any(_contains_final_consonant_typo_of(normalized, token) for token in _BEST_CANDIDATE_SUPERLATIVE_TOKENS)
+
+
 def is_best_candidate_query(text: str) -> bool:
     """True for "그중 제일 좋은 건 뭐야?" / "가장 좋은 후보가 뭐야?" style
     follow-ups that ask which of the mission's candidates is best, without
@@ -1670,13 +1750,23 @@ def is_best_candidate_query(text: str) -> bool:
     comparison questions. Defers to is_generic_continuation_request the
     same way is_mission_candidate_read_request does, so a real continuation
     request ("최고 성능이 나올 때까지 계속 연구해줘") is never reclassified
-    as a read query."""
+    as a read query.
+
+    Production hotfix: a minor typo in the superlative token itself (e.g.
+    "그중 제일 졸은 건 뭐야?") must not fall through to this predicate's
+    False - see ``_is_typo_tolerant_best_candidate_superlative``. The
+    backward-reference/subject-word requirement below still applies
+    unchanged, so this stays narrow to genuine candidate-comparison
+    questions even with the typo tolerance."""
     normalized = _norm(text)
     if not normalized:
         return False
     if is_generic_continuation_request(text):
         return False
-    if not _contains_any(normalized, _BEST_CANDIDATE_SUPERLATIVE_TOKENS):
+    if not (
+        _contains_any(normalized, _BEST_CANDIDATE_SUPERLATIVE_TOKENS)
+        or _is_typo_tolerant_best_candidate_superlative(normalized)
+    ):
         return False
     return _contains_any(normalized, _BEST_CANDIDATE_REFERENCE_TOKENS)
 

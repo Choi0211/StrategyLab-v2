@@ -22,6 +22,7 @@ from gaon.runtime.conversational_mvp import (
     PresentationPreference,
     classify_conversational_route,
     explanation_level_for_text,
+    extract_symbol_entities,
     is_availability_question,
     presentation_preference_for_text,
     render_presentation_from_payloads,
@@ -840,6 +841,18 @@ class LLMConversationBrain:
         # message. Only an explicit execution-intent message may proceed.
         if not has_explicit_research_execution_intent(request.text):
             return None
+        # hotfix/conversation-layer-subject-intent-continuity: an execution
+        # request that names no concrete subject at all - only a bare
+        # backward-reference pronoun ("그거 다시 연구해줘") - must never
+        # silently resolve to _default_tool_arguments' hardcoded "005930"
+        # placeholder symbol when there is no mission/candidate this can
+        # actually resolve "그거" against. See
+        # ``_omitted_subject_clarification``'s module note - the same
+        # guard is applied at every path that could otherwise silently
+        # default a bare pronoun reference to a hardcoded/stale subject.
+        omitted_subject = self._omitted_subject_clarification(request, warnings, references)
+        if omitted_subject is not None:
+            return omitted_subject
         arguments = _default_tool_arguments(tool_name, request.text)
         result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
@@ -1191,6 +1204,7 @@ class LLMConversationBrain:
                         (),
                     )
                 text = self._render_mission_candidate_read_response(request.text, mission, read_candidate)
+                self._remember_read_subject(request, mission, kind="candidate", candidate_id=read_candidate.candidate_id)
                 return (
                     text,
                     "conversation_mission_candidate_read",
@@ -1203,6 +1217,7 @@ class LLMConversationBrain:
             if active_candidate is not None:
                 self._remember_mission(request, mission)
                 text = self._render_mission_candidate_read_response(request.text, mission, active_candidate)
+                self._remember_read_subject(request, mission, kind="candidate", candidate_id=active_candidate.candidate_id)
                 return (
                     text,
                     "conversation_mission_candidate_read",
@@ -1267,6 +1282,7 @@ class LLMConversationBrain:
             )
         if mission is not None and is_best_candidate_query(request.text):
             self._remember_mission(request, mission)
+            self._remember_read_subject(request, mission, kind="candidates_overview")
             return (
                 render_mission_candidates_overview(mission),
                 "conversation_mission_candidates_overview",
@@ -1452,6 +1468,9 @@ class LLMConversationBrain:
                 (),
             )
         if route.intent in reasoning_followup_intents:
+            subject_explanation = self._try_mission_subject_explanation(request, route, warnings, references)
+            if subject_explanation is not None:
+                return subject_explanation
             context = self._mvp_context_for(request.session_id)
             if context is None:
                 if route.symbols and route.intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST, ConversationalMVPIntent.RISK_QUESTION, ConversationalMVPIntent.STRATEGY_QUESTION} and self._tool_executor is not None:
@@ -1530,6 +1549,83 @@ class LLMConversationBrain:
         if route.intent is ConversationalMVPIntent.UNKNOWN and route.symbols:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_unknown")
             return render_unknown(route.symbols), "conversation_mvp_unknown", _dedupe(warnings), references, "deterministic", ()
+        return None
+
+    def _try_mission_subject_explanation(
+        self,
+        request: LLMConversationRequest,
+        route: ConversationalRoute,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """hotfix/conversation-layer-subject-intent-continuity production bug
+        fix: real production showed "왜 그게 좋은데?" (an EXPLAIN_PREVIOUS_
+        RESULT follow-up immediately after a mission candidate-portfolio
+        read) answered from the stale, unrelated ConversationalMVPContext -
+        a single-slot cache of the last real TOOL result, entirely
+        decoupled from which mission/candidate subject the conversation
+        was actually just discussing - and rendered a description of a
+        much older, unrelated candidate in a way that read exactly like
+        Gaon had just re-run research on it.
+
+        ``_remember_read_subject`` tracks WHICH mission/candidate subject a
+        read-only mission-aware answer was actually about; this checks
+        that tracked subject FIRST, before ``ConversationalMVPContext`` is
+        ever consulted, whenever it is at least as recent as that context.
+        Returns None (deferring to the caller's existing
+        ConversationalMVPContext-based handling) when there is no tracked
+        subject, its mission no longer exists, the tracked candidate was
+        since removed, or the ConversationalMVPContext is strictly more
+        recent (a genuinely later single-symbol/autonomous research turn
+        took over as the real subject).
+
+        Only ever reads already-persisted mission/candidate state - zero
+        research tool calls in every branch - and never returns a
+        fabricated performance ranking (mirrors the same
+        score_status=insufficient_evidence precedent
+        ``render_mission_candidates_overview`` already establishes)."""
+        if route.intent not in {ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT, ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP}:
+            return None
+        subject = self._read_subject_for(request.session_id)
+        if subject is None:
+            return None
+        mvp_context = self._mvp_context_for(request.session_id)
+        if mvp_context is not None and str(mvp_context.updated_at) > str(subject.get("updated_at", "")):
+            return None
+        mission = self._mission_for(request.session_id)
+        if mission is None or mission.mission_id != subject.get("mission_id"):
+            return None
+        kind = subject.get("kind")
+        if kind == "candidates_overview":
+            self._remember_mission(request, mission)
+            text = (
+                "영하님, 아직 후보들을 성능으로 서열화할 신뢰할 수 있는 deterministic 기준이 없어 "
+                "특정 후보가 다른 후보보다 '더 좋다'고 단정해서 설명드릴 수는 없습니다.\n\n"
+                + render_mission_candidates_overview(mission)
+            )
+            return (
+                text,
+                "conversation_mission_subject_explanation",
+                _dedupe((*warnings, "mission candidate subject continuity; no fabricated ranking; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
+        if kind == "candidate":
+            candidate_id = subject.get("candidate_id")
+            candidate = get_candidate(mission, str(candidate_id)) if candidate_id else None
+            if candidate is None:
+                return None
+            self._remember_mission(request, mission)
+            text = f"{render_candidate_strategy_explanation(candidate)}\n\n{render_mission_candidate_detailed_status(mission, candidate)}"
+            return (
+                text,
+                "conversation_mission_subject_explanation",
+                _dedupe((*warnings, f"candidate_subject={candidate.candidate_id}", "mission candidate subject continuity; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
         return None
 
     @staticmethod
@@ -2383,6 +2479,10 @@ class LLMConversationBrain:
         fail_safe = self._mission_aware_continuation_fail_safe(request, route, warnings, references)
         if fail_safe is not None:
             return fail_safe
+        if not route.symbols:
+            omitted_subject = self._omitted_subject_clarification(request, warnings, references)
+            if omitted_subject is not None:
+                return omitted_subject
         symbol = _resolve_autonomous_symbol(route, context)
         original_text = previous_request_text(context, request.text) if context is not None else request.text
         tool_args: dict[str, object] = {"request_text": original_text, "symbol": symbol, "mode": mode}
@@ -2408,6 +2508,15 @@ class LLMConversationBrain:
         return text, "conversation_autonomous_research_cycle", _dedupe((*warnings, *result.warnings, *audit_warnings)), _dedupe((*references, "tool:autonomous_research_cycle")), "deterministic", ("autonomous_research_cycle",)
 
     def _try_autonomous_learning_v2_conversation(self, request: LLMConversationRequest, route, context: ConversationalMVPContext | None, mode: str, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+        # Checked before the generic "no context at all" branch below: a
+        # bare backward-reference pronoun ("그거") gets its own, more
+        # specific clarification regardless of whether some (possibly
+        # stale/unrelated) context happens to exist - see
+        # ``_omitted_subject_clarification``'s module note.
+        if not route.symbols:
+            omitted_subject = self._omitted_subject_clarification(request, warnings, references)
+            if omitted_subject is not None:
+                return omitted_subject
         if context is None and not route.symbols:
             return "영하님, 직전 연구나 전략 맥락이 없습니다. 이어서 자율 연구할 종목을 먼저 삼성전자처럼 말씀해 주세요.", "conversation_autonomous_learning_missing_target", _dedupe((*warnings, "autonomous learning requires target")), references, "deterministic", ()
         symbol = _resolve_autonomous_symbol(route, context)
@@ -2910,6 +3019,111 @@ class LLMConversationBrain:
         metadata["conversation_mvp"] = payload
         self._repository.upsert_session(LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, request.received_at, metadata))
 
+    # hotfix/conversation-layer-subject-intent-continuity: a mission-aware
+    # READ answer (the candidate-portfolio overview, or a specific
+    # candidate's own status/explain read) and the older, unrelated
+    # ConversationalMVPContext (a single-slot cache of the last real TOOL
+    # result, populated only by single-symbol/autonomous research turns)
+    # are two separate, unsynchronized stores. Real production showed a
+    # subsequent explanation follow-up ("왜 그게 좋은데?") reading
+    # exclusively from the stale ConversationalMVPContext - which could
+    # describe an entirely different, much older candidate/symbol than the
+    # one the last TWO turns were actually discussing - and rendering it in
+    # a way that read like Gaon had just re-run research on that unrelated
+    # subject. This lightweight, session-metadata-persisted pointer (same
+    # ``conversation_mvp`` JSON root ConversationalMVPContext/ResearchMission
+    # already use - no new database table) records WHICH mission/candidate
+    # subject a read-only answer was actually about, so a later explanation
+    # follow-up can ground itself in the CORRECT, most recently discussed
+    # subject instead of whichever store happens to be non-None. Writing
+    # this is always paired with an existing read-only response path (never
+    # with any tool execution), so it never grants or implies execution
+    # authority - resolving to it can only ever route into read-only
+    # rendering; the safe executor boundary and
+    # ``has_explicit_research_execution_intent`` remain the only gates that
+    # can ever approve a REAL research tool call.
+    def _remember_read_subject(
+        self,
+        request: LLMConversationRequest,
+        mission: ResearchMission,
+        *,
+        kind: str,
+        candidate_id: str | None = None,
+    ) -> None:
+        try:
+            session = self._repository.get_session(request.session_id)
+        except KeyError:
+            return
+        metadata = dict(session.metadata)
+        payload = _mvp_metadata_root(metadata)
+        payload["last_read_subject"] = {
+            "kind": kind,
+            "mission_id": mission.mission_id,
+            "candidate_id": candidate_id,
+            "text": _bounded_context_text(request.text),
+            "updated_at": request.received_at,
+        }
+        metadata["conversation_mvp"] = payload
+        self._repository.upsert_session(LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, request.received_at, metadata))
+
+    def _omitted_subject_clarification(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """hotfix/conversation-layer-subject-intent-continuity: "그거 다시
+        연구해줘" - an execution request naming no concrete subject, only a
+        bare backward-reference pronoun - must never silently resolve to
+        whatever a stale ``ConversationalMVPContext`` happens to hold
+        (``_resolve_autonomous_symbol`` falls back to
+        ``context.last_symbols[0]``, then to a hardcoded "005930"
+        placeholder) when nothing actually establishes what "그거" refers
+        to. This is the exact class of production defect
+        ``render_robustness_cycle_response``'s own module note already
+        names (a report reading "<UNRELATED SYMBOL> 전략을 다시
+        연구했습니다").
+
+        Returns the fail-closed clarification response (zero research tool
+        calls) when ``request.text`` is an omitted-subject reference
+        (``_is_omitted_subject_execution_reference``) AND there is no
+        resolvable subject to ground it - no ResearchMission, or a mission
+        with no active candidate. Returns None otherwise (the caller
+        should proceed with its own normal resolution): when a non-single-
+        symbol mission DOES have a real active candidate, the mission-
+        driven candidate-continuation precedence hook in
+        ``_try_conversational_mvp`` (checked BEFORE any of this method's
+        callers ever run) already resolves and continues that candidate
+        correctly, so this is never reached for that case."""
+        if not _is_omitted_subject_execution_reference(request.text):
+            return None
+        mission = self._mission_for(request.session_id)
+        if mission is not None and get_active_candidate(mission) is not None:
+            return None
+        return (
+            "영하님, '그거'/'그것'이 어떤 종목이나 전략 후보를 가리키는지 명확하지 않아 "
+            "임의의 대상으로 연구를 실행하지 않았습니다. 다시 연구할 종목명, 후보 id, 또는 "
+            "전략을 말씀해 주시면 바로 진행하겠습니다.",
+            "conversation_research_subject_unresolved",
+            _dedupe((*warnings, "omitted-subject reference with no resolvable research target; zero research tool calls")),
+            references,
+            "deterministic",
+            (),
+        )
+
+    def _read_subject_for(self, session_id: str) -> dict[str, object] | None:
+        try:
+            session = self._repository.get_session(session_id)
+        except KeyError:
+            return None
+        root = session.metadata.get("conversation_mvp")
+        if not isinstance(root, dict):
+            return None
+        subject = root.get("last_read_subject")
+        if not isinstance(subject, dict) or not subject.get("mission_id"):
+            return None
+        return subject
+
     def _mvp_context_for(self, session_id: str) -> ConversationalMVPContext | None:
         context = self._mvp_contexts.get(session_id)
         if context is not None:
@@ -3022,6 +3236,12 @@ class LLMConversationBrain:
         # a strict real-research tool's topic execute that tool.
         if is_strict_real_research_tool(tool_name) and not has_explicit_research_execution_intent(request.text):
             return None
+        # Same omitted-subject safeguard as _try_authoritative_research_tool
+        # - see ``_omitted_subject_clarification``'s module note.
+        if is_strict_real_research_tool(tool_name):
+            omitted_subject = self._omitted_subject_clarification(request, warnings, references)
+            if omitted_subject is not None:
+                return omitted_subject
         arguments = _default_tool_arguments(tool_name, request.text)
         result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
         self._record_tool_result(request.session_id, result, request.received_at)
@@ -3538,6 +3758,29 @@ def _context_key_hash(session_id: str) -> str:
 def _is_explicit_tool_result_synthesis_request(text: str) -> bool:
     normalized = text.casefold()
     return any(token in normalized for token in ("방금", "앞에서", "이전", "최근", "종합", "summary", "previous"))
+
+
+# hotfix/conversation-layer-subject-intent-continuity: "그거 다시 연구해줘"
+# (an execution request naming no concrete subject, only a bare backward-
+# reference pronoun) must never let _try_authoritative_research_tool /
+# _try_deterministic_tool silently resolve "그거" to
+# _default_tool_arguments' hardcoded "005930" placeholder - see those
+# methods' module notes. False whenever the message ALSO names an
+# explicit symbol/company alias (extract_symbol_entities) or an explicit
+# candidate id (extract_candidate_id) - those already carry their own
+# real subject and need no clarification.
+_OMITTED_SUBJECT_REFERENCE_TOKENS: tuple[str, ...] = ("그거", "그것", "이거", "이것", "저거", "저것")
+
+
+def _is_omitted_subject_execution_reference(text: str) -> bool:
+    normalized = text.casefold()
+    if not any(token in normalized for token in _OMITTED_SUBJECT_REFERENCE_TOKENS):
+        return False
+    if extract_symbol_entities(text):
+        return False
+    if extract_candidate_id(text) is not None:
+        return False
+    return True
 
 
 def _is_simple_conversational_research_request(text: str) -> bool:
