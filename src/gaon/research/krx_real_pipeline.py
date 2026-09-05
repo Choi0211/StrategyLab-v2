@@ -872,8 +872,14 @@ class _BarEvalContext:
     # feature/mean-reversion-capability: closing prices of the prior bars
     # the active entry-trigger needs (RuleBasedBacktestEngine.run passes the
     # last ``entry_lookback`` closes). breakout_lookback's trigger ignores
-    # this; mean_reversion_ma_lookback's trigger averages it into the SMA.
+    # this; mean_reversion_ma_lookback's trigger averages it into the SMA;
+    # momentum_roc_lookback's trigger reads prior_closes[0].
     prior_closes: tuple[float, ...] = ()
+    # feature/volatility-thrust-entry-trigger: highs and lows of the same
+    # window, so volatility_atr_lookback's trigger can compute a
+    # range-based ATR (mean of high - low) without reaching into raw bars.
+    prior_highs: tuple[float, ...] = ()
+    prior_lows: tuple[float, ...] = ()
 
 
 # --- predicate handlers: (active: bool, ctx: _BarEvalContext) -> bool -------
@@ -934,6 +940,19 @@ def _param_momentum_min_roc_pct(spec: "CanonicalStrategySpec") -> float:
     long-on-strength trigger."""
     provenanced = spec.entry.get("momentum_min_roc_pct")
     return abs(float(provenanced.value)) if provenanced is not None else 10.0
+
+
+def _param_volatility_atr_lookback(spec: "CanonicalStrategySpec") -> int:
+    return int(spec.entry["volatility_atr_lookback"].value)
+
+
+def _param_volatility_thrust_k(spec: "CanonicalStrategySpec") -> float:
+    """How many multiples of the recent average bar range a single bar's
+    close-to-close advance must exceed to trigger a volatility-thrust
+    entry. Optional - defaults to 1.5. ``abs()`` for sign robustness; a
+    negative multiple is nonsensical for a long-on-strength trigger."""
+    provenanced = spec.entry.get("volatility_thrust_k")
+    return abs(float(provenanced.value)) if provenanced is not None else 1.5
 
 
 # --- entry-trigger handlers: (spec, ctx: _BarEvalContext) -> bool ----------
@@ -998,8 +1017,36 @@ def _entry_trigger_lookback_mean_reversion(spec: "CanonicalStrategySpec") -> int
     return _param_mean_reversion_ma_lookback(spec)
 
 
+def _entry_trigger_volatility(spec: "CanonicalStrategySpec", ctx: "_BarEvalContext") -> bool:
+    """Volatility thrust - enter long when this bar's close-to-close
+    advance is at least ``volatility_thrust_k`` times the recent average
+    bar range (mean of ``high - low`` over the last
+    ``volatility_atr_lookback`` bars, a range-based ATR approximation).
+    Distinct from breakout (needs a fresh N-bar HIGH) and momentum (needs
+    an N-bar RETURN): a thrust fires on one wide up-bar even mid-range,
+    and stays quiet through a slow grind-up whose daily moves are small
+    relative to range. Closed-bar only (ctx.prior_* exclude the current
+    bar); no look-ahead."""
+    lookback = int(BACKTEST_RULE_REGISTRY["volatility_atr_lookback"].lookback(spec))
+    if lookback <= 0:
+        return False
+    highs = ctx.prior_highs[-lookback:]
+    lows = ctx.prior_lows[-lookback:]
+    if len(highs) < lookback or len(lows) < lookback or not ctx.prior_closes:
+        return False
+    avg_range = sum(h - low for h, low in zip(highs, lows)) / lookback
+    if avg_range <= 0:
+        return False
+    k = float(BACKTEST_RULE_REGISTRY["volatility_thrust_k"].handler(spec))
+    return (ctx.close - ctx.prior_closes[-1]) >= k * avg_range
+
+
 def _entry_trigger_lookback_momentum(spec: "CanonicalStrategySpec") -> int:
     return _param_momentum_roc_lookback(spec)
+
+
+def _entry_trigger_lookback_volatility(spec: "CanonicalStrategySpec") -> int:
+    return _param_volatility_atr_lookback(spec)
 
 
 @dataclass(frozen=True)
@@ -1027,6 +1074,8 @@ BACKTEST_RULE_DEFINITIONS: tuple[BacktestRuleDefinition, ...] = (
     BacktestRuleDefinition("mean_reversion_band_pct", "entry", "parameter", False, _param_mean_reversion_band_pct, default=5.0),
     BacktestRuleDefinition("momentum_roc_lookback", "entry", "entry_trigger", False, _entry_trigger_momentum, lookback=_entry_trigger_lookback_momentum),
     BacktestRuleDefinition("momentum_min_roc_pct", "entry", "parameter", False, _param_momentum_min_roc_pct, default=10.0),
+    BacktestRuleDefinition("volatility_atr_lookback", "entry", "entry_trigger", False, _entry_trigger_volatility, lookback=_entry_trigger_lookback_volatility),
+    BacktestRuleDefinition("volatility_thrust_k", "entry", "parameter", False, _param_volatility_thrust_k, default=1.5),
     BacktestRuleDefinition("close_gt_ma20", "entry", "predicate", False, _predicate_close_gt_ma20),
     BacktestRuleDefinition("ma20_gt_ma60", "entry", "predicate", False, _predicate_ma20_gt_ma60),
     BacktestRuleDefinition("protective_stop_pct", "exit", "parameter", True, _param_protective_stop_pct),
@@ -1122,7 +1171,8 @@ class RuleBasedBacktestCapabilities:
     def entry_trigger_rules(self) -> frozenset[str]:
         """feature/mean-reversion-capability: the entry-trigger GROUP - the
         rules of which a spec must carry exactly one (``breakout_lookback``,
-        ``mean_reversion_ma_lookback``, ``momentum_roc_lookback``)."""
+        ``mean_reversion_ma_lookback``, ``momentum_roc_lookback``,
+        ``volatility_atr_lookback``)."""
         return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.kind == "entry_trigger")
 
     def unsupported_components(self, spec: CanonicalStrategySpec) -> tuple[tuple[str, str], ...]:
@@ -1359,6 +1409,8 @@ class RuleBasedBacktestEngine:
                     close=bar.close, ma20=ma20, ma60=ma60, volume=bar.volume,
                     volume_ma20=volume_ma20, prior_high=prior_high, prior_low=prior_low,
                     prior_closes=tuple(item.close for item in prior[-entry_lookback:]),
+                    prior_highs=tuple(item.high for item in prior[-entry_lookback:]),
+                    prior_lows=tuple(item.low for item in prior[-entry_lookback:]),
                 )
                 entry_ok = entry_trigger_def.handler(strategy, ctx) and all(
                     rule.handler(_predicate_rule_active(strategy.entry, rule.key), ctx) for rule in entry_predicate_rules

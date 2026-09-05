@@ -225,8 +225,9 @@ class CapabilityContractIsExplicitTests(unittest.TestCase):
     def test_capabilities_object_exposes_the_full_grammar(self) -> None:
         caps = RULE_BASED_BACKTEST_CAPABILITIES
         self.assertEqual(caps.engine_name, RULE_BASED_ENGINE_NAME)
-        # The entry grammar gained the mean-reversion (PR #187) and
-        # momentum (this PR) entry triggers and their optional parameters.
+        # The entry grammar gained the mean-reversion (PR #187), momentum
+        # (PR #188) and volatility-thrust (this PR) entry triggers and
+        # their optional parameters.
         self.assertEqual(
             caps.supported_entry_rules,
             frozenset(
@@ -236,6 +237,8 @@ class CapabilityContractIsExplicitTests(unittest.TestCase):
                     "mean_reversion_band_pct",
                     "momentum_roc_lookback",
                     "momentum_min_roc_pct",
+                    "volatility_atr_lookback",
+                    "volatility_thrust_k",
                     "close_gt_ma20",
                     "ma20_gt_ma60",
                 }
@@ -247,7 +250,14 @@ class CapabilityContractIsExplicitTests(unittest.TestCase):
         # of the entry-trigger GROUP, of which a spec must carry exactly one.
         self.assertEqual(
             caps.entry_trigger_rules,
-            frozenset({"breakout_lookback", "mean_reversion_ma_lookback", "momentum_roc_lookback"}),
+            frozenset(
+                {
+                    "breakout_lookback",
+                    "mean_reversion_ma_lookback",
+                    "momentum_roc_lookback",
+                    "volatility_atr_lookback",
+                }
+            ),
         )
         self.assertNotIn("breakout_lookback", caps.required_entry_rules)
         self.assertIn("protective_stop_pct", caps.required_exit_rules)
