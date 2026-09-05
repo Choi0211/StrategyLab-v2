@@ -1,0 +1,578 @@
+{
+  "breakout_fast_multi_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "f93b63d7ce324178cd7fe51aefba2517c67826c42250500e80ce62555fc4566a",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_fast_standard": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "e1d9bd8b9f5bdc6ac882bfcb2dbe85e0a623867ebf95b3067ac51ae1015eec2b",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_fast_trend_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "0e771928c2c9f2e2c0adf2ca7310489ffaa3cecd7d9d8ac591f2521f808c575a",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_fast_volume_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "375ebdb2b7481b1afdd52b4c1af1816badd7fec29156f60be8151d314e375326",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_multi_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "53e8e5bc75783a9c76f60e5881a75052725ad2a6f9a1862b8fa23a3fe8eb584d",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_slow_multi_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "7898dc4d2f0edad77a078f238096807c7666484fb231d97c58e240035665d0ad",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_slow_standard": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "7fae206c06f0ee16e1bf8f2361a80ef89d9e3de18de0195ae88cfada7acfe79f",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_slow_trend_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "767e15f0810dcc3c1e23eb2b69fac6539d71c8cf0928ec658244f47ec16b4852",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_slow_volume_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "94b23820aca2672688d34f2526ce18a32827d67d642cf9c90393f964dec71c62",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_standard": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "bcac2bd5fbe559bf8c1b41443dcbe1e9adbb697616cd7f77f5824ee9b73161f7",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_trend_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "7579ff5510f798630ec51ef9f39275de1bf6630f777bacf0edb409471c192ac8",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_volume_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "8243d5b824d4b8eabb9fdb89e7298559289060b723be77b78b52b5f0eeca77aa",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_wide_multi_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "57cd8a5375d5b094390978050d7c315bbf01a8ce6b9bb1feba439e0d5ddcfa82",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_wide_standard": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "43651438f1144bbb94fc2e451a134af6c3ac414cd483a3edd81d4877beaae3ce",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_wide_trend_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "a8c2b28067a43ce3685d31302ac06e765d99d76a10b3188a80781cc0cbc1c251",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  },
+  "breakout_wide_volume_confirmed": {
+    "equity_curve_last": {
+      "equity": 1156105.5228,
+      "timestamp": "2026-07-10"
+    },
+    "metrics": {
+      "average_loss": null,
+      "average_trade": 153273.2997,
+      "average_win": 153273.2997,
+      "cagr": 0.321361,
+      "ending_equity": 1156105.5228,
+      "expectancy": 153273.2997,
+      "exposure": 0.65445,
+      "longest_losing_streak": 0,
+      "mdd": 0.034084,
+      "payoff_ratio": null,
+      "profit_factor": Infinity,
+      "sharpe": 2.327419,
+      "total_return": 0.156106,
+      "trade_count": 1,
+      "win_rate": 1.0
+    },
+    "strategy_family_fingerprint": "662bbe79fd170f90c316ebb7dc11b5a10689e06b9f319a6ca5222a247b57f693",
+    "trade_count": 1,
+    "trades": [
+      [
+        "2026-03-07",
+        "2026-07-10",
+        115.6627,
+        133.3924,
+        8645,
+        0.153288,
+        "end_of_dataset"
+      ]
+    ]
+  }
+}
