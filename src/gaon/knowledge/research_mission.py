@@ -1182,6 +1182,56 @@ def _kr_market_wide_requested(text: str) -> tuple[bool, tuple[str, ...]]:
 # Mission extraction / update
 # ---------------------------------------------------------------------------
 
+# fix/cross-transport-owner-research-mission: "단타 연구 계속해줘" style
+# CONTINUATION-shaped requests (is_generic_continuation_request) presuppose
+# something ALREADY exists to continue. When no mission exists at all
+# (session-local or durable-owner), extract_or_update_mission's own
+# research_intent union unconditionally manufactures a brand-new
+# SINGLE_SYMBOL placeholder mission for such text, because a bare
+# continuation phrase alone still counts as "research intent". This
+# predicate identifies the SAME three unambiguous "the user is declaring a
+# genuinely NEW scope right now" signals extract_or_update_mission itself
+# already computes (kr_market_wide / an explicit multi-symbol list / an
+# explicit target promotion-ready count) - deliberately NOT
+# _extract_strategy_family, since a bare family/topic word ("단타") is
+# exactly what a continuation phrase about an EXISTING "단타" mission also
+# contains; treating it as its own "new scope" signal would defeat this
+# predicate's purpose for precisely the reported defect. Callers combine
+# this with is_generic_continuation_request themselves - this predicate
+# alone says nothing about continuation shape.
+def has_explicit_new_mission_scope(text: str) -> bool:
+    kr_market_wide, _ = _kr_market_wide_requested(text)
+    if kr_market_wide:
+        return True
+    if len(_extract_explicit_multi_symbols(text)) >= 1:
+        return True
+    if _extract_target_count(text) is not None:
+        return True
+    return False
+
+
+# fix/cross-transport-owner-research-mission: a durable ResearchMission
+# resolved from a DIFFERENT (owner-matched) session must never be handed
+# to a request whose own text names an incompatible domain/scope - e.g. a
+# request about a market-wide KR mission must not silently continue an
+# unrelated mission whose ``strategy_family`` the text explicitly
+# contradicts. Reuses ONLY the same extraction helpers
+# extract_or_update_mission itself already trusts (no new keyword lists,
+# no invented market/domain detectors for domains - like Binance/crypto -
+# this ResearchMission model does not represent today). A request that
+# names NO scope signal at all is compatible with every mission - the
+# caller is responsible for failing closed/asking for clarification when
+# more than one compatible mission exists for the same owner.
+def is_mission_compatible_with_request(mission: ResearchMission, text: str) -> bool:
+    requested_family = _extract_strategy_family(text)
+    if requested_family is not None and mission.strategy_family is not None and requested_family != mission.strategy_family:
+        return False
+    kr_market_wide, _ = _kr_market_wide_requested(text)
+    if kr_market_wide and mission.market != "KR":
+        return False
+    return True
+
+
 def extract_or_update_mission(
     text: str,
     *,

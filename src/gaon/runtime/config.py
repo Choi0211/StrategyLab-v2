@@ -20,6 +20,19 @@ class GaonRuntimeConfig:
     telegram_enabled: bool = False
     telegram_bot_token: str | None = None
     telegram_allowed_chat_ids: tuple[str, ...] = ()
+    # fix/cross-transport-owner-research-mission: an explicit, opt-in
+    # declaration that specific Telegram chat ids and specific Web
+    # user_ref values (as sent, unprefixed, in a /gaon/chat request body -
+    # see GaonWebChatAdapter/LLMConversationRequest.user_ref's
+    # "web-user:{user_ref}" prefix) belong to the SAME durable research
+    # owner. Never inferred from user_ref string shape - both lists
+    # default to empty, meaning NO cross-transport ResearchMission sharing
+    # happens unless the operator explicitly configures it here. owner_ref
+    # is only a label (never a secret) used to tag the resolved identity in
+    # warnings/logs; it grants no authority by itself.
+    owner_ref: str | None = None
+    owner_telegram_chat_ids: tuple[str, ...] = ()
+    owner_web_user_refs: tuple[str, ...] = ()
     notion_enabled: bool = False
     notion_token: str | None = None
     notion_parent_page_id: str | None = None
@@ -60,6 +73,13 @@ class GaonRuntimeConfig:
         for chat_id in self.telegram_allowed_chat_ids:
             if not chat_id or not chat_id.lstrip("-").isdigit():
                 raise ConfigurationError("telegram allowed chat IDs must be numeric")
+        for chat_id in self.owner_telegram_chat_ids:
+            if not chat_id or not chat_id.lstrip("-").isdigit():
+                raise ConfigurationError("owner telegram chat IDs must be numeric")
+            if chat_id not in self.telegram_allowed_chat_ids:
+                raise ConfigurationError("owner telegram chat IDs must be a subset of telegram_allowed_chat_ids")
+        if (self.owner_telegram_chat_ids or self.owner_web_user_refs) and not self.owner_ref:
+            raise ConfigurationError("owner_ref is required when owner_telegram_chat_ids or owner_web_user_refs is set")
         if self.telegram_enabled and not self.telegram_bot_token:
             raise ConfigurationError("telegram token is required when Telegram is enabled")
         if self.notion_enabled and not self.notion_token:
@@ -101,6 +121,8 @@ class GaonRuntimeConfig:
             f"mode={self.mode!r}, telegram_enabled={self.telegram_enabled!r}, "
             f"telegram_bot_token={mask_secret(self.telegram_bot_token)!r}, "
             f"telegram_allowed_chat_ids={self.telegram_allowed_chat_ids!r}, "
+            f"owner_ref={self.owner_ref!r}, owner_telegram_chat_ids={self.owner_telegram_chat_ids!r}, "
+            f"owner_web_user_refs={self.owner_web_user_refs!r}, "
             f"notion_enabled={self.notion_enabled!r}, notion_token={mask_secret(self.notion_token)!r}, "
             f"timezone={self.timezone!r}, dry_run={self.dry_run!r}, "
             f"approval_signing_secret={mask_secret(self.approval_signing_secret)!r}, "
@@ -118,6 +140,9 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         telegram_enabled=parse_bool(env.get("GAON_TELEGRAM_ENABLED"), "GAON_TELEGRAM_ENABLED", default=False),
         telegram_bot_token=env.get("GAON_TELEGRAM_BOT_TOKEN"),
         telegram_allowed_chat_ids=_csv(env.get("GAON_TELEGRAM_ALLOWED_CHAT_IDS")),
+        owner_ref=env.get("GAON_OWNER_REF"),
+        owner_telegram_chat_ids=_csv(env.get("GAON_OWNER_TELEGRAM_CHAT_IDS")),
+        owner_web_user_refs=_csv(env.get("GAON_OWNER_WEB_USER_REFS")),
         notion_enabled=parse_bool(env.get("GAON_NOTION_ENABLED"), "GAON_NOTION_ENABLED", default=False),
         notion_token=env.get("GAON_NOTION_TOKEN"),
         notion_parent_page_id=env.get("GAON_NOTION_PARENT_PAGE_ID"),
