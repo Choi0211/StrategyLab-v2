@@ -225,10 +225,26 @@ class CapabilityContractIsExplicitTests(unittest.TestCase):
     def test_capabilities_object_exposes_the_full_grammar(self) -> None:
         caps = RULE_BASED_BACKTEST_CAPABILITIES
         self.assertEqual(caps.engine_name, RULE_BASED_ENGINE_NAME)
-        self.assertEqual(caps.supported_entry_rules, frozenset({"breakout_lookback", "close_gt_ma20", "ma20_gt_ma60"}))
+        # feature/mean-reversion-capability: the entry grammar gained the
+        # mean-reversion entry trigger and its optional band parameter.
+        self.assertEqual(
+            caps.supported_entry_rules,
+            frozenset(
+                {
+                    "breakout_lookback",
+                    "mean_reversion_ma_lookback",
+                    "mean_reversion_band_pct",
+                    "close_gt_ma20",
+                    "ma20_gt_ma60",
+                }
+            ),
+        )
         self.assertEqual(caps.supported_exit_rules, frozenset({"protective_stop_pct", "channel_exit_lookback"}))
         self.assertEqual(caps.supported_filters, frozenset({"volume_gte_ma20"}))
-        self.assertIn("breakout_lookback", caps.required_entry_rules)
+        # breakout_lookback is no longer individually required - it is one
+        # of the entry-trigger GROUP, of which a spec must carry exactly one.
+        self.assertEqual(caps.entry_trigger_rules, frozenset({"breakout_lookback", "mean_reversion_ma_lookback"}))
+        self.assertNotIn("breakout_lookback", caps.required_entry_rules)
         self.assertIn("protective_stop_pct", caps.required_exit_rules)
 
     def test_supports_answers_a_whole_spec_question_not_a_partial_one(self) -> None:
