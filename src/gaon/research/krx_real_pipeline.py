@@ -922,6 +922,20 @@ def _param_mean_reversion_band_pct(spec: "CanonicalStrategySpec") -> float:
     return abs(float(provenanced.value)) if provenanced is not None else 5.0
 
 
+def _param_momentum_roc_lookback(spec: "CanonicalStrategySpec") -> int:
+    return int(spec.entry["momentum_roc_lookback"].value)
+
+
+def _param_momentum_min_roc_pct(spec: "CanonicalStrategySpec") -> float:
+    """Minimum N-bar rate of change (percent) for a momentum entry.
+    Optional - defaults to 10.0 (= a 10% rise over the lookback window).
+    ``abs()`` for the same sign-robustness reason as the other percent
+    parameters; a negative momentum threshold is nonsensical for a
+    long-on-strength trigger."""
+    provenanced = spec.entry.get("momentum_min_roc_pct")
+    return abs(float(provenanced.value)) if provenanced is not None else 10.0
+
+
 # --- entry-trigger handlers: (spec, ctx: _BarEvalContext) -> bool ----------
 # Returns True when THIS bar opens a position. Exactly one entry-trigger
 # rule is present per spec (RuleBasedBacktestCapabilities enforces the
@@ -954,12 +968,38 @@ def _entry_trigger_mean_reversion(spec: "CanonicalStrategySpec", ctx: "_BarEvalC
     return ctx.close <= sma * (1.0 - band)
 
 
+def _entry_trigger_momentum(spec: "CanonicalStrategySpec", ctx: "_BarEvalContext") -> bool:
+    """Momentum - enter long when the close is at least
+    ``momentum_min_roc_pct`` percent above its level ``momentum_roc_lookback``
+    bars ago (an N-bar rate of change). Distinct from breakout, which
+    needs a fresh N-bar HIGH: a series that rose and then went flat still
+    has a large N-bar ROC (today's close vs the close on the rising leg N
+    bars back) while printing no new high. Closed-bar only (ctx.prior_closes
+    excludes the current bar); no look-ahead."""
+    lookback = int(BACKTEST_RULE_REGISTRY["momentum_roc_lookback"].lookback(spec))
+    if lookback <= 0:
+        return False
+    window = ctx.prior_closes[-lookback:]
+    if len(window) < lookback:
+        return False
+    past_close = window[0]  # close exactly ``lookback`` bars before this bar
+    if past_close <= 0:
+        return False
+    roc = (ctx.close / past_close) - 1.0
+    threshold = float(BACKTEST_RULE_REGISTRY["momentum_min_roc_pct"].handler(spec)) / 100.0
+    return roc >= threshold
+
+
 def _entry_trigger_lookback_breakout(spec: "CanonicalStrategySpec") -> int:
     return _param_breakout_lookback(spec)
 
 
 def _entry_trigger_lookback_mean_reversion(spec: "CanonicalStrategySpec") -> int:
     return _param_mean_reversion_ma_lookback(spec)
+
+
+def _entry_trigger_lookback_momentum(spec: "CanonicalStrategySpec") -> int:
+    return _param_momentum_roc_lookback(spec)
 
 
 @dataclass(frozen=True)
@@ -985,6 +1025,8 @@ BACKTEST_RULE_DEFINITIONS: tuple[BacktestRuleDefinition, ...] = (
     BacktestRuleDefinition("breakout_lookback", "entry", "entry_trigger", False, _entry_trigger_breakout, lookback=_entry_trigger_lookback_breakout),
     BacktestRuleDefinition("mean_reversion_ma_lookback", "entry", "entry_trigger", False, _entry_trigger_mean_reversion, lookback=_entry_trigger_lookback_mean_reversion),
     BacktestRuleDefinition("mean_reversion_band_pct", "entry", "parameter", False, _param_mean_reversion_band_pct, default=5.0),
+    BacktestRuleDefinition("momentum_roc_lookback", "entry", "entry_trigger", False, _entry_trigger_momentum, lookback=_entry_trigger_lookback_momentum),
+    BacktestRuleDefinition("momentum_min_roc_pct", "entry", "parameter", False, _param_momentum_min_roc_pct, default=10.0),
     BacktestRuleDefinition("close_gt_ma20", "entry", "predicate", False, _predicate_close_gt_ma20),
     BacktestRuleDefinition("ma20_gt_ma60", "entry", "predicate", False, _predicate_ma20_gt_ma60),
     BacktestRuleDefinition("protective_stop_pct", "exit", "parameter", True, _param_protective_stop_pct),
@@ -1079,8 +1121,8 @@ class RuleBasedBacktestCapabilities:
     @property
     def entry_trigger_rules(self) -> frozenset[str]:
         """feature/mean-reversion-capability: the entry-trigger GROUP - the
-        rules of which a spec must carry exactly one (currently
-        ``breakout_lookback`` and ``mean_reversion_ma_lookback``)."""
+        rules of which a spec must carry exactly one (``breakout_lookback``,
+        ``mean_reversion_ma_lookback``, ``momentum_roc_lookback``)."""
         return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.kind == "entry_trigger")
 
     def unsupported_components(self, spec: CanonicalStrategySpec) -> tuple[tuple[str, str], ...]:

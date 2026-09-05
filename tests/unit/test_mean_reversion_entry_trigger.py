@@ -84,7 +84,11 @@ class RegistryHasMeanReversionRulesTests(unittest.TestCase):
         caps = RULE_BASED_BACKTEST_CAPABILITIES
         self.assertIn("mean_reversion_ma_lookback", caps.supported_entry_rules)
         self.assertIn("mean_reversion_band_pct", caps.supported_entry_rules)
-        self.assertEqual(caps.entry_trigger_rules, frozenset({"breakout_lookback", "mean_reversion_ma_lookback"}))
+        # mean-reversion joined the entry-trigger group (later PRs add more).
+        self.assertLessEqual(
+            frozenset({"breakout_lookback", "mean_reversion_ma_lookback"}), caps.entry_trigger_rules
+        )
+        self.assertIn("mean_reversion_ma_lookback", caps.entry_trigger_rules)
 
 
 class EntryTriggerGroupIsExactlyOneTests(unittest.TestCase):
