@@ -245,10 +245,19 @@ class CapabilityContractIsExplicitTests(unittest.TestCase):
             ),
         )
         self.assertEqual(caps.supported_exit_rules, frozenset({"protective_stop_pct", "channel_exit_lookback"}))
-        # the filter grammar gained the relative-strength gate (this PR).
+        # the filter grammar gained the relative-strength gate (PR #190)
+        # and the market-regime gate (this PR).
         self.assertEqual(
             caps.supported_filters,
-            frozenset({"volume_gte_ma20", "relative_strength_min", "relative_strength_lookback"}),
+            frozenset(
+                {
+                    "volume_gte_ma20",
+                    "relative_strength_min",
+                    "relative_strength_lookback",
+                    "regime_bullish_only",
+                    "regime_ma_lookback",
+                }
+            ),
         )
         # breakout_lookback is no longer individually required - it is one
         # of the entry-trigger GROUP, of which a spec must carry exactly one.
