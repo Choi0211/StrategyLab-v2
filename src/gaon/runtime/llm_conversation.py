@@ -3216,12 +3216,31 @@ class LLMConversationBrain:
     # including diagnostic/release-check/CLI sessions, other allowed
     # Telegram chats not declared as the owner, and any Web caller that
     # did not supply the configured owner user_ref.
-    def _canonical_owner_ref(self, source: str, user_ref: str) -> str | None:
+    # Independent-review fix (Issue 1): TelegramConversationAgent sets
+    # session_id=f"telegram:{message.conversation_id}" (the CHAT the
+    # message arrived in) and user_ref=f"telegram-user:{message.user_id}"
+    # (the SENDER) as two SEPARATE fields - they coincide for an ordinary
+    # 1:1 Telegram chat but are never guaranteed to (group chats have one
+    # chat_id shared by many distinct user_ids). owner_telegram_chat_ids
+    # is validated as a subset of telegram_allowed_chat_ids - the existing
+    # chat-level access allowlist - so owner membership must be judged
+    # against the same chat identity, never against whichever user sent
+    # the message. This is an explicit, narrow parse of the session_id's
+    # own "telegram:{chat_id}" transport contract (see
+    # TelegramConversationAgent) - never a generic string-shape guess for
+    # other sources.
+    def _telegram_chat_id_from_session_id(self, session_id: str) -> str | None:
+        prefix = "telegram:"
+        if not session_id.startswith(prefix):
+            return None
+        return session_id[len(prefix):]
+
+    def _canonical_owner_ref(self, source: str, session_id: str, user_ref: str) -> str | None:
         if not self._config.owner_ref:
             return None
-        if source == "telegram" and user_ref.startswith("telegram-user:"):
-            raw = user_ref[len("telegram-user:"):]
-            if raw in self._config.owner_telegram_chat_ids:
+        if source == "telegram":
+            chat_id = self._telegram_chat_id_from_session_id(session_id)
+            if chat_id is not None and chat_id in self._config.owner_telegram_chat_ids:
                 return self._config.owner_ref
         elif source == "web" and user_ref.startswith("web-user:"):
             raw = user_ref[len("web-user:"):]
@@ -3232,27 +3251,62 @@ class LLMConversationBrain:
     def _connection(self) -> "sqlite3.Connection | None":
         return getattr(self._repository, "_connection", None)
 
-    # fix/cross-transport-owner-research-mission: same bounded-scan
-    # pattern already shipped and proven in
-    # gaon.runtime.web_api._list_pending_approval_missions - reads only
-    # the existing, already-durable conversation_sessions.metadata_json
-    # storage every other mission read in this codebase already uses,
-    # never a second mission representation. Bounded by `limit`
-    # (most-recently-updated sessions first), never an unbounded scan.
-    def _durable_owner_mission_candidates(self, owner_ref: str, *, exclude_session_id: str, limit: int = 200) -> tuple[tuple[str, ResearchMission], ...]:
+    # Independent-review fix (Issue 2): the previous implementation
+    # pre-filtered to the globally most-recently-updated N sessions
+    # BEFORE applying the owner check - on a real production database
+    # (browser sessions, diagnostic/release-check/CLI sessions, other
+    # transports all sharing this same table and constantly bumping their
+    # own updated_at), the owner's OWN session row could be pushed outside
+    # that global top-N by sheer unrelated volume, silently making a real,
+    # existing durable mission invisible - and, via _remember_mission's
+    # use of this same method to find a mission's actual owning row,
+    # capable of causing a duplicate authoritative copy to be created
+    # under the wrong session once the true owner could no longer be
+    # found.
+    #
+    # Fixed by filtering to the OWNER'S OWN, EXPLICITLY CONFIGURED
+    # identities directly in SQL - never a global scan. owner_ref only
+    # ever names ONE configured owner (see config.py), so this queries
+    # for exactly that owner's declared telegram:{chat_id} session_ids and
+    # web-user:{ref} user_refs (the same literal transport-contract
+    # strings _canonical_owner_ref itself parses) - a diagnostic/CLI/
+    # unconfigured/other-owner session can never even be a SQL candidate
+    # row, regardless of how many such sessions exist or how recently they
+    # were touched. No LIMIT is applied: the candidate set is already
+    # bounded by the (small, operator-configured) number of declared
+    # owner identities, not by how much unrelated traffic the database has
+    # accumulated.
+    def _durable_owner_mission_candidates(self, owner_ref: str, *, exclude_session_id: str) -> tuple[tuple[str, ResearchMission], ...]:
         connection = self._connection()
-        if connection is None:
+        if connection is None or owner_ref != self._config.owner_ref:
             return ()
+        telegram_session_ids = [f"telegram:{chat_id}" for chat_id in self._config.owner_telegram_chat_ids]
+        web_user_refs = [f"web-user:{user_ref}" for user_ref in self._config.owner_web_user_refs]
+        if not telegram_session_ids and not web_user_refs:
+            return ()
+        conditions: list[str] = []
+        params: list[str] = []
+        if telegram_session_ids:
+            placeholders = ",".join("?" for _ in telegram_session_ids)
+            conditions.append(f"session_id IN ({placeholders})")
+            params.extend(telegram_session_ids)
+        if web_user_refs:
+            placeholders = ",".join("?" for _ in web_user_refs)
+            conditions.append(f"(source = 'web' AND user_ref IN ({placeholders}))")
+            params.extend(web_user_refs)
         rows = connection.execute(
-            "SELECT session_id, source, user_ref, metadata_json FROM conversation_sessions ORDER BY updated_at DESC LIMIT ?",
-            (limit,),
+            f"SELECT session_id, source, user_ref, metadata_json FROM conversation_sessions WHERE {' OR '.join(conditions)} ORDER BY updated_at DESC",
+            tuple(params),
         ).fetchall()
         found: list[tuple[str, ResearchMission]] = []
         for session_id, source, user_ref, metadata_json in rows:
             session_id = str(session_id)
             if session_id == exclude_session_id:
                 continue
-            if self._canonical_owner_ref(str(source), str(user_ref)) != owner_ref:
+            # Defense-in-depth: re-validates through the single canonical
+            # identity contract rather than trusting the SQL WHERE clause
+            # alone to stay in sync with it.
+            if self._canonical_owner_ref(str(source), session_id, str(user_ref)) != owner_ref:
                 continue
             try:
                 metadata = loads_json(str(metadata_json))
@@ -3288,7 +3342,7 @@ class LLMConversationBrain:
     #   DISTINCT, compatible mission exists for this owner - the caller
     #   must ask for clarification rather than pick one arbitrarily.
     def _resolve_durable_owner_mission(self, request: LLMConversationRequest) -> tuple[ResearchMission | None, bool]:
-        owner_ref = self._canonical_owner_ref(request.source, request.user_ref)
+        owner_ref = self._canonical_owner_ref(request.source, request.session_id, request.user_ref)
         if owner_ref is None:
             return None, False
         candidates = self._durable_owner_mission_candidates(owner_ref, exclude_session_id=request.session_id)
@@ -3336,7 +3390,7 @@ class LLMConversationBrain:
             # is not owned anywhere else does this fall back to creating it
             # in the current session - the normal "brand-new mission"
             # first-ever-save case, unchanged from before this hotfix.
-            owner_ref = self._canonical_owner_ref(session.source, session.user_ref)
+            owner_ref = self._canonical_owner_ref(session.source, session.session_id, session.user_ref)
             owning = None
             if owner_ref is not None:
                 for other_session_id, other_mission in self._durable_owner_mission_candidates(owner_ref, exclude_session_id=request.session_id):

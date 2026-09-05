@@ -22,13 +22,14 @@ configured.
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import parse_update_result
 from gaon.knowledge.research_mission import extract_or_update_mission
 from gaon.runtime.config import GaonRuntimeConfig
-from gaon.runtime.llm_conversation import LLMConversationRequest
+from gaon.runtime.llm_conversation import LLMConversationRequest, LLMConversationSession, SQLiteConversationRepository
 from gaon.runtime.research_grounding import is_strict_real_research_tool
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.telegram_agent import TelegramConversationAgent
@@ -73,15 +74,26 @@ class _FakeTelegramClient:
         return TelegramResponse(chat_id, text, dry_run=False, correlation_id=f"sent:{len(self.sent)}", message_id=str(len(self.sent)))
 
 
-def _telegram_update(update_id: int, text: str, *, chat_id: str) -> dict:
-    return {"update_id": update_id, "message": {"message_id": update_id, "chat": {"id": int(chat_id)}, "from": {"id": int(chat_id)}, "text": text}}
+def _telegram_update(update_id: int, text: str, *, chat_id: str, user_id: str | None = None) -> dict:
+    # Independent-review fix (Issue 1): chat_id (the CONVERSATION the
+    # message arrived in - TelegramConversationAgent's session_id) and
+    # user_id (the SENDER - TelegramConversationAgent's user_ref) are
+    # deliberately DIFFERENT by default here (user_id defaults to a value
+    # distinct from chat_id, never silently equal) so that a test using
+    # the default never hides a chat_id/user_id identity mismatch the way
+    # the original chat.id == from.id helper did.
+    resolved_user_id = user_id if user_id is not None else f"{chat_id}9"
+    return {
+        "update_id": update_id,
+        "message": {"message_id": update_id, "chat": {"id": int(chat_id)}, "from": {"id": int(resolved_user_id)}, "text": text},
+    }
 
 
-def _telegram_send(config: GaonRuntimeConfig, connection, text: str, *, chat_id: str = OWNER_CHAT_ID, update_id: int = 1, received_at: str = NOW) -> tuple[str, TelegramConversationAgent]:
+def _telegram_send(config: GaonRuntimeConfig, connection, text: str, *, chat_id: str = OWNER_CHAT_ID, user_id: str | None = None, update_id: int = 1, received_at: str = NOW) -> tuple[str, TelegramConversationAgent]:
     agent = TelegramConversationAgent(config, connection)
     runtime = TelegramRuntime(agent, allowed_chat_ids=(chat_id,))
     client = _FakeTelegramClient()
-    process_update(parse_update_result(_telegram_update(update_id, text, chat_id=chat_id), received_at=received_at), runtime, client)
+    process_update(parse_update_result(_telegram_update(update_id, text, chat_id=chat_id, user_id=user_id), received_at=received_at), runtime, client)
     return client.sent[-1][1], agent
 
 
@@ -120,6 +132,59 @@ def _seed_web_mission(config: GaonRuntimeConfig, connection, mission, *, session
         LLMConversationRequest(session_id=f"web:{session_ref}", user_ref=f"web-user:{user_ref}", source="web", text="x", received_at=NOW),
         mission,
     )
+
+
+def _inject_unrelated_noise_sessions(connection, count: int, *, updated_at: str) -> None:
+    """Directly inserts `count` unrelated conversation_sessions rows (no
+    owner mission, no owner identity) all stamped with `updated_at` - used
+    to reproduce the confirmed production condition where diagnostic/CLI/
+    browser/binance-dashboard session volume vastly outnumbers, and is more
+    recently updated than, the real owner's durable mission session. A
+    LIMIT-based global scan ordered by updated_at DESC would push the real
+    owner mission out of its window; an owner-identity-first SQL filter
+    must not be affected by this volume at all."""
+    repository = SQLiteConversationRepository(connection)
+    sources = ("web", "cli", "diagnostic")
+    for index in range(count):
+        source = sources[index % len(sources)]
+        session_id = f"{source}:noise-{index}" if source != "web" else f"web:browser:noise-{index}"
+        repository.upsert_session(
+            LLMConversationSession(
+                session_id=session_id,
+                user_ref=f"web-user:noise-{index}" if source == "web" else f"{source}-user:noise-{index}",
+                source=source,
+                status="active",
+                created_at=updated_at,
+                updated_at=updated_at,
+                metadata={},
+            )
+        )
+
+
+def _authoritative_mission_id(connection, session_id: str) -> str | None:
+    """Precise dict-key inspection of the ONE authoritative mission field
+    (conversation_mvp.research_mission.mission_id) for a session - never a
+    LIKE-substring scan, which can also match unrelated session-local data
+    such as ConversationalMVPContext's own JSON payload."""
+    row = connection.execute("SELECT metadata_json FROM conversation_sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if row is None:
+        return None
+    metadata = json.loads(row[0])
+    root = metadata.get("conversation_mvp")
+    if not isinstance(root, dict):
+        return None
+    raw_mission = root.get("research_mission")
+    if not isinstance(raw_mission, dict):
+        return None
+    return raw_mission.get("mission_id")
+
+
+def _sessions_with_authoritative_mission(connection, mission_id: str) -> list[str]:
+    """DB-wide scan (every session_id) using the same precise dict-key
+    inspection, to prove exactly one session holds the authoritative copy
+    of a given mission_id."""
+    rows = connection.execute("SELECT session_id FROM conversation_sessions").fetchall()
+    return [session_id for (session_id,) in rows if _authoritative_mission_id(connection, session_id) == mission_id]
 
 
 class TelegramSeedWebReadTests(unittest.TestCase):
@@ -275,6 +340,59 @@ class CrossOwnerIsolationTests(unittest.TestCase):
             store.close()
 
 
+class TelegramChatIdVsUserIdIdentityTests(unittest.TestCase):
+    """Independent-review Issue 1: TelegramConversationAgent sets
+    session_id=f"telegram:{message.conversation_id}" (the CHAT) and
+    user_ref=f"telegram-user:{message.user_id}" (the SENDER) as two
+    SEPARATE fields. owner_telegram_chat_ids is validated as a subset of
+    telegram_allowed_chat_ids - the existing CHAT-level access allowlist -
+    so owner membership must be judged by chat_id, never by whichever
+    user happens to send the message. A test helper that always sets
+    chat.id == from.id (as this file's own helpers originally did) hides
+    this exact class of bug."""
+
+    def test_configured_chat_id_resolves_as_owner_even_with_a_different_sender_user_id(self) -> None:
+        # chat_id="111" IS declared as the owner's chat; the SENDER's own
+        # user_id ("999") is unrelated and different - this must still
+        # resolve to the configured owner.
+        store = RuntimeStateStore(":memory:")
+        try:
+            config = GaonRuntimeConfig(
+                telegram_allowed_chat_ids=("111",),
+                owner_ref="ownerA",
+                owner_telegram_chat_ids=("111",),
+                owner_web_user_refs=("web-A",),
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            _agent, _mission = _seed_telegram_market_wide_daytrade_mission(config, store._connection, chat_id="111")
+            reply, _agent2 = _telegram_send(config, store._connection, "단타 연구 잘되고 있어?", chat_id="111", user_id="999", update_id=1)
+            self.assertIn("KOSPI", reply)
+        finally:
+            store.close()
+
+    def test_undeclared_chat_id_is_never_treated_as_owner_even_if_sender_user_id_coincides_with_a_configured_chat_id(self) -> None:
+        # chat_id="222" is allowed to talk to the bot but is NOT declared
+        # as the owner's chat. The sender's user_id ("111") happens to
+        # equal a DIFFERENT, actually-configured owner chat_id purely by
+        # coincidence - this must NEVER be treated as owner membership.
+        store = RuntimeStateStore(":memory:")
+        try:
+            config = GaonRuntimeConfig(
+                telegram_allowed_chat_ids=("111", "222"),
+                owner_ref="ownerA",
+                owner_telegram_chat_ids=("111",),
+                owner_web_user_refs=("web-A",),
+                assistant_enabled=True,
+                assistant_provider="deterministic",
+            )
+            _agent, _mission = _seed_telegram_market_wide_daytrade_mission(config, store._connection, chat_id="111")
+            reply, _agent2 = _telegram_send(config, store._connection, "단타 연구 잘되고 있어?", chat_id="222", user_id="111", update_id=1)
+            self.assertNotIn("KOSPI", reply)
+        finally:
+            store.close()
+
+
 class DiagnosticSessionExclusionTests(unittest.TestCase):
     """Requirement 7: diagnostic/CLI/release-check sessions must never be
     treated as the operator's own durable mission (they resolve to no
@@ -392,6 +510,60 @@ class NoOwnerConfiguredRegressionTests(unittest.TestCase):
             self.assertEqual(payload["route"], "conversation_research_status_no_mission")
         finally:
             store.close()
+
+
+class LargeUnrelatedSessionVolumeTests(unittest.TestCase):
+    """Independent-review fix (Issue 2): the durable owner mission lookup
+    must resolve correctly by OWNER IDENTITY, never by "most recently
+    updated N sessions" - reproduced with hundreds of unrelated, more
+    recently updated noise sessions (diagnostic/CLI/browser/binance-
+    dashboard volume) that a LIMIT-based global scan would let crowd the
+    real owner mission out of its window."""
+
+    def _run_with_noise(self, noise_count: int) -> None:
+        store = RuntimeStateStore(":memory:")
+        try:
+            config = _owner_config()
+            _agent, mission = _seed_telegram_market_wide_daytrade_mission(config, store._connection)
+            # All noise sessions are stamped strictly LATER than the owner's
+            # Telegram session, so a naive "ORDER BY updated_at DESC LIMIT N"
+            # scan would rank every one of them ahead of the real owner
+            # mission once noise_count exceeds that limit.
+            _inject_unrelated_noise_sessions(store._connection, noise_count, updated_at="2026-09-06T00:00:00Z")
+
+            # Test A: a pure status-read from the owner's Web identity must
+            # still find the Telegram-owned mission, with zero tool calls.
+            payload = _web_send(config, store._connection, "단타 연구 잘되고 있어?")
+            self.assertEqual(payload["route"], "conversation_mission_status_read")
+            self.assertEqual(payload["tool_calls"], [])
+            for candidate in mission.candidates:
+                self.assertIn(candidate["candidate_id"], payload["text"])
+            self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+
+            # Test B: an EXPLICIT continuation must still resolve to, and
+            # update, the SAME authoritative Telegram-owning row - not a
+            # new/duplicate mission in Web's own session.
+            payload = _web_send(config, store._connection, "단타 연구 계속해줘")
+            self.assertEqual(payload["tool_calls"], ["multi_symbol_research"])
+
+            web_mission_id = _authoritative_mission_id(store._connection, "web:browser:abc")
+            self.assertIsNone(web_mission_id, "Web's own session must never hold a duplicate authoritative mission copy")
+
+            telegram_mission_id = _authoritative_mission_id(store._connection, f"telegram:{OWNER_CHAT_ID}")
+            self.assertEqual(telegram_mission_id, mission.mission_id)
+
+            # Single source of truth, DB-wide: exactly one session row (out
+            # of noise_count + 2) may hold this mission_id.
+            owners = _sessions_with_authoritative_mission(store._connection, mission.mission_id)
+            self.assertEqual(owners, [f"telegram:{OWNER_CHAT_ID}"])
+        finally:
+            store.close()
+
+    def test_correct_with_200_unrelated_more_recently_updated_sessions(self) -> None:
+        self._run_with_noise(200)
+
+    def test_correct_with_500_unrelated_more_recently_updated_sessions(self) -> None:
+        self._run_with_noise(500)
 
 
 if __name__ == "__main__":
