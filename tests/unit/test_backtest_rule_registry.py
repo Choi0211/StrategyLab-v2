@@ -210,12 +210,16 @@ class EveryRegisteredPredicateIsExecutedTests(unittest.TestCase):
         vol_spec = _spec(
             {"volatility_atr_lookback": _v(20), "volatility_thrust_k": _v(1.5)}, _EXIT, {}
         )
+        rs_spec = _spec(
+            _ENTRY, _EXIT, {"relative_strength_min": _v(True), "relative_strength_lookback": _v(20)}
+        )
         spec_by_key = {
             "protective_stop_pct": _spec(_ENTRY, _EXIT, {}),
             "channel_exit_lookback": _spec(_ENTRY, _EXIT, {}),
             "mean_reversion_band_pct": mr_spec,
             "momentum_min_roc_pct": mom_spec,
             "volatility_thrust_k": vol_spec,
+            "relative_strength_lookback": rs_spec,
         }
         for key in parameter_keys:
             with self.subTest(rule=key):

@@ -880,6 +880,12 @@ class _BarEvalContext:
     # range-based ATR (mean of high - low) without reaching into raw bars.
     prior_highs: tuple[float, ...] = ()
     prior_lows: tuple[float, ...] = ()
+    # feature/relative-strength-filter: the traded symbol's N-bar return
+    # minus the equal-weight benchmark N-bar return (benchmark = the other
+    # symbols in the dataset), or None when it cannot be evaluated (no
+    # peers / not enough peer history). Only populated when the
+    # relative_strength_min filter is active.
+    relative_strength: float | None = None
 
 
 # --- predicate handlers: (active: bool, ctx: _BarEvalContext) -> bool -------
@@ -898,6 +904,18 @@ def _predicate_volume_gte_ma20(active: bool, ctx: "_BarEvalContext") -> bool:
     return (not active) or ctx.volume >= ctx.volume_ma20
 
 
+def _predicate_relative_strength_min(active: bool, ctx: "_BarEvalContext") -> bool:
+    """feature/relative-strength-filter: when active, only allow an entry
+    if the traded symbol's N-bar return is at least the equal-weight
+    benchmark's. ``ctx.relative_strength`` is None when it could not be
+    evaluated (no peer symbols in the dataset, or not enough peer
+    history) - in that case the gate fails CLOSED (blocks the entry)
+    rather than assuming a zero benchmark."""
+    if not active:
+        return True
+    return ctx.relative_strength is not None and ctx.relative_strength >= 0.0
+
+
 # --- parameter handlers: (spec: CanonicalStrategySpec) -> int | float ------
 # Returns the exact typed value RuleBasedBacktestEngine.run consumes for
 # this key. run() calls the handler - it never reads the key directly - so
@@ -913,6 +931,14 @@ def _param_channel_exit_lookback(spec: "CanonicalStrategySpec") -> int:
 
 def _param_protective_stop_pct(spec: "CanonicalStrategySpec") -> float:
     return abs(float(spec.exit["protective_stop_pct"].value)) / 100.0
+
+
+def _param_relative_strength_lookback(spec: "CanonicalStrategySpec") -> int:
+    """feature/relative-strength-filter: the N for both the traded
+    symbol's and the benchmark's return window. Optional - defaults to 20
+    trading days."""
+    provenanced = spec.filters.get("relative_strength_lookback")
+    return int(provenanced.value) if provenanced is not None else 20
 
 
 def _param_mean_reversion_ma_lookback(spec: "CanonicalStrategySpec") -> int:
@@ -1081,8 +1107,45 @@ BACKTEST_RULE_DEFINITIONS: tuple[BacktestRuleDefinition, ...] = (
     BacktestRuleDefinition("protective_stop_pct", "exit", "parameter", True, _param_protective_stop_pct),
     BacktestRuleDefinition("channel_exit_lookback", "exit", "parameter", False, _param_channel_exit_lookback, default=10),
     BacktestRuleDefinition("volume_gte_ma20", "filter", "predicate", False, _predicate_volume_gte_ma20),
+    BacktestRuleDefinition("relative_strength_min", "filter", "predicate", False, _predicate_relative_strength_min),
+    BacktestRuleDefinition("relative_strength_lookback", "filter", "parameter", False, _param_relative_strength_lookback, default=20),
 )
 BACKTEST_RULE_REGISTRY: dict[str, BacktestRuleDefinition] = {definition.key: definition for definition in BACKTEST_RULE_DEFINITIONS}
+
+
+def _benchmark_relative_strength(
+    close_now: float,
+    primary_prior_closes: "tuple[float, ...]",
+    peer_close_series: "tuple[tuple[float, ...], ...]",
+    lookback: int,
+) -> float | None:
+    """feature/relative-strength-filter: the traded symbol's N-bar return
+    minus the equal-weight mean of the peer symbols' N-bar returns.
+
+    ``primary_prior_closes`` and each series in ``peer_close_series`` are
+    the closes UP TO AND INCLUDING the current bar's timestamp (no
+    look-ahead - the caller only ever passes peer bars whose timestamp is
+    <= the current primary timestamp). Returns None when the benchmark
+    cannot be built (no peers, or a peer lacks ``lookback + 1`` closes) so
+    the gate can fail closed rather than invent a zero benchmark."""
+    if lookback <= 0 or len(primary_prior_closes) < lookback:
+        return None
+    primary_base = primary_prior_closes[-lookback]
+    if primary_base <= 0:
+        return None
+    primary_return = (close_now / primary_base) - 1.0
+    peer_returns: list[float] = []
+    for series in peer_close_series:
+        if len(series) < lookback + 1:
+            continue
+        base = series[-lookback - 1]
+        if base <= 0:
+            continue
+        peer_returns.append((series[-1] / base) - 1.0)
+    if not peer_returns:
+        return None
+    benchmark_return = sum(peer_returns) / len(peer_returns)
+    return primary_return - benchmark_return
 
 
 def _predicate_rule_active(rule_map: Mapping[str, "ProvenancedValue"], key: str) -> bool:
@@ -1356,7 +1419,24 @@ class RuleBasedBacktestEngine:
         # dropped, defaulted, or partially executed as a breakout.
         RULE_BASED_BACKTEST_CAPABILITIES.validate(strategy)
         at = generated_at or utc_now()
-        bars = tuple(sorted(dataset.bars, key=lambda bar: bar.timestamp))
+        # feature/relative-strength-filter: a dataset may now carry more
+        # than one symbol. The traded symbol's bars drive the simulation
+        # exactly as before; any OTHER symbols are the relative-strength
+        # benchmark and never enter the trade loop. A single-symbol
+        # dataset behaves identically to every prior version.
+        distinct_symbols = {item.symbol for item in dataset.bars}
+        if len(distinct_symbols) <= 1:
+            bars = tuple(sorted(dataset.bars, key=lambda bar: bar.timestamp))
+            peer_bars_by_symbol: dict[str, tuple[MarketBar, ...]] = {}
+        else:
+            bars = tuple(sorted((b for b in dataset.bars if b.symbol == strategy.symbol), key=lambda bar: bar.timestamp))
+            peer_bars_by_symbol = {
+                sym: tuple(sorted((b for b in dataset.bars if b.symbol == sym), key=lambda bar: bar.timestamp))
+                for sym in distinct_symbols
+                if sym != strategy.symbol
+            }
+            if not bars:
+                return _empty_result(run_id, strategy, dataset, assumptions, "rejected", (f"traded symbol {strategy.symbol!r} absent from multi-symbol dataset",), at)
         if len(bars) < 61:
             return _empty_result(run_id, strategy, dataset, assumptions, "rejected", ("insufficient bars for MA60 and breakout lookback",), at)
         initial_capital = float(assumptions.initial_capital.value)
@@ -1391,12 +1471,17 @@ class RuleBasedBacktestEngine:
         stop_pct = float(BACKTEST_RULE_REGISTRY["protective_stop_pct"].handler(strategy))
         entry_predicate_rules = tuple(d for d in BACKTEST_RULE_REGISTRY.values() if d.component == "entry" and d.kind == "predicate")
         filter_predicate_rules = tuple(d for d in BACKTEST_RULE_REGISTRY.values() if d.component == "filter" and d.kind == "predicate")
+        # feature/relative-strength-filter: only compute the benchmark when
+        # the gate is actually switched on - otherwise this whole block is
+        # inert and single-symbol runs are byte-identical to before.
+        rs_active = _predicate_rule_active(strategy.filters, "relative_strength_min")
+        rs_lookback = int(BACKTEST_RULE_REGISTRY["relative_strength_lookback"].handler(strategy)) if rs_active else 0
         for index, bar in enumerate(bars):
             if quantity:
                 invested_days += 1
             equity = cash + quantity * bar.close
             equity_curve.append({"timestamp": bar.timestamp, "equity": round(equity, 4)})
-            if index < max(60, entry_lookback, exit_n):
+            if index < max(60, entry_lookback, exit_n, rs_lookback):
                 continue
             prior = bars[:index]
             prior_high = max(item.high for item in prior[-entry_lookback:])
@@ -1405,12 +1490,24 @@ class RuleBasedBacktestEngine:
             volume_ma20 = sum(item.volume for item in prior[-20:]) / 20
             prior_low = min(item.low for item in prior[-exit_n:])
             if quantity == 0:
+                relative_strength: float | None = None
+                if rs_active:
+                    relative_strength = _benchmark_relative_strength(
+                        bar.close,
+                        tuple(item.close for item in prior[-rs_lookback:]),
+                        tuple(
+                            tuple(b.close for b in peer_bars if b.timestamp <= bar.timestamp)
+                            for peer_bars in peer_bars_by_symbol.values()
+                        ),
+                        rs_lookback,
+                    )
                 ctx = _BarEvalContext(
                     close=bar.close, ma20=ma20, ma60=ma60, volume=bar.volume,
                     volume_ma20=volume_ma20, prior_high=prior_high, prior_low=prior_low,
                     prior_closes=tuple(item.close for item in prior[-entry_lookback:]),
                     prior_highs=tuple(item.high for item in prior[-entry_lookback:]),
                     prior_lows=tuple(item.low for item in prior[-entry_lookback:]),
+                    relative_strength=relative_strength,
                 )
                 entry_ok = entry_trigger_def.handler(strategy, ctx) and all(
                     rule.handler(_predicate_rule_active(strategy.entry, rule.key), ctx) for rule in entry_predicate_rules
@@ -2281,11 +2378,19 @@ def _max_required_lookback(strategy: CanonicalStrategySpec) -> int:
         if key in strategy.entry:
             entry_lookback = int(BACKTEST_RULE_REGISTRY[key].lookback(strategy))
             break
+    # feature/relative-strength-filter: the RS gate, when switched on, adds
+    # its own return-window warm-up.
+    rs_lookback = (
+        int(strategy.filters.get("relative_strength_lookback", ProvenancedValue(20, FieldProvenance.DEFAULT)).value)
+        if strategy.filters.get("relative_strength_min")
+        else 0
+    )
     return max(
         60,
         entry_lookback,
         int(strategy.exit.get("channel_exit_lookback", ProvenancedValue(10, FieldProvenance.DEFAULT)).value),
         20 if strategy.filters.get("volume_gte_ma20") else 0,
+        rs_lookback,
     )
 
 
