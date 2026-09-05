@@ -23,6 +23,15 @@ def classify_tool_failure(error_type: str, message: str = "") -> ResearchFailure
         return ResearchFailure("market_data", error_type, True, "영하님, 실제 시장 데이터를 가져오지 못해 연구를 수행하지 못했습니다. 결과를 임의로 만들지 않겠습니다.")
     if "dataquality" in normalized or "blocking_quality" in normalized or "invalid_ohlc" in normalized or "duplicate" in normalized:
         return ResearchFailure("quality", error_type, False, "영하님, 시장 데이터 품질 문제로 백테스트를 중단했습니다. 결과를 임의로 만들지 않겠습니다.")
+    # fix/rule-based-engine-fail-closed: an UnsupportedStrategySpecError /
+    # UnsupportedStrategyRuleError from RuleBasedBacktestEngine means the
+    # strategy carries a rule the backtest engine does not implement - not
+    # retryable, and NOT a generic tool glitch. Surfaced as its own
+    # "engine_capability" stage so the conversation layer records
+    # research_failure_engine_capability rather than hiding it as a
+    # generic internal error, and never as an unverified backtest result.
+    if "unsupportedstrategy" in normalized:
+        return ResearchFailure("engine_capability", error_type, False, "영하님, 이 전략은 백테스트 엔진이 아직 해석하지 못하는 규칙을 포함하고 있어 검증을 진행하지 않았습니다. 검증되지 않은 결과는 만들지 않겠습니다.")
     if "backtest" in normalized:
         return ResearchFailure("backtest", error_type, False, "영하님, 백테스트 실행 중 오류가 발생했습니다. 검증되지 않은 성과 수치는 만들지 않겠습니다.")
     return ResearchFailure("tool", error_type, True, "영하님, 연구 도구 실행 중 오류가 발생했습니다. 검증되지 않은 연구 결과는 만들지 않겠습니다.")
@@ -47,4 +56,4 @@ def warning_for_failure(failure: ResearchFailure) -> str:
 
 def _looks_like_research_failure(error_type: str, message: str) -> bool:
     normalized = f"{error_type} {message}".casefold()
-    return any(token in normalized for token in ("realmarketdataunavailable", "real_data_unavailable", "dataquality", "backtest", "blocking_quality"))
+    return any(token in normalized for token in ("realmarketdataunavailable", "real_data_unavailable", "dataquality", "backtest", "blocking_quality", "unsupportedstrategy"))
