@@ -886,6 +886,11 @@ class _BarEvalContext:
     # peers / not enough peer history). Only populated when the
     # relative_strength_min filter is active.
     relative_strength: float | None = None
+    # feature/market-regime-filter: "bull" / "bear" / "neutral" for the
+    # traded symbol on this bar (close vs its N-bar SMA and vs its level N
+    # bars back), or None when it cannot be evaluated. Only populated when
+    # the regime_bullish_only filter is active.
+    market_regime: str | None = None
 
 
 # --- predicate handlers: (active: bool, ctx: _BarEvalContext) -> bool -------
@@ -916,6 +921,16 @@ def _predicate_relative_strength_min(active: bool, ctx: "_BarEvalContext") -> bo
     return ctx.relative_strength is not None and ctx.relative_strength >= 0.0
 
 
+def _predicate_regime_bullish_only(active: bool, ctx: "_BarEvalContext") -> bool:
+    """feature/market-regime-filter: when active, only allow an entry when
+    the traded symbol is in a BULLISH regime (close above its N-bar SMA
+    AND above its level N bars ago). A non-bullish or unknown
+    (``ctx.market_regime is None``) regime fails CLOSED - the gate can
+    only ever remove an entry an entry trigger already wanted, never add
+    one, and it touches no risk parameter."""
+    return (not active) or ctx.market_regime == "bull"
+
+
 # --- parameter handlers: (spec: CanonicalStrategySpec) -> int | float ------
 # Returns the exact typed value RuleBasedBacktestEngine.run consumes for
 # this key. run() calls the handler - it never reads the key directly - so
@@ -939,6 +954,13 @@ def _param_relative_strength_lookback(spec: "CanonicalStrategySpec") -> int:
     trading days."""
     provenanced = spec.filters.get("relative_strength_lookback")
     return int(provenanced.value) if provenanced is not None else 20
+
+
+def _param_regime_ma_lookback(spec: "CanonicalStrategySpec") -> int:
+    """feature/market-regime-filter: the N for the regime's SMA and its
+    momentum comparison. Optional - defaults to 50 trading days."""
+    provenanced = spec.filters.get("regime_ma_lookback")
+    return int(provenanced.value) if provenanced is not None else 50
 
 
 def _param_mean_reversion_ma_lookback(spec: "CanonicalStrategySpec") -> int:
@@ -1109,6 +1131,8 @@ BACKTEST_RULE_DEFINITIONS: tuple[BacktestRuleDefinition, ...] = (
     BacktestRuleDefinition("volume_gte_ma20", "filter", "predicate", False, _predicate_volume_gte_ma20),
     BacktestRuleDefinition("relative_strength_min", "filter", "predicate", False, _predicate_relative_strength_min),
     BacktestRuleDefinition("relative_strength_lookback", "filter", "parameter", False, _param_relative_strength_lookback, default=20),
+    BacktestRuleDefinition("regime_bullish_only", "filter", "predicate", False, _predicate_regime_bullish_only),
+    BacktestRuleDefinition("regime_ma_lookback", "filter", "parameter", False, _param_regime_ma_lookback, default=50),
 )
 BACKTEST_RULE_REGISTRY: dict[str, BacktestRuleDefinition] = {definition.key: definition for definition in BACKTEST_RULE_DEFINITIONS}
 
@@ -1146,6 +1170,25 @@ def _benchmark_relative_strength(
         return None
     benchmark_return = sum(peer_returns) / len(peer_returns)
     return primary_return - benchmark_return
+
+
+def _classify_market_regime(close_now: float, regime_prior_closes: "tuple[float, ...]", lookback: int) -> str | None:
+    """feature/market-regime-filter: "bull" when the close is BOTH above
+    its N-bar SMA and above its level N bars ago; "bear" when it is below
+    both; "neutral" otherwise. None when there is not enough history.
+    ``regime_prior_closes`` are the closes up to (not including) this bar."""
+    if lookback <= 0 or len(regime_prior_closes) < lookback:
+        return None
+    window = regime_prior_closes[-lookback:]
+    sma = sum(window) / lookback
+    past = window[0]
+    above_ma = close_now > sma
+    rising = close_now > past
+    if above_ma and rising:
+        return "bull"
+    if (not above_ma) and (not rising):
+        return "bear"
+    return "neutral"
 
 
 def _predicate_rule_active(rule_map: Mapping[str, "ProvenancedValue"], key: str) -> bool:
@@ -1476,12 +1519,16 @@ class RuleBasedBacktestEngine:
         # inert and single-symbol runs are byte-identical to before.
         rs_active = _predicate_rule_active(strategy.filters, "relative_strength_min")
         rs_lookback = int(BACKTEST_RULE_REGISTRY["relative_strength_lookback"].handler(strategy)) if rs_active else 0
+        # feature/market-regime-filter: same "only when switched on" rule -
+        # the regime block is inert unless regime_bullish_only is set.
+        regime_active = _predicate_rule_active(strategy.filters, "regime_bullish_only")
+        regime_lookback = int(BACKTEST_RULE_REGISTRY["regime_ma_lookback"].handler(strategy)) if regime_active else 0
         for index, bar in enumerate(bars):
             if quantity:
                 invested_days += 1
             equity = cash + quantity * bar.close
             equity_curve.append({"timestamp": bar.timestamp, "equity": round(equity, 4)})
-            if index < max(60, entry_lookback, exit_n, rs_lookback):
+            if index < max(60, entry_lookback, exit_n, rs_lookback, regime_lookback):
                 continue
             prior = bars[:index]
             prior_high = max(item.high for item in prior[-entry_lookback:])
@@ -1501,6 +1548,13 @@ class RuleBasedBacktestEngine:
                         ),
                         rs_lookback,
                     )
+                market_regime: str | None = None
+                if regime_active:
+                    market_regime = _classify_market_regime(
+                        bar.close,
+                        tuple(item.close for item in prior[-regime_lookback:]),
+                        regime_lookback,
+                    )
                 ctx = _BarEvalContext(
                     close=bar.close, ma20=ma20, ma60=ma60, volume=bar.volume,
                     volume_ma20=volume_ma20, prior_high=prior_high, prior_low=prior_low,
@@ -1508,6 +1562,7 @@ class RuleBasedBacktestEngine:
                     prior_highs=tuple(item.high for item in prior[-entry_lookback:]),
                     prior_lows=tuple(item.low for item in prior[-entry_lookback:]),
                     relative_strength=relative_strength,
+                    market_regime=market_regime,
                 )
                 entry_ok = entry_trigger_def.handler(strategy, ctx) and all(
                     rule.handler(_predicate_rule_active(strategy.entry, rule.key), ctx) for rule in entry_predicate_rules
@@ -2385,12 +2440,20 @@ def _max_required_lookback(strategy: CanonicalStrategySpec) -> int:
         if strategy.filters.get("relative_strength_min")
         else 0
     )
+    # feature/market-regime-filter: the regime gate, when switched on, adds
+    # its own SMA/momentum warm-up.
+    regime_lookback = (
+        int(strategy.filters.get("regime_ma_lookback", ProvenancedValue(50, FieldProvenance.DEFAULT)).value)
+        if strategy.filters.get("regime_bullish_only")
+        else 0
+    )
     return max(
         60,
         entry_lookback,
         int(strategy.exit.get("channel_exit_lookback", ProvenancedValue(10, FieldProvenance.DEFAULT)).value),
         20 if strategy.filters.get("volume_gte_ma20") else 0,
         rs_lookback,
+        regime_lookback,
     )
 
 
