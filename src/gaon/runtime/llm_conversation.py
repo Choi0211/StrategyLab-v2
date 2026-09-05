@@ -71,12 +71,14 @@ from gaon.knowledge.research_mission import (
     extract_or_update_mission,
     get_active_candidate,
     get_candidate,
+    has_explicit_new_mission_scope,
     is_best_candidate_query,
     is_candidate_robustness_continuation_request,
     is_cycle_budget_exhausted,
     is_diversity_request,
     is_generic_continuation_request,
     is_mission_candidate_read_request,
+    is_mission_compatible_with_request,
     is_research_progress_status_question,
     is_stop_or_negation_request,
     is_provider_acquisition_blocker,
@@ -909,6 +911,50 @@ class LLMConversationBrain:
             if context is not None:
                 route = ConversationalRoute(ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, route.symbols)
         existing_mission = self._mission_for(request.session_id)
+        # fix/cross-transport-owner-research-mission: True only when
+        # existing_mission below is resolved from a DIFFERENT (owner-
+        # matched) session's durable mission, never this session's own.
+        # See its one consuming use below (candidate_continuation_
+        # precedence/robustness_continuation_precedence): an
+        # owner-scoped mission lookup must never itself become execution
+        # permission for an omitted-subject pronoun reference ("그거 다시
+        # 연구해줘") that has no session-local antecedent - only a fully
+        # session-local mission (where "그거"/continuing the active
+        # candidate naturally refers to what THIS session was just
+        # discussing) may drive that legacy precedence path from a bare
+        # pronoun alone.
+        mission_is_cross_transport = False
+        # fix/cross-transport-owner-research-mission production defect:
+        # ResearchMission is persisted per session_id, which never matches
+        # across transports (telegram:{chat_id} vs web:{session_ref}) even
+        # for the identical human. When this session has no mission of its
+        # own, try a durable, owner-scoped, domain-compatible lookup
+        # BEFORE the "no active mission" short-circuit below - so that
+        # short-circuit only ever fires when there truly is no mission
+        # anywhere for this owner, never merely because the request
+        # arrived on a different transport/session. Resolves to nothing
+        # (existing_mission stays None, exactly today's behavior) unless
+        # the operator has explicitly configured owner_ref/owner_telegram_
+        # chat_ids/owner_web_user_refs (see config.py) - never inferred,
+        # never a "most recent mission anywhere" guess, never a different
+        # owner's mission, never a diagnostic/release-check/CLI session.
+        if existing_mission is None:
+            durable_mission, ambiguous = self._resolve_durable_owner_mission(request)
+            if ambiguous:
+                return (
+                    "영하님, 이어서 연구할 기존 Research Mission이 여러 개 있어 어떤 것을 이어갈지 "
+                    "명확하지 않습니다. 시장이나 종목, 전략(예: 단타, 시장 전체 등)을 조금 더 구체적으로 "
+                    "말씀해 주세요.",
+                    "conversation_durable_mission_ambiguous",
+                    _dedupe((*warnings, "multiple compatible owner-scoped durable missions; clarification requested; zero research tool calls")),
+                    references,
+                    "deterministic",
+                    (),
+                )
+            if durable_mission is not None:
+                existing_mission = durable_mission
+                mission_is_cross_transport = True
+                warnings = _dedupe((*warnings, f"durable_owner_mission_resolved={durable_mission.mission_id}"))
         # hotfix/conversation-layer-safe-web-parity: extract_or_update_
         # mission recognizes a research-shaped SUBJECT (e.g. "단타") and
         # unconditionally returns/persists a brand-new ACTIVE
@@ -948,7 +994,54 @@ class LLMConversationBrain:
                 "deterministic",
                 (),
             )
-        mission = extract_or_update_mission(request.text, existing=existing_mission, now=request.received_at)
+        # fix/cross-transport-owner-research-mission Web placeholder
+        # mission bug: "단타 연구 계속해줘" is CONTINUATION-shaped
+        # (is_generic_continuation_request) - it presupposes something
+        # ALREADY exists to continue. With no ResearchMission anywhere for
+        # this session/owner (existing_mission is still None even after
+        # the durable-owner lookup above), NO other legacy continuation
+        # target either (ConversationalMVPContext is also None - see the
+        # note below), and no explicit NEW scope declared in this same
+        # turn (has_explicit_new_mission_scope - kr_market_wide / explicit
+        # multi-symbols / an explicit target count),
+        # extract_or_update_mission would otherwise unconditionally
+        # manufacture a brand-new, empty SINGLE_SYMBOL placeholder mission
+        # from a bare continuation phrase alone and PERSIST it via
+        # _remember_mission below - exactly the confirmed production
+        # defect: Web's user-facing text for that exact turn was already
+        # the correct, honest legacy "no context, name a target" fallback
+        # (render further down via _try_autonomous_research_conversation)
+        # - the bug was purely the SILENT SIDE EFFECT of a placeholder
+        # mission being created and persisted in the background regardless
+        # of what was said, which then poisoned the NEXT turn's mission
+        # read. This therefore does not return a new message at all - it
+        # only suppresses the extract_or_update_mission call (mission
+        # stays None, matching what that function would itself return for
+        # "no existing mission, no research intent" if continuation alone
+        # did not count as intent) so every existing downstream branch -
+        # including the legacy autonomous system's own fallback text -
+        # runs completely unchanged.
+        #
+        # Independent-review fix: requires the session's own
+        # ConversationalMVPContext to ALSO be None. A single-symbol
+        # request ("삼성전자 최근 분석해줘") never creates a ResearchMission
+        # at all (research_intent stays False for it) - it is handled
+        # entirely by the separate legacy single-symbol/autonomous-
+        # learning system, which persists ITS OWN continuation target in
+        # ConversationalMVPContext, not ResearchMission. Without this
+        # check, a legitimate "계속 진행해줘" continuing THAT context would
+        # be wrongly treated as "nothing to continue" - existing_mission
+        # being None is not, on its own, evidence that nothing exists to
+        # continue.
+        suppress_placeholder_mission = (
+            existing_mission is None
+            and self._mvp_context_for(request.session_id) is None
+            and is_generic_continuation_request(request.text)
+            and not has_explicit_new_mission_scope(request.text)
+        )
+        mission = None if suppress_placeholder_mission else extract_or_update_mission(request.text, existing=existing_mission, now=request.received_at)
+        if suppress_placeholder_mission:
+            warnings = _dedupe((*warnings, "generic continuation with no existing mission/context and no explicit new scope; no placeholder mission created"))
         if mission is not None:
             self._remember_mission(request, mission)
 
@@ -980,10 +1073,22 @@ class LLMConversationBrain:
         # continuation of the active candidate's validation. An explicit
         # symbol mention (route.symbols) or an excluded conversational
         # intent still bypasses this entirely, same as the token-based path.
+        # fix/cross-transport-owner-research-mission: when `mission` was
+        # resolved from a DIFFERENT session's durable owner-scoped state
+        # (mission_is_cross_transport), an omitted-subject pronoun
+        # reference ("그거 다시 연구해줘" - no session-local antecedent for
+        # "그거" exists in THIS session) must never use it to drive
+        # continuation - it falls through instead to the existing
+        # _omitted_subject_clarification fail-closed path further below.
+        # A request that actually NAMES its subject/scope ("단타 연구
+        # 계속해줘") is not an omitted-subject reference at all
+        # (is_omitted_subject_execution_reference requires a bare pronoun
+        # with no named symbol/candidate) and is unaffected by this guard.
         candidate_continuation_precedence = (
             existing_tool in _LEGACY_SINGLE_SYMBOL_RESEARCH_TOOLS
             and mission is not None
             and get_active_candidate(mission) is not None
+            and not (mission_is_cross_transport and _is_omitted_subject_execution_reference(request.text))
         )
         # Patch 8.5 production bug fix: once a candidate's breadth
         # evaluation has already gathered sufficient cross-symbol evidence
@@ -3098,16 +3203,209 @@ class LLMConversationBrain:
         except (KeyError, ValueError, TypeError):
             return None
 
+    # fix/cross-transport-owner-research-mission: ResearchMission is
+    # persisted per session_id (telegram:{chat_id} vs web:{session_ref}) -
+    # two namespaces that never collide even for the same human, since
+    # Telegram's identity is transport-stable while Web's is caller-
+    # supplied per HTTP request. This resolves a stable, transport-
+    # independent "owner_ref" ONLY when the operator has explicitly
+    # configured it (GaonRuntimeConfig.owner_ref/owner_telegram_chat_ids/
+    # owner_web_user_refs - see config.py's own note) - never inferred
+    # from user_ref string shape, never a guess. Returns None (no
+    # cross-transport sharing) for any identity not explicitly declared -
+    # including diagnostic/release-check/CLI sessions, other allowed
+    # Telegram chats not declared as the owner, and any Web caller that
+    # did not supply the configured owner user_ref.
+    # Independent-review fix (Issue 1): TelegramConversationAgent sets
+    # session_id=f"telegram:{message.conversation_id}" (the CHAT the
+    # message arrived in) and user_ref=f"telegram-user:{message.user_id}"
+    # (the SENDER) as two SEPARATE fields - they coincide for an ordinary
+    # 1:1 Telegram chat but are never guaranteed to (group chats have one
+    # chat_id shared by many distinct user_ids). owner_telegram_chat_ids
+    # is validated as a subset of telegram_allowed_chat_ids - the existing
+    # chat-level access allowlist - so owner membership must be judged
+    # against the same chat identity, never against whichever user sent
+    # the message. This is an explicit, narrow parse of the session_id's
+    # own "telegram:{chat_id}" transport contract (see
+    # TelegramConversationAgent) - never a generic string-shape guess for
+    # other sources.
+    def _telegram_chat_id_from_session_id(self, session_id: str) -> str | None:
+        prefix = "telegram:"
+        if not session_id.startswith(prefix):
+            return None
+        return session_id[len(prefix):]
+
+    def _canonical_owner_ref(self, source: str, session_id: str, user_ref: str) -> str | None:
+        if not self._config.owner_ref:
+            return None
+        if source == "telegram":
+            chat_id = self._telegram_chat_id_from_session_id(session_id)
+            if chat_id is not None and chat_id in self._config.owner_telegram_chat_ids:
+                return self._config.owner_ref
+        elif source == "web" and user_ref.startswith("web-user:"):
+            raw = user_ref[len("web-user:"):]
+            if raw in self._config.owner_web_user_refs:
+                return self._config.owner_ref
+        return None
+
+    def _connection(self) -> "sqlite3.Connection | None":
+        return getattr(self._repository, "_connection", None)
+
+    # Independent-review fix (Issue 2): the previous implementation
+    # pre-filtered to the globally most-recently-updated N sessions
+    # BEFORE applying the owner check - on a real production database
+    # (browser sessions, diagnostic/release-check/CLI sessions, other
+    # transports all sharing this same table and constantly bumping their
+    # own updated_at), the owner's OWN session row could be pushed outside
+    # that global top-N by sheer unrelated volume, silently making a real,
+    # existing durable mission invisible - and, via _remember_mission's
+    # use of this same method to find a mission's actual owning row,
+    # capable of causing a duplicate authoritative copy to be created
+    # under the wrong session once the true owner could no longer be
+    # found.
+    #
+    # Fixed by filtering to the OWNER'S OWN, EXPLICITLY CONFIGURED
+    # identities directly in SQL - never a global scan. owner_ref only
+    # ever names ONE configured owner (see config.py), so this queries
+    # for exactly that owner's declared telegram:{chat_id} session_ids and
+    # web-user:{ref} user_refs (the same literal transport-contract
+    # strings _canonical_owner_ref itself parses) - a diagnostic/CLI/
+    # unconfigured/other-owner session can never even be a SQL candidate
+    # row, regardless of how many such sessions exist or how recently they
+    # were touched. No LIMIT is applied: the candidate set is already
+    # bounded by the (small, operator-configured) number of declared
+    # owner identities, not by how much unrelated traffic the database has
+    # accumulated.
+    def _durable_owner_mission_candidates(self, owner_ref: str, *, exclude_session_id: str) -> tuple[tuple[str, ResearchMission], ...]:
+        connection = self._connection()
+        if connection is None or owner_ref != self._config.owner_ref:
+            return ()
+        telegram_session_ids = [f"telegram:{chat_id}" for chat_id in self._config.owner_telegram_chat_ids]
+        web_user_refs = [f"web-user:{user_ref}" for user_ref in self._config.owner_web_user_refs]
+        if not telegram_session_ids and not web_user_refs:
+            return ()
+        conditions: list[str] = []
+        params: list[str] = []
+        if telegram_session_ids:
+            placeholders = ",".join("?" for _ in telegram_session_ids)
+            conditions.append(f"session_id IN ({placeholders})")
+            params.extend(telegram_session_ids)
+        if web_user_refs:
+            placeholders = ",".join("?" for _ in web_user_refs)
+            conditions.append(f"(source = 'web' AND user_ref IN ({placeholders}))")
+            params.extend(web_user_refs)
+        rows = connection.execute(
+            f"SELECT session_id, source, user_ref, metadata_json FROM conversation_sessions WHERE {' OR '.join(conditions)} ORDER BY updated_at DESC",
+            tuple(params),
+        ).fetchall()
+        found: list[tuple[str, ResearchMission]] = []
+        for session_id, source, user_ref, metadata_json in rows:
+            session_id = str(session_id)
+            if session_id == exclude_session_id:
+                continue
+            # Defense-in-depth: re-validates through the single canonical
+            # identity contract rather than trusting the SQL WHERE clause
+            # alone to stay in sync with it.
+            if self._canonical_owner_ref(str(source), session_id, str(user_ref)) != owner_ref:
+                continue
+            try:
+                metadata = loads_json(str(metadata_json))
+            except (TypeError, ValueError):
+                continue
+            root = metadata.get("conversation_mvp") if isinstance(metadata, dict) else None
+            raw_mission = root.get("research_mission") if isinstance(root, dict) else None
+            if not isinstance(raw_mission, dict):
+                continue
+            try:
+                mission = ResearchMission.from_json(raw_mission)
+            except (KeyError, ValueError, TypeError):
+                continue
+            found.append((session_id, mission))
+        return tuple(found)
+
+    # fix/cross-transport-owner-research-mission: resolves a durable,
+    # owner-scoped ResearchMission for a session that has none of its own
+    # yet - the fix for the production defect where Web could never see a
+    # Telegram-created mission (and vice versa) for the SAME configured
+    # owner. Deliberately narrow:
+    # - Returns (None, False) when no owner_ref is configured for this
+    #   request's identity - the exact same "no sharing" behavior as
+    #   before this hotfix.
+    # - Only considers OTHER sessions whose OWN (source, user_ref) also
+    #   resolves to the identical owner_ref (never "most recent mission
+    #   anywhere", never a different owner's mission, never a diagnostic/
+    #   release-check/CLI session, which resolve to no owner at all).
+    # - Only considers missions COMPATIBLE with this request's own scope
+    #   signal (is_mission_compatible_with_request) - a request naming no
+    #   scope at all is compatible with every candidate.
+    # - Returns ambiguous=True (never guesses) when more than one
+    #   DISTINCT, compatible mission exists for this owner - the caller
+    #   must ask for clarification rather than pick one arbitrarily.
+    def _resolve_durable_owner_mission(self, request: LLMConversationRequest) -> tuple[ResearchMission | None, bool]:
+        owner_ref = self._canonical_owner_ref(request.source, request.session_id, request.user_ref)
+        if owner_ref is None:
+            return None, False
+        candidates = self._durable_owner_mission_candidates(owner_ref, exclude_session_id=request.session_id)
+        compatible = [mission for _session_id, mission in candidates if is_mission_compatible_with_request(mission, request.text)]
+        distinct: dict[str, ResearchMission] = {}
+        for mission in compatible:
+            distinct.setdefault(mission.mission_id, mission)
+        if not distinct:
+            return None, False
+        if len(distinct) > 1:
+            return None, True
+        return next(iter(distinct.values())), False
+
+    # fix/cross-transport-owner-research-mission: a mission resolved via
+    # _resolve_durable_owner_mission keeps its ORIGINAL mission_id - it is
+    # never copied into this session's own metadata_json. When a later
+    # turn persists an update to that same mission (e.g. a real
+    # continuation cycle adding a candidate), this write must land back on
+    # the mission's ACTUAL owning session row, never fork a second,
+    # diverging authoritative copy under the current session. The common
+    # case (this session already owns this exact mission, or has no
+    # mission yet) is unchanged from before this hotfix and costs nothing
+    # extra - the bounded scan only runs when this session's own current
+    # mission_id (if any) does not match what is being saved.
     def _remember_mission(self, request: LLMConversationRequest, mission: ResearchMission) -> None:
         try:
             session = self._repository.get_session(request.session_id)
         except KeyError:
             return
-        metadata = dict(session.metadata)
+        current_root = session.metadata.get("conversation_mvp")
+        current_raw = current_root.get("research_mission") if isinstance(current_root, dict) else None
+        current_mission_id = current_raw.get("mission_id") if isinstance(current_raw, dict) else None
+        if current_mission_id == mission.mission_id:
+            # Fast path: this session already owns this exact mission (the
+            # overwhelming common case for every existing single-session
+            # flow) - write here directly, no scan, zero added cost.
+            target_session = session
+        else:
+            # Either this session has no mission yet, or it has a
+            # DIFFERENT one than what is being saved - in both cases,
+            # `mission` may already be durably owned by ANOTHER session
+            # (resolved via _resolve_durable_owner_mission earlier this
+            # turn) and must be written back there, never forked into a
+            # second copy here. Only once the scan confirms this mission_id
+            # is not owned anywhere else does this fall back to creating it
+            # in the current session - the normal "brand-new mission"
+            # first-ever-save case, unchanged from before this hotfix.
+            owner_ref = self._canonical_owner_ref(session.source, session.session_id, session.user_ref)
+            owning = None
+            if owner_ref is not None:
+                for other_session_id, other_mission in self._durable_owner_mission_candidates(owner_ref, exclude_session_id=request.session_id):
+                    if other_mission.mission_id == mission.mission_id:
+                        try:
+                            owning = self._repository.get_session(other_session_id)
+                        except KeyError:
+                            owning = None
+                        break
+            target_session = owning if owning is not None else session
+        metadata = dict(target_session.metadata)
         payload = _mvp_metadata_root(metadata)
         payload["research_mission"] = mission.to_json()
         metadata["conversation_mvp"] = payload
-        self._repository.upsert_session(LLMConversationSession(session.session_id, session.user_ref, session.source, session.status, session.created_at, request.received_at, metadata))
+        self._repository.upsert_session(LLMConversationSession(target_session.session_id, target_session.user_ref, target_session.source, target_session.status, target_session.created_at, request.received_at, metadata))
 
     # hotfix/conversation-layer-subject-intent-continuity: a mission-aware
     # READ answer (the candidate-portfolio overview, or a specific
