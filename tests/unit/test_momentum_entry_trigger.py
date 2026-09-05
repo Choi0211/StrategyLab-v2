@@ -101,9 +101,10 @@ class RegistryHasMomentumRulesTests(unittest.TestCase):
         caps = RULE_BASED_BACKTEST_CAPABILITIES
         self.assertIn("momentum_roc_lookback", caps.supported_entry_rules)
         self.assertIn("momentum_min_roc_pct", caps.supported_entry_rules)
-        self.assertEqual(
-            caps.entry_trigger_rules,
+        # momentum joined the entry-trigger group (later PRs add more).
+        self.assertLessEqual(
             frozenset({"breakout_lookback", "mean_reversion_ma_lookback", "momentum_roc_lookback"}),
+            caps.entry_trigger_rules,
         )
 
 
