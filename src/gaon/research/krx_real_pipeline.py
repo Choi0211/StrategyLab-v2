@@ -847,7 +847,13 @@ def default_execution_assumptions() -> BacktestExecutionAssumptionSet:
 RULE_BASED_ENGINE_NAME = "gaon-rule-backtest"
 
 _VALID_RULE_COMPONENTS: frozenset[str] = frozenset({"entry", "exit", "filter"})
-_VALID_RULE_KINDS: frozenset[str] = frozenset({"parameter", "predicate"})
+# feature/mean-reversion-capability: "entry_trigger" is the kind for the one
+# rule that decides whether THIS bar opens a position (breakout_lookback ->
+# close above an N-bar high; mean_reversion_ma_lookback -> close a band
+# below its N-bar SMA). A spec carries EXACTLY ONE entry_trigger rule - it
+# is a required GROUP, not a required key, so neither trigger is
+# ``required=True`` on its own.
+_VALID_RULE_KINDS: frozenset[str] = frozenset({"parameter", "predicate", "entry_trigger"})
 
 
 @dataclass(frozen=True)
@@ -863,6 +869,11 @@ class _BarEvalContext:
     volume_ma20: float
     prior_high: float
     prior_low: float
+    # feature/mean-reversion-capability: closing prices of the prior bars
+    # the active entry-trigger needs (RuleBasedBacktestEngine.run passes the
+    # last ``entry_lookback`` closes). breakout_lookback's trigger ignores
+    # this; mean_reversion_ma_lookback's trigger averages it into the SMA.
+    prior_closes: tuple[float, ...] = ()
 
 
 # --- predicate handlers: (active: bool, ctx: _BarEvalContext) -> bool -------
@@ -898,6 +909,59 @@ def _param_protective_stop_pct(spec: "CanonicalStrategySpec") -> float:
     return abs(float(spec.exit["protective_stop_pct"].value)) / 100.0
 
 
+def _param_mean_reversion_ma_lookback(spec: "CanonicalStrategySpec") -> int:
+    return int(spec.entry["mean_reversion_ma_lookback"].value)
+
+
+def _param_mean_reversion_band_pct(spec: "CanonicalStrategySpec") -> float:
+    """How far BELOW the SMA the close must fall to trigger a dip entry,
+    as a percent. Optional - defaults to 5.0 (= 5%). ``abs()`` so a spec
+    that stored it as ``-5`` (mirroring protective_stop_pct's sign
+    convention) still means 5% below."""
+    provenanced = spec.entry.get("mean_reversion_band_pct")
+    return abs(float(provenanced.value)) if provenanced is not None else 5.0
+
+
+# --- entry-trigger handlers: (spec, ctx: _BarEvalContext) -> bool ----------
+# Returns True when THIS bar opens a position. Exactly one entry-trigger
+# rule is present per spec (RuleBasedBacktestCapabilities enforces the
+# group), so run() dispatches to the single active handler. The signature
+# differs from predicate handlers - a trigger reads the spec directly for
+# its own parameters and is never "inactive".
+def _entry_trigger_breakout(spec: "CanonicalStrategySpec", ctx: "_BarEvalContext") -> bool:
+    """N-bar-high breakout - identical to the pre-registry hard-coded
+    ``bar.close > prior_high`` check (prior_high is the max high over the
+    last ``breakout_lookback`` bars, pre-computed in run())."""
+    return ctx.close > ctx.prior_high
+
+
+def _entry_trigger_mean_reversion(spec: "CanonicalStrategySpec", ctx: "_BarEvalContext") -> bool:
+    """Mean-reversion dip - enter long when the close is at least
+    ``mean_reversion_band_pct`` percent below the simple moving average of
+    the last ``mean_reversion_ma_lookback`` closes. A genuinely different
+    computation from the breakout trigger: it compares the close to a
+    trailing AVERAGE, not to a trailing HIGH, and fires on weakness rather
+    than strength. Closed-bar only (ctx.prior_closes excludes the current
+    bar); no look-ahead."""
+    lookback = int(BACKTEST_RULE_REGISTRY["mean_reversion_ma_lookback"].lookback(spec))
+    if lookback <= 0:
+        return False
+    window = ctx.prior_closes[-lookback:]
+    if len(window) < lookback:
+        return False
+    sma = sum(window) / lookback
+    band = float(BACKTEST_RULE_REGISTRY["mean_reversion_band_pct"].handler(spec)) / 100.0
+    return ctx.close <= sma * (1.0 - band)
+
+
+def _entry_trigger_lookback_breakout(spec: "CanonicalStrategySpec") -> int:
+    return _param_breakout_lookback(spec)
+
+
+def _entry_trigger_lookback_mean_reversion(spec: "CanonicalStrategySpec") -> int:
+    return _param_mean_reversion_ma_lookback(spec)
+
+
 @dataclass(frozen=True)
 class BacktestRuleDefinition:
     """One rule RuleBasedBacktestEngine can execute. ``handler`` is the
@@ -906,14 +970,21 @@ class BacktestRuleDefinition:
 
     key: str
     component: str  # entry | exit | filter
-    kind: str  # parameter | predicate
+    kind: str  # parameter | predicate | entry_trigger
     required: bool
     handler: Callable[..., object]
-    default: object | None = None  # parameter-rule fallback when the key is absent; forbidden on required/predicate rules
+    default: object | None = None  # parameter-rule fallback when the key is absent; forbidden on required/predicate/entry_trigger rules
+    # feature/mean-reversion-capability: only set on kind == "entry_trigger".
+    # ``(spec) -> int`` returning how many prior bars the trigger needs, so
+    # run() can size the warm-up and the prior-close window generically
+    # instead of hard-coding breakout_lookback.
+    lookback: Callable[["CanonicalStrategySpec"], int] | None = None
 
 
 BACKTEST_RULE_DEFINITIONS: tuple[BacktestRuleDefinition, ...] = (
-    BacktestRuleDefinition("breakout_lookback", "entry", "parameter", True, _param_breakout_lookback),
+    BacktestRuleDefinition("breakout_lookback", "entry", "entry_trigger", False, _entry_trigger_breakout, lookback=_entry_trigger_lookback_breakout),
+    BacktestRuleDefinition("mean_reversion_ma_lookback", "entry", "entry_trigger", False, _entry_trigger_mean_reversion, lookback=_entry_trigger_lookback_mean_reversion),
+    BacktestRuleDefinition("mean_reversion_band_pct", "entry", "parameter", False, _param_mean_reversion_band_pct, default=5.0),
     BacktestRuleDefinition("close_gt_ma20", "entry", "predicate", False, _predicate_close_gt_ma20),
     BacktestRuleDefinition("ma20_gt_ma60", "entry", "predicate", False, _predicate_ma20_gt_ma60),
     BacktestRuleDefinition("protective_stop_pct", "exit", "parameter", True, _param_protective_stop_pct),
@@ -1005,11 +1076,19 @@ class RuleBasedBacktestCapabilities:
     def supported_filters(self) -> frozenset[str]:
         return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.component == "filter")
 
+    @property
+    def entry_trigger_rules(self) -> frozenset[str]:
+        """feature/mean-reversion-capability: the entry-trigger GROUP - the
+        rules of which a spec must carry exactly one (currently
+        ``breakout_lookback`` and ``mean_reversion_ma_lookback``)."""
+        return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.kind == "entry_trigger")
+
     def unsupported_components(self, spec: CanonicalStrategySpec) -> tuple[tuple[str, str], ...]:
         """Every ``(component, key)`` this engine cannot honour for ``spec``
         - missing required rules first, then unsupported rule keys, then
-        predicate rules carrying a non-boolean value. Empty tuple means the
-        whole spec is interpretable."""
+        predicate rules carrying a non-boolean value, then an entry-trigger
+        group violation. Empty tuple means the whole spec is
+        interpretable."""
         problems: list[tuple[str, str]] = []
         for key in sorted(self.required_entry_rules - set(spec.entry)):
             problems.append(("entry", f"missing:{key}"))
@@ -1035,6 +1114,16 @@ class RuleBasedBacktestCapabilities:
             provenanced = _component_map[definition.component].get(key)
             if provenanced is not None and not isinstance(provenanced.value, bool):
                 problems.append((definition.component, f"non_bool:{key}"))
+        # feature/mean-reversion-capability: a spec must carry EXACTLY ONE
+        # entry-trigger rule. Zero -> the engine has no signal to open a
+        # position on; two or more -> ambiguous (which one opens the
+        # trade?). Either way fail closed rather than silently pick one.
+        present_triggers = sorted(self.entry_trigger_rules & set(spec.entry))
+        if not present_triggers:
+            problems.append(("entry", "entry_trigger_group:none"))
+        elif len(present_triggers) > 1:
+            for key in present_triggers:
+                problems.append(("entry", f"entry_trigger_group:{key}"))
         return tuple(problems)
 
     def supports(self, spec: CanonicalStrategySpec) -> bool:
@@ -1048,9 +1137,11 @@ class RuleBasedBacktestCapabilities:
         components = self.unsupported_components(spec)
         if not components:
             return
+        _prefixed = ("missing:", "non_bool:", "entry_trigger_group:")
         missing = [f"{c}.{k.split(':', 1)[1]}" for c, k in components if k.startswith("missing:")]
         non_bool = [f"{c}.{k.split(':', 1)[1]}" for c, k in components if k.startswith("non_bool:")]
-        unsupported = [f"{c}.{k}" for c, k in components if not (k.startswith("missing:") or k.startswith("non_bool:"))]
+        trigger_group = [k.split(":", 1)[1] for _c, k in components if k.startswith("entry_trigger_group:")]
+        unsupported = [f"{c}.{k}" for c, k in components if not k.startswith(_prefixed)]
         detail: list[str] = []
         if missing:
             detail.append("missing required rule(s): " + ", ".join(missing))
@@ -1058,6 +1149,16 @@ class RuleBasedBacktestCapabilities:
             detail.append("unsupported rule(s): " + ", ".join(unsupported))
         if non_bool:
             detail.append("predicate rule(s) with a non-boolean value: " + ", ".join(non_bool))
+        if trigger_group == ["none"]:
+            detail.append(
+                "exactly one entry trigger rule is required (one of "
+                + ", ".join(sorted(self.entry_trigger_rules))
+                + "); none found"
+            )
+        elif trigger_group:
+            detail.append(
+                "conflicting entry trigger rules (exactly one allowed): " + ", ".join(sorted(trigger_group))
+            )
         family_prefix = f"strategy family '{strategy_family}' - " if strategy_family else ""
         message = (
             f"{self.engine_name} cannot validate this strategy spec: {family_prefix}"
@@ -1068,7 +1169,7 @@ class RuleBasedBacktestCapabilities:
         raise UnsupportedStrategyRuleError(
             message,
             engine_name=self.engine_name,
-            unsupported_components=tuple((c, k.split(":", 1)[1] if (k.startswith("missing:") or k.startswith("non_bool:")) else k) for c, k in components),
+            unsupported_components=tuple((c, k.split(":", 1)[1] if k.startswith(_prefixed) else k) for c, k in components),
             strategy_family=strategy_family,
         )
 
@@ -1114,7 +1215,23 @@ def validate_rule_registry_integrity() -> None:
             problems.append(f"{where}: a predicate rule must not carry a parameter default")
         if definition.required and definition.default is not None:
             problems.append(f"{where}: a required rule must not carry a default")
+        # feature/mean-reversion-capability: an entry_trigger rule is a
+        # member of the required GROUP (never required on its own), it
+        # takes no parameter default, and it MUST expose a ``lookback``
+        # callable so run() can size the warm-up generically. A
+        # non-entry_trigger rule must not carry one.
+        if definition.kind == "entry_trigger":
+            if definition.required:
+                problems.append(f"{where}: an entry_trigger rule must not be individually required (the group is)")
+            if definition.default is not None:
+                problems.append(f"{where}: an entry_trigger rule must not carry a parameter default")
+            if not callable(definition.lookback):
+                problems.append(f"{where}: an entry_trigger rule must expose a callable lookback(spec) -> int")
+        elif definition.lookback is not None:
+            problems.append(f"{where}: only an entry_trigger rule may carry a lookback callable")
     caps = RULE_BASED_BACKTEST_CAPABILITIES
+    if not caps.entry_trigger_rules:
+        problems.append("no entry_trigger rule registered - RuleBasedBacktestEngine has no way to open a position")
     declared = set(caps.supported_entry_rules) | set(caps.supported_exit_rules) | set(caps.supported_filters)
     if declared != set(registry):
         problems.append("RuleBasedBacktestCapabilities supported sets diverge from the executable rule registry")
@@ -1163,7 +1280,21 @@ class RuleBasedBacktestEngine:
         # refactor/backtest-capabilities-executable-registry: every rule
         # value the engine consumes comes through its registered handler -
         # the registry is the only place these keys are read.
-        breakout_n = int(BACKTEST_RULE_REGISTRY["breakout_lookback"].handler(strategy))
+        # feature/mean-reversion-capability: exactly one entry_trigger rule
+        # is present (validate() above guaranteed it). run() dispatches to
+        # that single handler for the per-bar open decision instead of
+        # hard-coding the breakout comparison.
+        entry_trigger_def = next(
+            (d for d in BACKTEST_RULE_REGISTRY.values() if d.kind == "entry_trigger" and d.key in strategy.entry),
+            None,
+        )
+        if entry_trigger_def is None or entry_trigger_def.lookback is None:  # pragma: no cover - validate() guarantees exactly one
+            raise UnsupportedStrategyRuleError(
+                f"{RULE_BASED_ENGINE_NAME}: no executable entry trigger for this spec",
+                engine_name=RULE_BASED_ENGINE_NAME,
+                unsupported_components=(("entry", "entry_trigger_group"),),
+            )
+        entry_lookback = int(entry_trigger_def.lookback(strategy))
         exit_n = int(BACKTEST_RULE_REGISTRY["channel_exit_lookback"].handler(strategy))
         stop_pct = float(BACKTEST_RULE_REGISTRY["protective_stop_pct"].handler(strategy))
         entry_predicate_rules = tuple(d for d in BACKTEST_RULE_REGISTRY.values() if d.component == "entry" and d.kind == "predicate")
@@ -1173,10 +1304,10 @@ class RuleBasedBacktestEngine:
                 invested_days += 1
             equity = cash + quantity * bar.close
             equity_curve.append({"timestamp": bar.timestamp, "equity": round(equity, 4)})
-            if index < max(60, breakout_n, exit_n):
+            if index < max(60, entry_lookback, exit_n):
                 continue
             prior = bars[:index]
-            prior_high = max(item.high for item in prior[-breakout_n:])
+            prior_high = max(item.high for item in prior[-entry_lookback:])
             ma20 = sum(item.close for item in prior[-20:]) / 20
             ma60 = sum(item.close for item in prior[-60:]) / 60
             volume_ma20 = sum(item.volume for item in prior[-20:]) / 20
@@ -1185,8 +1316,9 @@ class RuleBasedBacktestEngine:
                 ctx = _BarEvalContext(
                     close=bar.close, ma20=ma20, ma60=ma60, volume=bar.volume,
                     volume_ma20=volume_ma20, prior_high=prior_high, prior_low=prior_low,
+                    prior_closes=tuple(item.close for item in prior[-entry_lookback:]),
                 )
-                entry_ok = bar.close > prior_high and all(
+                entry_ok = entry_trigger_def.handler(strategy, ctx) and all(
                     rule.handler(_predicate_rule_active(strategy.entry, rule.key), ctx) for rule in entry_predicate_rules
                 )
                 volume_ok = all(
@@ -1994,7 +2126,12 @@ def _validation_coverage_diagnostic(
 
 
 def _signal_diagnostics(strategy: CanonicalStrategySpec, bars: tuple[MarketBar, ...], *, trade_count: int) -> dict[str, int]:
-    breakout_n = int(strategy.entry["breakout_lookback"].value)
+    # feature/mean-reversion-capability: this breakout-shaped diagnostic is
+    # only reached for breakout specs today (non-breakout families are not
+    # yet wired into the pipeline); guard the key access so it degrades
+    # instead of KeyError-ing if that changes.
+    _breakout_pv = strategy.entry.get("breakout_lookback")
+    breakout_n = int(_breakout_pv.value) if _breakout_pv is not None else _max_required_lookback(strategy)
     exit_n = int(strategy.exit.get("channel_exit_lookback", ProvenancedValue(10, FieldProvenance.DEFAULT)).value)
     warmup = _max_required_lookback(strategy)
     breakout_hits = 0
@@ -2040,9 +2177,19 @@ def _signal_diagnostics(strategy: CanonicalStrategySpec, bars: tuple[MarketBar, 
 
 
 def _max_required_lookback(strategy: CanonicalStrategySpec) -> int:
+    # feature/mean-reversion-capability: whichever entry_trigger the spec
+    # carries supplies the entry-side warm-up; the trigger's own registered
+    # ``lookback`` callback computes it. Fall back to 20 if none is present
+    # (an invalid spec that never reaches the engine, but this helper must
+    # not KeyError).
+    entry_lookback = 20
+    for key in RULE_BASED_BACKTEST_CAPABILITIES.entry_trigger_rules:
+        if key in strategy.entry:
+            entry_lookback = int(BACKTEST_RULE_REGISTRY[key].lookback(strategy))
+            break
     return max(
         60,
-        int(strategy.entry.get("breakout_lookback", ProvenancedValue(20, FieldProvenance.DEFAULT)).value),
+        entry_lookback,
         int(strategy.exit.get("channel_exit_lookback", ProvenancedValue(10, FieldProvenance.DEFAULT)).value),
         20 if strategy.filters.get("volume_gte_ma20") else 0,
     )

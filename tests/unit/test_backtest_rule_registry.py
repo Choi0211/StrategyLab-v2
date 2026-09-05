@@ -102,7 +102,12 @@ class SupportedRulesComeFromExecutableRegistryTests(unittest.TestCase):
             with self.subTest(rule=key):
                 self.assertTrue(callable(definition.handler))
                 self.assertIn(definition.component, {"entry", "exit", "filter"})
-                self.assertIn(definition.kind, {"parameter", "predicate"})
+                # feature/mean-reversion-capability: "entry_trigger" joined
+                # the grammar - the rule that decides whether this bar opens
+                # a position (breakout_lookback / mean_reversion_ma_lookback).
+                self.assertIn(definition.kind, {"parameter", "predicate", "entry_trigger"})
+                if definition.kind == "entry_trigger":
+                    self.assertTrue(callable(definition.lookback))
 
     def test_capabilities_has_no_hand_declared_rule_set_constructor_argument(self) -> None:
         # The old escape hatch - constructing capabilities with an
@@ -191,9 +196,22 @@ class EveryRegisteredPredicateIsExecutedTests(unittest.TestCase):
 
     def test_each_registered_parameter_handler_is_consumed_on_the_run_path(self) -> None:
         parameter_keys = [k for k, d in BACKTEST_RULE_REGISTRY.items() if d.kind == "parameter"]
-        spec = _spec(_ENTRY, _EXIT, {})
+        # feature/mean-reversion-capability: a parameter key is consumed
+        # only on a run whose spec actually activates it - breakout params
+        # on a breakout spec, mean-reversion params on a mean-reversion
+        # spec. A new param key with no entry here fails loudly (KeyError),
+        # forcing the author to prove it is exercised.
+        mr_spec = _spec(
+            {"mean_reversion_ma_lookback": _v(20), "mean_reversion_band_pct": _v(5.0)}, _EXIT, {}
+        )
+        spec_by_key = {
+            "protective_stop_pct": _spec(_ENTRY, _EXIT, {}),
+            "channel_exit_lookback": _spec(_ENTRY, _EXIT, {}),
+            "mean_reversion_band_pct": mr_spec,
+        }
         for key in parameter_keys:
             with self.subTest(rule=key):
+                spec = spec_by_key[key]
                 original = BACKTEST_RULE_REGISTRY[key]
                 calls = {"n": 0}
 
@@ -201,10 +219,38 @@ class EveryRegisteredPredicateIsExecutedTests(unittest.TestCase):
                     calls["n"] += 1
                     return _orig.handler(s)
 
-                spied = BacktestRuleDefinition(original.key, original.component, original.kind, original.required, _spy, original.default)
+                spied = BacktestRuleDefinition(original.key, original.component, original.kind, original.required, _spy, original.default, original.lookback)
                 with patch.dict(BACKTEST_RULE_REGISTRY, {key: spied}):
                     _run(spec)
                 self.assertGreater(calls["n"], 0)
+
+    def test_each_registered_entry_trigger_handler_and_lookback_are_consumed_on_the_run_path(self) -> None:
+        trigger_specs = {
+            "breakout_lookback": _spec(_ENTRY, _EXIT, {}),
+            "mean_reversion_ma_lookback": _spec({"mean_reversion_ma_lookback": _v(20)}, _EXIT, {}),
+        }
+        for key, spec in trigger_specs.items():
+            with self.subTest(rule=key):
+                original = BACKTEST_RULE_REGISTRY[key]
+                self.assertEqual(original.kind, "entry_trigger")
+                calls = {"handler": 0, "lookback": 0}
+
+                def _handler_spy(s, ctx, _orig=original):
+                    calls["handler"] += 1
+                    return _orig.handler(s, ctx)
+
+                def _lookback_spy(s, _orig=original):
+                    calls["lookback"] += 1
+                    return _orig.lookback(s)
+
+                spied = BacktestRuleDefinition(
+                    original.key, original.component, original.kind, original.required,
+                    _handler_spy, original.default, _lookback_spy,
+                )
+                with patch.dict(BACKTEST_RULE_REGISTRY, {key: spied}):
+                    _run(spec)
+                self.assertGreater(calls["handler"], 0)
+                self.assertGreater(calls["lookback"], 0)
 
 
 # ---------------------------------------------------------------------------
