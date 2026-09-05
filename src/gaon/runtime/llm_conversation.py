@@ -3914,8 +3914,41 @@ def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
     # read_only probe is meant to stay a side-effect-free diagnostic ping
     # through the pre-existing deterministic-tool path, not gain
     # ConversationalMVPContext state.
+    #
+    # fix/cross-transport-mission-read-routing production bug fix: this
+    # exclusion was unconditional, so it ALSO caught a genuine, specific
+    # mission-status question ("단타 연구는 잘되고 있나요?") whenever it
+    # happened to be sent with read_only=True (e.g. a diagnostic parity
+    # check calling POST /gaon/chat directly) - completely independent of
+    # whether the operator's configured durable owner mission actually
+    # existed. Excluded from the conversational-MVP pipeline, such a
+    # message fell through to the raw assistant-provider/tool-executor
+    # path with no mission awareness at all, where a real LLM provider
+    # could plausibly pick the generic, mission-unaware
+    # "research_operation_status" tool (a different data model entirely -
+    # research_quality/strategy_config/rollback audit rows, never
+    # ResearchMission/StrategyCandidateRecord) instead of ever reading the
+    # real, existing durable mission - directly contradicting the actual
+    # persisted state. Only the UNDERLYING (marker-stripped) text is
+    # checked here, and only against the SAME two predicates
+    # ``_try_conversational_mvp`` itself already uses further below to
+    # answer such a question deterministically with zero research tool
+    # calls (is_research_progress_status_question /
+    # is_mission_candidate_read_request) - a bare, non-research runtime
+    # ping ("가온 상태 알려줘") still satisfies neither once the marker
+    # itself is stripped out first (is_mission_candidate_read_request's
+    # own explicit-read-only-marker branch only ever matches the marker
+    # STILL being present in the text, which it no longer is here), so it
+    # keeps being excluded exactly as before - this only widens the gate
+    # for a message that was ALREADY, on its own words, an honestly-
+    # answerable mission read/status question.
     if request.source == "web" and request.text.casefold().endswith(_WEB_READ_ONLY_PROBE_MARKER_SUFFIX):
-        return False
+        underlying_text = request.text[: -len(_WEB_READ_ONLY_PROBE_MARKER_SUFFIX)]
+        if not (
+            is_research_progress_status_question(underlying_text)
+            or is_mission_candidate_read_request(underlying_text)
+        ):
+            return False
     return (
         (request.source == "telegram" and str(request.message_id or "").startswith("telegram:"))
         or (request.source == "web" and str(request.message_id or "").startswith("web:"))
