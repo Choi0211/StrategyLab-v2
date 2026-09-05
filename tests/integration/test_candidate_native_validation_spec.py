@@ -125,9 +125,13 @@ class RootCauseReproductionTests(unittest.TestCase):
         with _with_gap_family():
             candidate = new_candidate(_GAP_FAMILY, sequence=1, now=NOW)
             text = render_candidate_request_text(candidate, "005930")
-            # render_candidate_request_text silently fell back to
-            # breakout_standard's text - never raised, never warned.
-            self.assertNotIn("37", text)
+            # fix/engine-integrity-known-gap-hardening: the fallback text no
+            # longer borrows breakout_standard's "고가 돌파" wording - it
+            # honestly names the family. Either way it does NOT encode the
+            # candidate's real rule VALUES (breakout_lookback=37 etc.), so
+            # UserStrategyParser still cannot reconstruct the candidate's
+            # identity from it (the PR #183 point).
+            self.assertNotIn("고가 돌파", text)
             reconstructed = UserStrategyParser().parse(text, symbol="005930")
             # X (candidate's real, intended identity) != Y (what the OLD
             # text round-trip would have handed to the deep pipeline).

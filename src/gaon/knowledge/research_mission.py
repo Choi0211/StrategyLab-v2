@@ -1222,12 +1222,54 @@ def has_explicit_new_mission_scope(text: str) -> bool:
 # names NO scope signal at all is compatible with every mission - the
 # caller is responsible for failing closed/asking for clarification when
 # more than one compatible mission exists for the same owner.
+def _mission_active_candidate_engine_supported(mission: ResearchMission) -> bool:
+    """fix/engine-integrity-known-gap-hardening: True unless this mission
+    ALREADY has a concrete active candidate whose exact rules
+    RuleBasedBacktestEngine cannot run.
+
+    A mission with NO candidate yet returns True - its spec is not
+    knowable, and family/market compatibility is judged elsewhere (a
+    non-breakout family is not tokenised by ``_extract_strategy_family``
+    anyway). When the active candidate's ``spec_rules`` cannot be
+    reconstructed/verified, this fails closed (returns False) rather than
+    guess."""
+    if not mission.candidates:
+        return True
+    active = next(
+        (c for c in mission.candidates if isinstance(c, Mapping) and c.get("candidate_id") == mission.active_candidate_id),
+        None,
+    )
+    if active is None:
+        first = mission.candidates[0]
+        active = first if isinstance(first, Mapping) else None
+    if active is None:
+        return True
+    spec_rules = active.get("spec_rules")
+    if not isinstance(spec_rules, Mapping):
+        return True
+    try:
+        from gaon.research.krx_real_pipeline import (
+            RULE_BASED_BACKTEST_CAPABILITIES,
+            candidate_spec_from_rules_json,
+        )
+
+        spec = candidate_spec_from_rules_json(spec_rules, symbol="005930", created_at="1970-01-01T00:00:00Z")
+        return RULE_BASED_BACKTEST_CAPABILITIES.supports(spec)
+    except Exception:  # noqa: BLE001 - any reconstruction/validation error -> not verifiable -> fail closed
+        return False
+
+
 def is_mission_compatible_with_request(mission: ResearchMission, text: str) -> bool:
     requested_family = _extract_strategy_family(text)
     if requested_family is not None and mission.strategy_family is not None and requested_family != mission.strategy_family:
         return False
     kr_market_wide, _ = _kr_market_wide_requested(text)
     if kr_market_wide and mission.market != "KR":
+        return False
+    # fix/engine-integrity-known-gap-hardening: never resolve a durable
+    # owner mission as a continuation target when its active candidate's
+    # exact rules cannot actually be run by RuleBasedBacktestEngine.
+    if not _mission_active_candidate_engine_supported(mission):
         return False
     return True
 
