@@ -238,17 +238,13 @@ class CapabilityContractIsExplicitTests(unittest.TestCase):
 
 
 class RenderCandidateRequestTextFallbackIsDocumentedTests(unittest.TestCase):
-    """Task item 8: render_candidate_request_text still falls back silently
-    to breakout_standard's descriptive text for a family with no curated
-    _FAMILY_REQUEST_TEXT entry. Left as-is on purpose (see this PR's
-    report): after PR #183 that text no longer carries strategy identity,
-    and after THIS PR an unsupported spec fails closed at the engine no
-    matter what descriptive text was rendered - so the fallback affects
-    only the external-research/report DISPLAY text, never validation
-    behaviour or safety. This test pins that boundary rather than changing
-    it."""
+    """fix/engine-integrity-known-gap-hardening: for a family with no
+    curated _FAMILY_REQUEST_TEXT entry, render_candidate_request_text no
+    longer borrows breakout_standard's specific "고가 돌파 ..." wording -
+    it names the family honestly. The candidate's real spec_rules still
+    fail closed at the engine regardless of the rendered text."""
 
-    def test_fallback_is_descriptive_only_engine_still_fails_closed(self) -> None:
+    def test_fallback_names_the_family_and_engine_still_fails_closed(self) -> None:
         from unittest.mock import patch as _patch
 
         from gaon.knowledge.strategy_candidate import (
@@ -266,9 +262,10 @@ class RenderCandidateRequestTextFallbackIsDocumentedTests(unittest.TestCase):
         with _patch.dict(_TBF, {gap_family: gap_template}):
             candidate = _new_candidate(gap_family, sequence=1, now=NOW)
             text = render_candidate_request_text(candidate, "005930")
-            # Silent fallback: it describes a plain breakout, not the gap family.
+            self.assertIn(gap_family, text)
+            self.assertNotIn("고가 돌파", text)
             self.assertNotIn("rsi", text.lower())
-            # But the candidate's real spec_rules still fail closed at the engine.
+            # The candidate's real spec_rules still fail closed at the engine.
             spec = _spec(
                 {k: _v(v["value"]) for k, v in candidate.spec_rules["entry"].items()},
                 {k: _v(v["value"]) for k, v in candidate.spec_rules["exit"].items()},

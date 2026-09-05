@@ -1007,8 +1007,9 @@ class RuleBasedBacktestCapabilities:
 
     def unsupported_components(self, spec: CanonicalStrategySpec) -> tuple[tuple[str, str], ...]:
         """Every ``(component, key)`` this engine cannot honour for ``spec``
-        - missing required rules first, then unsupported rule keys. Empty
-        tuple means the whole spec is interpretable."""
+        - missing required rules first, then unsupported rule keys, then
+        predicate rules carrying a non-boolean value. Empty tuple means the
+        whole spec is interpretable."""
         problems: list[tuple[str, str]] = []
         for key in sorted(self.required_entry_rules - set(spec.entry)):
             problems.append(("entry", f"missing:{key}"))
@@ -1020,6 +1021,20 @@ class RuleBasedBacktestCapabilities:
             problems.append(("exit", key))
         for key in sorted(set(spec.filters) - self.supported_filters):
             problems.append(("filter", key))
+        # fix/engine-integrity-known-gap-hardening: a predicate rule
+        # (close_gt_ma20 / ma20_gt_ma60 / volume_gte_ma20) is a boolean
+        # gate. A spec that stores a non-bool for one - e.g. the string
+        # "true", or 1 - must fail closed here rather than be coerced by
+        # Python truthiness in _predicate_rule_active. isinstance(x, bool)
+        # deliberately rejects int 1/0 (bool is an int subclass, not the
+        # reverse).
+        _component_map = {"entry": spec.entry, "exit": spec.exit, "filter": spec.filters}
+        for key, definition in sorted(BACKTEST_RULE_REGISTRY.items()):
+            if definition.kind != "predicate":
+                continue
+            provenanced = _component_map[definition.component].get(key)
+            if provenanced is not None and not isinstance(provenanced.value, bool):
+                problems.append((definition.component, f"non_bool:{key}"))
         return tuple(problems)
 
     def supports(self, spec: CanonicalStrategySpec) -> bool:
@@ -1034,12 +1049,15 @@ class RuleBasedBacktestCapabilities:
         if not components:
             return
         missing = [f"{c}.{k.split(':', 1)[1]}" for c, k in components if k.startswith("missing:")]
-        unsupported = [f"{c}.{k}" for c, k in components if not k.startswith("missing:")]
+        non_bool = [f"{c}.{k.split(':', 1)[1]}" for c, k in components if k.startswith("non_bool:")]
+        unsupported = [f"{c}.{k}" for c, k in components if not (k.startswith("missing:") or k.startswith("non_bool:"))]
         detail: list[str] = []
         if missing:
             detail.append("missing required rule(s): " + ", ".join(missing))
         if unsupported:
             detail.append("unsupported rule(s): " + ", ".join(unsupported))
+        if non_bool:
+            detail.append("predicate rule(s) with a non-boolean value: " + ", ".join(non_bool))
         family_prefix = f"strategy family '{strategy_family}' - " if strategy_family else ""
         message = (
             f"{self.engine_name} cannot validate this strategy spec: {family_prefix}"
@@ -1050,7 +1068,7 @@ class RuleBasedBacktestCapabilities:
         raise UnsupportedStrategyRuleError(
             message,
             engine_name=self.engine_name,
-            unsupported_components=tuple((c, k.split(":", 1)[1] if k.startswith("missing:") else k) for c, k in components),
+            unsupported_components=tuple((c, k.split(":", 1)[1] if (k.startswith("missing:") or k.startswith("non_bool:")) else k) for c, k in components),
             strategy_family=strategy_family,
         )
 

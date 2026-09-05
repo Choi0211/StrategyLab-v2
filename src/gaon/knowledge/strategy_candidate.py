@@ -433,14 +433,18 @@ def render_candidate_request_text(candidate: "StrategyCandidateRecord", symbol: 
     cycle in llm_conversation.py, which always does. This function's
     output is used only for external multi-source research queries and
     the Korean report's own displayed request text - purely descriptive.
-    Because of this, its fallback to ``_FAMILY_REQUEST_TEXT["breakout_
-    standard"]`` for a family with no curated entry (e.g. a newly added
-    family template whose text was not yet hand-authored) no longer risks
-    the candidate's identity - it only makes that ONE cycle's external-
-    provider query and displayed text describe the wrong family; the
-    actual backtest still runs the candidate's real, exact rules via
-    candidate_spec regardless."""
-    base = _FAMILY_REQUEST_TEXT.get(candidate.strategy_family, _FAMILY_REQUEST_TEXT["breakout_standard"])
+    fix/engine-integrity-known-gap-hardening: a family with no curated
+    ``_FAMILY_REQUEST_TEXT`` entry (a newly added family template whose
+    text was not yet hand-authored) no longer borrows ``breakout_
+    standard``'s specific "20 고가 돌파 ..." wording - it gets an honest,
+    family-NAMED description instead, so an external-provider query / the
+    displayed report text can never silently misdescribe the family as a
+    breakout. The candidate's actual rules still run via candidate_spec
+    (PR #183) and still fail closed at the engine if unsupported (PR
+    #184/#185) regardless of this text."""
+    base = _FAMILY_REQUEST_TEXT.get(candidate.strategy_family)
+    if base is None:
+        return f"{symbol} {candidate.strategy_family} 전략 후보 심층 검증 요청"
     return f"{symbol} {base}"
 
 
