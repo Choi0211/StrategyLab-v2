@@ -826,39 +826,111 @@ def default_execution_assumptions() -> BacktestExecutionAssumptionSet:
 
 
 # ---------------------------------------------------------------------------
-# RuleBasedBacktestEngine capability contract (fix/rule-based-engine-fail-closed)
+# RuleBasedBacktestEngine executable rule registry (SINGLE SOURCE OF TRUTH)
 # ---------------------------------------------------------------------------
-# The EXACT and ONLY strategy grammar RuleBasedBacktestEngine.run below
-# actually interprets. Every rule key run() reads is listed here:
-#   entry:  breakout_lookback (required; the N-day-high breakout entry),
-#           close_gt_ma20 / ma20_gt_ma60 (optional bool trend gates)
-#   exit:   protective_stop_pct (required; percentage stop-loss),
-#           channel_exit_lookback (optional; N-day channel-low exit, engine
-#           default 10 when omitted)
-#   filters: volume_gte_ma20 (optional bool volume-confirmation gate)
-# Anything else in a CanonicalStrategySpec's entry/exit/filters is a rule
-# this engine does NOT implement. It has no separate mean-reversion,
-# momentum, volatility, relative-strength, ranking or regime computation.
+# refactor/backtest-capabilities-executable-registry: what
+# RuleBasedBacktestEngine.run can interpret is NOT a hand-maintained set of
+# strings any more - it is exactly the set of rules that have an executable
+# handler registered below. RuleBasedBacktestEngine.run consumes the
+# handlers directly (see its body), RuleBasedBacktestCapabilities derives
+# its supported_* sets from BACKTEST_RULE_REGISTRY, and
+# validate_rule_registry_integrity() (run at import) enforces that a
+# declared rule and its executable implementation can never drift apart.
 #
-# Before this contract, run() dereferenced the required keys with [] (a
-# bare KeyError if absent) and read the optional keys with .get(), SILENTLY
-# IGNORING every unrecognized key - so a spec carrying, e.g., an
-# "rsi_below" entry rule alongside "breakout_lookback" produced a result
-# byte-for-byte identical to the pure-breakout spec, recording a
-# valid-looking research result for a strategy the engine never ran.
-#
-# A future non-breakout family (RSI / volatility / relative strength /
-# ranking / regime-aware) MUST add its rule keys to the frozensets below
-# AND the matching evaluation logic in RuleBasedBacktestEngine.run - until
-# both are done, validate_strategy_spec_for_rule_based_engine (called as
-# run()'s first statement) fails the spec closed with an actionable
-# UnsupportedStrategyRuleError, never a silent breakout in its place.
+# There is no separate mean-reversion, momentum, volatility,
+# relative-strength, ranking or regime computation. A future non-breakout
+# family adds a BacktestRuleDefinition here WITH its handler AND (for a new
+# indicator) whatever _BarEvalContext field its handler needs - a rule key
+# with no handler cannot be registered (integrity failure), and a spec
+# carrying an unregistered rule fails closed in
+# RuleBasedBacktestEngine.run's first statement (unchanged from PR #184).
 RULE_BASED_ENGINE_NAME = "gaon-rule-backtest"
-RULE_BASED_ENGINE_SUPPORTED_ENTRY_RULES: frozenset[str] = frozenset({"breakout_lookback", "close_gt_ma20", "ma20_gt_ma60"})
-RULE_BASED_ENGINE_REQUIRED_ENTRY_RULES: frozenset[str] = frozenset({"breakout_lookback"})
-RULE_BASED_ENGINE_SUPPORTED_EXIT_RULES: frozenset[str] = frozenset({"protective_stop_pct", "channel_exit_lookback"})
-RULE_BASED_ENGINE_REQUIRED_EXIT_RULES: frozenset[str] = frozenset({"protective_stop_pct"})
-RULE_BASED_ENGINE_SUPPORTED_FILTERS: frozenset[str] = frozenset({"volume_gte_ma20"})
+
+_VALID_RULE_COMPONENTS: frozenset[str] = frozenset({"entry", "exit", "filter"})
+_VALID_RULE_KINDS: frozenset[str] = frozenset({"parameter", "predicate"})
+
+
+@dataclass(frozen=True)
+class _BarEvalContext:
+    """Everything a per-bar predicate handler is allowed to look at. A new
+    indicator family extends this (and the pre-computation feeding it in
+    RuleBasedBacktestEngine.run) rather than reaching into raw bars."""
+
+    close: float
+    ma20: float
+    ma60: float
+    volume: float
+    volume_ma20: float
+    prior_high: float
+    prior_low: float
+
+
+# --- predicate handlers: (active: bool, ctx: _BarEvalContext) -> bool -------
+# Returns True when the predicate ALLOWS an entry this bar. ``active`` is
+# False when the rule is absent from the spec OR its schema value is False
+# (see _predicate_rule_active) - an inactive predicate never blocks.
+def _predicate_close_gt_ma20(active: bool, ctx: "_BarEvalContext") -> bool:
+    return (not active) or ctx.close > ctx.ma20
+
+
+def _predicate_ma20_gt_ma60(active: bool, ctx: "_BarEvalContext") -> bool:
+    return (not active) or ctx.ma20 > ctx.ma60
+
+
+def _predicate_volume_gte_ma20(active: bool, ctx: "_BarEvalContext") -> bool:
+    return (not active) or ctx.volume >= ctx.volume_ma20
+
+
+# --- parameter handlers: (spec: CanonicalStrategySpec) -> int | float ------
+# Returns the exact typed value RuleBasedBacktestEngine.run consumes for
+# this key. run() calls the handler - it never reads the key directly - so
+# a parameter rule is always exercised on the run path.
+def _param_breakout_lookback(spec: "CanonicalStrategySpec") -> int:
+    return int(spec.entry["breakout_lookback"].value)
+
+
+def _param_channel_exit_lookback(spec: "CanonicalStrategySpec") -> int:
+    provenanced = spec.exit.get("channel_exit_lookback")
+    return int(provenanced.value) if provenanced is not None else 10
+
+
+def _param_protective_stop_pct(spec: "CanonicalStrategySpec") -> float:
+    return abs(float(spec.exit["protective_stop_pct"].value)) / 100.0
+
+
+@dataclass(frozen=True)
+class BacktestRuleDefinition:
+    """One rule RuleBasedBacktestEngine can execute. ``handler`` is the
+    executable implementation (predicate or parameter - see ``kind``);
+    there is no way to register a rule without one."""
+
+    key: str
+    component: str  # entry | exit | filter
+    kind: str  # parameter | predicate
+    required: bool
+    handler: Callable[..., object]
+    default: object | None = None  # parameter-rule fallback when the key is absent; forbidden on required/predicate rules
+
+
+BACKTEST_RULE_DEFINITIONS: tuple[BacktestRuleDefinition, ...] = (
+    BacktestRuleDefinition("breakout_lookback", "entry", "parameter", True, _param_breakout_lookback),
+    BacktestRuleDefinition("close_gt_ma20", "entry", "predicate", False, _predicate_close_gt_ma20),
+    BacktestRuleDefinition("ma20_gt_ma60", "entry", "predicate", False, _predicate_ma20_gt_ma60),
+    BacktestRuleDefinition("protective_stop_pct", "exit", "parameter", True, _param_protective_stop_pct),
+    BacktestRuleDefinition("channel_exit_lookback", "exit", "parameter", False, _param_channel_exit_lookback, default=10),
+    BacktestRuleDefinition("volume_gte_ma20", "filter", "predicate", False, _predicate_volume_gte_ma20),
+)
+BACKTEST_RULE_REGISTRY: dict[str, BacktestRuleDefinition] = {definition.key: definition for definition in BACKTEST_RULE_DEFINITIONS}
+
+
+def _predicate_rule_active(rule_map: Mapping[str, "ProvenancedValue"], key: str) -> bool:
+    """A predicate rule is active iff the spec carries the key AND its
+    schema-typed value is truthy. ``rule_map.get(key)`` returns the
+    ProvenancedValue OBJECT (always truthy) - the value inside it is what
+    decides, so ``close_gt_ma20 = False`` genuinely disables the gate
+    instead of behaving like ``True`` (the pre-refactor bug)."""
+    provenanced = rule_map.get(key)
+    return provenanced is not None and bool(provenanced.value)
 
 
 class UnsupportedStrategySpecError(ValueError):
@@ -900,17 +972,38 @@ class UnsupportedStrategyFamilyError(UnsupportedStrategySpecError):
 
 @dataclass(frozen=True)
 class RuleBasedBacktestCapabilities:
-    """The queryable form of the capability contract above. Answers the one
+    """The queryable form of the capability contract. Answers the one
     question that matters before execution: 'can RuleBasedBacktestEngine
     interpret this WHOLE CanonicalStrategySpec?' - never a per-rule partial
-    answer."""
+    answer.
+
+    refactor/backtest-capabilities-executable-registry: the supported_* /
+    required_* sets are DERIVED (read-only properties) from
+    BACKTEST_RULE_REGISTRY - there is no constructor argument and no
+    hand-maintained constant behind them, so a rule can never be 'declared
+    supported' without an executable handler in the registry."""
 
     engine_name: str = RULE_BASED_ENGINE_NAME
-    supported_entry_rules: frozenset[str] = RULE_BASED_ENGINE_SUPPORTED_ENTRY_RULES
-    required_entry_rules: frozenset[str] = RULE_BASED_ENGINE_REQUIRED_ENTRY_RULES
-    supported_exit_rules: frozenset[str] = RULE_BASED_ENGINE_SUPPORTED_EXIT_RULES
-    required_exit_rules: frozenset[str] = RULE_BASED_ENGINE_REQUIRED_EXIT_RULES
-    supported_filters: frozenset[str] = RULE_BASED_ENGINE_SUPPORTED_FILTERS
+
+    @property
+    def supported_entry_rules(self) -> frozenset[str]:
+        return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.component == "entry")
+
+    @property
+    def required_entry_rules(self) -> frozenset[str]:
+        return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.component == "entry" and d.required)
+
+    @property
+    def supported_exit_rules(self) -> frozenset[str]:
+        return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.component == "exit")
+
+    @property
+    def required_exit_rules(self) -> frozenset[str]:
+        return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.component == "exit" and d.required)
+
+    @property
+    def supported_filters(self) -> frozenset[str]:
+        return frozenset(key for key, d in BACKTEST_RULE_REGISTRY.items() if d.component == "filter")
 
     def unsupported_components(self, spec: CanonicalStrategySpec) -> tuple[tuple[str, str], ...]:
         """Every ``(component, key)`` this engine cannot honour for ``spec``
@@ -972,6 +1065,58 @@ def validate_strategy_spec_for_rule_based_engine(spec: CanonicalStrategySpec, *,
     RULE_BASED_BACKTEST_CAPABILITIES.validate(spec, strategy_family=strategy_family)
 
 
+def validate_rule_registry_integrity() -> None:
+    """Production invariant (run once at import, and re-runnable): the
+    declared capability and the executable rule registry cannot diverge.
+
+    For every registered rule an executable handler exists; the definition
+    list and the lookup registry hold the same keys; capability
+    supported_* sets are EXACTLY the registry keys. Any violation raises
+    RuntimeError so the module fails to import rather than silently
+    shipping a rule that is 'supported' but never executed."""
+    definitions = tuple(BACKTEST_RULE_DEFINITIONS)
+    registry = dict(BACKTEST_RULE_REGISTRY)
+    problems: list[str] = []
+    definition_keys = [d.key for d in definitions]
+    if len(definition_keys) != len(set(definition_keys)):
+        problems.append("duplicate rule key in BACKTEST_RULE_DEFINITIONS")
+    if set(definition_keys) != set(registry):
+        problems.append("BACKTEST_RULE_DEFINITIONS and BACKTEST_RULE_REGISTRY hold different keys")
+    for key, definition in registry.items():
+        where = f"rule {key!r}"
+        if definition.key != key:
+            problems.append(f"{where}: registry key does not match definition.key {definition.key!r}")
+        if definition.component not in _VALID_RULE_COMPONENTS:
+            problems.append(f"{where}: invalid component {definition.component!r}")
+        if definition.kind not in _VALID_RULE_KINDS:
+            problems.append(f"{where}: invalid kind {definition.kind!r}")
+        if not callable(definition.handler):
+            problems.append(f"{where}: no executable handler - a rule cannot be declared supported without an implementation")
+        if definition.kind == "predicate" and definition.default is not None:
+            problems.append(f"{where}: a predicate rule must not carry a parameter default")
+        if definition.required and definition.default is not None:
+            problems.append(f"{where}: a required rule must not carry a default")
+    caps = RULE_BASED_BACKTEST_CAPABILITIES
+    declared = set(caps.supported_entry_rules) | set(caps.supported_exit_rules) | set(caps.supported_filters)
+    if declared != set(registry):
+        problems.append("RuleBasedBacktestCapabilities supported sets diverge from the executable rule registry")
+    if problems:
+        raise RuntimeError("RuleBasedBacktestEngine rule registry integrity failure: " + "; ".join(problems))
+
+
+validate_rule_registry_integrity()
+
+
+# Backward-compatible module-level views (PR #184). NOT a second source of
+# truth - each is derived from RULE_BASED_BACKTEST_CAPABILITIES, itself
+# derived from BACKTEST_RULE_REGISTRY.
+RULE_BASED_ENGINE_SUPPORTED_ENTRY_RULES: frozenset[str] = RULE_BASED_BACKTEST_CAPABILITIES.supported_entry_rules
+RULE_BASED_ENGINE_REQUIRED_ENTRY_RULES: frozenset[str] = RULE_BASED_BACKTEST_CAPABILITIES.required_entry_rules
+RULE_BASED_ENGINE_SUPPORTED_EXIT_RULES: frozenset[str] = RULE_BASED_BACKTEST_CAPABILITIES.supported_exit_rules
+RULE_BASED_ENGINE_REQUIRED_EXIT_RULES: frozenset[str] = RULE_BASED_BACKTEST_CAPABILITIES.required_exit_rules
+RULE_BASED_ENGINE_SUPPORTED_FILTERS: frozenset[str] = RULE_BASED_BACKTEST_CAPABILITIES.supported_filters
+
+
 class RuleBasedBacktestEngine:
     engine_name = RULE_BASED_ENGINE_NAME
     engine_version = "v1"
@@ -997,9 +1142,14 @@ class RuleBasedBacktestEngine:
         equity_curve: list[dict[str, float | str]] = []
         invested_days = 0
         cost_rate = float(assumptions.commission.value) + float(assumptions.tax.value) + float(assumptions.slippage.value)
-        breakout_n = int(strategy.entry["breakout_lookback"].value)
-        exit_n = int(strategy.exit.get("channel_exit_lookback", ProvenancedValue(10, FieldProvenance.DEFAULT)).value)
-        stop_pct = abs(float(strategy.exit["protective_stop_pct"].value)) / 100.0
+        # refactor/backtest-capabilities-executable-registry: every rule
+        # value the engine consumes comes through its registered handler -
+        # the registry is the only place these keys are read.
+        breakout_n = int(BACKTEST_RULE_REGISTRY["breakout_lookback"].handler(strategy))
+        exit_n = int(BACKTEST_RULE_REGISTRY["channel_exit_lookback"].handler(strategy))
+        stop_pct = float(BACKTEST_RULE_REGISTRY["protective_stop_pct"].handler(strategy))
+        entry_predicate_rules = tuple(d for d in BACKTEST_RULE_REGISTRY.values() if d.component == "entry" and d.kind == "predicate")
+        filter_predicate_rules = tuple(d for d in BACKTEST_RULE_REGISTRY.values() if d.component == "filter" and d.kind == "predicate")
         for index, bar in enumerate(bars):
             if quantity:
                 invested_days += 1
@@ -1014,8 +1164,16 @@ class RuleBasedBacktestEngine:
             volume_ma20 = sum(item.volume for item in prior[-20:]) / 20
             prior_low = min(item.low for item in prior[-exit_n:])
             if quantity == 0:
-                entry_ok = bar.close > prior_high and (not strategy.entry.get("close_gt_ma20") or bar.close > ma20) and (not strategy.entry.get("ma20_gt_ma60") or ma20 > ma60)
-                volume_ok = not strategy.filters.get("volume_gte_ma20") or bar.volume >= volume_ma20
+                ctx = _BarEvalContext(
+                    close=bar.close, ma20=ma20, ma60=ma60, volume=bar.volume,
+                    volume_ma20=volume_ma20, prior_high=prior_high, prior_low=prior_low,
+                )
+                entry_ok = bar.close > prior_high and all(
+                    rule.handler(_predicate_rule_active(strategy.entry, rule.key), ctx) for rule in entry_predicate_rules
+                )
+                volume_ok = all(
+                    rule.handler(_predicate_rule_active(strategy.filters, rule.key), ctx) for rule in filter_predicate_rules
+                )
                 if entry_ok and volume_ok:
                     fill = bar.close * (1.0 + cost_rate)
                     quantity = int(cash // fill)
