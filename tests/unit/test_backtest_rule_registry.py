@@ -102,9 +102,9 @@ class SupportedRulesComeFromExecutableRegistryTests(unittest.TestCase):
             with self.subTest(rule=key):
                 self.assertTrue(callable(definition.handler))
                 self.assertIn(definition.component, {"entry", "exit", "filter"})
-                # feature/mean-reversion-capability: "entry_trigger" joined
-                # the grammar - the rule that decides whether this bar opens
-                # a position (breakout_lookback / mean_reversion_ma_lookback).
+                # "entry_trigger" is the rule that decides whether this bar
+                # opens a position (breakout_lookback /
+                # mean_reversion_ma_lookback / momentum_roc_lookback).
                 self.assertIn(definition.kind, {"parameter", "predicate", "entry_trigger"})
                 if definition.kind == "entry_trigger":
                     self.assertTrue(callable(definition.lookback))
@@ -196,18 +196,22 @@ class EveryRegisteredPredicateIsExecutedTests(unittest.TestCase):
 
     def test_each_registered_parameter_handler_is_consumed_on_the_run_path(self) -> None:
         parameter_keys = [k for k, d in BACKTEST_RULE_REGISTRY.items() if d.kind == "parameter"]
-        # feature/mean-reversion-capability: a parameter key is consumed
-        # only on a run whose spec actually activates it - breakout params
-        # on a breakout spec, mean-reversion params on a mean-reversion
+        # A parameter key is consumed only on a run whose spec actually
+        # activates it - breakout params on a breakout spec, mean-reversion
+        # params on a mean-reversion spec, momentum params on a momentum
         # spec. A new param key with no entry here fails loudly (KeyError),
         # forcing the author to prove it is exercised.
         mr_spec = _spec(
             {"mean_reversion_ma_lookback": _v(20), "mean_reversion_band_pct": _v(5.0)}, _EXIT, {}
         )
+        mom_spec = _spec(
+            {"momentum_roc_lookback": _v(20), "momentum_min_roc_pct": _v(10.0)}, _EXIT, {}
+        )
         spec_by_key = {
             "protective_stop_pct": _spec(_ENTRY, _EXIT, {}),
             "channel_exit_lookback": _spec(_ENTRY, _EXIT, {}),
             "mean_reversion_band_pct": mr_spec,
+            "momentum_min_roc_pct": mom_spec,
         }
         for key in parameter_keys:
             with self.subTest(rule=key):
@@ -228,6 +232,7 @@ class EveryRegisteredPredicateIsExecutedTests(unittest.TestCase):
         trigger_specs = {
             "breakout_lookback": _spec(_ENTRY, _EXIT, {}),
             "mean_reversion_ma_lookback": _spec({"mean_reversion_ma_lookback": _v(20)}, _EXIT, {}),
+            "momentum_roc_lookback": _spec({"momentum_roc_lookback": _v(20)}, _EXIT, {}),
         }
         for key, spec in trigger_specs.items():
             with self.subTest(rule=key):
