@@ -1,0 +1,49 @@
+name: Main/Compatibility Verify
+
+# ci/optimize-pr-verification: the full 4-combo matrix (ubuntu-latest +
+# windows-latest, each on Python 3.11 and 3.12) - see verify.yml's own
+# note for why Windows 3.11 was moved out of the PR-blocking critical
+# path rather than removed. This workflow is the durable home for that
+# full compatibility coverage: every push to main/develop-v2 (post-merge,
+# never gating a PR), a weekly schedule (catches drift even with no new
+# pushes - e.g. a GitHub-hosted runner image update), and on-demand via
+# workflow_dispatch.
+on:
+  push:
+    branches:
+      - develop-v2
+      - main
+  schedule:
+    - cron: "0 18 * * 0" # weekly, Sunday 18:00 UTC
+  workflow_dispatch:
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package
+        run: python -m pip install -e .
+
+      - name: Verify release
+        run: python scripts/verify_release.py
