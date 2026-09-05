@@ -781,6 +781,39 @@ class UserStrategyParser:
         return CanonicalStrategySpec(f"canonical-strategy:{uuid4().hex}", symbol.upper(), entry, exit_rules, filters, text, created_at or utc_now())
 
 
+# fix/candidate-native-validation-spec: the candidate-native counterpart to
+# UserStrategyParser.parse above. Reconstructs a CanonicalStrategySpec
+# DIRECTLY from the JSON-safe rules-only shape
+# gaon.knowledge.strategy_candidate.spec_rules_to_json produces
+# ({"entry": {...}, "exit": {...}, "filters": {...}}, each value in
+# ProvenancedValue.to_json() shape) - never by re-parsing free text. This is
+# the SAME reconstruction gaon.research.multi_symbol has used for
+# candidate-driven BREADTH validation since Patch 8.2 (multi_symbol_
+# research's own candidate_spec tool argument) - see
+# RealAutonomousResearchPipeline.run's own candidate_spec parameter, which
+# uses this to give candidate-generated DEEP single-symbol validation
+# (OOS/walk-forward/regime/cost/sensitivity/Monte Carlo) the same guarantee:
+# a StrategyCandidateRecord's own persisted rules are the single, exact
+# source of truth for what gets validated, at every stage - never a lossy
+# natural-language approximation UserStrategyParser must re-interpret.
+def candidate_spec_from_rules_json(candidate_spec: Mapping[str, object], *, symbol: str, created_at: str) -> CanonicalStrategySpec:
+    def _field(raw: Mapping[str, object]) -> ProvenancedValue:
+        return ProvenancedValue(raw["value"], FieldProvenance(str(raw.get("provenance", FieldProvenance.RESEARCH_CANDIDATE.value))))
+
+    entry = {key: _field(value) for key, value in dict(candidate_spec.get("entry") or {}).items()}
+    exit_rules = {key: _field(value) for key, value in dict(candidate_spec.get("exit") or {}).items()}
+    filters = {key: _field(value) for key, value in dict(candidate_spec.get("filters") or {}).items()}
+    return CanonicalStrategySpec(
+        spec_id=f"candidate-spec:{_sha(dict(candidate_spec))[:16]}",
+        symbol=symbol.upper(),
+        entry=entry,
+        exit=exit_rules,
+        filters=filters,
+        source_text="strategy-candidate:direct-spec-validation",
+        created_at=created_at,
+    )
+
+
 def default_execution_assumptions() -> BacktestExecutionAssumptionSet:
     return BacktestExecutionAssumptionSet(
         ProvenancedValue(0.00015, FieldProvenance.DEFAULT),
@@ -949,10 +982,24 @@ class RealAutonomousResearchPipeline:
         self._connection = connection
         self._provider = provider or KRXFixtureMarketDataProvider()
 
-    def run(self, request_text: str, *, run_id: str | None = None, symbol: str = "005930", start_date: str | None = None, end_date: str | None = None, generated_at: str | None = None) -> RealAutonomousResearchReport:
+    # fix/candidate-native-validation-spec: candidate_spec is the ENTIRE
+    # fix - see candidate_spec_from_rules_json's own docstring above. When a
+    # caller (StrategyCandidateRecord-driven deep validation) supplies it,
+    # request_text is still used exactly as before for everything ELSE this
+    # method already does with it (external multi-source research queries,
+    # the Korean report's own displayed request text, persistence/logging)
+    # - it simply stops being the SOURCE of the strategy's own rules. A
+    # natural-language caller with no candidate (the ordinary "삼성전자
+    # 전략 연구해줘" user-request path) leaves this None and gets EXACTLY
+    # today's UserStrategyParser behavior, unchanged.
+    def run(self, request_text: str, *, run_id: str | None = None, symbol: str = "005930", start_date: str | None = None, end_date: str | None = None, generated_at: str | None = None, candidate_spec: Mapping[str, object] | None = None) -> RealAutonomousResearchReport:
         at = generated_at or utc_now()
         rid = run_id or f"krx-real-research:{uuid4().hex}"
-        strategy = UserStrategyParser().parse(request_text, symbol=symbol, created_at=at)
+        strategy = (
+            candidate_spec_from_rules_json(candidate_spec, symbol=symbol, created_at=at)
+            if candidate_spec is not None
+            else UserStrategyParser().parse(request_text, symbol=symbol, created_at=at)
+        )
         assumptions = default_execution_assumptions()
         engine = RuleBasedBacktestEngine()
         builder = KRXDatasetBuilder(self._connection, self._provider)
@@ -1036,12 +1083,14 @@ class RealAutonomousResearchPipeline:
         return None
 
 
-def krx_real_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930", start_date: str | None = None, end_date: str | None = None) -> dict[str, object]:
+def krx_real_research_payload(connection: sqlite3.Connection, request_text: str, *, symbol: str = "005930", start_date: str | None = None, end_date: str | None = None, candidate_spec: Mapping[str, object] | None = None) -> dict[str, object]:
     kwargs: dict[str, object] = {"symbol": symbol}
     if start_date is not None:
         kwargs["start_date"] = start_date
     if end_date is not None:
         kwargs["end_date"] = end_date
+    if candidate_spec is not None:
+        kwargs["candidate_spec"] = candidate_spec
     report = RealAutonomousResearchPipeline(connection, build_market_data_provider_from_env(os.environ)).run(request_text, **kwargs)
     return report.to_json()
 

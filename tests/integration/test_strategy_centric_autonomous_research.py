@@ -615,6 +615,7 @@ class SampleExhaustionCandidateDecisionTelegramTests(unittest.TestCase):
             max_steps=8,
             planned_action=None,
             planned_action_reason=None,
+            candidate_spec=None,
         ):
             return {
                 "schema_version": 2,

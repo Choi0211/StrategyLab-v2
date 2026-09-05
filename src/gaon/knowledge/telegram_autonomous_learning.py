@@ -125,12 +125,32 @@ def telegram_autonomous_learning_payload(
     max_steps: int = 8,
     planned_action: str | None = None,
     planned_action_reason: str | None = None,
+    candidate_spec: Mapping[str, object] | None = None,
 ) -> Mapping[str, object]:
-    """Run the production Autonomous Learning V2 route behind Telegram."""
+    """Run the production Autonomous Learning V2 route behind Telegram.
+
+    fix/candidate-native-validation-spec: ``candidate_spec`` (the SAME
+    JSON-safe rules-only shape ``multi_symbol_research``'s own
+    ``candidate_spec`` argument already uses -
+    ``gaon.knowledge.strategy_candidate.spec_rules_to_json``) is threaded
+    straight through to ``krx_real_research_payload`` unchanged - this
+    function does not itself interpret or re-derive it. When present, it
+    becomes the baseline backtest's ONLY source of strategy rules; every
+    later Autonomous Learning V2 stage (OOS/walk-forward/regime/cost/
+    sensitivity/Monte Carlo, orchestrated below and in
+    ``gaon.knowledge.autonomous_quant_partner``) reconstructs its own
+    strategy from this SAME ``baseline["strategy"]`` JSON rather than
+    re-parsing ``request_text`` - see
+    ``gaon.knowledge.autonomous_quant_partner._strategy_from_json`` - so
+    fixing this one call site is sufficient for every downstream stage.
+    ``request_text`` is still required and still used exactly as before
+    for the external multi-source research queries and the Korean report's
+    own displayed text below - only the STRATEGY RULES stop being derived
+    from it once ``candidate_spec`` is supplied."""
 
     from gaon.research.krx_real_pipeline import krx_real_research_payload
 
-    baseline = krx_real_research_payload(connection, request_text, symbol=symbol)
+    baseline = krx_real_research_payload(connection, request_text, symbol=symbol, candidate_spec=candidate_spec)
     external = _run_production_external_research(
         request_text,
         symbol=symbol,
