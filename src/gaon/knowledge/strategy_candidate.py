@@ -176,27 +176,46 @@ class StrategyFamilyTemplate:
 #
 # ULTRAREVIEW fix: this used to also include numeric-lookback/stop-width
 # variants (breakout_fast: 10-day/-4%/7-day; breakout_wide_swing: 40-day/
-# -8%/20-day). UserStrategyParser (the ONLY parser the deep single-symbol
-# validation pipeline - gaon.research.krx_real_pipeline.
-# RealAutonomousResearchPipeline - uses to turn request text back into a
-# CanonicalStrategySpec) does not extract numbers from text at all: it only
-# ever assigns the fixed literals 20/-5.0/10 regardless of what number
-# appears in the text. Those two numeric-variant families could therefore
-# never be deep-validated as themselves - the deep stage would silently
-# validate a DIFFERENT, unrelated rule set while the candidate kept
-# claiming its original (numerically distinct) fingerprint as
-# "promotion-ready". Rather than rewire that deeper pipeline to accept a
-# spec directly (a materially larger change, out of scope here - see
-# render_candidate_request_text's docstring and
-# _try_candidate_robustness_cycle's identity verification in
-# llm_conversation.py for the defense-in-depth check that would catch this
-# even if a future family reintroduces it), those two families are removed.
-# The remaining four all use breakout_lookback=20 / protective_stop_pct=
-# -5.0 / channel_exit_lookback=10 (the only values UserStrategyParser can
-# ever produce) and differ only by which filters are present - every one of
-# them round-trips through _FAMILY_REQUEST_TEXT -> UserStrategyParser into
-# the EXACT SAME effective rule VALUES as its template (see
-# tests/unit/test_strategy_candidate.py's family round-trip tests).
+# -8%/20-day). At the time of this fix, UserStrategyParser (the ONLY parser
+# the deep single-symbol validation pipeline - gaon.research.krx_real_
+# pipeline.RealAutonomousResearchPipeline - used to turn request text back
+# into a CanonicalStrategySpec) did not extract numbers from text at all:
+# it only ever assigned the fixed literals 20/-5.0/10 regardless of what
+# number appeared in the text. Those two numeric-variant families could
+# therefore never be deep-validated as themselves - the deep stage would
+# silently validate a DIFFERENT, unrelated rule set while the candidate
+# kept claiming its original (numerically distinct) fingerprint as
+# "promotion-ready". Those two families were removed rather than rewiring
+# the deeper pipeline to accept a spec directly (judged a materially larger
+# change, out of scope at the time).
+#
+# fix/candidate-native-validation-spec: that larger change has since been
+# made. RealAutonomousResearchPipeline.run now accepts an explicit
+# candidate_spec argument (gaon.research.krx_real_pipeline.
+# candidate_spec_from_rules_json) that _try_candidate_robustness_cycle
+# (llm_conversation.py) always supplies from this candidate's own
+# spec_rules - candidate-generated deep validation no longer depends on
+# UserStrategyParser reconstructing request text at all, for ANY family,
+# numeric-variant or otherwise. UserStrategyParser's own text-number
+# extraction was also separately hardened since the note above was
+# written (see its regex-based breakout_lookback/protective_stop_pct/
+# channel_exit_lookback extraction) - the four families below, and the
+# further STRATEGY_SPACE_EXPANSION_TEMPLATES/STRATEGY_SPACE_EXPANSION_
+# ROUND_2_TEMPLATES tuples further down (which DO vary breakout_lookback/
+# protective_stop_pct/channel_exit_lookback across 10/20/30/40,
+# -4/-5/-6/-8, and 7/10/15/20), all still round-trip correctly through
+# _FAMILY_REQUEST_TEXT -> UserStrategyParser (see tests/unit/
+# test_strategy_candidate.py's family round-trip tests) - but that
+# round-trip is no longer what candidate-generated deep validation
+# actually relies on for its identity guarantee; _deep_validation_
+# effective_fingerprint's defense-in-depth check in llm_conversation.py
+# now verifies candidate_spec_from_rules_json's own reconstruction instead
+# (see that function's docstring for why this makes a fingerprint mismatch
+# structurally near-impossible for a candidate-generated cycle, rather
+# than merely detected after the fact). render_candidate_request_text
+# below is still used - but now purely as a human-readable DESCRIPTION for
+# external research providers and report display, never as the source of
+# validated strategy identity.
 STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
     StrategyFamilyTemplate(
         "breakout_standard", "표준 돌파",
@@ -397,15 +416,30 @@ class StrategySpaceExpansion:
 
 
 def render_candidate_request_text(candidate: "StrategyCandidateRecord", symbol: str) -> str:
-    """Builds the request text for a deep single-symbol robustness cycle
-    validating ``candidate`` using ``symbol`` as the evaluation sample.
+    """Builds the DESCRIPTIVE request text for a deep single-symbol
+    robustness cycle validating ``candidate`` using ``symbol`` as the
+    evaluation sample.
 
     Deliberately a clean, human-readable research request (safe to forward
     to external research providers verbatim, like any other request text
     this pipeline already sends externally) - never embeds internal
-    control metadata (candidate_id, mission_id, cycle counters). Candidate
-    attribution is done separately by the caller, from the returned
-    strategy's own rules - not by parsing this text back."""
+    control metadata (candidate_id, mission_id, cycle counters).
+
+    fix/candidate-native-validation-spec: this text is NO LONGER the
+    source of the candidate's validated strategy identity - callers must
+    pass ``candidate.spec_rules`` as ``RealAutonomousResearchPipeline.
+    run``'s (or the autonomous_learning_research tool's) own
+    ``candidate_spec`` argument for that; see _try_candidate_robustness_
+    cycle in llm_conversation.py, which always does. This function's
+    output is used only for external multi-source research queries and
+    the Korean report's own displayed request text - purely descriptive.
+    Because of this, its fallback to ``_FAMILY_REQUEST_TEXT["breakout_
+    standard"]`` for a family with no curated entry (e.g. a newly added
+    family template whose text was not yet hand-authored) no longer risks
+    the candidate's identity - it only makes that ONE cycle's external-
+    provider query and displayed text describe the wrong family; the
+    actual backtest still runs the candidate's real, exact rules via
+    candidate_spec regardless."""
     base = _FAMILY_REQUEST_TEXT.get(candidate.strategy_family, _FAMILY_REQUEST_TEXT["breakout_standard"])
     return f"{symbol} {base}"
 
@@ -441,12 +475,16 @@ def build_candidate_spec(family: str, *, placeholder_symbol: str = "005930", cre
 
 
 def spec_rules_to_json(spec: CanonicalStrategySpec) -> dict[str, object]:
-    """JSON-safe encoding of a spec's RULES ONLY (entry/exit/filters) -
-    what ``multi_symbol_research``'s ``candidate_spec`` tool argument
-    carries, and what ``candidate_spec_from_rules_json`` (in
-    ``gaon.research.multi_symbol``) reconstructs an equivalent spec from.
-    Never includes symbol/spec_id/timestamps - those are per-evaluation,
-    not part of the strategy's identity."""
+    """JSON-safe encoding of a spec's RULES ONLY (entry/exit/filters) - what
+    both ``multi_symbol_research`` (breadth, since Patch 8.2 - see
+    ``gaon.research.multi_symbol._strategy_from_candidate_spec``) and
+    ``autonomous_learning_research`` (deep single-symbol robustness, since
+    fix/candidate-native-validation-spec - see ``gaon.research.
+    krx_real_pipeline.candidate_spec_from_rules_json``) accept as their own
+    ``candidate_spec`` tool argument and reconstruct an equivalent spec
+    from directly - never through free-text re-parsing. Never includes
+    symbol/spec_id/timestamps - those are per-evaluation, not part of the
+    strategy's identity."""
     return {
         "entry": {key: value.to_json() for key, value in sorted(spec.entry.items())},
         "exit": {key: value.to_json() for key, value in sorted(spec.exit.items())},

@@ -358,7 +358,15 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
             "Run the read-only Autonomous Learning V2 research orchestration behind Telegram.",
             ToolRiskLevel.READ_ONLY,
             required_args=("request_text",),
-            allowed_args=("symbol", "mode", "steps_used", "max_steps", "planned_action", "planned_action_reason"),
+            # fix/candidate-native-validation-spec: candidate_spec mirrors
+            # multi_symbol_research's own argument of the same name (see its
+            # ToolDefinition above) - the candidate-native direct-spec input
+            # this deep single-symbol validation pipeline now accepts, so a
+            # StrategyCandidateRecord-driven cycle never has its rules
+            # re-derived from request_text via UserStrategyParser. Optional:
+            # omitted entirely for the ordinary natural-language research
+            # path, which is unaffected.
+            allowed_args=("symbol", "mode", "steps_used", "max_steps", "planned_action", "planned_action_reason", "candidate_spec"),
         ),
         lambda args: telegram_autonomous_learning_payload(
             connection,
@@ -369,6 +377,7 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
             max_steps=int(args.get("max_steps", 8)),
             planned_action=str(args.get("planned_action", "")) or None,
             planned_action_reason=str(args.get("planned_action_reason", "")) or None,
+            candidate_spec=args.get("candidate_spec") if isinstance(args.get("candidate_spec"), dict) else None,
         ),
     )
     registry.register(

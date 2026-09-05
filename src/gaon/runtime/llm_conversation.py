@@ -184,21 +184,51 @@ _MISSION_HOOK_EXCLUDED_INTENTS = frozenset(
     }
 )
 
-# ULTRAREVIEW High #1 fix: the deep single-symbol validation pipeline
+# ULTRAREVIEW High #1 fix (defense-in-depth, still kept - see
+# fix/candidate-native-validation-spec below for the STRUCTURAL fix): the
+# deep single-symbol validation pipeline
 # (gaon.research.krx_real_pipeline.RealAutonomousResearchPipeline, invoked
-# via the autonomous_learning_research tool) never accepts a
-# CanonicalStrategySpec directly - it always re-parses the request text
-# through UserStrategyParser. A candidate's fingerprint may only be
-# recorded as promotion-ready when that re-parse demonstrably produces the
-# SAME effective strategy rules the candidate's own fingerprint claims -
-# never on trust that the request text was a faithful approximation.
-def _deep_validation_effective_fingerprint(request_text: str, *, symbol: str) -> str:
-    """Reuses the EXACT parser (gaon.research.krx_real_pipeline.
-    UserStrategyParser) the deep-validation pipeline itself uses on
-    ``request_text`` - never a second/parallel implementation - to compute
-    what that pipeline actually validated, so it can be compared against
-    the candidate's own ``strategy_fingerprint`` before recording a
+# via the autonomous_learning_research tool) used to NEVER accept a
+# CanonicalStrategySpec directly - it always re-parsed the request text
+# through UserStrategyParser, which could only reliably reproduce a narrow
+# subset of parameter values from natural language. A candidate's
+# fingerprint could only be recorded as promotion-ready when that re-parse
+# demonstrably produced the SAME effective strategy rules the candidate's
+# own fingerprint claims - never on trust that the request text was a
+# faithful approximation.
+#
+# fix/candidate-native-validation-spec: candidate-generated deep validation
+# (_try_candidate_robustness_cycle below) now passes the candidate's own
+# ``spec_rules`` straight through as the autonomous_learning_research tool's
+# ``candidate_spec`` argument, so RealAutonomousResearchPipeline.run no
+# longer re-derives that candidate's rules from text AT ALL - see
+# candidate_spec_from_rules_json's own docstring in krx_real_pipeline.py.
+# This check remains as a defense-in-depth backstop (never removed, per
+# safety invariants) against a plumbing bug dropping/corrupting
+# candidate_spec_rules somewhere in the tool call chain: when
+# candidate_spec_rules is supplied, this reconstructs it through the EXACT
+# same function the pipeline itself now uses
+# (candidate_spec_from_rules_json) - which, since it is the SAME rules
+# dict, is expected to ALWAYS match the candidate's own fingerprint by
+# construction (mismatch is now structurally near-impossible, not merely
+# detected). The natural-language path (candidate_spec_rules=None - a real
+# user's own free-text research request, never candidate-generated) is
+# completely unchanged: still UserStrategyParser, still re-parsed from
+# request_text exactly as before this fix.
+def _deep_validation_effective_fingerprint(request_text: str, *, symbol: str, candidate_spec_rules: Mapping[str, object] | None = None) -> str:
+    """Reuses the EXACT reconstruction (gaon.research.krx_real_pipeline.
+    candidate_spec_from_rules_json when ``candidate_spec_rules`` is given,
+    else UserStrategyParser.parse on ``request_text``) the deep-validation
+    pipeline itself uses - never a second/parallel implementation - to
+    compute what that pipeline actually validated, so it can be compared
+    against the candidate's own ``strategy_fingerprint`` before recording a
     promotion-ready strategy."""
+    if candidate_spec_rules is not None:
+        from gaon.research.krx_real_pipeline import candidate_spec_from_rules_json
+
+        spec = candidate_spec_from_rules_json(candidate_spec_rules, symbol=symbol, created_at="1970-01-01T00:00:00Z")
+        return spec.strategy_family_fingerprint
+
     from gaon.research.krx_real_pipeline import UserStrategyParser
 
     parsed = UserStrategyParser().parse(request_text, symbol=symbol)
@@ -2256,6 +2286,14 @@ class LLMConversationBrain:
         )
         mode = "continue" if continuing_same_candidate else "research"
         steps_used = _autonomous_learning_v2_steps_used(context, mode)
+        # fix/candidate-native-validation-spec: request_text is still built
+        # and sent (external multi-source research/news queries and the
+        # Korean report's own displayed text still use it exactly as
+        # before) but candidate_spec - this candidate's own persisted,
+        # exact rules - is what the deep-validation pipeline now ACTUALLY
+        # backtests, at every stage (OOS/walk-forward/regime/cost/
+        # sensitivity/Monte Carlo) - never a text re-parse. See
+        # candidate_spec_from_rules_json's docstring in krx_real_pipeline.py.
         request_text = render_candidate_request_text(candidate, symbol)
         result = self._tool_executor.execute(
             ToolRequest(
@@ -2267,6 +2305,7 @@ class LLMConversationBrain:
                     "steps_used": steps_used,
                     "planned_action": planned_action,
                     "planned_action_reason": planned_reason,
+                    "candidate_spec": candidate.spec_rules,
                 },
                 request.user_ref,
                 request.received_at,
@@ -2335,7 +2374,7 @@ class LLMConversationBrain:
         # validation pipeline ended up validating a DIFFERENT effective
         # rule set than this candidate's own fingerprint must never be
         # counted as this candidate's robustness evidence.
-        validated_fingerprint = _deep_validation_effective_fingerprint(request_text, symbol=symbol)
+        validated_fingerprint = _deep_validation_effective_fingerprint(request_text, symbol=symbol, candidate_spec_rules=candidate.spec_rules)
         identity_verified = validated_fingerprint == candidate.strategy_fingerprint
         identity_unverified = not identity_verified
 

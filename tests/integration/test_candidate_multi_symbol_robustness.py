@@ -245,7 +245,7 @@ class CandidateMultiSymbolRobustnessTests(unittest.TestCase):
         self._send(1, "안녕하세요 가온")
         self._seed_regime_blocked_candidate()
 
-        def fake_learning(_connection, request_text, *, symbol="005930", mode="research", storage_root=None, steps_used=0, max_steps=8, planned_action=None, planned_action_reason=None):
+        def fake_learning(_connection, request_text, *, symbol="005930", mode="research", storage_root=None, steps_used=0, max_steps=8, planned_action=None, planned_action_reason=None, candidate_spec=None):
             return self._action_payload(planned_action=planned_action, planned_action_reason=planned_action_reason, symbol=symbol)
 
         with patch("gaon.runtime.llm_tools.telegram_autonomous_learning_payload", side_effect=fake_learning):
@@ -269,7 +269,7 @@ class CandidateMultiSymbolRobustnessTests(unittest.TestCase):
         before_candidate = candidate_records(reloaded_before)[0]
         self.assertEqual(before_candidate.validation_stage_status.get("regime_validation"), "partial")
 
-        def fake_learning(_connection, request_text, *, symbol="005930", mode="research", storage_root=None, steps_used=0, max_steps=8, planned_action=None, planned_action_reason=None):
+        def fake_learning(_connection, request_text, *, symbol="005930", mode="research", storage_root=None, steps_used=0, max_steps=8, planned_action=None, planned_action_reason=None, candidate_spec=None):
             return self._action_payload(
                 planned_action=planned_action,
                 planned_action_reason=planned_action_reason,
