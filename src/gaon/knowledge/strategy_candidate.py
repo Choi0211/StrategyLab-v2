@@ -253,7 +253,85 @@ STRATEGY_SPACE_EXPANSION_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
 
 ALL_STRATEGY_FAMILY_TEMPLATES = (*STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_TEMPLATES)
 
-_TEMPLATE_BY_FAMILY = {template.family: template for template in ALL_STRATEGY_FAMILY_TEMPLATES}
+# fix/research-adaptive-hypothesis-expansion production bug fix: real
+# production reached a mission BLOCKED on "strategy_hypothesis_space_
+# exhausted" after all 9 of the templates above (STRATEGY_FAMILY_TEMPLATES
+# + STRATEGY_SPACE_EXPANSION_TEMPLATES) had been tried, even though the
+# supported RuleBasedBacktestEngine grammar (breakout_lookback, close_gt_
+# ma20/ma20_gt_ma60 trend filters, volume_gte_ma20, protective_stop_pct,
+# channel_exit_lookback) still has SAFE, never-yet-tried combinations left.
+#
+# The 9 existing templates are actually an INCOMPLETE grid over 4 already-
+# established (lookback, stop_pct, channel_exit_lookback) "scale" tiers -
+# fast=(10,-4,7), standard=(20,-5,10), slow=(30,-5,15), wide=(40,-8,20) -
+# crossed with 4 filter-presence combinations (none / trend-only / volume-
+# only / trend+volume). Only the "standard" tier has all 4 filter
+# combinations represented; fast/slow/wide each have gaps. This second
+# expansion round is exactly those SAME 4 tiers' remaining gaps, using
+# ONLY parameter VALUES already used somewhere in the 9 templates above -
+# never a new numeric value, never a new rule key, never a capability the
+# engine does not already compute. Each entry below is verified (see
+# tests/unit/test_strategy_candidate.py) to round-trip through
+# UserStrategyParser into exactly its own entry/exit/filters, the same
+# contract STRATEGY_SPACE_EXPANSION_TEMPLATES already establishes.
+#
+# Deliberately its own separate tuple, NOT folded into
+# STRATEGY_SPACE_EXPANSION_TEMPLATES or ALL_STRATEGY_FAMILY_TEMPLATES:
+# several other modules/tests (gaon.research.hypothesis_proposal,
+# gaon.runtime.autonomous_research_runtime, and numerous release-check
+# fixtures) zip a fixed-length ``specs`` list against
+# ``ALL_STRATEGY_FAMILY_TEMPLATES`` by position - silently growing that
+# tuple's length would desynchronize every one of those zips. This tuple
+# is consulted ONLY by expand_strategy_space_candidate below, strictly
+# after STRATEGY_SPACE_EXPANSION_TEMPLATES (round 1) is exhausted - a
+# bounded, deterministic, restart-safe SECOND round, never an open-ended
+# search. Once this round is ALSO exhausted, "strategy_hypothesis_space_
+# exhausted" is the honest terminal state: no further combination of the
+# supported grammar remains untried.
+STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
+    StrategyFamilyTemplate(
+        "breakout_fast_standard", "빠른 표준 돌파",
+        {"breakout_lookback": 10}, {"protective_stop_pct": -4.0, "channel_exit_lookback": 7}, {},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_fast_multi_confirmed", "빠른 복합 확인 돌파 (추세+거래량)",
+        {"breakout_lookback": 10, "close_gt_ma20": True, "ma20_gt_ma60": True},
+        {"protective_stop_pct": -4.0, "channel_exit_lookback": 7}, {"volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_slow_standard", "느린 표준 돌파",
+        {"breakout_lookback": 30}, {"protective_stop_pct": -5.0, "channel_exit_lookback": 15}, {},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_slow_volume_confirmed", "느린 거래량 확인 돌파",
+        {"breakout_lookback": 30}, {"protective_stop_pct": -5.0, "channel_exit_lookback": 15},
+        {"volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_wide_trend_confirmed", "넓은 채널 추세 확인 돌파",
+        {"breakout_lookback": 40, "close_gt_ma20": True, "ma20_gt_ma60": True},
+        {"protective_stop_pct": -8.0, "channel_exit_lookback": 20}, {},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_wide_volume_confirmed", "넓은 채널 거래량 확인 돌파",
+        {"breakout_lookback": 40}, {"protective_stop_pct": -8.0, "channel_exit_lookback": 20},
+        {"volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_wide_multi_confirmed", "넓은 채널 복합 확인 돌파 (추세+거래량)",
+        {"breakout_lookback": 40, "close_gt_ma20": True, "ma20_gt_ma60": True},
+        {"protective_stop_pct": -8.0, "channel_exit_lookback": 20}, {"volume_gte_ma20": True},
+    ),
+)
+
+# Includes round 2 so build_candidate_spec()/_template() can resolve those
+# family names too - deliberately NOT named ALL_STRATEGY_FAMILY_TEMPLATES
+# and never exported as a public constant other modules might zip against
+# (see the note above).
+_TEMPLATE_BY_FAMILY = {
+    template.family: template
+    for template in (*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES)
+}
 
 # Natural-language text per family for the EXISTING single-symbol deep-
 # validation pipeline (OOS/walk-forward/regime/cost/Monte Carlo via
@@ -283,6 +361,16 @@ _FAMILY_REQUEST_TEXT: Mapping[str, str] = {
     "breakout_slow_multi_confirmed": "30 고가 돌파 종가 > MA20 > MA60 거래량 평균 이상 손절 -6% 15일 저점 이탈 청산",
     "breakout_wide_standard": "40 고가 돌파 손절 -8% 20일 저점 이탈 청산",
     "breakout_fast_trend_confirmed": "10 고가 돌파 종가 > MA20 > MA60 손절 -4% 7일 저점 이탈 청산",
+    # Round 2 (STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES) - same tier
+    # values (10/-4/7, 30/-5/15, 40/-8/20) already used above, just the
+    # previously-untried filter combinations for each tier.
+    "breakout_fast_standard": "10 고가 돌파 손절 -4% 7일 저점 이탈 청산",
+    "breakout_fast_multi_confirmed": "10 고가 돌파 종가 > MA20 > MA60 거래량 평균 이상 손절 -4% 7일 저점 이탈 청산",
+    "breakout_slow_standard": "30 고가 돌파 손절 -5% 15일 저점 이탈 청산",
+    "breakout_slow_volume_confirmed": "30 고가 돌파 거래량 평균 이상 손절 -5% 15일 저점 이탈 청산",
+    "breakout_wide_trend_confirmed": "40 고가 돌파 종가 > MA20 > MA60 손절 -8% 20일 저점 이탈 청산",
+    "breakout_wide_volume_confirmed": "40 고가 돌파 거래량 평균 이상 손절 -8% 20일 저점 이탈 청산",
+    "breakout_wide_multi_confirmed": "40 고가 돌파 종가 > MA20 > MA60 거래량 평균 이상 손절 -8% 20일 저점 이탈 청산",
 }
 
 
@@ -396,34 +484,48 @@ def expand_strategy_space_candidate(
     above, rejects semantic duplicates by strategy fingerprint, and returns a
     normal StrategyCandidateRecord for the existing mission pipeline to
     validate through multi_symbol_research.
+
+    fix/research-adaptive-hypothesis-expansion: tries round 1
+    (STRATEGY_SPACE_EXPANSION_TEMPLATES) first, exactly as before - if that
+    round is fully skipped (every template's family or fingerprint already
+    used), it ALSO tries round 2 (STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES
+    - see that tuple's module note) before reporting
+    ``strategy_hypothesis_space_exhausted``. Both rounds are read purely
+    from ``existing`` (already-persisted candidates), so this function
+    stays restart-safe and idempotent by construction: re-calling it after
+    a process restart with the identical persisted candidate history always
+    picks the identical next candidate (or the identical exhausted
+    verdict) - never repeats an already-tried family/fingerprint, never
+    depends on any counter outside the mission's own candidate history.
     """
     evidence_signals = _mission_failure_signals(existing)
     known_fingerprints = {candidate.strategy_fingerprint for candidate in existing}
     used_families = {candidate.strategy_family for candidate in existing}
     skipped: list[str] = []
-    ranked = _rank_expansion_templates(evidence_signals)
-    for template in ranked[: len(STRATEGY_SPACE_EXPANSION_TEMPLATES)]:
-        spec = build_candidate_spec(template.family, created_at=now)
-        fingerprint = spec.strategy_family_fingerprint
-        if template.family in used_families or fingerprint in known_fingerprints:
-            skipped.append(fingerprint)
-            continue
-        candidate = new_candidate(template.family, sequence=sequence, now=now)
-        return StrategySpaceExpansion(
-            action="EXPAND_STRATEGY_SPACE",
-            reason="strategy_family_space_exhausted",
-            candidate=candidate,
-            evidence_signals=evidence_signals,
-            skipped_fingerprints=tuple(skipped),
-            search_budget=len(STRATEGY_SPACE_EXPANSION_TEMPLATES),
-        )
+    for round_templates in (STRATEGY_SPACE_EXPANSION_TEMPLATES, STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES):
+        ranked = _rank_expansion_templates(evidence_signals, round_templates)
+        for template in ranked[: len(round_templates)]:
+            spec = build_candidate_spec(template.family, created_at=now)
+            fingerprint = spec.strategy_family_fingerprint
+            if template.family in used_families or fingerprint in known_fingerprints:
+                skipped.append(fingerprint)
+                continue
+            candidate = new_candidate(template.family, sequence=sequence, now=now)
+            return StrategySpaceExpansion(
+                action="EXPAND_STRATEGY_SPACE",
+                reason="strategy_family_space_exhausted",
+                candidate=candidate,
+                evidence_signals=evidence_signals,
+                skipped_fingerprints=tuple(skipped),
+                search_budget=len(round_templates),
+            )
     return StrategySpaceExpansion(
         action="EXPAND_STRATEGY_SPACE",
         reason="strategy_hypothesis_space_exhausted",
         candidate=None,
         evidence_signals=evidence_signals,
         skipped_fingerprints=tuple(skipped),
-        search_budget=len(STRATEGY_SPACE_EXPANSION_TEMPLATES),
+        search_budget=len(STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES),
     )
 
 
@@ -446,7 +548,10 @@ def _mission_failure_signals(existing: tuple["StrategyCandidateRecord", ...]) ->
     return tuple(dict.fromkeys(signals)) or ("base_family_space_exhausted",)
 
 
-def _rank_expansion_templates(evidence_signals: tuple[str, ...]) -> tuple[StrategyFamilyTemplate, ...]:
+def _rank_expansion_templates(
+    evidence_signals: tuple[str, ...],
+    templates: tuple[StrategyFamilyTemplate, ...] = STRATEGY_SPACE_EXPANSION_TEMPLATES,
+) -> tuple[StrategyFamilyTemplate, ...]:
     signal_text = " ".join(evidence_signals)
 
     def score(template: StrategyFamilyTemplate) -> tuple[int, str]:
@@ -469,7 +574,7 @@ def _rank_expansion_templates(evidence_signals: tuple[str, ...]) -> tuple[Strate
             value += 1
         return (-value, template.family)
 
-    return tuple(sorted(STRATEGY_SPACE_EXPANSION_TEMPLATES, key=score))
+    return tuple(sorted(templates, key=score))
 
 
 @dataclass(frozen=True)

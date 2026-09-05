@@ -20,6 +20,7 @@ from gaon.knowledge.strategy_candidate import (
     ECONOMIC_VIABILITY_MIN_TRADE_SAMPLE,
     ROBUSTNESS_EVIDENCE_SYMBOL_CAP,
     STRATEGY_FAMILY_TEMPLATES,
+    STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
     STRATEGY_SPACE_EXPANSION_TEMPLATES,
     EconomicViabilityStatus,
     StrategyCandidateStatus,
@@ -204,6 +205,38 @@ class DistinctStrategyRulesProduceDistinctFingerprintsTests(unittest.TestCase):
             parsed = parser.parse(render_candidate_request_text(candidate, "005930"), symbol="005930")
             self.assertEqual(parsed.strategy_family_fingerprint, candidate.strategy_fingerprint, template.family)
 
+    def test_round_2_expansion_templates_are_distinct_and_within_backtester_capability(self) -> None:
+        # fix/research-adaptive-hypothesis-expansion: round 2 must use ONLY
+        # the same supported rule keys as every other template, and every
+        # template (base + round 1 + round 2, 16 total) must be a
+        # semantically distinct strategy.
+        supported_entry_keys = {"breakout_lookback", "close_gt_ma20", "ma20_gt_ma60"}
+        supported_exit_keys = {"protective_stop_pct", "channel_exit_lookback"}
+        supported_filter_keys = {"volume_gte_ma20"}
+        for template in STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES:
+            self.assertTrue(set(template.entry.keys()) <= supported_entry_keys, template.family)
+            self.assertTrue(set(template.exit.keys()) <= supported_exit_keys, template.family)
+            self.assertTrue(set(template.filters.keys()) <= supported_filter_keys, template.family)
+            self.assertIn("breakout_lookback", template.entry, template.family)
+        fingerprints = {
+            build_candidate_spec(template.family, created_at=NOW).strategy_family_fingerprint
+            for template in (*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES)
+        }
+        self.assertEqual(len(fingerprints), len(ALL_STRATEGY_FAMILY_TEMPLATES) + len(STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
+
+    def test_round_2_expansion_request_text_round_trips_to_candidate_fingerprint(self) -> None:
+        parser = UserStrategyParser()
+        for template in STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES:
+            candidate = new_candidate(template.family, sequence=1, now=NOW)
+            parsed = parser.parse(render_candidate_request_text(candidate, "005930"), symbol="005930")
+            self.assertEqual(parsed.strategy_family_fingerprint, candidate.strategy_fingerprint, template.family)
+
+    def test_round_2_does_not_grow_all_strategy_family_templates(self) -> None:
+        # Several other modules/tests zip a fixed-length list against
+        # ALL_STRATEGY_FAMILY_TEMPLATES by position - round 2 must never
+        # silently change that tuple's length.
+        self.assertEqual(len(ALL_STRATEGY_FAMILY_TEMPLATES), 9)
+
     def test_parser_preserves_expansion_numeric_rules(self) -> None:
         parsed = UserStrategyParser().parse("30 고가 돌파 종가 > MA20 > MA60 손절 -6% 15일 저점 이탈 청산", symbol="005930")
         self.assertEqual(parsed.entry["breakout_lookback"].value, 30)
@@ -332,15 +365,68 @@ class StagnationRotationTests(unittest.TestCase):
         self.assertIn("insufficient_trade_sample", expansion.evidence_signals)
         self.assertIn("regime_validation_partial", expansion.evidence_signals)
 
-    def test_strategy_space_expansion_is_bounded_when_all_expansion_templates_used(self) -> None:
+    def test_strategy_space_expansion_advances_to_round_2_once_round_1_is_used(self) -> None:
+        # fix/research-adaptive-hypothesis-expansion production bug fix:
+        # exhausting round 1 (all 9 base+round-1 templates) must NOT
+        # immediately report strategy_hypothesis_space_exhausted while
+        # round 2's safe, still-supported-grammar combinations remain
+        # untried.
         candidates = tuple(
             new_candidate(template.family, sequence=index + 1, now=NOW)
             for index, template in enumerate(ALL_STRATEGY_FAMILY_TEMPLATES)
         )
         expansion = expand_strategy_space_candidate(candidates, sequence=len(candidates) + 1, now=LATER)
+        self.assertEqual(expansion.reason, "strategy_family_space_exhausted")
+        self.assertIsNotNone(expansion.candidate)
+        assert expansion.candidate is not None
+        self.assertIn(expansion.candidate.strategy_family, {template.family for template in STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES})
+        self.assertNotIn(expansion.candidate.strategy_fingerprint, {candidate.strategy_fingerprint for candidate in candidates})
+        self.assertEqual(expansion.search_budget, len(STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
+
+    def test_strategy_space_expansion_never_repeats_a_used_family_or_fingerprint_across_both_rounds(self) -> None:
+        # Bounded: generating one round-2 candidate at a time and re-calling
+        # with the updated candidate history must eventually enumerate
+        # every remaining round-2 template exactly once, never repeating.
+        candidates = list(
+            new_candidate(template.family, sequence=index + 1, now=NOW)
+            for index, template in enumerate(ALL_STRATEGY_FAMILY_TEMPLATES)
+        )
+        generated_families: list[str] = []
+        for _ in range(len(STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES)):
+            expansion = expand_strategy_space_candidate(tuple(candidates), sequence=len(candidates) + 1, now=LATER)
+            self.assertIsNotNone(expansion.candidate)
+            assert expansion.candidate is not None
+            self.assertNotIn(expansion.candidate.strategy_family, generated_families)
+            generated_families.append(expansion.candidate.strategy_family)
+            candidates.append(expansion.candidate)
+        self.assertEqual(set(generated_families), {template.family for template in STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES})
+
+    def test_strategy_hypothesis_space_exhausted_only_after_both_rounds_used(self) -> None:
+        candidates = tuple(
+            new_candidate(template.family, sequence=index + 1, now=NOW)
+            for index, template in enumerate((*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
+        )
+        expansion = expand_strategy_space_candidate(candidates, sequence=len(candidates) + 1, now=LATER)
         self.assertEqual(expansion.reason, "strategy_hypothesis_space_exhausted")
         self.assertIsNone(expansion.candidate)
-        self.assertEqual(expansion.search_budget, len(STRATEGY_SPACE_EXPANSION_TEMPLATES))
+        self.assertEqual(expansion.search_budget, len(STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
+
+    def test_strategy_space_expansion_is_a_pure_restart_safe_function(self) -> None:
+        # Restart-safety requirement: calling expand_strategy_space_candidate
+        # twice with the IDENTICAL persisted candidate history (simulating a
+        # process restart with no new evidence) must return the identical
+        # next candidate/verdict, never a different one and never a
+        # duplicate of an already-tried family.
+        candidates = tuple(
+            new_candidate(template.family, sequence=index + 1, now=NOW)
+            for index, template in enumerate(ALL_STRATEGY_FAMILY_TEMPLATES)
+        )
+        first = expand_strategy_space_candidate(candidates, sequence=len(candidates) + 1, now=LATER)
+        second = expand_strategy_space_candidate(candidates, sequence=len(candidates) + 1, now=LATER)
+        self.assertEqual(first.reason, second.reason)
+        assert first.candidate is not None and second.candidate is not None
+        self.assertEqual(first.candidate.strategy_family, second.candidate.strategy_family)
+        self.assertEqual(first.candidate.strategy_fingerprint, second.candidate.strategy_fingerprint)
 
     def test_promotion_ready_and_rejected_candidates_are_never_marked_stagnant(self) -> None:
         promoted = mark_promotion_ready(self.candidate, now=LATER)

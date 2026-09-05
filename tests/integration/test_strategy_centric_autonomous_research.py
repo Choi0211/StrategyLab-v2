@@ -44,7 +44,9 @@ from gaon.knowledge.research_mission import (
     set_active_candidate,
 )
 from gaon.knowledge.strategy_candidate import (
+    ALL_STRATEGY_FAMILY_TEMPLATES,
     STRATEGY_FAMILY_TEMPLATES,
+    STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
     STRATEGY_SPACE_EXPANSION_TEMPLATES,
     build_candidate_spec,
     candidate_sample_exhausted,
@@ -364,7 +366,7 @@ class StrategySpaceExpansionTelegramTests(unittest.TestCase):
         self.runtime = TelegramRuntime(self.agent, allowed_chat_ids=("100",))
         self.client = _RecordingTelegramClient()
 
-    def _seed_exhausted_mission(self) -> None:
+    def _seed_exhausted_mission(self, templates=STRATEGY_FAMILY_TEMPLATES) -> None:
         now = "2026-08-21T00:00:00Z"
         mission = ResearchMission(
             mission_id="research-mission:test-strategy-space-expansion",
@@ -387,7 +389,7 @@ class StrategySpaceExpansionTelegramTests(unittest.TestCase):
             updated_at=now,
             originating_request="release-check",
         )
-        for index, template in enumerate(STRATEGY_FAMILY_TEMPLATES, start=1):
+        for index, template in enumerate(templates, start=1):
             candidate = new_candidate(template.family, sequence=index, now=now)
             candidate = record_breadth_progress(
                 candidate,
@@ -451,6 +453,65 @@ class StrategySpaceExpansionTelegramTests(unittest.TestCase):
         self.assertNotIn("strategy_family_space_exhausted", response)
         self.assertEqual(len(self.store.tool_audit.list(tool_name="autonomous_learning_research")), 0)
         self.assertEqual(len(self.store.tool_audit.list(tool_name="autonomous_research_cycle")), 0)
+
+    def test_round_1_exhausted_expands_to_round_2_and_real_research_continues(self) -> None:
+        # fix/research-adaptive-hypothesis-expansion production bug fix:
+        # real production reached a mission BLOCKED on
+        # "strategy_hypothesis_space_exhausted" with exactly these 9
+        # candidates (KR-ST-001..009, base 4 + expansion round 1) even
+        # though round 2's safe, already-supported-grammar combinations
+        # were never tried. This reproduces that exact bounded space and
+        # proves research now continues into round 2 through the REAL
+        # conversation stack, instead of blocking.
+        self._seed_exhausted_mission(ALL_STRATEGY_FAMILY_TEMPLATES)
+        before = candidate_records(self.agent._brain._mission_for("telegram:100"))
+        self.assertEqual(len(before), len(ALL_STRATEGY_FAMILY_TEMPLATES))
+        before_fingerprints = {candidate.strategy_fingerprint for candidate in before}
+        received_at = "2026-08-21T00:10:00Z"
+        with patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=_baseline(trades=45, run_id="expansion-round-2")), patch(
+            "gaon.knowledge.telegram_autonomous_learning._run_production_external_research",
+            return_value={"state": "content_unavailable"},
+        ), patch(
+            "gaon.research.multi_symbol.build_market_data_provider_from_env",
+            return_value=_DeterministicKRUniverseProvider(),
+        ):
+            result = process_update(
+                parse_update_result(_update(10, 10, "연구를 계속해주세요"), received_at=received_at),
+                self.runtime,
+                self.client,
+            )
+
+        self.assertEqual(result.status, "sent", result)
+        mission = self.agent._brain._mission_for("telegram:100")
+        self.assertEqual(mission.status, MissionStatus.ACTIVE)
+        records = candidate_records(mission)
+        self.assertEqual(len(records), len(before) + 1)
+        expanded = records[-1]
+        self.assertIn(expanded.strategy_family, {template.family for template in STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES})
+        self.assertNotIn(expanded.strategy_fingerprint, before_fingerprints)
+        for old in before:
+            preserved = next(candidate for candidate in records if candidate.candidate_id == old.candidate_id)
+            self.assertEqual(preserved.to_json(), old.to_json())
+        response = self.client.sent[-1][1]
+        self.assertIn(expanded.candidate_id, response)
+        self.assertNotIn("strategy_hypothesis_space_exhausted", response)
+        self.assertNotIn("bounded declarative strategy expansion budget exhausted", response)
+
+    def test_both_rounds_exhausted_still_gives_the_honest_blocked_message(self) -> None:
+        # Once round 2 is ALSO fully used, the mission must still, honestly,
+        # report blocked - never fabricate a 17th family.
+        self._seed_exhausted_mission((*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
+        received_at = "2026-08-21T00:10:00Z"
+        result = process_update(
+            parse_update_result(_update(10, 10, "연구를 계속해주세요"), received_at=received_at),
+            self.runtime,
+            self.client,
+        )
+        self.assertEqual(result.status, "sent", result)
+        mission = self.agent._brain._mission_for("telegram:100")
+        self.assertEqual(mission.status, MissionStatus.BLOCKED)
+        self.assertIn("strategy_hypothesis_space_exhausted", mission.blocked_reason or "")
+        self.assertEqual(len(self.store.tool_audit.list(tool_name="multi_symbol_research")), 0)
 
 
 class SampleExhaustionCandidateDecisionTelegramTests(unittest.TestCase):
