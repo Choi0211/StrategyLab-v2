@@ -609,8 +609,13 @@ class SubjectIntentContinuityTests(unittest.TestCase):
         finally:
             store.close()
 
-    def test_web_explain_followup_after_candidate_overview_uses_the_correct_subject_with_zero_tool_calls(self) -> None:
-        # Case 4 - the exact reported CRITICAL defect.
+    def test_web_explain_followup_after_candidate_overview_gives_the_natural_no_selection_answer(self) -> None:
+        # Case 4 - the CRITICAL defect this test originally proved fixed
+        # (stale unrelated context) is unaffected; fix/conversation-
+        # unselected-candidate-followup additionally fixes the follow-on
+        # UX defect - repeating the full candidate table is a different,
+        # unasked question, not the honest answer to "why is THAT one
+        # good" when no single candidate was ever selected.
         store = RuntimeStateStore(":memory:")
         try:
             mission, c1, c2 = _seeded_two_candidate_mission()
@@ -618,15 +623,16 @@ class SubjectIntentContinuityTests(unittest.TestCase):
             _web_send(store, "그중 제일 좋은 건 뭐야?", session_ref="exp1")
             payload = _web_send(store, "왜 그게 좋은데?", session_ref="exp1")
             self.assertEqual(payload["route"], "conversation_mission_subject_explanation")
-            self.assertIn(c1.candidate_id, payload["text"])
-            self.assertIn(c2.candidate_id, payload["text"])
+            self.assertNotIn(c1.candidate_id, payload["text"])
+            self.assertNotIn(c2.candidate_id, payload["text"])
+            self.assertIn("하나의 후보는 없습니다", payload["text"])
             self.assertEqual(payload["tool_calls"], [])
             self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
             self.assertFalse(payload["strategy_mutated"])
         finally:
             store.close()
 
-    def test_telegram_explain_followup_after_candidate_overview_uses_the_correct_subject_with_zero_tool_calls(self) -> None:
+    def test_telegram_explain_followup_after_candidate_overview_gives_the_natural_no_selection_answer(self) -> None:
         # Case 4 + Case 6 (Web/Telegram parity).
         store = RuntimeStateStore(":memory:")
         try:
@@ -634,24 +640,66 @@ class SubjectIntentContinuityTests(unittest.TestCase):
             _seed_telegram_mission(store, mission)
             _telegram_send(store, "그중 제일 좋은 건 뭐야?", update_id=1)
             reply = _telegram_send(store, "왜 그게 좋은데?", update_id=2)
-            self.assertIn(c1.candidate_id, reply)
-            self.assertIn(c2.candidate_id, reply)
+            self.assertNotIn(c1.candidate_id, reply)
+            self.assertNotIn(c2.candidate_id, reply)
+            self.assertIn("하나의 후보는 없습니다", reply)
             self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
         finally:
             store.close()
 
-    def test_explain_followup_chained_after_the_typo_overview_still_uses_the_correct_subject(self) -> None:
-        # Chains Case 3 -> Case 4 exactly as reported in production.
+    def test_explain_followup_chained_after_the_typo_overview_gives_the_natural_no_selection_answer(self) -> None:
+        # Chains Case 3 -> Case 4 exactly as reported in production - the
+        # typo-tolerant candidate-overview read (CASE C) must still lead
+        # to the same natural no-selection follow-up answer.
         store = RuntimeStateStore(":memory:")
         try:
             mission, c1, _c2 = _seeded_two_candidate_mission()
             _seed_web_mission(store, mission, session_ref="exp2")
             _web_send(store, "그중 제일 졸은 건 뭐야?", session_ref="exp2")
-            payload = _web_send(store, "왜 그게 좋은데?", session_ref="exp2")
+            payload = _web_send(store, "왜그게 졸은데?", session_ref="exp2")
             self.assertEqual(payload["route"], "conversation_mission_subject_explanation")
-            self.assertIn(c1.candidate_id, payload["text"])
+            self.assertNotIn(c1.candidate_id, payload["text"])
+            self.assertIn("하나의 후보는 없습니다", payload["text"])
             self.assertEqual(payload["tool_calls"], [])
             self.assertEqual(_strict_tool_call_counts(store), {name: 0 for name in _STRICT_TOOLS})
+        finally:
+            store.close()
+
+    def test_naming_a_specific_candidate_after_the_no_selection_answer_still_explains_it(self) -> None:
+        # fix/conversation-unselected-candidate-followup requirement: once
+        # the user names a concrete candidate id/name in context, Gaon
+        # must explain THAT candidate exactly as before - this hotfix only
+        # changes the unselected-candidate case, never the selected one.
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, c1, c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(store, mission, session_ref="exp3")
+            _web_send(store, "그중 제일 좋은 건 뭐야?", session_ref="exp3")
+            _web_send(store, "왜 그게 좋은데?", session_ref="exp3")
+            payload = _web_send(store, f"{c1.candidate_id} 왜 그런데?", session_ref="exp3")
+            self.assertEqual(payload["route"], "conversation_mission_candidate_read")
+            # The detailed [Research Mission] block names the EXPLAINED
+            # candidate as the active one - c2's id may still legitimately
+            # appear in the portfolio summary header line above it (same
+            # as any other candidate-read response), so this only checks
+            # the specific candidate actually being explained.
+            self.assertIn(f"active candidate ID/name: {c1.candidate_id}", payload["text"])
+            self.assertEqual(payload["tool_calls"], [])
+        finally:
+            store.close()
+
+    def test_no_selection_answer_never_repeats_the_full_candidate_table(self) -> None:
+        # UX requirement: the no-selection answer must never contain the
+        # CASE C overview's own literal disclaimer/heading text either -
+        # it is a short, distinct answer, not the overview repeated.
+        store = RuntimeStateStore(":memory:")
+        try:
+            mission, _c1, _c2 = _seeded_two_candidate_mission()
+            _seed_web_mission(store, mission, session_ref="exp4")
+            _web_send(store, "그중 제일 좋은 건 뭐야?", session_ref="exp4")
+            payload = _web_send(store, "왜 그게 좋은데?", session_ref="exp4")
+            self.assertNotIn("[전략 후보 비교]", payload["text"])
+            self.assertNotIn("각 후보의 실제 진행 상태", payload["text"])
         finally:
             store.close()
 
