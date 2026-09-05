@@ -825,11 +825,164 @@ def default_execution_assumptions() -> BacktestExecutionAssumptionSet:
     )
 
 
+# ---------------------------------------------------------------------------
+# RuleBasedBacktestEngine capability contract (fix/rule-based-engine-fail-closed)
+# ---------------------------------------------------------------------------
+# The EXACT and ONLY strategy grammar RuleBasedBacktestEngine.run below
+# actually interprets. Every rule key run() reads is listed here:
+#   entry:  breakout_lookback (required; the N-day-high breakout entry),
+#           close_gt_ma20 / ma20_gt_ma60 (optional bool trend gates)
+#   exit:   protective_stop_pct (required; percentage stop-loss),
+#           channel_exit_lookback (optional; N-day channel-low exit, engine
+#           default 10 when omitted)
+#   filters: volume_gte_ma20 (optional bool volume-confirmation gate)
+# Anything else in a CanonicalStrategySpec's entry/exit/filters is a rule
+# this engine does NOT implement. It has no separate mean-reversion,
+# momentum, volatility, relative-strength, ranking or regime computation.
+#
+# Before this contract, run() dereferenced the required keys with [] (a
+# bare KeyError if absent) and read the optional keys with .get(), SILENTLY
+# IGNORING every unrecognized key - so a spec carrying, e.g., an
+# "rsi_below" entry rule alongside "breakout_lookback" produced a result
+# byte-for-byte identical to the pure-breakout spec, recording a
+# valid-looking research result for a strategy the engine never ran.
+#
+# A future non-breakout family (RSI / volatility / relative strength /
+# ranking / regime-aware) MUST add its rule keys to the frozensets below
+# AND the matching evaluation logic in RuleBasedBacktestEngine.run - until
+# both are done, validate_strategy_spec_for_rule_based_engine (called as
+# run()'s first statement) fails the spec closed with an actionable
+# UnsupportedStrategyRuleError, never a silent breakout in its place.
+RULE_BASED_ENGINE_NAME = "gaon-rule-backtest"
+RULE_BASED_ENGINE_SUPPORTED_ENTRY_RULES: frozenset[str] = frozenset({"breakout_lookback", "close_gt_ma20", "ma20_gt_ma60"})
+RULE_BASED_ENGINE_REQUIRED_ENTRY_RULES: frozenset[str] = frozenset({"breakout_lookback"})
+RULE_BASED_ENGINE_SUPPORTED_EXIT_RULES: frozenset[str] = frozenset({"protective_stop_pct", "channel_exit_lookback"})
+RULE_BASED_ENGINE_REQUIRED_EXIT_RULES: frozenset[str] = frozenset({"protective_stop_pct"})
+RULE_BASED_ENGINE_SUPPORTED_FILTERS: frozenset[str] = frozenset({"volume_gte_ma20"})
+
+
+class UnsupportedStrategySpecError(ValueError):
+    """A CanonicalStrategySpec contains something RuleBasedBacktestEngine
+    cannot interpret. A ValueError subclass so the existing research-failure
+    handlers (gaon.runtime.research_failures) still catch it, but carries
+    structured, actionable context - never a bare KeyError or a generic
+    ValueError.
+
+    ``unsupported_components`` is a tuple of ``(component, key)`` pairs
+    where ``component`` is one of ``"family"``, ``"entry"``, ``"exit"``,
+    ``"filter"``. ``strategy_family`` is set only when the caller resolved
+    this spec from a named family."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        engine_name: str,
+        unsupported_components: tuple[tuple[str, str], ...],
+        strategy_family: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.engine_name = engine_name
+        self.unsupported_components = tuple(unsupported_components)
+        self.strategy_family = strategy_family
+
+
+class UnsupportedStrategyRuleError(UnsupportedStrategySpecError):
+    """At least one entry/exit/filter rule key is outside the engine's
+    grammar, or a required rule key is missing."""
+
+
+class UnsupportedStrategyFamilyError(UnsupportedStrategySpecError):
+    """Reserved for callers that resolve a spec from a named strategy
+    family the engine cannot support and want the failure attributed to
+    the family rather than an individual key."""
+
+
+@dataclass(frozen=True)
+class RuleBasedBacktestCapabilities:
+    """The queryable form of the capability contract above. Answers the one
+    question that matters before execution: 'can RuleBasedBacktestEngine
+    interpret this WHOLE CanonicalStrategySpec?' - never a per-rule partial
+    answer."""
+
+    engine_name: str = RULE_BASED_ENGINE_NAME
+    supported_entry_rules: frozenset[str] = RULE_BASED_ENGINE_SUPPORTED_ENTRY_RULES
+    required_entry_rules: frozenset[str] = RULE_BASED_ENGINE_REQUIRED_ENTRY_RULES
+    supported_exit_rules: frozenset[str] = RULE_BASED_ENGINE_SUPPORTED_EXIT_RULES
+    required_exit_rules: frozenset[str] = RULE_BASED_ENGINE_REQUIRED_EXIT_RULES
+    supported_filters: frozenset[str] = RULE_BASED_ENGINE_SUPPORTED_FILTERS
+
+    def unsupported_components(self, spec: CanonicalStrategySpec) -> tuple[tuple[str, str], ...]:
+        """Every ``(component, key)`` this engine cannot honour for ``spec``
+        - missing required rules first, then unsupported rule keys. Empty
+        tuple means the whole spec is interpretable."""
+        problems: list[tuple[str, str]] = []
+        for key in sorted(self.required_entry_rules - set(spec.entry)):
+            problems.append(("entry", f"missing:{key}"))
+        for key in sorted(self.required_exit_rules - set(spec.exit)):
+            problems.append(("exit", f"missing:{key}"))
+        for key in sorted(set(spec.entry) - self.supported_entry_rules):
+            problems.append(("entry", key))
+        for key in sorted(set(spec.exit) - self.supported_exit_rules):
+            problems.append(("exit", key))
+        for key in sorted(set(spec.filters) - self.supported_filters):
+            problems.append(("filter", key))
+        return tuple(problems)
+
+    def supports(self, spec: CanonicalStrategySpec) -> bool:
+        return not self.unsupported_components(spec)
+
+    def validate(self, spec: CanonicalStrategySpec, *, strategy_family: str | None = None) -> None:
+        """Fail-closed. Raises ``UnsupportedStrategyRuleError`` listing EVERY
+        violation at once if this engine cannot fully interpret ``spec`` -
+        otherwise returns ``None``. Never validates part of a spec, never
+        silently drops a rule, never substitutes a default interpretation."""
+        components = self.unsupported_components(spec)
+        if not components:
+            return
+        missing = [f"{c}.{k.split(':', 1)[1]}" for c, k in components if k.startswith("missing:")]
+        unsupported = [f"{c}.{k}" for c, k in components if not k.startswith("missing:")]
+        detail: list[str] = []
+        if missing:
+            detail.append("missing required rule(s): " + ", ".join(missing))
+        if unsupported:
+            detail.append("unsupported rule(s): " + ", ".join(unsupported))
+        family_prefix = f"strategy family '{strategy_family}' - " if strategy_family else ""
+        message = (
+            f"{self.engine_name} cannot validate this strategy spec: {family_prefix}"
+            + "; ".join(detail)
+            + f". Supported grammar - entry: {sorted(self.supported_entry_rules)}, "
+            f"exit: {sorted(self.supported_exit_rules)}, filters: {sorted(self.supported_filters)}."
+        )
+        raise UnsupportedStrategyRuleError(
+            message,
+            engine_name=self.engine_name,
+            unsupported_components=tuple((c, k.split(":", 1)[1] if k.startswith("missing:") else k) for c, k in components),
+            strategy_family=strategy_family,
+        )
+
+
+RULE_BASED_BACKTEST_CAPABILITIES = RuleBasedBacktestCapabilities()
+
+
+def validate_strategy_spec_for_rule_based_engine(spec: CanonicalStrategySpec, *, strategy_family: str | None = None) -> None:
+    """Module-level alias for ``RULE_BASED_BACKTEST_CAPABILITIES.validate`` -
+    the fail-closed gate every RuleBasedBacktestEngine.run call passes
+    through first (see that method)."""
+    RULE_BASED_BACKTEST_CAPABILITIES.validate(spec, strategy_family=strategy_family)
+
+
 class RuleBasedBacktestEngine:
-    engine_name = "gaon-rule-backtest"
+    engine_name = RULE_BASED_ENGINE_NAME
     engine_version = "v1"
 
     def run(self, run_id: str, strategy: CanonicalStrategySpec, dataset: MarketDataset, assumptions: BacktestExecutionAssumptionSet, *, generated_at: str | None = None) -> RealBacktestResult:
+        # fix/rule-based-engine-fail-closed: validate the COMPLETE spec
+        # before touching the dataset or running a single bar of trade
+        # simulation. An unsupported rule (or a missing required one) raises
+        # UnsupportedStrategyRuleError here - it can never be silently
+        # dropped, defaulted, or partially executed as a breakout.
+        RULE_BASED_BACKTEST_CAPABILITIES.validate(strategy)
         at = generated_at or utc_now()
         bars = tuple(sorted(dataset.bars, key=lambda bar: bar.timestamp))
         if len(bars) < 61:
