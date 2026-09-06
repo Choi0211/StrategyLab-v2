@@ -384,7 +384,10 @@ class FailClosedPreservedTests(unittest.TestCase):
 
 class AllExistingFamiliesAcceptedTests(unittest.TestCase):
     def test_every_shipped_family_still_validates_and_runs(self) -> None:
-        self.assertEqual(len(_TEMPLATE_BY_FAMILY), 16)
+        # 16 breakout-combination families + non-breakout families
+        # (feature/mean-reversion-strategy-family onward). Every resolvable
+        # family must build a spec the engine fully supports and can run.
+        self.assertGreaterEqual(len(_TEMPLATE_BY_FAMILY), 16)
         for family in _TEMPLATE_BY_FAMILY:
             with self.subTest(family=family):
                 spec = build_candidate_spec(family, created_at=NOW)

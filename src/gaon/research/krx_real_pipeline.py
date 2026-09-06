@@ -1672,9 +1672,32 @@ class ImprovementCandidateGenerator:
     def generate(self, strategy: CanonicalStrategySpec, findings: tuple[CriticFinding, ...], *, run_id: str, created_at: str | None = None) -> tuple[ImprovementCandidate, ...]:
         at = created_at or utc_now()
         candidates: list[ImprovementCandidate] = []
+        # feature/mean-reversion-strategy-family: candidate:a widens the
+        # base spec's ENTRY-TRIGGER lookback. For a breakout spec this is
+        # byte-for-byte the historical "breakout_lookback -> 30" mutation;
+        # for a non-breakout entry trigger it widens THAT trigger's own
+        # lookback instead of blindly injecting breakout_lookback (which
+        # would make an invalid two-trigger spec the engine rejects).
         entry_a = dict(strategy.entry)
-        entry_a["breakout_lookback"] = ProvenancedValue(30, FieldProvenance.RESEARCH_CANDIDATE)
-        candidates.append(ImprovementCandidate(f"{run_id}:candidate:a", strategy.spec_id, replace(strategy, spec_id=f"{strategy.spec_id}:breakout30", entry=entry_a, created_at=at), ("entry.breakout_lookback",), "거짓 돌파를 줄이기 위해 돌파 기준을 20일에서 30일로 늘립니다.", FieldProvenance.RESEARCH_CANDIDATE))
+        if "breakout_lookback" in strategy.entry:
+            entry_a["breakout_lookback"] = ProvenancedValue(30, FieldProvenance.RESEARCH_CANDIDATE)
+            _suffix_a, _field_a, _reason_a = "breakout30", "entry.breakout_lookback", "거짓 돌파를 줄이기 위해 돌파 기준을 20일에서 30일로 늘립니다."
+        else:
+            _trigger_key_a = next(
+                (key for key, d in BACKTEST_RULE_REGISTRY.items() if d.kind == "entry_trigger" and key in strategy.entry),
+                None,
+            )
+            if _trigger_key_a is not None:
+                _current_a = int(entry_a[_trigger_key_a].value)
+                _widened_a = _current_a + 10
+                entry_a[_trigger_key_a] = ProvenancedValue(_widened_a, FieldProvenance.RESEARCH_CANDIDATE)
+                _suffix_a = f"{_trigger_key_a}:{_widened_a}"
+                _field_a = f"entry.{_trigger_key_a}"
+                _reason_a = f"신호 빈도를 낮추기 위해 진입 룩백을 {_current_a}일에서 {_widened_a}일로 늘립니다."
+            else:  # pragma: no cover - validate() guarantees an entry trigger
+                _suffix_a = _field_a = _reason_a = None
+        if _suffix_a is not None:
+            candidates.append(ImprovementCandidate(f"{run_id}:candidate:a", strategy.spec_id, replace(strategy, spec_id=f"{strategy.spec_id}:{_suffix_a}", entry=entry_a, created_at=at), (_field_a,), _reason_a, FieldProvenance.RESEARCH_CANDIDATE))
         exit_b = dict(strategy.exit)
         exit_b["channel_exit_lookback"] = ProvenancedValue(15, FieldProvenance.RESEARCH_CANDIDATE)
         candidates.append(ImprovementCandidate(f"{run_id}:candidate:b", strategy.spec_id, replace(strategy, spec_id=f"{strategy.spec_id}:exit15", exit=exit_b, created_at=at), ("exit.channel_exit_lookback",), "수익 반납을 줄이는지 확인하기 위해 청산 저점 기준을 15일로 완화합니다.", FieldProvenance.RESEARCH_CANDIDATE))

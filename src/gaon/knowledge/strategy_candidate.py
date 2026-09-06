@@ -162,17 +162,57 @@ class StrategyFamilyTemplate:
 
 # Honest inventory of what the ONLY backtest engine wired into this
 # codebase (gaon.research.krx_real_pipeline.RuleBasedBacktestEngine)
-# actually computes: a single N-day-high BREAKOUT entry, optionally gated
-# by a close>MA20 and/or MA20>MA60 trend filter and/or a volume>=MA20(20)
-# filter, exited by a percentage stop-loss and/or an N-day channel low.
-# There is no separate mean-reversion, momentum-continuation (without a
-# breakout), or volatility-contraction computation anywhere in the engine.
+# actually computes.
 #
-# "Strategy family" here therefore means a distinct, named, honestly
-# different COMBINATION of that engine's real tunable dimensions (trend/
-# volume confirmation) - not a different algorithmic paradigm the engine
-# does not implement. Naming avoids claiming "momentum"/"mean reversion"/
-# "volatility contraction" as if they were separately computed.
+# The four tuples in THIS section - STRATEGY_FAMILY_TEMPLATES,
+# STRATEGY_SPACE_EXPANSION_TEMPLATES, STRATEGY_SPACE_EXPANSION_ROUND_2_
+# TEMPLATES - are all BREAKOUT-paradigm families: a single N-day-high
+# breakout entry, optionally gated by a close>MA20 and/or MA20>MA60 trend
+# filter and/or a volume>=MA20(20) filter, exited by a percentage
+# stop-loss and/or an N-day channel low. "Strategy family" within these
+# tuples means a distinct, named COMBINATION of that breakout grammar's
+# tunable dimensions (lookback/stop/channel tiers x trend/volume
+# confirmation) - NOT a different algorithmic paradigm. Their length and
+# order are load-bearing: gaon.research.hypothesis_proposal,
+# gaon.runtime.autonomous_research_runtime and several release-check
+# fixtures zip fixed-length ``specs`` lists against
+# ALL_STRATEGY_FAMILY_TEMPLATES by position, so these tuples must not grow.
+#
+# feature/mean-reversion-strategy-family (and the engine PRs #187-#191
+# before it): RuleBasedBacktestEngine now ALSO computes genuinely
+# non-breakout signals - a mean-reversion dip entry
+# (mean_reversion_ma_lookback / mean_reversion_band_pct), an N-bar
+# rate-of-change momentum entry (momentum_roc_lookback /
+# momentum_min_roc_pct), a volatility-thrust entry (volatility_atr_
+# lookback / volatility_thrust_k), a cross-symbol relative-strength
+# filter and a market-regime filter. Those are real, separately-computed
+# entry triggers / filters in the engine's rule registry - see
+# gaon.research.krx_real_pipeline.BACKTEST_RULE_REGISTRY and its
+# import-time integrity invariant, which is the single source of truth
+# for engine capability (do NOT maintain a second hand-written
+# SUPPORTED_FAMILIES list). Non-breakout families that use those rules
+# live in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES below - a SEPARATE tuple,
+# kept out of the breakout tuples and their positional zips, resolved by
+# name through _TEMPLATE_BY_FAMILY. They are first-class research
+# candidates (build_candidate_spec / new_candidate / spec_rules /
+# candidate-native deep validation) but are NOT yet part of the automatic
+# breakout family rotation - crossing paradigms in the autonomous
+# research cycle is its own later, explicit change.
+#
+# ULTRAREVIEW fix: this used to also include numeric-lookback/stop-width
+# variants (breakout_fast: 10-day/-4%/7-day; breakout_wide_swing: 40-day/
+# -8%/20-day). At the time of this fix, UserStrategyParser (the ONLY parser
+# the deep single-symbol validation pipeline - gaon.research.krx_real_
+# pipeline.RealAutonomousResearchPipeline - used to turn request text back
+# into a CanonicalStrategySpec) did not extract numbers from text at all:
+# it only ever assigned the fixed literals 20/-5.0/10 regardless of what
+# number appeared in the text. Those two numeric-variant families could
+# therefore never be deep-validated as themselves - the deep stage would
+# silently validate a DIFFERENT, unrelated rule set while the candidate
+# kept claiming its original (numerically distinct) fingerprint as
+# "promotion-ready". Those two families were removed rather than rewiring
+# the deeper pipeline to accept a spec directly (judged a materially larger
+# change, out of scope at the time).
 #
 # ULTRAREVIEW fix: this used to also include numeric-lookback/stop-width
 # variants (breakout_fast: 10-day/-4%/7-day; breakout_wide_swing: 40-day/
@@ -343,13 +383,47 @@ STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES: tuple[StrategyFamilyTemplate, ...] =
     ),
 )
 
-# Includes round 2 so build_candidate_spec()/_template() can resolve those
-# family names too - deliberately NOT named ALL_STRATEGY_FAMILY_TEMPLATES
-# and never exported as a public constant other modules might zip against
-# (see the note above).
+# feature/mean-reversion-strategy-family: non-breakout paradigm families.
+# Each uses a genuinely different RuleBasedBacktestEngine entry trigger /
+# filter (registered in gaon.research.krx_real_pipeline.
+# BACKTEST_RULE_REGISTRY - the single source of truth for what the engine
+# computes) - NEVER a renamed breakout. Kept in its own tuple, OUTSIDE
+# the breakout tuples and ALL_STRATEGY_FAMILY_TEMPLATES, so the
+# positional zips that depend on those tuples' length are untouched and
+# an existing breakout mission never silently rotates into a different
+# paradigm. Resolved by name through _TEMPLATE_BY_FAMILY, so
+# build_candidate_spec / new_candidate / spec_rules / candidate-native
+# deep validation all work; the autonomous breakout rotation
+# (next_untried_family / expand_strategy_space_candidate) deliberately
+# does NOT consult this tuple yet.
+#
+# Conservative defaults only, taken from the engine's own declared
+# registry defaults and its capability tests - never a tuned value and
+# never a performance claim. mean_reversion_standard: enter long when the
+# close is >= mean_reversion_band_pct (5%, the engine's registry default)
+# below its mean_reversion_ma_lookback (20-day) SMA; exit on the same
+# protective stop / channel low the breakout families use (a
+# mean-reversion-specific "revert to the MA" exit is a future engine
+# capability, not invented here).
+NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
+    StrategyFamilyTemplate(
+        "mean_reversion_standard", "표준 평균회귀",
+        {"mean_reversion_ma_lookback": 20, "mean_reversion_band_pct": 5.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10}, {},
+    ),
+)
+
+# Includes round 2 and the non-breakout families so build_candidate_spec()
+# / _template() can resolve those family names too - deliberately NOT named
+# ALL_STRATEGY_FAMILY_TEMPLATES and never exported as a public constant
+# other modules might zip against (see the note above).
 _TEMPLATE_BY_FAMILY = {
     template.family: template
-    for template in (*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES)
+    for template in (
+        *ALL_STRATEGY_FAMILY_TEMPLATES,
+        *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
+        *NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
+    )
 }
 
 # Natural-language text per family for the EXISTING single-symbol deep-
@@ -390,6 +464,12 @@ _FAMILY_REQUEST_TEXT: Mapping[str, str] = {
     "breakout_wide_trend_confirmed": "40 고가 돌파 종가 > MA20 > MA60 손절 -8% 20일 저점 이탈 청산",
     "breakout_wide_volume_confirmed": "40 고가 돌파 거래량 평균 이상 손절 -8% 20일 저점 이탈 청산",
     "breakout_wide_multi_confirmed": "40 고가 돌파 종가 > MA20 > MA60 거래량 평균 이상 손절 -8% 20일 저점 이탈 청산",
+    # feature/mean-reversion-strategy-family: an honest DESCRIPTION only.
+    # This does NOT round-trip through UserStrategyParser (which knows only
+    # the breakout grammar) and nothing relies on it doing so - a
+    # non-breakout candidate's identity is its own spec_rules, reconstructed
+    # by candidate_spec_from_rules_json, never this text.
+    "mean_reversion_standard": "20일 이동평균 대비 5% 이상 하락 시 평균회귀 매수 손절 -5% 10일 저점 이탈 청산",
 }
 
 
