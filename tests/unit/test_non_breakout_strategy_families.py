@@ -42,6 +42,7 @@ NOW = "2026-09-06T00:00:00Z"
 _FAMILIES = {
     "mean_reversion_standard": ("mean_reversion_ma_lookback", "돌파"),
     "momentum_roc_standard": ("momentum_roc_lookback", "돌파"),
+    "volatility_thrust_standard": ("volatility_atr_lookback", "돌파"),
 }
 
 
