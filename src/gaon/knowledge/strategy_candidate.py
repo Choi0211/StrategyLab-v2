@@ -458,6 +458,31 @@ REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = 
     ),
 )
 
+# feature/relative-strength-strategy-family: a CROSS-SYMBOL family. It
+# pairs the standard 20-day breakout with the relative-strength gate
+# (relative_strength_min - PR #190): only enter when the traded symbol's
+# 20-bar return is at least the equal-weight benchmark of the OTHER
+# symbols in the dataset. Relative strength has no timing of its own, so
+# it is a filter, never a standalone entry.
+#
+# IMPORTANT: this family can only be validated with a real multi-symbol
+# dataset. On a single-symbol dataset the engine's own guard returns None
+# for the benchmark and the gate FAILS CLOSED (blocks every entry -> 0
+# trades) - it never invents a zero benchmark or a synthetic peer. So a
+# candidate of this family run through the single-symbol deep-validation
+# wrapper produces 0 trades and can never reach PROMOTION_READY (it fails
+# the minimum-trade-sample gate), which is the honest outcome: "not
+# evaluable here", not "a bad strategy". Wiring the deep pipeline with a
+# real peer universe is a separate, larger change.
+RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
+    StrategyFamilyTemplate(
+        "breakout_relative_strength", "상대강도 돌파 (동종 대비 강세 한정)",
+        {"breakout_lookback": 20},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"relative_strength_min": True, "relative_strength_lookback": 20},
+    ),
+)
+
 # Includes round 2, the non-breakout families and the regime-filtered
 # families so build_candidate_spec() / _template() can resolve those
 # family names too - deliberately NOT named ALL_STRATEGY_FAMILY_TEMPLATES
@@ -470,6 +495,7 @@ _TEMPLATE_BY_FAMILY = {
         *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
         *NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
         *REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+        *RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES,
     )
 }
 
@@ -525,6 +551,12 @@ _FAMILY_REQUEST_TEXT: Mapping[str, str] = {
     # does NOT round-trip to the candidate's fingerprint (which carries
     # regime_bullish_only) - candidate-native spec_rules are authoritative.
     "breakout_regime_filtered": "50일 이동평균 위이고 50일 전보다 높은 상승 국면에서만 20 고가 돌파 매수 손절 -5% 10일 저점 이탈 청산",
+    # feature/relative-strength-strategy-family: description only. The
+    # relative-strength gate needs a peer universe and has no
+    # UserStrategyParser grammar, so this does not round-trip to the
+    # candidate's fingerprint - candidate-native spec_rules are
+    # authoritative.
+    "breakout_relative_strength": "동종 종목 대비 최근 20일 상대강도가 벤치마크 이상일 때만 20 고가 돌파 매수 손절 -5% 10일 저점 이탈 청산",
 }
 
 
