@@ -82,6 +82,7 @@ from gaon.knowledge.research_mission import (
     is_research_progress_status_question,
     is_stop_or_negation_request,
     is_provider_acquisition_blocker,
+    mission_multi_symbol_context_available,
     requested_strategy_family,
     mission_awaiting_approval_message,
     mission_blocked_message,
@@ -1976,6 +1977,10 @@ class LLMConversationBrain:
                     candidate_records(mission),
                     sequence=next_candidate_sequence(mission),
                     now=request.received_at,
+                    # relative-strength enters the promotion-capable
+                    # rotation only when the mission actually carries a
+                    # real peer universe; otherwise it stays fail-closed.
+                    multi_symbol_context_available=mission_multi_symbol_context_available(mission),
                 )
                 if expansion.candidate is None:
                     updated = record_blocked(
