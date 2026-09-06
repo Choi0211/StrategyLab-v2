@@ -439,16 +439,37 @@ NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
     ),
 )
 
-# Includes round 2 and the non-breakout families so build_candidate_spec()
-# / _template() can resolve those family names too - deliberately NOT named
-# ALL_STRATEGY_FAMILY_TEMPLATES and never exported as a public constant
-# other modules might zip against (see the note above).
+# feature/regime-filtered-strategy-family: families that gate an entry
+# with the market-regime filter (regime_bullish_only - PR #191). The
+# regime gate is a PREFERENCE, never a licence: it can only ever remove
+# an entry the underlying trigger already wanted, and it touches no risk
+# parameter. breakout_regime_filtered pairs the standard 20-day breakout
+# with regime_bullish_only (regime_ma_lookback 50, the engine default) so
+# a candidate can only open a position when the close is above its 50-bar
+# SMA AND above its level 50 bars ago. Its own tuple, resolved through
+# _TEMPLATE_BY_FAMILY, kept out of ALL_STRATEGY_FAMILY_TEMPLATES and the
+# autonomous rotation for now (regime-aware rotation is a later step).
+REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
+    StrategyFamilyTemplate(
+        "breakout_regime_filtered", "국면 필터 돌파 (상승 국면 한정)",
+        {"breakout_lookback": 20},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"regime_bullish_only": True, "regime_ma_lookback": 50},
+    ),
+)
+
+# Includes round 2, the non-breakout families and the regime-filtered
+# families so build_candidate_spec() / _template() can resolve those
+# family names too - deliberately NOT named ALL_STRATEGY_FAMILY_TEMPLATES
+# and never exported as a public constant other modules might zip against
+# (see the note above).
 _TEMPLATE_BY_FAMILY = {
     template.family: template
     for template in (
         *ALL_STRATEGY_FAMILY_TEMPLATES,
         *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
         *NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
+        *REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
     )
 }
 
@@ -499,6 +520,11 @@ _FAMILY_REQUEST_TEXT: Mapping[str, str] = {
     "mean_reversion_standard": "20일 이동평균 대비 5% 이상 하락 시 평균회귀 매수 손절 -5% 10일 저점 이탈 청산",
     "momentum_roc_standard": "최근 20일 수익률이 10% 이상일 때 모멘텀 매수 손절 -5% 10일 저점 이탈 청산",
     "volatility_thrust_standard": "1일 상승폭이 최근 20일 평균 레인지의 1.5배 이상일 때 변동성 급등 매수 손절 -5% 10일 저점 이탈 청산",
+    # feature/regime-filtered-strategy-family: a description only. The
+    # regime gate has no free-text grammar in UserStrategyParser, so this
+    # does NOT round-trip to the candidate's fingerprint (which carries
+    # regime_bullish_only) - candidate-native spec_rules are authoritative.
+    "breakout_regime_filtered": "50일 이동평균 위이고 50일 전보다 높은 상승 국면에서만 20 고가 돌파 매수 손절 -5% 10일 저점 이탈 청산",
 }
 
 
