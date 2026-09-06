@@ -640,21 +640,41 @@ def expand_strategy_space_candidate(
     (STRATEGY_SPACE_EXPANSION_TEMPLATES) first, exactly as before - if that
     round is fully skipped (every template's family or fingerprint already
     used), it ALSO tries round 2 (STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES
-    - see that tuple's module note) before reporting
-    ``strategy_hypothesis_space_exhausted``. Both rounds are read purely
-    from ``existing`` (already-persisted candidates), so this function
-    stays restart-safe and idempotent by construction: re-calling it after
-    a process restart with the identical persisted candidate history always
-    picks the identical next candidate (or the identical exhausted
-    verdict) - never repeats an already-tried family/fingerprint, never
-    depends on any counter outside the mission's own candidate history.
+    - see that tuple's module note).
+
+    feature/autonomous-paradigm-rotation: once BOTH breakout expansion
+    rounds are exhausted it rotates, in deterministic tuple order (NOT the
+    breakout-shaped evidence ranking), through
+    NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES - genuinely different paradigms
+    the engine can now compute (mean-reversion, momentum, volatility) -
+    one candidate per paradigm, with ``reason="strategy_paradigm_
+    rotation"``. Only once THOSE are also used does it report
+    ``strategy_hypothesis_space_exhausted`` with ``candidate=None`` - the
+    same terminal string and downstream handling as before, reached later.
+
+    Every phase is read purely from ``existing`` (already-persisted
+    candidates), so this function stays restart-safe and idempotent by
+    construction: re-calling it after a process restart with the identical
+    persisted candidate history always picks the identical next candidate
+    (or the identical exhausted verdict) - never repeats an already-tried
+    family/fingerprint, never depends on any counter outside the mission's
+    own candidate history.
     """
     evidence_signals = _mission_failure_signals(existing)
     known_fingerprints = {candidate.strategy_fingerprint for candidate in existing}
     used_families = {candidate.strategy_family for candidate in existing}
     skipped: list[str] = []
-    for round_templates in (STRATEGY_SPACE_EXPANSION_TEMPLATES, STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES):
-        ranked = _rank_expansion_templates(evidence_signals, round_templates)
+    phases: tuple[tuple[str, str, tuple[StrategyFamilyTemplate, ...]], ...] = (
+        ("strategy_family_space_exhausted", "ranked", STRATEGY_SPACE_EXPANSION_TEMPLATES),
+        ("strategy_family_space_exhausted", "ranked", STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES),
+        ("strategy_paradigm_rotation", "ordered", NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES),
+    )
+    for reason, ordering, round_templates in phases:
+        ranked = (
+            round_templates
+            if ordering == "ordered"
+            else _rank_expansion_templates(evidence_signals, round_templates)
+        )
         for template in ranked[: len(round_templates)]:
             spec = build_candidate_spec(template.family, created_at=now)
             fingerprint = spec.strategy_family_fingerprint
@@ -664,7 +684,7 @@ def expand_strategy_space_candidate(
             candidate = new_candidate(template.family, sequence=sequence, now=now)
             return StrategySpaceExpansion(
                 action="EXPAND_STRATEGY_SPACE",
-                reason="strategy_family_space_exhausted",
+                reason=reason,
                 candidate=candidate,
                 evidence_signals=evidence_signals,
                 skipped_fingerprints=tuple(skipped),
@@ -676,7 +696,7 @@ def expand_strategy_space_candidate(
         candidate=None,
         evidence_signals=evidence_signals,
         skipped_fingerprints=tuple(skipped),
-        search_budget=len(STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES),
+        search_budget=len(NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES),
     )
 
 

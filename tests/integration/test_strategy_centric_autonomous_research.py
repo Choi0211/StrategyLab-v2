@@ -45,6 +45,7 @@ from gaon.knowledge.research_mission import (
 )
 from gaon.knowledge.strategy_candidate import (
     ALL_STRATEGY_FAMILY_TEMPLATES,
+    NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
     STRATEGY_FAMILY_TEMPLATES,
     STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
     STRATEGY_SPACE_EXPANSION_TEMPLATES,
@@ -497,10 +498,39 @@ class StrategySpaceExpansionTelegramTests(unittest.TestCase):
         self.assertNotIn("strategy_hypothesis_space_exhausted", response)
         self.assertNotIn("bounded declarative strategy expansion budget exhausted", response)
 
-    def test_both_rounds_exhausted_still_gives_the_honest_blocked_message(self) -> None:
-        # Once round 2 is ALSO fully used, the mission must still, honestly,
-        # report blocked - never fabricate a 17th family.
+    def test_after_both_rounds_research_rotates_into_the_non_breakout_paradigms(self) -> None:
+        # feature/autonomous-paradigm-rotation: once both breakout rounds
+        # are used, "continue research" rotates into the non-breakout
+        # paradigm families (mean-reversion first) instead of blocking.
         self._seed_exhausted_mission((*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
+        before = candidate_records(self.agent._brain._mission_for("telegram:100"))
+        received_at = "2026-08-21T00:10:00Z"
+        with patch("gaon.research.krx_real_pipeline.krx_real_research_payload", return_value=_baseline(trades=45, run_id="paradigm-rotation")), patch(
+            "gaon.knowledge.telegram_autonomous_learning._run_production_external_research",
+            return_value={"state": "content_unavailable"},
+        ), patch(
+            "gaon.research.multi_symbol.build_market_data_provider_from_env",
+            return_value=_DeterministicKRUniverseProvider(),
+        ):
+            result = process_update(
+                parse_update_result(_update(10, 10, "연구를 계속해주세요"), received_at=received_at),
+                self.runtime,
+                self.client,
+            )
+        self.assertEqual(result.status, "sent", result)
+        mission = self.agent._brain._mission_for("telegram:100")
+        self.assertEqual(mission.status, MissionStatus.ACTIVE)
+        records = candidate_records(mission)
+        self.assertEqual(len(records), len(before) + 1)
+        self.assertEqual(records[-1].strategy_family, NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES[0].family)
+        self.assertNotIn("strategy_hypothesis_space_exhausted", self.client.sent[-1][1])
+
+    def test_every_paradigm_exhausted_still_gives_the_honest_blocked_message(self) -> None:
+        # Only once the non-breakout paradigms are ALSO used does the
+        # mission honestly report blocked - never fabricate a family.
+        self._seed_exhausted_mission(
+            (*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES, *NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES)
+        )
         received_at = "2026-08-21T00:10:00Z"
         result = process_update(
             parse_update_result(_update(10, 10, "연구를 계속해주세요"), received_at=received_at),
