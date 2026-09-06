@@ -81,8 +81,10 @@ from gaon.knowledge.research_mission import (
     is_mission_compatible_with_request,
     is_research_progress_status_question,
     is_stop_or_negation_request,
+    is_strategy_family_coverage_question,
     is_provider_acquisition_blocker,
     mission_multi_symbol_context_available,
+    render_mission_family_coverage,
     requested_strategy_family,
     mission_awaiting_approval_message,
     mission_blocked_message,
@@ -1231,6 +1233,18 @@ class LLMConversationBrain:
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
             and (not route.symbols or multi_symbol_breadth_request)
             and (route.intent not in _MISSION_HOOK_EXCLUDED_INTENTS or robustness_continuation_precedence or multi_symbol_breadth_request)
+            # fix/web-conversation-family-coverage-read: a read-only
+            # family-coverage QUESTION ("평균회귀나 모멘텀 전략도 연구 중이야?")
+            # names paradigm words that requested_strategy_family() also
+            # matches - but it is a question, not a "run that family next"
+            # request. It must never drive a mission-continuation cycle
+            # (which mark_stagnant's the active candidate and re-activates
+            # another). It is answered read-only just below via
+            # is_strategy_family_coverage_question.
+            and not (
+                is_strategy_family_coverage_question(request.text)
+                and not has_explicit_research_execution_intent(request.text)
+            )
             and (
                 is_generic_continuation_request(request.text)
                 or candidate_continuation_precedence
@@ -1267,6 +1281,18 @@ class LLMConversationBrain:
                 )
                 if mission_result is not None:
                     return mission_result
+
+        # fix/web-conversation-family-coverage-read: a bare reasoning
+        # follow-up ("왜?", "그건 왜?") right after a read-only mission read
+        # must keep that tracked subject - resolved here, BEFORE the generic
+        # is_mission_candidate_read_request branch below claims it (the web
+        # read-only marker makes that predicate match almost any read-only
+        # text). Returns None (and falls through unchanged) when there is no
+        # tracked read subject or the context has moved on.
+        if extract_candidate_id(request.text) is None:
+            followup_subject = self._try_mission_subject_explanation(request, route, warnings, references)
+            if followup_subject is not None:
+                return followup_subject
 
         # Patch 8.8 production bug fix: a read-only question about the
         # ACTIVE mission/candidate itself ("현재 활성 후보의 fingerprint와
@@ -1320,7 +1346,17 @@ class LLMConversationBrain:
         # generic natural-language GENERAL_CONVERSATION fallback
         # ("말씀해 주신 불편을 확인했습니다...") - a feedback response to
         # what was actually a research-status question.
-        if mission is None and is_mission_candidate_read_request(request.text):
+        # fix/web-conversation-family-coverage-read: a family-coverage
+        # question ("돌파 말고 다른 전략도 연구하고 있어?") carries the web
+        # read-only marker, which makes is_mission_candidate_read_request
+        # match it too - but the generic active-candidate read does not
+        # answer the family question. Let the dedicated family-coverage
+        # branch further below own it.
+        if (
+            mission is None
+            and is_mission_candidate_read_request(request.text)
+            and not is_strategy_family_coverage_question(request.text)
+        ):
             return (
                 "영하님, 현재 진행 중인 Research Mission이 없습니다. 연구를 시작하시려면 "
                 "원하시는 종목이나 전략, 시장 범위를 말씀해 주세요.",
@@ -1334,6 +1370,14 @@ class LLMConversationBrain:
             mission is not None
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
             and is_mission_candidate_read_request(request.text)
+            and not is_strategy_family_coverage_question(request.text)
+            # fix/web-conversation-family-coverage-read: "그중 제일 좋은 건?"
+            # also carries the web read-only marker (matching
+            # is_mission_candidate_read_request), but the honest answer is
+            # the whole-portfolio comparison that explicitly declines to
+            # rank - not the single active-candidate read. Defer to the
+            # is_best_candidate_query branch below.
+            and not is_best_candidate_query(request.text)
         ):
             explicit_candidate_id = extract_candidate_id(request.text)
             if explicit_candidate_id is not None:
@@ -1508,6 +1552,40 @@ class LLMConversationBrain:
                 render_mission_candidates_overview(mission),
                 "conversation_mission_candidates_overview",
                 _dedupe((*warnings, "read-only candidate comparison; no fabricated ranking; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
+
+        # fix/web-conversation-family-coverage-read: "돌파 말고 다른 전략도
+        # 연구하고 있어?" is a READ question about which strategy FAMILIES the
+        # mission covers - answered TRUTHFULLY from persisted candidate state
+        # only (which families have a real candidate vs are merely a
+        # supported research direction; relative strength stays fail-closed
+        # without an explicit peer context). Zero research tool calls, no
+        # mission mutation - it is deliberately checked here, BEFORE the
+        # mission-continuation / diversity-rotation machinery below, so an
+        # interrogative "…있어?" can never rotate the mission.
+        if (
+            not has_explicit_research_execution_intent(request.text)
+            and is_strategy_family_coverage_question(request.text)
+        ):
+            if mission is None:
+                return (
+                    "영하님, 현재 진행 중인 Research Mission이 없습니다. 연구를 시작하시려면 "
+                    "원하시는 종목이나 전략, 시장 범위를 말씀해 주세요.",
+                    "conversation_research_status_no_mission",
+                    _dedupe((*warnings, "no active research mission; zero research tool calls")),
+                    references,
+                    "deterministic",
+                    (),
+                )
+            self._remember_mission(request, mission)
+            self._remember_read_subject(request, mission, kind="family_coverage")
+            return (
+                render_mission_family_coverage(mission),
+                "conversation_mission_family_coverage",
+                _dedupe((*warnings, "read-only strategy-family coverage; persisted state only; no fabricated family activity; no research tool executed")),
                 references,
                 "deterministic",
                 (),
@@ -1814,6 +1892,17 @@ class LLMConversationBrain:
         if mvp_context is not None and str(mvp_context.updated_at) > str(subject.get("updated_at", "")):
             return None
         mission = self._mission_for(request.session_id)
+        if mission is None:
+            # fix/web-conversation-family-coverage-read: the tracked subject
+            # was set this session, but for a cross-transport durable owner
+            # mission ``_remember_mission`` writes the mission back to its
+            # OWNING session, never this one - so ``_mission_for`` here is
+            # None even though the subject and the mission both exist. Fall
+            # back to the same read-only durable-owner resolution the main
+            # path uses; a follow-up ("왜?") then keeps its subject instead
+            # of collapsing to the generic fallback.
+            durable_mission, _ambiguous = self._resolve_durable_owner_mission(request)
+            mission = durable_mission
         if mission is None or mission.mission_id != subject.get("mission_id"):
             return None
         kind = subject.get("kind")
@@ -1860,6 +1949,22 @@ class LLMConversationBrain:
                 text,
                 "conversation_mission_subject_explanation",
                 _dedupe((*warnings, f"candidate_subject={candidate.candidate_id}", "mission candidate subject continuity; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
+        if kind == "family_coverage":
+            # fix/web-conversation-family-coverage-read: a follow-up "왜?" /
+            # "그중에서 상대강도 전략은?" right after the family-coverage read
+            # keeps that same subject - re-render the truthful, persisted-
+            # state-only family coverage rather than falling through to the
+            # stale ConversationalMVPContext.
+            self._remember_mission(request, mission)
+            self._remember_read_subject(request, mission, kind="family_coverage")
+            return (
+                render_mission_family_coverage(mission),
+                "conversation_mission_family_coverage",
+                _dedupe((*warnings, "family-coverage subject continuity; persisted state only; no research tool executed")),
                 references,
                 "deterministic",
                 (),
@@ -1931,7 +2036,19 @@ class LLMConversationBrain:
             return text, "conversation_mission_blocked", _dedupe((*warnings, "mission blocked; safe explanation only")), references, "deterministic", ()
 
         active = get_active_candidate(mission)
-        if active is not None and is_diversity_request(request.text):
+        if (
+            active is not None
+            and is_diversity_request(request.text)
+            # fix/web-conversation-family-coverage-read defensive guard: a
+            # read-only interrogative like "돌파 말고 다른 전략도 연구하고
+            # 있어?" also matches is_diversity_request's "다른전략" token but
+            # is a QUESTION, never a rotation command - it must never mutate
+            # the mission (mark_stagnant / clear the active candidate). It is
+            # already answered read-only above via
+            # is_strategy_family_coverage_question; this keeps rotation from
+            # firing even if that read path is ever bypassed.
+            and not is_strategy_family_coverage_question(request.text)
+        ):
             # "다른 방식도 찾아봐": an explicit user request to bias the next
             # hypothesis cycle toward a different strategy family - treated
             # the same as natural stagnation-driven rotation (never
@@ -4026,9 +4143,31 @@ def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
     # answerable mission read/status question.
     if request.source == "web" and request.text.casefold().endswith(_WEB_READ_ONLY_PROBE_MARKER_SUFFIX):
         underlying_text = request.text[: -len(_WEB_READ_ONLY_PROBE_MARKER_SUFFIX)]
+        # fix/web-conversation-family-coverage-read: the admission gate for a
+        # read_only=True web message must cover EVERY deterministic,
+        # zero-research-tool, no-mutation mission read ``_try_conversational_
+        # mvp`` can answer - not only progress-status / candidate-read.
+        # Before this, a read-only "그중 제일 좋은 건?" (candidate-portfolio
+        # comparison) or "돌파 말고 다른 전략도 연구하고 있어?" (family
+        # coverage) was excluded here, never resolved the durable owner
+        # mission, and was answered by a mission-unaware generic path -
+        # directly contradicting the progress-status question asked moments
+        # earlier that DID resolve the same mission.
+        # A bare reasoning follow-up ("왜?", "그건 왜?") right after a
+        # read-only mission read is also a zero-research-tool, no-mutation
+        # question ``_try_mission_subject_explanation`` answers from the
+        # tracked read subject; when there is no subject it returns None and
+        # falls through exactly as before, so admitting it is safe.
+        _followup_intent = classify_conversational_route(underlying_text).intent in {
+            ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
+            ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
+        }
         if not (
             is_research_progress_status_question(underlying_text)
             or is_mission_candidate_read_request(underlying_text)
+            or is_best_candidate_query(underlying_text)
+            or is_strategy_family_coverage_question(underlying_text)
+            or _followup_intent
         ):
             return False
     return (
