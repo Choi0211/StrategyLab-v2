@@ -82,6 +82,7 @@ from gaon.knowledge.research_mission import (
     is_research_progress_status_question,
     is_stop_or_negation_request,
     is_provider_acquisition_blocker,
+    requested_strategy_family,
     mission_awaiting_approval_message,
     mission_blocked_message,
     mission_budget_exhausted_message,
@@ -104,6 +105,7 @@ from gaon.knowledge.research_mission import (
 from gaon.knowledge.strategy_candidate import (
     EconomicViabilityStatus,
     StrategyCandidateStatus,
+    _TEMPLATE_BY_FAMILY,
     candidate_remaining_blockers,
     candidate_sample_exhausted,
     evaluate_economic_viability,
@@ -1228,7 +1230,17 @@ class LLMConversationBrain:
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
             and (not route.symbols or multi_symbol_breadth_request)
             and (route.intent not in _MISSION_HOOK_EXCLUDED_INTENTS or robustness_continuation_precedence or multi_symbol_breadth_request)
-            and (is_generic_continuation_request(request.text) or candidate_continuation_precedence or robustness_continuation_precedence or multi_symbol_breadth_request)
+            and (
+                is_generic_continuation_request(request.text)
+                or candidate_continuation_precedence
+                or robustness_continuation_precedence
+                or multi_symbol_breadth_request
+                # feature/conversation-paradigm-family-routing (A9): a user
+                # naming a specific paradigm ("평균회귀 전략은 어때?") is a
+                # mission-continuation request that selects which family
+                # runs next - route it through the same mission cycle.
+                or requested_strategy_family(request.text) is not None
+            )
         ):
             if mission.status is MissionStatus.AWAITING_HUMAN_APPROVAL:
                 # The target promotion-ready candidate count was already
@@ -1930,6 +1942,32 @@ class LLMConversationBrain:
             mission = clear_focus_symbol(mission, now=request.received_at)
             warnings = (*warnings, f"user_requested_diversity_rotation={stagnant.candidate_id}")
             active = None
+
+        # feature/conversation-paradigm-family-routing (A9): a user naming
+        # a SPECIFIC paradigm ("평균회귀 전략은 어때?", "모멘텀도 비교해줘")
+        # selects that family as the next candidate - never skipping any
+        # validation or promotion gate, only choosing which family runs
+        # next. If it is already this mission's active candidate, do
+        # nothing; if it already has candidate history, re-activate that
+        # candidate rather than duplicating it; otherwise create it.
+        requested_family = requested_strategy_family(request.text)
+        if requested_family is not None and requested_family in _TEMPLATE_BY_FAMILY:
+            records = candidate_records(mission)
+            already = next((c for c in records if c.strategy_family == requested_family), None)
+            if active is None or active.strategy_family != requested_family:
+                if active is not None:
+                    stagnant = mark_stagnant(active, now=request.received_at, reason="user_requested_specific_strategy_family")
+                    mission = update_candidate(mission, stagnant, now=request.received_at)
+                    mission = clear_focus_symbol(mission, now=request.received_at)
+                    warnings = (*warnings, f"user_requested_family_rotation={stagnant.candidate_id}->{requested_family}")
+                if already is not None:
+                    mission = set_active_candidate(mission, already.candidate_id, now=request.received_at)
+                    active = get_active_candidate(mission)
+                else:
+                    active = new_candidate(requested_family, sequence=next_candidate_sequence(mission), now=request.received_at)
+                    mission = add_candidate(mission, active, now=request.received_at)
+                    mission = set_active_candidate(mission, active.candidate_id, now=request.received_at)
+                    warnings = (*warnings, f"user_requested_family={requested_family}:{active.candidate_id}")
 
         if active is None:
             family = next_untried_family(candidate_records(mission))
