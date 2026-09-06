@@ -33,7 +33,12 @@ from unittest.mock import patch
 
 from gaon.integrations.telegram.runtime import TelegramRuntime, process_update
 from gaon.integrations.telegram.transport import parse_update_result
-from gaon.knowledge.research_mission import MissionStatus, MissionUniverseScope
+from gaon.knowledge.research_mission import (
+    MissionStatus,
+    MissionUniverseScope,
+    candidate_records,
+    get_active_candidate,
+)
 from gaon.research.krx_real_pipeline import KRXFixtureMarketDataProvider
 from gaon.research.real_research import MarketSymbol
 from gaon.runtime.config import GaonRuntimeConfig
@@ -386,6 +391,33 @@ class PersistentResearchMissionConversationTests(unittest.TestCase):
         real_work_before = len(self._multi_symbol_audits()) + len(self._single_symbol_audits())
         self._send(2, "계속 연구해주세요")
         self.assertGreater(len(self._multi_symbol_audits()) + len(self._single_symbol_audits()), real_work_before)
+
+    def test_naming_a_paradigm_routes_research_to_that_family(self) -> None:
+        # feature/conversation-paradigm-family-routing (A9): asking about a
+        # specific paradigm makes the Research Brain study THAT family next.
+        self._send(1, "국내 주식 전체를 대상으로 단타 전략을 연구해주세요")
+        self._send(2, "계속 연구해주세요")
+        families_before = {c.strategy_family for c in candidate_records(self._mission())}
+        # the mission has been researching breakout families only.
+        self.assertTrue(families_before)
+        self.assertNotIn("mean_reversion_standard", families_before)
+
+        self._send(3, "평균회귀 전략은 어때?")
+        mission = self._mission()
+        active = get_active_candidate(mission)
+        self.assertIsNotNone(active)
+        self.assertEqual(active.strategy_family, "mean_reversion_standard")
+        self.assertEqual(mission.status, MissionStatus.ACTIVE)
+        # earlier breakout candidates are preserved, not discarded.
+        self.assertTrue(families_before <= {c.strategy_family for c in candidate_records(mission)})
+
+        # a follow-up naming momentum switches again; mean-reversion stays in history.
+        self._send(4, "모멘텀도 비교해줘")
+        mission = self._mission()
+        self.assertEqual(get_active_candidate(mission).strategy_family, "momentum_roc_standard")
+        history = {c.strategy_family for c in candidate_records(mission)}
+        self.assertIn("mean_reversion_standard", history)
+        self.assertIn("momentum_roc_standard", history)
 
     def test_no_order_promotion_or_mutation_across_the_whole_conversation(self) -> None:
         self._send(1, "국내 주식 전체를 대상으로 단타 전략을 연구해주세요")

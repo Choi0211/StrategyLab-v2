@@ -321,6 +321,39 @@ def is_diversity_request(text: str) -> bool:
     return _contains_any(normalized, _DIVERSITY_REQUEST_TOKENS)
 
 
+# feature/conversation-paradigm-family-routing (A9): a user naming a
+# specific strategy PARADIGM ("평균회귀 전략은 어때?", "모멘텀도 비교해줘",
+# "변동성 전략 연구해봐", "국면 필터도 봐줘") - unlike the generic
+# is_diversity_request ("다른 방식도"), which only asks to rotate. Maps the
+# named paradigm to the family the Research Brain wires it as (see
+# gaon.knowledge.strategy_candidate). Order matters: the most specific /
+# least ambiguous tokens first. Returns None when no paradigm is named
+# (or only the default breakout paradigm is mentioned) - callers then
+# keep the normal rotation order.
+# Tokens are matched against the whitespace/punctuation-stripped,
+# case-folded text (see _norm), so they must themselves be in that form.
+_PARADIGM_FAMILY_TOKENS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("평균회귀", "역추세", "meanreversion", "회귀전략"), "mean_reversion_standard"),
+    (("모멘텀", "momentum", "추세추종"), "momentum_roc_standard"),
+    (("변동성", "volatility", "레인지돌파", "급등포착"), "volatility_thrust_standard"),
+    (("국면필터", "국면전략", "레짐", "regime", "상승국면"), "breakout_regime_filtered"),
+)
+
+
+def requested_strategy_family(text: str) -> str | None:
+    """The specific strategy family a user named, or None. Deterministic;
+    does not touch mission state. A caller uses this only to CHOOSE the
+    next candidate family - never to skip validation, promotion gates, or
+    any safety check."""
+    normalized = _norm(text)
+    if not normalized:
+        return None
+    for tokens, family in _PARADIGM_FAMILY_TOKENS:
+        if _contains_any(normalized, tokens):
+            return family
+    return None
+
+
 # Patch 8.3 production bug fix (root cause): a real Telegram conversation
 # established a market-wide strategy-centric mission with a promising
 # candidate, then asked to continue its robustness validation with phrasing
