@@ -709,8 +709,55 @@ def _real_robustness_execution_from_baseline(
     candidate_strategy = _candidate_strategy_from_baseline(baseline) or strategy
     engine = _engine()
     rid = f"production-robustness:{_hash({'symbol': symbol, 'dataset': dataset.fingerprint, 'strategy': candidate_strategy.fingerprint})[:16]}"
+
+    # feature/relative-strength-real-walk-forward-wiring: a relative-strength
+    # candidate is only meaningful against REAL peers. Build a combined
+    # primary+peer, timestamp-aligned dataset for its walk-forward; if a
+    # real peer context cannot be assembled, the whole robustness result
+    # is fail-closed (never promotion-ready, never fabricated).
+    primary_symbol = str(getattr(candidate_strategy, "symbol", symbol) or symbol)
+    walk_forward_dataset = dataset
+    walk_forward_primary_symbol: str | None = None
+    relative_strength_context: dict[str, object] | None = None
+    if "relative_strength_min" in dict(getattr(candidate_strategy, "filters", {}) or {}):
+        from gaon.research.multi_symbol_validation import (
+            MultiSymbolValidationError,
+            build_relative_strength_validation_dataset,
+        )
+
+        try:
+            peer_datasets = _resolved_peer_datasets_for_relative_strength(
+                symbol=symbol, baseline=baseline, dataset=dataset, budget=budget, connection=connection
+            )
+            walk_forward_dataset = build_relative_strength_validation_dataset(
+                dataset, peer_datasets, primary_symbol=primary_symbol
+            )
+        except MultiSymbolValidationError as exc:
+            return {
+                "execution_state": "blocked_unsupported_validation_context",
+                "blockers": [f"UNSUPPORTED_VALIDATION_CONTEXT:{exc}"],
+                "relative_strength_validation_context": {"status": "unsupported", "reason": str(exc)},
+                "walk_forward": _not_run(
+                    "not_run_unsupported_validation_context",
+                    "relative_strength_requires_real_multi_symbol_context",
+                    {"fold_count": 0, "folds": []},
+                ),
+                "fabricated_metrics": False,
+                "strategy_mutated": False,
+                "order_executed": False,
+            }
+        walk_forward_primary_symbol = primary_symbol
+        peer_symbols = [s.symbol for s in walk_forward_dataset.symbols if s.symbol != primary_symbol]
+        relative_strength_context = {
+            "status": "real_multi_symbol",
+            "primary": primary_symbol,
+            "peers": peer_symbols,
+            "aligned_bars": len({b.timestamp for b in walk_forward_dataset.bars if b.symbol == primary_symbol}),
+            "fabricated_metrics": False,
+        }
+
     primary = engine.run(f"{rid}:primary", candidate_strategy, dataset, assumptions)
-    return {
+    result = {
         "execution_state": "executed",
         "primary_result": _result_summary(primary),
         "multi_symbol_validation": _execute_peer_symbols(
@@ -725,11 +772,40 @@ def _real_robustness_execution_from_baseline(
             connection=connection,
         ),
         "out_of_sample": _execute_oos(rid, dataset, strategy, candidate_strategy, assumptions),
-        "walk_forward": _execute_walk_forward(rid, dataset, strategy, candidate_strategy, assumptions, budget),
+        "walk_forward": _execute_walk_forward(
+            rid, walk_forward_dataset, strategy, candidate_strategy, assumptions, budget,
+            primary_symbol=walk_forward_primary_symbol,
+        ),
         "regime_validation": _execute_regimes(rid, dataset, strategy, candidate_strategy, assumptions),
         "parameter_sensitivity": _execute_parameter_sensitivity(rid, dataset, candidate_strategy, assumptions, budget),
         "transaction_cost_stress": _execute_cost_stress(rid, dataset, strategy, candidate_strategy, assumptions),
     }
+    if relative_strength_context is not None:
+        result["relative_strength_validation_context"] = relative_strength_context
+    return result
+
+
+def _resolved_peer_datasets_for_relative_strength(
+    *,
+    symbol: str,
+    baseline: Mapping[str, object],
+    dataset: object,
+    budget: ResearchBudget,
+    connection: object | None,
+) -> list[object]:
+    """Resolve the SAME real peer datasets ``_execute_peer_symbols`` uses -
+    ``baseline['peer_datasets']`` first, then the real provider when it is
+    explicitly enabled. Never synthesises a peer; an unresolvable peer is
+    skipped, and an empty result makes the caller fail closed."""
+    peer_datasets_json = _as_dict(baseline.get("peer_datasets"))
+    selection = _select_peer_symbols(symbol, baseline=baseline, budget=budget)
+    resolved: list[object] = []
+    for peer in (str(item) for item in _as_list(selection.get("selected_peers"))):
+        try:
+            resolved.append(_peer_dataset(peer, peer_datasets_json, dataset=dataset, connection=connection))
+        except Exception:  # noqa: BLE001 - an unresolvable peer is simply absent.
+            continue
+    return resolved
 
 
 def _engine():
@@ -1010,8 +1086,25 @@ def _execute_oos(rid: str, dataset: object, baseline_strategy: object, candidate
     }
 
 
-def _execute_walk_forward(rid: str, dataset: object, baseline_strategy: object, candidate_strategy: object, assumptions: object, budget: ResearchBudget) -> dict[str, object]:
-    bars = tuple(dataset.bars)
+def _execute_walk_forward(rid: str, dataset: object, baseline_strategy: object, candidate_strategy: object, assumptions: object, budget: ResearchBudget, *, primary_symbol: str | None = None) -> dict[str, object]:
+    # feature/relative-strength-real-walk-forward-wiring: when a combined
+    # multi-symbol dataset is passed for a relative-strength candidate,
+    # the fold timeline and boundaries come from the PRIMARY symbol only
+    # and every symbol is sliced at the SAME timestamp window. The
+    # single-symbol path below is byte-for-byte unchanged.
+    _multi_symbol = primary_symbol is not None and len({bar.symbol for bar in dataset.bars}) > 1
+    if _multi_symbol:
+        timeline = tuple(bar for bar in sorted(dataset.bars, key=lambda bar: bar.timestamp) if bar.symbol == primary_symbol)
+
+        def _fold_slice(ds: object, lo: int, hi: int, *, suffix: str) -> object:
+            return _slice_dataset_by_timestamp(ds, timeline[lo].timestamp, timeline[hi - 1].timestamp, suffix=suffix)
+    else:
+        timeline = tuple(dataset.bars)
+
+        def _fold_slice(ds: object, lo: int, hi: int, *, suffix: str) -> object:
+            return _slice_dataset(ds, lo, hi, suffix=suffix)
+
+    bars = timeline
     fold_count = min(3, budget.max_walk_forward_folds)
     min_test = 90
     if len(bars) < 60 + fold_count * min_test:
@@ -1022,8 +1115,8 @@ def _execute_walk_forward(rid: str, dataset: object, baseline_strategy: object, 
     for index in range(fold_count):
         test_start = start + index * step
         test_end = len(bars) if index == fold_count - 1 else start + (index + 1) * step
-        train = _slice_dataset(dataset, 0, test_start, suffix=f"wf:{index + 1}:train")
-        test = _slice_dataset(dataset, max(0, test_start - EVALUATION_WARMUP_BARS), test_end, suffix=f"wf:{index + 1}:test")
+        train = _fold_slice(dataset, 0, test_start, suffix=f"wf:{index + 1}:train")
+        test = _fold_slice(dataset, max(0, test_start - EVALUATION_WARMUP_BARS), test_end, suffix=f"wf:{index + 1}:test")
         evaluation_start = bars[test_start].timestamp
         evaluation_end = bars[test_end - 1].timestamp
         baseline = _evaluation_backtest(f"{rid}:wf:{index + 1}:baseline", baseline_strategy, test, assumptions, evaluation_start=evaluation_start, evaluation_end=evaluation_end)
@@ -1308,6 +1401,21 @@ def _slice_dataset(dataset: object, start: int, end: int, *, suffix: str) -> obj
     from gaon.research.real_research import MarketDataMetadata, MarketDataset
 
     bars = tuple(dataset.bars)[start:end]
+    metadata = replace(dataset.metadata, start_date=bars[0].timestamp, end_date=bars[-1].timestamp)
+    return MarketDataset(f"{dataset.dataset_id}:{suffix}", dataset.symbols, bars, metadata, dataset.corporate_actions)
+
+
+def _slice_dataset_by_timestamp(dataset: object, low_ts: str, high_ts: str, *, suffix: str) -> object:
+    """Keep every symbol's bars inside the inclusive ``[low_ts, high_ts]``
+    window - the multi-symbol analogue of ``_slice_dataset``'s index cut,
+    so a combined primary+peer dataset is split at one shared date."""
+    from gaon.research.real_research import MarketDataset
+
+    bars = tuple(
+        bar
+        for bar in sorted(dataset.bars, key=lambda bar: (bar.timestamp, bar.symbol))
+        if low_ts <= bar.timestamp <= high_ts
+    )
     metadata = replace(dataset.metadata, start_date=bars[0].timestamp, end_date=bars[-1].timestamp)
     return MarketDataset(f"{dataset.dataset_id}:{suffix}", dataset.symbols, bars, metadata, dataset.corporate_actions)
 
