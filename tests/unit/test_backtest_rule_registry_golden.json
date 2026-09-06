@@ -574,5 +574,31 @@
         "end_of_dataset"
       ]
     ]
+  },
+  "mean_reversion_standard": {
+    "strategy_family_fingerprint": "589cb0894eca2c7a5beb6d4fe1e835a91e39878a72b65da41469126d84f53764",
+    "trade_count": 0,
+    "metrics": {
+      "total_return": 0.0,
+      "cagr": 0.0,
+      "mdd": 0.0,
+      "sharpe": null,
+      "win_rate": null,
+      "profit_factor": null,
+      "trade_count": 0,
+      "average_trade": null,
+      "average_win": null,
+      "average_loss": null,
+      "payoff_ratio": null,
+      "exposure": 0.0,
+      "ending_equity": 1000000.0,
+      "expectancy": null,
+      "longest_losing_streak": 0
+    },
+    "trades": [],
+    "equity_curve_last": {
+      "timestamp": "2026-07-10",
+      "equity": 1000000.0
+    }
   }
 }

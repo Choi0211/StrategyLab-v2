@@ -217,19 +217,35 @@ class NaturalLanguagePathBackwardCompatibilityTests(unittest.TestCase):
 
 
 class ExistingFamiliesUnchangedBehaviorTests(unittest.TestCase):
-    """Part F: candidate behavior for every EXISTING family must not
-    change. Compares the OLD path (no candidate_spec) against the NEW path
-    (candidate_spec supplied) for all 17 currently-shipped families."""
+    """Part F: the NEW path (candidate_spec supplied) always validates the
+    candidate's OWN spec_rules. For a BREAKOUT family, whose descriptive
+    text still round-trips through UserStrategyParser, the OLD (free-text)
+    path lands on the same fingerprint - unchanged behaviour. For a
+    NON-BREAKOUT family (feature/mean-reversion-strategy-family onward),
+    whose paradigm the breakout-only parser cannot express, the free-text
+    path deliberately does NOT reproduce the candidate - which is exactly
+    why candidate-native validation exists."""
 
-    def test_all_existing_families_produce_identical_strategy_rules_old_vs_new_path(self) -> None:
+    def test_breakout_families_round_trip_and_non_breakout_families_are_candidate_native(self) -> None:
+        from gaon.research.krx_real_pipeline import RULE_BASED_BACKTEST_CAPABILITIES
+
         for family in _TEMPLATE_BY_FAMILY:
             with self.subTest(family=family):
                 candidate = new_candidate(family, sequence=1, now=NOW)
                 text = render_candidate_request_text(candidate, "005930")
                 old_report = RealAutonomousResearchPipeline(None).run(text, symbol="005930", generated_at=NOW)
                 new_report = RealAutonomousResearchPipeline(None).run(text, symbol="005930", candidate_spec=candidate.spec_rules, generated_at=NOW)
-                self.assertEqual(old_report.strategy.strategy_family_fingerprint, new_report.strategy.strategy_family_fingerprint)
+                # the NEW path is always the candidate's own identity.
                 self.assertEqual(new_report.strategy.strategy_family_fingerprint, candidate.strategy_fingerprint)
+                reconstructed = candidate_spec_from_rules_json(candidate.spec_rules, symbol="005930", created_at=NOW)
+                is_breakout = "breakout_lookback" in reconstructed.entry
+                if is_breakout:
+                    self.assertEqual(old_report.strategy.strategy_family_fingerprint, new_report.strategy.strategy_family_fingerprint)
+                else:
+                    # free-text path cannot express this paradigm - it must
+                    # not silently claim the candidate's identity.
+                    self.assertNotEqual(old_report.strategy.strategy_family_fingerprint, candidate.strategy_fingerprint)
+                    self.assertTrue(RULE_BASED_BACKTEST_CAPABILITIES.supports(reconstructed))
 
 
 class DeepValidationStagesShareOneSpecTests(unittest.TestCase):
