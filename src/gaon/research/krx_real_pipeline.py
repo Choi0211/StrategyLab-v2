@@ -34,6 +34,7 @@ from gaon.research.real_research import (
     SQLiteDatasetRegistry,
     TradingCalendar,
 )
+from gaon.research.multi_symbol_validation import walk_forward_timestamp_split
 from gaon.research.self_improving import ResearchMemoryEntry, SQLiteResearchMemoryRepository
 
 
@@ -1635,10 +1636,13 @@ class PerformanceMetricsCalculator:
 class WalkForwardValidator:
     def validate(self, strategy: CanonicalStrategySpec, dataset: MarketDataset, assumptions: BacktestExecutionAssumptionSet, *, run_id: str, generated_at: str | None = None) -> ValidationReport:
         at = generated_at or utc_now()
-        bars = tuple(sorted(dataset.bars, key=lambda bar: bar.timestamp))
-        split = max(70, int(len(bars) * 0.65))
-        train = replace(dataset, dataset_id=f"{dataset.dataset_id}:train", bars=bars[:split])
-        test = replace(dataset, dataset_id=f"{dataset.dataset_id}:test", bars=bars[split - 60 :])
+        # Priority 4: split by TIMESTAMP on the primary symbol's own
+        # timeline, not by mixed-symbol bar index. For a single-symbol
+        # dataset this is bar-for-bar identical to the historical
+        # ``max(70, int(len*0.65))`` index split; for a multi-symbol
+        # (relative-strength) dataset it cuts every peer at the SAME date
+        # so the OOS fold sees a real, time-aligned peer group.
+        train, test = walk_forward_timestamp_split(dataset, primary_symbol=strategy.symbol)
         engine = RuleBasedBacktestEngine()
         train_result = engine.run(f"{run_id}:train", strategy, train, assumptions, generated_at=at)
         test_result = engine.run(f"{run_id}:test", strategy, test, assumptions, generated_at=at)
