@@ -401,15 +401,32 @@ class StagnationRotationTests(unittest.TestCase):
             candidates.append(expansion.candidate)
         self.assertEqual(set(generated_families), {template.family for template in STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES})
 
-    def test_strategy_hypothesis_space_exhausted_only_after_both_rounds_used(self) -> None:
-        candidates = tuple(
+    def test_strategy_hypothesis_space_exhausted_only_after_all_rounds_and_paradigm_rotation(self) -> None:
+        # feature/autonomous-paradigm-rotation: after both breakout
+        # expansion rounds, expand_strategy_space_candidate rotates through
+        # NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES (deterministic order) one
+        # candidate at a time; the terminal
+        # ``strategy_hypothesis_space_exhausted`` fires only once those are
+        # ALSO used.
+        from gaon.knowledge.strategy_candidate import NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES
+
+        candidates = list(
             new_candidate(template.family, sequence=index + 1, now=NOW)
             for index, template in enumerate((*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
         )
-        expansion = expand_strategy_space_candidate(candidates, sequence=len(candidates) + 1, now=LATER)
+        rotated: list[str] = []
+        for _ in range(len(NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES)):
+            expansion = expand_strategy_space_candidate(tuple(candidates), sequence=len(candidates) + 1, now=LATER)
+            self.assertEqual(expansion.reason, "strategy_paradigm_rotation")
+            assert expansion.candidate is not None
+            rotated.append(expansion.candidate.strategy_family)
+            candidates.append(expansion.candidate)
+        self.assertEqual(rotated, [t.family for t in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES])
+
+        expansion = expand_strategy_space_candidate(tuple(candidates), sequence=len(candidates) + 1, now=LATER)
         self.assertEqual(expansion.reason, "strategy_hypothesis_space_exhausted")
         self.assertIsNone(expansion.candidate)
-        self.assertEqual(expansion.search_budget, len(STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
+        self.assertEqual(expansion.search_budget, len(NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES))
 
     def test_strategy_space_expansion_is_a_pure_restart_safe_function(self) -> None:
         # Restart-safety requirement: calling expand_strategy_space_candidate
