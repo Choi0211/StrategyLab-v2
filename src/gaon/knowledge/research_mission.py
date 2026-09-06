@@ -1465,6 +1465,26 @@ def next_unexplored_symbols(mission: ResearchMission, *, batch_size: int = 5) ->
     return remaining[:batch_size] if remaining else ()
 
 
+def mission_multi_symbol_context_available(mission: ResearchMission) -> bool:
+    """Does this mission carry a REAL multi-symbol validation context -
+    a primary symbol plus at least one real peer?
+
+    True only when the mission has an explicit set of two or more
+    symbols. Those are concrete, caller-supplied tickers whose bars the
+    dataset builder can actually populate, so the relative-strength
+    family can be walk-forward / robustness validated against real,
+    time-aligned peers (``MultiSymbolValidationContext``).
+
+    A single-symbol mission, or a ``market_wide`` mission with no
+    explicit peer list, returns False: the rotation keeps the
+    relative-strength family OUT of the promotion-capable path and the
+    exhausted verdict carries
+    ``relative_strength_requires_multi_symbol_context``. A peer set is
+    never synthesised to flip this to True.
+    """
+    return len(mission.symbols) >= 2
+
+
 def mission_cycle_request_text(mission: ResearchMission, request_text: str | None = None) -> str:
     """Builds request text for the next bounded market-wide/multi-symbol
     coverage cycle that keeps ``resolve_market_scope`` matching the
