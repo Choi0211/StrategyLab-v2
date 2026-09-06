@@ -411,7 +411,14 @@ STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES: tuple[StrategyFamilyTemplate, ...] =
 # breakout. momentum_roc_lookback 20 mirrors the standard breakout tier's
 # lookback so the two are directly comparable.
 #
-# Both exit on the same protective stop / channel low the breakout
+# volatility_thrust_standard: enter long when a single bar's close-to-
+# close advance (close_t - close_{t-1}) is >= volatility_thrust_k (1.5,
+# the engine's registry default) times the mean bar range (high - low)
+# over volatility_atr_lookback (20) bars - a range-scaled thrust, never a
+# breakout. The `close_t - close_{t-1} vs k x average_range(N)` semantics
+# live in the candidate spec verbatim.
+#
+# All exit on the same protective stop / channel low the breakout
 # families use (paradigm-specific exits are a future engine capability,
 # not invented here).
 NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
@@ -423,6 +430,11 @@ NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
     StrategyFamilyTemplate(
         "momentum_roc_standard", "표준 모멘텀 (N일 수익률)",
         {"momentum_roc_lookback": 20, "momentum_min_roc_pct": 10.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10}, {},
+    ),
+    StrategyFamilyTemplate(
+        "volatility_thrust_standard", "표준 변동성 급등 (레인지 대비 1일 상승)",
+        {"volatility_atr_lookback": 20, "volatility_thrust_k": 1.5},
         {"protective_stop_pct": -5.0, "channel_exit_lookback": 10}, {},
     ),
 )
@@ -486,6 +498,7 @@ _FAMILY_REQUEST_TEXT: Mapping[str, str] = {
     # json, never this text.
     "mean_reversion_standard": "20일 이동평균 대비 5% 이상 하락 시 평균회귀 매수 손절 -5% 10일 저점 이탈 청산",
     "momentum_roc_standard": "최근 20일 수익률이 10% 이상일 때 모멘텀 매수 손절 -5% 10일 저점 이탈 청산",
+    "volatility_thrust_standard": "1일 상승폭이 최근 20일 평균 레인지의 1.5배 이상일 때 변동성 급등 매수 손절 -5% 10일 저점 이탈 청산",
 }
 
 
