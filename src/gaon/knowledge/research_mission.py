@@ -1916,6 +1916,230 @@ def is_best_candidate_query(text: str) -> bool:
     return _contains_any(normalized, _BEST_CANDIDATE_REFERENCE_TOKENS)
 
 
+# fix/web-conversation-family-coverage-read: "돌파 말고 다른 전략도 연구하고
+# 있어?" is a READ question about which strategy FAMILIES the mission
+# covers, not a rotation command. ``is_diversity_request`` ("다른전략")
+# matches its words but was written for the imperative "다른 방식도
+# 찾아봐" - routing this question through the rotation path both mutates
+# the mission and never answers the actual question. The FRAMING tokens
+# below are the "which families / anything other than breakout" signal
+# that distinguishes a coverage question from a single-paradigm A9
+# selection ("평균회귀 전략은 어때?", which ``requested_strategy_family``
+# owns).
+_FAMILY_COVERAGE_FRAMING_TOKENS: tuple[str, ...] = (
+    "다른전략",
+    "다른방식",
+    "다른방법",
+    "다른접근",
+    "돌파말고",
+    "돌파외",
+    "돌파이외",
+    "돌파아닌",
+    "비돌파",
+    "그중에서",
+)
+_FAMILY_PARADIGM_WORDS: tuple[str, ...] = (
+    "평균회귀",
+    "역추세",
+    "모멘텀",
+    "추세추종",
+    "변동성",
+    "국면",
+    "레짐",
+    "regime",
+    "상대강도",
+    "relativestrength",
+)
+_FAMILY_COVERAGE_QUESTION_MARKERS: tuple[str, ...] = (
+    "있어",
+    "있나",
+    "있니",
+    "있는지",
+    "하고있",
+    "되고있",
+    "연구중",
+    "중이야",
+    "중인가",
+    "중이니",
+    "중입니까",
+    "진행중",
+    "어때",
+    "있습니까",
+    # the Web dashboard read-only marker is itself a read signal - an
+    # imperative rotation request is already excluded above.
+    "readonly",
+)
+_FAMILY_COVERAGE_IMPERATIVE_MARKERS: tuple[str, ...] = (
+    "찾아",
+    "해줘",
+    "해주세요",
+    "비교",
+    "추가",
+    "돌려",
+    "실행",
+    "연구해",
+    "진행해",
+    "시작해",
+    "바꿔",
+    "전환",
+)
+
+
+def is_strategy_family_coverage_question(text: str) -> bool:
+    """True for a read-only question like "돌파 말고 다른 전략도 연구하고
+    있어?" / "평균회귀나 모멘텀 전략도 연구 중이야?" / "그중에서 상대강도
+    전략은?" - asks which strategy FAMILIES the mission is actually
+    covering. Deliberately narrow:
+
+    * NOT an imperative rotation request ("다른 방식도 찾아봐" -
+      ``is_diversity_request`` keeps those),
+    * NOT a single-paradigm A9 selection ("평균회귀 전략은 어때?" -
+      ``requested_strategy_family`` keeps those): it requires either an
+      explicit "which families / other-than-breakout" FRAMING token, or
+      two or more distinct paradigm words in one question.
+    """
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    if _contains_any(normalized, _FAMILY_COVERAGE_IMPERATIVE_MARKERS):
+        return False
+    distinct_paradigms = sum(1 for word in _FAMILY_PARADIGM_WORDS if word in normalized)
+    if not (
+        _contains_any(normalized, _FAMILY_COVERAGE_FRAMING_TOKENS)
+        or distinct_paradigms >= 2
+    ):
+        return False
+    return _contains_any(normalized, _FAMILY_COVERAGE_QUESTION_MARKERS) or text.rstrip().endswith("?")
+
+
+_BREAKOUT_FAMILY_GROUP = "돌파(breakout)"
+_NON_BREAKOUT_FAMILY_GROUP = "비-돌파 패러다임(mean_reversion / momentum / volatility)"
+_REGIME_FAMILY_GROUP = "국면 필터(regime)"
+_RELATIVE_STRENGTH_FAMILY_GROUP = "상대강도(relative strength)"
+
+
+def _family_group(family: str) -> str:
+    from gaon.knowledge.strategy_candidate import (
+        NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
+        REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+        RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES,
+    )
+
+    if family in {t.family for t in RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES}:
+        return _RELATIVE_STRENGTH_FAMILY_GROUP
+    if family in {t.family for t in REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES}:
+        return _REGIME_FAMILY_GROUP
+    if family in {t.family for t in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES}:
+        return _NON_BREAKOUT_FAMILY_GROUP
+    return _BREAKOUT_FAMILY_GROUP
+
+
+def render_mission_family_coverage(mission: ResearchMission) -> str:
+    """Answers "돌파 말고 다른 전략도 연구하고 있어?" TRUTHFULLY from
+    persisted state only:
+
+    * which strategy families actually have a generated candidate (grouped
+      breakout / non-breakout paradigm / regime / relative-strength), with
+      each candidate's real recorded stage,
+    * which supported families have NO candidate yet - reported as an
+      available research DIRECTION, never as "being researched",
+    * relative strength: whether the mission has an explicit multi-symbol
+      (peer) context; without one it stays fail-closed
+      (``relative_strength_requires_multi_symbol_context``) and is NOT on
+      the research path.
+
+    Never fabricates a candidate and never claims a family is being
+    actively researched without a persisted candidate proving it."""
+    from gaon.knowledge.strategy_candidate import (
+        NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
+        REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+        RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES,
+        _TEMPLATE_BY_FAMILY,
+    )
+
+    records = candidate_records(mission)
+    active_id = mission.active_candidate_id
+    by_family: dict[str, list] = {}
+    for candidate in records:
+        by_family.setdefault(candidate.strategy_family, []).append(candidate)
+
+    def _label(family: str) -> str:
+        template = _TEMPLATE_BY_FAMILY.get(family)
+        return f"{family}" if template is None else f"{template.label_ko}({family})"
+
+    def _candidate_line(candidate) -> str:
+        marker = " · 현재 활성 후보" if candidate.candidate_id == active_id else ""
+        return (
+            f"    · {candidate.candidate_id}{marker}: stage={candidate.status.value}, "
+            f"검증 종목 {candidate.valid_symbols}/{candidate.attempted_symbols}, 누적 거래 {candidate.trade_count}회"
+        )
+
+    lines: list[str] = ["[전략 계열(family) 연구 현황 — 실제 저장된 상태 기준]", ""]
+
+    breakout_families = sorted(f for f in by_family if _family_group(f) == _BREAKOUT_FAMILY_GROUP)
+    lines.append(f"■ {_BREAKOUT_FAMILY_GROUP}")
+    if breakout_families:
+        for family in breakout_families:
+            lines.append(f"  - {_label(family)}")
+            for candidate in by_family[family]:
+                lines.append(_candidate_line(candidate))
+    else:
+        lines.append("  - 생성된 후보 없음")
+    lines.append("")
+
+    non_breakout_all = [t.family for t in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES]
+    lines.append("■ 비-돌파 패러다임 (평균회귀 / 모멘텀 / 변동성 급등)")
+    for family in non_breakout_all:
+        candidates = by_family.get(family, [])
+        if candidates:
+            lines.append(f"  - {_label(family)}: 후보 있음")
+            for candidate in candidates:
+                lines.append(_candidate_line(candidate))
+        else:
+            lines.append(f"  - {_label(family)}: 아직 생성된 후보 없음 (연구 엔진이 지원하는 연구 방향)")
+    lines.append("")
+
+    regime_family = REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES[0].family
+    regime_candidates = by_family.get(regime_family, [])
+    lines.append("■ 국면 필터 / 상대강도 계열")
+    if regime_candidates:
+        lines.append(f"  - {_label(regime_family)}: 후보 있음")
+        for candidate in regime_candidates:
+            lines.append(_candidate_line(candidate))
+    else:
+        lines.append(f"  - {_label(regime_family)}: 아직 생성된 후보 없음 (지원되는 연구 방향)")
+
+    rs_family = RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES[0].family
+    rs_candidates = by_family.get(rs_family, [])
+    has_peer_context = mission_multi_symbol_context_available(mission)
+    if rs_candidates:
+        lines.append(f"  - {_label(rs_family)}: 후보 있음")
+        for candidate in rs_candidates:
+            lines.append(_candidate_line(candidate))
+    elif has_peer_context:
+        lines.append(
+            f"  - {_label(rs_family)}: 아직 생성된 후보 없음. 이 미션은 명시적 peer 종목이 있어 "
+            "다음 로테이션에서 정상 후보로 진입할 수 있습니다."
+        )
+    else:
+        lines.append(
+            f"  - {_label(rs_family)}: 명시적 peer 종목이 없어 현재 fail-closed 상태입니다 "
+            "(relative_strength_requires_multi_symbol_context). 가짜 peer를 만들지 않으며, "
+            "연구 경로에 진입하지 않습니다."
+        )
+    lines.append("")
+
+    researched_groups = sorted({_family_group(f) for f in by_family})
+    if researched_groups:
+        lines.append("요약: 현재 실제로 후보가 존재하는 계열 — " + ", ".join(researched_groups) + ".")
+    else:
+        lines.append("요약: 현재 어떤 계열에도 생성된 전략 후보가 없습니다.")
+    lines.append("나머지 계열은 연구 엔진이 지원하지만 아직 활성 후보가 없으며, 상태 질문만으로 연구를 시작하지 않습니다.")
+    lines.append("")
+    lines.append(mission_status_block(mission))
+    return "\n".join(lines)
+
+
 def render_mission_candidates_overview(mission: ResearchMission) -> str:
     """Answers "그중 제일 좋은 건 뭐야?" honestly: lists every real
     candidate this mission has actually generated with its persisted

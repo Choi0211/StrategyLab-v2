@@ -143,30 +143,43 @@ class GaonWebChatAdapter:
             metrics=self._metrics,
         )
 
-    def mission_for(self, session_ref: str) -> ResearchMission | None:
-        """Read-only: the ResearchMission (if any) persisted for this
-        session. A mission is scoped to the conversation session that
-        created it - there is no single global "the" mission - so this
-        mirrors exactly how gaon.runtime.llm_conversation.
-        LLMConversationBrain._mission_for reads it (same repository, same
-        session metadata key, same ResearchMission.from_json), just
-        exposed as a public, testable read for the HTTP layer. Never
-        writes anything."""
+    def mission_for(self, session_ref: str, *, user_ref: str | None = None) -> ResearchMission | None:
+        """Read-only: the ResearchMission for this session. First the
+        session's own persisted mission (mirrors exactly how gaon.runtime.
+        llm_conversation.LLMConversationBrain._mission_for reads it); then,
+        when ``user_ref`` identifies the configured durable owner and this
+        session has no mission of its own, the SAME read-only durable
+        owner-scoped resolution the chat path uses
+        (``_resolve_durable_owner_mission``) - so the dashboard's mission
+        panel shows the exact mission a chat turn in a fresh session would
+        resolve. Never writes anything, never guesses across owners, and
+        returns None (unchanged) when nothing is configured or the owner
+        has more than one compatible mission."""
         session_id = f"web:{session_ref}"
         try:
             session = self._repository.get_session(session_id)
         except KeyError:
+            session = None
+        if session is not None:
+            root = session.metadata.get("conversation_mvp")
+            raw = root.get("research_mission") if isinstance(root, dict) else None
+            if isinstance(raw, dict):
+                try:
+                    return ResearchMission.from_json(raw)
+                except (KeyError, ValueError, TypeError):
+                    return None
+        if user_ref is None or not user_ref.strip():
             return None
-        root = session.metadata.get("conversation_mvp")
-        if not isinstance(root, dict):
-            return None
-        raw = root.get("research_mission")
-        if not isinstance(raw, dict):
-            return None
-        try:
-            return ResearchMission.from_json(raw)
-        except (KeyError, ValueError, TypeError):
-            return None
+        request = LLMConversationRequest(
+            session_id=session_id,
+            user_ref=f"web-user:{user_ref}",
+            source="web",
+            text="",
+            received_at="",
+            message_id=f"web:{session_ref}:mission-read",
+        )
+        durable_mission, _ambiguous = self._brain._resolve_durable_owner_mission(request)
+        return durable_mission
 
     def list_conversations(self, *, user_ref: str, include_archived: bool = True) -> tuple:
         return list_conversations(self._repository._connection, user_ref=f"web-user:{user_ref}", include_archived=include_archived)
@@ -487,6 +500,13 @@ def _session_ref_from_query(query: Mapping[str, list[str]]) -> str | None:
     return values[0].strip()
 
 
+def _user_ref_from_query(query: Mapping[str, list[str]]) -> str | None:
+    values = query.get("user_ref")
+    if not values or not values[0].strip():
+        return None
+    return values[0].strip()
+
+
 def _mission_payload(mission: ResearchMission | None) -> Mapping[str, object]:
     if mission is None:
         return {"schema_version": WEB_API_SCHEMA_VERSION, "exists": False}
@@ -548,7 +568,7 @@ def _handle_mission_status(adapter: GaonWebChatAdapter, query: Mapping[str, list
     session_ref = _session_ref_from_query(query)
     if session_ref is None:
         return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "session_ref query parameter is required"}
-    mission = adapter.mission_for(session_ref)
+    mission = adapter.mission_for(session_ref, user_ref=_user_ref_from_query(query))
     return 200, {
         **_mission_payload(mission),
         "strategy_mutated": False,
@@ -562,7 +582,7 @@ def _handle_candidates_list(adapter: GaonWebChatAdapter, query: Mapping[str, lis
     session_ref = _session_ref_from_query(query)
     if session_ref is None:
         return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "session_ref query parameter is required"}
-    mission = adapter.mission_for(session_ref)
+    mission = adapter.mission_for(session_ref, user_ref=_user_ref_from_query(query))
     candidates = [] if mission is None else [_candidate_payload(c) for c in candidate_records(mission)]
     return 200, {
         "schema_version": WEB_API_SCHEMA_VERSION,
