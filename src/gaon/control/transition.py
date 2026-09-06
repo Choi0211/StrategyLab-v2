@@ -26,6 +26,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Callable
 
+from gaon.control.approval import ApprovalRegistry, require_live_approval
 from gaon.control.trading_mode import (
     Mode,
     ServiceState,
@@ -113,6 +114,8 @@ class ModeTransition:
         verify_target_account: Callable[[str], bool],
         verify_effective_mode: Callable[[], Mode],
         live_approved: bool = False,
+        approval_registry: ApprovalRegistry | None = None,
+        approval_id: str | None = None,
     ) -> None:
         self._start = start
         self._target = target
@@ -123,7 +126,21 @@ class ModeTransition:
         self._verify_target_account = verify_target_account
         self._verify_effective_mode = verify_effective_mode
         self._live_approved = live_approved
+        self._approval_registry = approval_registry
+        self._approval_id = approval_id
         self._visited: list[TransitionState] = []
+
+    def _live_transition_approved(self) -> bool:
+        """A DEMO -> LIVE transition proceeds ONLY with an explicit
+        one-shot approval. ``live_approved=True`` is a direct override for
+        callers that already validated; otherwise an ApprovalRegistry +
+        approval_id must resolve (and are consumed) here. Anything else ->
+        False, fail closed."""
+        if self._live_approved:
+            return True
+        if self._approval_registry is None or not self._approval_id:
+            return False
+        return require_live_approval(self._approval_registry, self._approval_id, now=self._clock())
 
     def _advance(self, state: TradingModeControllerState, to: TransitionState) -> TradingModeControllerState:
         self._visited.append(to)
@@ -134,7 +151,7 @@ class ModeTransition:
         service_touched = False
         try:
             state = self._advance(state, TransitionState.REQUESTED)
-            if self._target is Mode.LIVE and not self._live_approved:
+            if self._target is Mode.LIVE and not self._live_transition_approved():
                 raise _StepFailure("DEMO->LIVE transition requires explicit transition-scoped approval")
 
             state = self._advance(state, TransitionState.ENTRY_BLOCKED)
