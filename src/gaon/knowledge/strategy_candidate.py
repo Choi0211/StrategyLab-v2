@@ -399,16 +399,30 @@ STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES: tuple[StrategyFamilyTemplate, ...] =
 #
 # Conservative defaults only, taken from the engine's own declared
 # registry defaults and its capability tests - never a tuned value and
-# never a performance claim. mean_reversion_standard: enter long when the
-# close is >= mean_reversion_band_pct (5%, the engine's registry default)
-# below its mean_reversion_ma_lookback (20-day) SMA; exit on the same
-# protective stop / channel low the breakout families use (a
-# mean-reversion-specific "revert to the MA" exit is a future engine
-# capability, not invented here).
+# never a performance claim.
+#
+# mean_reversion_standard: enter long when the close is >=
+# mean_reversion_band_pct (5%, the engine's registry default) below its
+# mean_reversion_ma_lookback (20-day) SMA.
+#
+# momentum_roc_standard: enter long when the N-bar rate of change
+# (close_t / close_{t-momentum_roc_lookback} - 1) is >= momentum_min_roc_
+# pct (10%, the engine's registry default) - a genuine ROC trigger, not a
+# breakout. momentum_roc_lookback 20 mirrors the standard breakout tier's
+# lookback so the two are directly comparable.
+#
+# Both exit on the same protective stop / channel low the breakout
+# families use (paradigm-specific exits are a future engine capability,
+# not invented here).
 NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
     StrategyFamilyTemplate(
         "mean_reversion_standard", "표준 평균회귀",
         {"mean_reversion_ma_lookback": 20, "mean_reversion_band_pct": 5.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10}, {},
+    ),
+    StrategyFamilyTemplate(
+        "momentum_roc_standard", "표준 모멘텀 (N일 수익률)",
+        {"momentum_roc_lookback": 20, "momentum_min_roc_pct": 10.0},
         {"protective_stop_pct": -5.0, "channel_exit_lookback": 10}, {},
     ),
 )
@@ -464,12 +478,14 @@ _FAMILY_REQUEST_TEXT: Mapping[str, str] = {
     "breakout_wide_trend_confirmed": "40 고가 돌파 종가 > MA20 > MA60 손절 -8% 20일 저점 이탈 청산",
     "breakout_wide_volume_confirmed": "40 고가 돌파 거래량 평균 이상 손절 -8% 20일 저점 이탈 청산",
     "breakout_wide_multi_confirmed": "40 고가 돌파 종가 > MA20 > MA60 거래량 평균 이상 손절 -8% 20일 저점 이탈 청산",
-    # feature/mean-reversion-strategy-family: an honest DESCRIPTION only.
-    # This does NOT round-trip through UserStrategyParser (which knows only
-    # the breakout grammar) and nothing relies on it doing so - a
-    # non-breakout candidate's identity is its own spec_rules, reconstructed
-    # by candidate_spec_from_rules_json, never this text.
+    # feature/mean-reversion-strategy-family / feature/momentum-strategy-
+    # family: honest DESCRIPTIONS only. These do NOT round-trip through
+    # UserStrategyParser (which knows only the breakout grammar) and
+    # nothing relies on it doing so - a non-breakout candidate's identity
+    # is its own spec_rules, reconstructed by candidate_spec_from_rules_
+    # json, never this text.
     "mean_reversion_standard": "20일 이동평균 대비 5% 이상 하락 시 평균회귀 매수 손절 -5% 10일 저점 이탈 청산",
+    "momentum_roc_standard": "최근 20일 수익률이 10% 이상일 때 모멘텀 매수 손절 -5% 10일 저점 이탈 청산",
 }
 
 
