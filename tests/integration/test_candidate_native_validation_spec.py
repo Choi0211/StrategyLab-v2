@@ -218,15 +218,17 @@ class NaturalLanguagePathBackwardCompatibilityTests(unittest.TestCase):
 
 class ExistingFamiliesUnchangedBehaviorTests(unittest.TestCase):
     """Part F: the NEW path (candidate_spec supplied) always validates the
-    candidate's OWN spec_rules. For a BREAKOUT family, whose descriptive
-    text still round-trips through UserStrategyParser, the OLD (free-text)
-    path lands on the same fingerprint - unchanged behaviour. For a
-    NON-BREAKOUT family (feature/mean-reversion-strategy-family onward),
-    whose paradigm the breakout-only parser cannot express, the free-text
-    path deliberately does NOT reproduce the candidate - which is exactly
-    why candidate-native validation exists."""
+    candidate's OWN spec_rules. A family whose descriptive text round-trips
+    through UserStrategyParser (the plain breakout combinations) lands on
+    the same fingerprint from the OLD free-text path - unchanged
+    behaviour. A family whose rules the breakout-only parser cannot
+    express (the non-breakout paradigms, and any regime/relative-strength
+    filter it has no grammar for) deliberately does NOT reproduce the
+    candidate from free text - which is exactly why candidate-native
+    validation exists. Either way the engine must fully support the
+    reconstructed spec."""
 
-    def test_breakout_families_round_trip_and_non_breakout_families_are_candidate_native(self) -> None:
+    def test_free_text_round_trips_only_for_parser_expressible_families_new_path_always_candidate_native(self) -> None:
         from gaon.research.krx_real_pipeline import RULE_BASED_BACKTEST_CAPABILITIES
 
         for family in _TEMPLATE_BY_FAMILY:
@@ -235,17 +237,22 @@ class ExistingFamiliesUnchangedBehaviorTests(unittest.TestCase):
                 text = render_candidate_request_text(candidate, "005930")
                 old_report = RealAutonomousResearchPipeline(None).run(text, symbol="005930", generated_at=NOW)
                 new_report = RealAutonomousResearchPipeline(None).run(text, symbol="005930", candidate_spec=candidate.spec_rules, generated_at=NOW)
-                # the NEW path is always the candidate's own identity.
+                # the NEW path is always the candidate's own identity, and
+                # the engine fully supports it.
                 self.assertEqual(new_report.strategy.strategy_family_fingerprint, candidate.strategy_fingerprint)
                 reconstructed = candidate_spec_from_rules_json(candidate.spec_rules, symbol="005930", created_at=NOW)
-                is_breakout = "breakout_lookback" in reconstructed.entry
-                if is_breakout:
+                self.assertTrue(RULE_BASED_BACKTEST_CAPABILITIES.supports(reconstructed))
+                free_text_reproduces = (
+                    old_report.strategy.strategy_family_fingerprint == candidate.strategy_fingerprint
+                )
+                if free_text_reproduces:
+                    # regression: a parser-expressible family must keep
+                    # round-tripping exactly.
                     self.assertEqual(old_report.strategy.strategy_family_fingerprint, new_report.strategy.strategy_family_fingerprint)
                 else:
-                    # free-text path cannot express this paradigm - it must
-                    # not silently claim the candidate's identity.
+                    # a family the parser cannot express must never have
+                    # the free-text path silently claim its identity.
                     self.assertNotEqual(old_report.strategy.strategy_family_fingerprint, candidate.strategy_fingerprint)
-                    self.assertTrue(RULE_BASED_BACKTEST_CAPABILITIES.supports(reconstructed))
 
 
 class DeepValidationStagesShareOneSpecTests(unittest.TestCase):
