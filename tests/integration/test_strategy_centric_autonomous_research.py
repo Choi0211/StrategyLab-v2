@@ -526,10 +526,19 @@ class StrategySpaceExpansionTelegramTests(unittest.TestCase):
         self.assertNotIn("strategy_hypothesis_space_exhausted", self.client.sent[-1][1])
 
     def test_every_paradigm_exhausted_still_gives_the_honest_blocked_message(self) -> None:
-        # Only once the non-breakout paradigms are ALSO used does the
-        # mission honestly report blocked - never fabricate a family.
+        # Only once every reachable family - non-breakout paradigms AND the
+        # regime-filtered family (Priority 6) - is used does the mission
+        # honestly report blocked. Relative strength is not reachable in a
+        # single-symbol continuation, so it is not seeded here.
+        from gaon.knowledge.strategy_candidate import REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES
+
         self._seed_exhausted_mission(
-            (*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES, *NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES)
+            (
+                *ALL_STRATEGY_FAMILY_TEMPLATES,
+                *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
+                *NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
+                *REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+            )
         )
         received_at = "2026-08-21T00:10:00Z"
         result = process_update(

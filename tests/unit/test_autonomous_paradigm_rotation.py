@@ -66,14 +66,22 @@ class ParadigmRotationBeginsAfterBreakoutExhaustionTests(unittest.TestCase):
         # ordered: mean_reversion -> momentum -> volatility
         self.assertEqual(seen[0], "mean_reversion_standard")
 
-    def test_terminal_state_only_after_every_paradigm_is_used(self) -> None:
+    def test_terminal_state_only_after_every_reachable_paradigm_is_used(self) -> None:
+        # Priority 6: the rotation now also covers the regime-filtered
+        # family (and relative strength when a multi-symbol context is
+        # available). Drain until the honest terminal.
         history = _breakout_history()
-        for _ in range(len(NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES)):
+        seen: list[str] = []
+        for _ in range(30):
             exp = expand_strategy_space_candidate(tuple(history), sequence=len(history) + 1, now=LATER)
-            assert exp.candidate is not None
+            if exp.candidate is None:
+                break
+            seen.append(exp.candidate.strategy_family)
             history.append(exp.candidate)
-        exp = expand_strategy_space_candidate(tuple(history), sequence=len(history) + 1, now=LATER)
-        self.assertIsNone(exp.candidate)
+        else:  # pragma: no cover
+            self.fail("rotation did not terminate")
+        # every non-breakout paradigm family was rotated at least once.
+        self.assertLessEqual(set(t.family for t in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES), set(seen))
         self.assertEqual(exp.reason, "strategy_hypothesis_space_exhausted")
 
     def test_rotation_is_restart_safe_and_never_repeats_a_family(self) -> None:

@@ -684,6 +684,7 @@ def expand_strategy_space_candidate(
     *,
     sequence: int,
     now: str,
+    multi_symbol_context_available: bool = False,
 ) -> StrategySpaceExpansion:
     """Generates the next bounded, evidence-linked strategy hypothesis.
 
@@ -706,7 +707,19 @@ def expand_strategy_space_candidate(
     NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES - genuinely different paradigms
     the engine can now compute (mean-reversion, momentum, volatility) -
     one candidate per paradigm, with ``reason="strategy_paradigm_
-    rotation"``. Only once THOSE are also used does it report
+    rotation"``.
+
+    Priority 6: the rotation then also visits
+    REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES (safe to validate on a
+    single symbol), and finally RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES
+    - but the relative-strength phase is entered ONLY when
+    ``multi_symbol_context_available`` is True. A single-symbol mission
+    NEVER gets a relative-strength candidate (its engine gate would fail
+    closed with no peers); instead the exhausted verdict carries
+    ``relative_strength_requires_multi_symbol_context`` in
+    ``evidence_signals`` so the skip is explicit, not silent.
+
+    Only once every reachable phase is used does it report
     ``strategy_hypothesis_space_exhausted`` with ``candidate=None`` - the
     same terminal string and downstream handling as before, reached later.
 
@@ -722,11 +735,20 @@ def expand_strategy_space_candidate(
     known_fingerprints = {candidate.strategy_fingerprint for candidate in existing}
     used_families = {candidate.strategy_family for candidate in existing}
     skipped: list[str] = []
-    phases: tuple[tuple[str, str, tuple[StrategyFamilyTemplate, ...]], ...] = (
+    phases: list[tuple[str, str, tuple[StrategyFamilyTemplate, ...]]] = [
         ("strategy_family_space_exhausted", "ranked", STRATEGY_SPACE_EXPANSION_TEMPLATES),
         ("strategy_family_space_exhausted", "ranked", STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES),
         ("strategy_paradigm_rotation", "ordered", NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES),
-    )
+        ("strategy_paradigm_rotation", "ordered", REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES),
+    ]
+    if multi_symbol_context_available:
+        phases.append(("strategy_paradigm_rotation", "ordered", RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES))
+        rs_context_signal: tuple[str, ...] = ()
+    else:
+        # single-symbol mission: relative strength is NOT a research
+        # candidate here - fail closed, and say so.
+        rs_context_signal = ("relative_strength_requires_multi_symbol_context",)
+
     for reason, ordering, round_templates in phases:
         ranked = (
             round_templates
@@ -752,9 +774,9 @@ def expand_strategy_space_candidate(
         action="EXPAND_STRATEGY_SPACE",
         reason="strategy_hypothesis_space_exhausted",
         candidate=None,
-        evidence_signals=evidence_signals,
+        evidence_signals=tuple(dict.fromkeys((*evidence_signals, *rs_context_signal))),
         skipped_fingerprints=tuple(skipped),
-        search_budget=len(NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES),
+        search_budget=len(phases[-1][2]),
     )
 
 
