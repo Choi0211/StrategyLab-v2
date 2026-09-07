@@ -57,6 +57,10 @@ from gaon.runtime.research_grounding import contains_fixture_leakage, contains_u
 from gaon.runtime.research_failures import classify_tool_failure, warning_for_failure
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import has_explicit_research_execution_intent, route_read_only_tool
+from gaon.runtime.conversation_integrity import (
+    read_only_intent,
+    read_only_turn_may_not_mutate_mission,
+)
 from gaon.research.global_market import extract_market_symbols, resolve_market_scope
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
 from gaon.knowledge.research_mission import (
@@ -84,7 +88,9 @@ from gaon.knowledge.research_mission import (
     is_strategy_family_coverage_question,
     is_provider_acquisition_blocker,
     mission_multi_symbol_context_available,
+    render_blocked_reason_explanation,
     render_mission_family_coverage,
+    wants_technical_blocker_detail,
     requested_strategy_family,
     mission_awaiting_approval_message,
     mission_blocked_message,
@@ -945,6 +951,20 @@ class LLMConversationBrain:
             context = self._mvp_context_for(request.session_id)
             if context is not None:
                 route = ConversationalRoute(ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, route.symbols)
+        # PR #213 - conversation integrity: a read-only conversational turn
+        # (explain / translate / simplify / summarize / clarify / status /
+        # compare / why / opinion / recommendation / inspect / describe, or
+        # a bare backward-reference follow-up) that carries NO explicit
+        # state-changing research verb must never mutate operational
+        # ResearchMission state (status / candidate_count / cycles_completed
+        # / blocked_reason / updated_at) and must never launch research.
+        # ``read_only_turn`` gates every mutation-capable path below;
+        # ``extract_or_update_mission`` + the paired ``_remember_mission``
+        # are skipped entirely so ``mission`` stays byte-identical to what
+        # is already persisted. When the turn is ambiguous this fails closed
+        # to read-only (see ``conversation_integrity``): "please explain" is
+        # never inferred as "please research again".
+        read_only_turn = read_only_turn_may_not_mutate_mission(request.text)
         existing_mission = self._mission_for(request.session_id)
         # fix/cross-transport-owner-research-mission: True only when
         # existing_mission below is resolved from a DIFFERENT (owner-
@@ -1074,11 +1094,21 @@ class LLMConversationBrain:
             and is_generic_continuation_request(request.text)
             and not has_explicit_new_mission_scope(request.text)
         )
-        mission = None if suppress_placeholder_mission else extract_or_update_mission(request.text, existing=existing_mission, now=request.received_at)
-        if suppress_placeholder_mission:
-            warnings = _dedupe((*warnings, "generic continuation with no existing mission/context and no explicit new scope; no placeholder mission created"))
-        if mission is not None:
-            self._remember_mission(request, mission)
+        if read_only_turn:
+            # Read-only turn: never derive/merge/persist a mission from this
+            # message. ``mission`` is exactly the already-persisted mission
+            # (or None) - every read renderer below works off it unchanged,
+            # and ``updated_at`` / ``status`` / candidate refs / cycles /
+            # blocked_reason are never touched.
+            mission = existing_mission
+            if request.text and read_only_intent(request.text):
+                warnings = _dedupe((*warnings, f"read_only_conversation_intent={read_only_intent(request.text)}; no mission mutation; no research tool calls"))
+        else:
+            mission = None if suppress_placeholder_mission else extract_or_update_mission(request.text, existing=existing_mission, now=request.received_at)
+            if suppress_placeholder_mission:
+                warnings = _dedupe((*warnings, "generic continuation with no existing mission/context and no explicit new scope; no placeholder mission created"))
+            if mission is not None:
+                self._remember_mission(request, mission)
 
         # Explicit whole-market / multi-market research is an authoritative
         # execution request and must not be reinterpreted as a contextual
@@ -1228,7 +1258,8 @@ class LLMConversationBrain:
         # _try_autonomous_research_conversation, which is a larger,
         # separately-scoped change - see the Patch 8.5 completion report.
         if (
-            (existing_tool != "multi_symbol_research" or robustness_continuation_precedence or multi_symbol_breadth_request)
+            not read_only_turn
+            and (existing_tool != "multi_symbol_research" or robustness_continuation_precedence or multi_symbol_breadth_request)
             and mission is not None
             and mission.universe_scope is not MissionUniverseScope.SINGLE_SYMBOL
             and (not route.symbols or multi_symbol_breadth_request)
@@ -1436,14 +1467,16 @@ class LLMConversationBrain:
             # text is introduced.
             self._remember_mission(request, mission)
             if mission.status is MissionStatus.BLOCKED:
+                self._remember_read_subject(request, mission, kind="blocked_reason", answer_kind="mission_blocked")
                 return (
-                    mission_blocked_message(mission),
+                    mission_blocked_message(mission, technical=wants_technical_blocker_detail(request.text)),
                     "conversation_mission_blocked",
-                    _dedupe((*warnings, "mission blocked; no active candidate; read-only; no research tool executed")),
+                    _dedupe((*warnings, "mission blocked; no active candidate; read-only; no research tool executed", "blocker code hidden unless technical detail requested")),
                     references,
                     "deterministic",
                     (),
                 )
+            self._remember_read_subject(request, mission, kind="mission_status", answer_kind="mission_status")
             return (
                 f"영하님, 현재 Research Mission은 진행 중이지만 아직 생성된 전략 후보가 없습니다.\n\n"
                 f"{mission_status_block(mission)}",
@@ -1493,15 +1526,17 @@ class LLMConversationBrain:
         ):
             self._remember_mission(request, mission)
             if mission.status is MissionStatus.BLOCKED:
+                self._remember_read_subject(request, mission, kind="blocked_reason", answer_kind="mission_blocked")
                 return (
-                    mission_blocked_message(mission),
+                    mission_blocked_message(mission, technical=wants_technical_blocker_detail(request.text)),
                     "conversation_mission_status_read",
-                    _dedupe((*warnings, "mission blocked; read-only research-progress status question; no research tool executed")),
+                    _dedupe((*warnings, "mission blocked; read-only research-progress status question; no research tool executed", "blocker code hidden unless technical detail requested")),
                     references,
                     "deterministic",
                     (),
                 )
             if not mission.candidates:
+                self._remember_read_subject(request, mission, kind="mission_status", answer_kind="mission_status")
                 return (
                     f"영하님, 현재 Research Mission은 진행 중이지만 아직 생성된 전략 후보가 없습니다.\n\n"
                     f"{mission_status_block(mission)}",
@@ -1518,6 +1553,7 @@ class LLMConversationBrain:
             )
             detailed_status = render_mission_candidate_detailed_status(mission, get_active_candidate(mission))
             text = f"{summary_text}\n\n{detailed_status}"
+            self._remember_read_subject(request, mission, kind="mission_status", answer_kind="mission_status")
             return (
                 text,
                 "conversation_mission_status_read",
@@ -1602,7 +1638,18 @@ class LLMConversationBrain:
         ):
             return None
 
-        autonomous = self._try_autonomous_research_conversation(request, route, warnings, references)
+        # PR #213: a read-only conversational turn must never reach the
+        # EXECUTING branches of the autonomous-research machinery.
+        # ``_try_autonomous_research_conversation`` resolves its target
+        # symbol from a possibly-stale per-session ``ConversationalMVPContext``
+        # (``_resolve_autonomous_symbol`` falls back to
+        # ``context.last_symbols[0]``), so an explanation/status follow-up
+        # like "이유를 한글로 알아들을수있게 말해주세요" could otherwise be
+        # executed as fresh research on an unrelated leftover symbol. Its
+        # read-only render branches (learning-memory read, progress
+        # comparison, missing-context clarification) still run - only the
+        # tool-executing paths are suppressed when ``read_only``.
+        autonomous = self._try_autonomous_research_conversation(request, route, warnings, references, read_only=read_only_turn)
         if autonomous is not None:
             return autonomous
 
@@ -1772,7 +1819,7 @@ class LLMConversationBrain:
                 return subject_explanation
             context = self._mvp_context_for(request.session_id)
             if context is None:
-                if route.symbols and route.intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST, ConversationalMVPIntent.RISK_QUESTION, ConversationalMVPIntent.STRATEGY_QUESTION} and self._tool_executor is not None:
+                if not read_only_turn and route.symbols and route.intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST, ConversationalMVPIntent.RISK_QUESTION, ConversationalMVPIntent.STRATEGY_QUESTION} and self._tool_executor is not None:
                     result = self._execute_mvp_real_research(request, route.symbols[0].symbol)
                     if result.status != "success":
                         failure = classify_tool_failure(str(result.output.get("error_type", "ToolError")), str(result.output.get("message", "")))
@@ -1882,13 +1929,80 @@ class LLMConversationBrain:
         research tool calls in every branch - and never returns a
         fabricated performance ranking (mirrors the same
         score_status=insufficient_evidence precedent
-        ``render_mission_candidates_overview`` already establishes)."""
-        if route.intent not in {ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT, ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP}:
+        ``render_mission_candidates_overview`` already establishes).
+
+        PR #213: the gate is broadened from EXPLAIN/CONTEXTUAL to every
+        read-only reasoning follow-up (simplify / translate / professional /
+        show-details / why / recommendation / strategy / risk / decision
+        question) plus any turn ``conversation_integrity`` classifies as
+        read-only, and it now also keeps a ``blocked_reason`` /
+        ``mission_status`` subject - so "이유를 한글로 알아들을수있게
+        말해주세요" right after a blocked-status read explains the SAME
+        blocked reason in natural Korean rather than losing the subject
+        (and never launches unrelated research)."""
+        # A read-only follow-up that has its OWN dedicated mission-read
+        # branch ("그중 제일 좋은 건?" -> candidates overview; "돌파 말고
+        # 다른 전략도?" -> family coverage; an explicit "KR-ST-00N" ->
+        # candidate read) must reach that branch, not this subject-continuity
+        # path - defer.
+        if (
+            is_best_candidate_query(request.text)
+            or is_strategy_family_coverage_question(request.text)
+            or extract_candidate_id(request.text) is not None
+            or requested_strategy_family(request.text) is not None
+            or is_diversity_request(request.text)
+        ):
             return None
+        if has_explicit_research_execution_intent(request.text):
+            return None
+        _followup_intent = read_only_intent(request.text)
+        # Pure follow-up shapes that keep whatever subject the last read-only
+        # answer established.
+        _pure_followup = route.intent in {
+            ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
+            ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
+            ConversationalMVPIntent.SIMPLIFY_PREVIOUS_RESULT,
+            ConversationalMVPIntent.PROFESSIONAL_EXPLANATION,
+            ConversationalMVPIntent.SHOW_DETAILS,
+        } or _followup_intent in {
+            "why", "explain", "translate", "simplify", "clarify",
+            "summarize", "reference",
+        }
         subject = self._read_subject_for(request.session_id)
-        if subject is None:
-            return None
         mvp_context = self._mvp_context_for(request.session_id)
+        if subject is None:
+            # Defensive: no tracked subject (a prior read path that does not
+            # yet record one, or a cross-transport gap). If a mission exists
+            # and this is unmistakably a read-only explanation/why/translate/
+            # simplify/status/recommendation follow-up, still answer from the
+            # mission's own persisted state rather than losing the subject to
+            # research or a "no previous result" fallback.
+            if mvp_context is not None:
+                return None
+            explain_kinds = {
+                "why", "explain", "translate", "simplify", "clarify",
+                "summarize", "reference", "status", "recommendation",
+                "decision", "inspect", "describe", "opinion",
+            }
+            if _followup_intent not in explain_kinds:
+                return None
+            fallback_mission = self._mission_for(request.session_id)
+            if fallback_mission is None:
+                fallback_mission, _ambiguous = self._resolve_durable_owner_mission(request)
+            if fallback_mission is None:
+                return None
+            subject = {
+                "kind": "blocked_reason" if fallback_mission.status is MissionStatus.BLOCKED else "mission_status",
+                "mission_id": fallback_mission.mission_id,
+            }
+            mission = fallback_mission
+            kind = subject["kind"]
+            return self._render_subject_followup(request, mission, kind, warnings, references)
+        if not _pure_followup:
+            # There is a tracked subject, but this turn is not a pure
+            # follow-up ("그중 제일 좋은 건?", "현재 진행상황 알려줘") - let
+            # its own dedicated mission-read branch answer it.
+            return None
         if mvp_context is not None and str(mvp_context.updated_at) > str(subject.get("updated_at", "")):
             return None
         mission = self._mission_for(request.session_id)
@@ -1969,7 +2083,64 @@ class LLMConversationBrain:
                 "deterministic",
                 (),
             )
+        if kind in {"blocked_reason", "mission_status"}:
+            return self._render_subject_followup(request, mission, str(kind), warnings, references)
         return None
+
+    def _render_subject_followup(
+        self,
+        request: LLMConversationRequest,
+        mission: ResearchMission,
+        kind: str,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
+        """PR #213: keep a ``blocked_reason`` / ``mission_status`` subject
+        across a read-only follow-up ("왜?", "이유를 한글로 알아들을수있게
+        말해주세요", "그게 무슨 뜻이야?", "현재 진행상황 알려줘"). The
+        blocked reason is explained in natural Korean through the single
+        centralized ``render_blocked_reason_explanation`` path - the raw
+        internal code is only surfaced when the user explicitly asked for
+        technical/raw/debug detail. Zero research tool calls, no mutation."""
+        self._remember_mission(request, mission)
+        technical = wants_technical_blocker_detail(request.text)
+        if kind == "blocked_reason" and mission.status is MissionStatus.BLOCKED:
+            self._remember_read_subject(request, mission, kind="blocked_reason", answer_kind="mission_blocked")
+            lead = "영하님, 앞서 말씀드린 연구가 멈춘 이유를 풀어서 설명드리면 다음과 같습니다."
+            body = render_blocked_reason_explanation(mission.blocked_reason, technical=technical)
+            text = f"{lead}\n\n{body}\n\n{mission_status_block(mission)}"
+            return (
+                text,
+                "conversation_mission_blocked",
+                _dedupe((*warnings, "blocked-reason subject continuity; natural-language explanation; blocker code hidden unless technical detail requested; no research tool executed")),
+                references,
+                "deterministic",
+                (),
+            )
+        # mission_status subject, or a blocked subject whose mission is no
+        # longer blocked - answer from the mission's current persisted state.
+        self._remember_read_subject(request, mission, kind="mission_status", answer_kind="mission_status")
+        if not mission.candidates:
+            text = (
+                "영하님, 현재 Research Mission은 진행 중이지만 아직 생성된 전략 후보가 없습니다.\n\n"
+                f"{mission_status_block(mission)}"
+            )
+        else:
+            summary_text = render_candidate_status_summary(
+                candidate_records(mission),
+                current=distinct_promotion_ready_strategy_count(mission),
+                target=mission.target_promotion_ready_candidates,
+            )
+            detailed_status = render_mission_candidate_detailed_status(mission, get_active_candidate(mission))
+            text = f"{summary_text}\n\n{detailed_status}"
+        return (
+            text,
+            "conversation_mission_status_read",
+            _dedupe((*warnings, "mission-status subject continuity; persisted state only; no research tool executed")),
+            references,
+            "deterministic",
+            (),
+        )
 
     @staticmethod
     def _render_mission_candidate_read_response(text: str, mission: ResearchMission, candidate: "StrategyCandidateRecord") -> str:
@@ -2804,7 +2975,7 @@ class LLMConversationBrain:
             return None
         return self._try_mission_driven_research_cycle(request, mission, warnings, references)
 
-    def _try_autonomous_research_conversation(self, request: LLMConversationRequest, route, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+    def _try_autonomous_research_conversation(self, request: LLMConversationRequest, route, warnings: tuple[str, ...], references: tuple[str, ...], *, read_only: bool = False) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
             return None
         context = self._mvp_context_for(request.session_id)
@@ -2841,6 +3012,11 @@ class LLMConversationBrain:
                 legacy_cycle_request
                 or legacy_cycle_continuation
             ):
+                if read_only:
+                    # PR #213: a read-only turn must not enter Autonomous
+                    # Learning V2 execution. Fall through to the read-only
+                    # ``mode``-based branches below (or return None).
+                    return None
                 fail_safe = self._mission_aware_continuation_fail_safe(request, route, warnings, references)
                 if fail_safe is not None:
                     return fail_safe
@@ -2861,7 +3037,7 @@ class LLMConversationBrain:
             text = _render_autonomous_progress_comparison(context)
             self._remember_mvp_response_context(request, ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP, "conversation_autonomous_progress_comparison")
             return text, "conversation_autonomous_progress_comparison", _dedupe((*warnings, "autonomous progression comparison grounded")), references, "deterministic", ()
-        if mode == "compare" and len(route.symbols) >= 2:
+        if mode == "compare" and len(route.symbols) >= 2 and not read_only:
             result = self._execute_mvp_multi_symbol_research(request, tuple(symbol.symbol for symbol in route.symbols), request.text, None, None)
             self._record_tool_result(request.session_id, result, request.received_at)
             if result.status != "success":
@@ -2877,6 +3053,11 @@ class LLMConversationBrain:
             omitted_subject = self._omitted_subject_clarification(request, warnings, references)
             if omitted_subject is not None:
                 return omitted_subject
+        if read_only:
+            # PR #213: everything below runs a real research tool
+            # (``autonomous_research_cycle``). A read-only turn stops here
+            # and is answered by the caller's read-only branches.
+            return None
         symbol = _resolve_autonomous_symbol(route, context)
         original_text = previous_request_text(context, request.text) if context is not None else request.text
         tool_args: dict[str, object] = {"request_text": original_text, "symbol": symbol, "mode": mode}
@@ -3602,7 +3783,20 @@ class LLMConversationBrain:
             target_session = owning if owning is not None else session
         metadata = dict(target_session.metadata)
         payload = _mvp_metadata_root(metadata)
-        payload["research_mission"] = mission.to_json()
+        new_mission_json = mission.to_json()
+        # PR #213 - read-only mission integrity: a pure read
+        # (status/explain/compare/follow-up) turn passes the already-
+        # persisted mission through unchanged. Persisting it anyway would
+        # rewrite the owning session row and refresh its timestamp for no
+        # operational reason - and any read path that forgot to strip an
+        # ``updated_at`` refresh would silently mutate
+        # ResearchMission.updated_at. Skip the write entirely when the
+        # mission JSON is byte-identical to what is already stored for the
+        # target session; a genuine research cycle (which really does change
+        # a field) still persists exactly as before.
+        if payload.get("research_mission") == new_mission_json:
+            return
+        payload["research_mission"] = new_mission_json
         metadata["conversation_mvp"] = payload
         self._repository.upsert_session(LLMConversationSession(target_session.session_id, target_session.user_ref, target_session.source, target_session.status, target_session.created_at, request.received_at, metadata))
 
@@ -3636,7 +3830,18 @@ class LLMConversationBrain:
         *,
         kind: str,
         candidate_id: str | None = None,
+        symbol: str | None = None,
+        answer_kind: str | None = None,
     ) -> None:
+        # PR #213 - follow-up context: ``last_read_subject`` carries enough
+        # structured semantic context to answer pronouns and short
+        # follow-ups ("왜?", "그게 무슨 뜻이야?", "한글로 설명해줘") without
+        # the user repeating the mission/symbol/candidate every turn. It is
+        # the project's single conversation-subject pointer (not a new
+        # store); the reason code/text are captured here so a later
+        # "이유를 한글로..." can be answered from the SAME blocked reason.
+        # This is written only alongside a read-only response - it never
+        # implies execution authority.
         try:
             session = self._repository.get_session(request.session_id)
         except KeyError:
@@ -3645,8 +3850,21 @@ class LLMConversationBrain:
         payload = _mvp_metadata_root(metadata)
         payload["last_read_subject"] = {
             "kind": kind,
+            "subject_type": kind,
+            "subject_ref": candidate_id or symbol or mission.mission_id,
             "mission_id": mission.mission_id,
+            "last_mission_id": mission.mission_id,
             "candidate_id": candidate_id,
+            "last_candidate_id": candidate_id,
+            "symbol": symbol,
+            "last_symbol": symbol,
+            "reason_code": mission.blocked_reason.split(":", 1)[0].strip() if mission.blocked_reason else None,
+            "reason_text": mission.blocked_reason,
+            "mission_status": mission.status.value,
+            "intent": read_only_intent(request.text),
+            "last_intent": read_only_intent(request.text),
+            "answer_kind": answer_kind or kind,
+            "last_answer_kind": answer_kind or kind,
             "text": _bounded_context_text(request.text),
             "updated_at": request.received_at,
         }
@@ -4162,12 +4380,22 @@ def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
             ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
             ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
         }
+        # PR #213: an explicit technical/raw/debug detail request about the
+        # blocker ("blocker 코드 원문 그대로 알려줘", "내부 코드로 알려줘") is
+        # a zero-research-tool, no-mutation read answered from persisted
+        # state - admit it so the read-only subject-continuity path can
+        # surface the raw code when (and only when) it was explicitly
+        # requested, instead of the generic "I don't understand" fallback.
+        # A bare runtime/availability ping ("가온 상태 알려줘") is still not
+        # admitted here.
+        _technical_detail_read = wants_technical_blocker_detail(underlying_text)
         if not (
             is_research_progress_status_question(underlying_text)
             or is_mission_candidate_read_request(underlying_text)
             or is_best_candidate_query(underlying_text)
             or is_strategy_family_coverage_question(underlying_text)
             or _followup_intent
+            or _technical_detail_read
         ):
             return False
     return (
