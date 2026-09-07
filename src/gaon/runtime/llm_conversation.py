@@ -24,6 +24,7 @@ from gaon.runtime.conversational_mvp import (
     explanation_level_for_text,
     extract_symbol_entities,
     is_availability_question,
+    is_low_content_complaint,
     presentation_preference_for_text,
     render_presentation_from_payloads,
     render_reasoning_from_payloads,
@@ -38,6 +39,13 @@ from gaon.runtime.conversational_mvp import (
     render_symbol_comparison,
     render_unknown,
 )
+from gaon.runtime.gaon_agent import (
+    GaonTurnRouter,
+    TurnLane,
+    capability_prompt_summary,
+    default_capability_registry,
+)
+from gaon.runtime.gaon_agent.multi_intent import recompose_answers
 from gaon.runtime.conversational_research_execution import (
     ConversationalResearchExecutionResult,
     build_conversational_research_execution_request,
@@ -547,6 +555,14 @@ class LLMConversationBrain:
         self._event_store = event_store
         self._metrics = metrics or MetricsCollector()
         self._mvp_contexts: dict[str, ConversationalMVPContext] = {}
+        # Gaon Agent Foundation V2: the single source of truth for what Gaon
+        # can actually do, the capability-grounded prompt block, and the thin
+        # conversational routing seam. ``_in_agent_router`` guards against
+        # re-entering the seam from a multi-intent sub-turn.
+        self._capability_registry = default_capability_registry()
+        self._capability_summary = capability_prompt_summary(self._capability_registry)
+        self._turn_router = GaonTurnRouter(self._capability_registry)
+        self._in_agent_router = False
         self._cognitive = None
         connection = getattr(repository, "_connection", None)
         if connection is not None and connection.execute(
@@ -702,6 +718,9 @@ class LLMConversationBrain:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
             return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
+        agent_turn = self._route_agent_turn(request, intent, context, warnings, references)
+        if agent_turn is not None:
+            return agent_turn
         mvp = self._try_conversational_mvp(request, warnings, references)
         if mvp is not None:
             return mvp
@@ -733,7 +752,7 @@ class LLMConversationBrain:
                         user_id=request.user_ref,
                         conversation_id=request.session_id,
                         received_at=request.received_at,
-                        prompt=_base_prompt(request.text, context),
+                        prompt=_base_prompt(request.text, context, capabilities=self._capability_summary),
                         references=references,
                         tools=tools,
                     )
@@ -785,6 +804,101 @@ class LLMConversationBrain:
                 return fallback
             return _provider_unavailable_message(), "fallback", _dedupe((*warnings, f"provider fallback: {reason}")), references, "deterministic", ()
 
+    def _route_agent_turn(
+        self,
+        request: LLMConversationRequest,
+        intent: Intent,
+        context,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """Gaon Agent Foundation V2 seam.
+
+        Owns only the lanes the legacy pipeline mis-serves: a multi-question
+        turn (each part routed and recomposed), and an honest capability-
+        limitation reply when the user asks Gaon to read a link / look up
+        live info / inspect media it cannot access yet. Returns ``None`` for
+        everything else so today's routing (general conversation -> LLM,
+        mission reads, research execution, safety gate) runs unchanged.
+
+        Never intercepts a research-execution or explicit mission-read turn,
+        never mutates state, never grants a capability.
+        """
+        if self._in_agent_router:
+            return None
+        text = request.text
+        execution_intent = has_explicit_research_execution_intent(text)
+        # A turn the mission / research pipeline legitimately owns is never
+        # taken over by the seam. An explicit research-execution turn is also
+        # never sliced into multi-intent fragments (a structured research
+        # brief is one intent even with blank lines between its sections).
+        defer = (
+            execution_intent
+            or is_mission_candidate_read_request(text)
+            or is_research_progress_status_question(text)
+        )
+        routed = self._turn_router.classify(text, defer=defer, allow_multi=not execution_intent)
+        if routed.lane is TurnLane.PASS_THROUGH:
+            return None
+        if routed.lane is TurnLane.MULTI_INTENT:
+            return self._answer_multi_intent(request, context, routed.segments, warnings, references)
+        # capability-limitation lanes: deterministic, honest, no fabrication
+        return (
+            routed.text,
+            routed.route_name,
+            _dedupe((*warnings, *routed.warnings)),
+            references,
+            "deterministic",
+            (),
+        )
+
+    def _answer_multi_intent(
+        self,
+        request: LLMConversationRequest,
+        context,
+        segments,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        parts: list[str] = []
+        seg_warnings: list[str] = []
+        seg_refs: list[str] = []
+        seg_tools: list[str] = []
+        self._in_agent_router = True
+        try:
+            for segment in segments:
+                seg_text = segment.text.strip()
+                if not seg_text:
+                    continue
+                sub_request = replace(
+                    request,
+                    text=seg_text,
+                    is_system_turn=True,
+                    message_id=f"{request.message_id or 'segment'}:s{segment.index}",
+                )
+                seg_intent = parse_intent(seg_text)
+                seg_approval = _requires_manual_boundary(seg_text) or bool(safety_warning(seg_text))
+                s_text, _s_route, s_warn, s_ref, _s_provider, s_tools = self._generate(
+                    sub_request, seg_intent, seg_approval, context
+                )
+                parts.append(s_text)
+                seg_warnings.extend(s_warn)
+                seg_refs.extend(s_ref)
+                seg_tools.extend(s_tools)
+        finally:
+            self._in_agent_router = False
+        combined = recompose_answers(tuple(parts))
+        if not combined.strip():
+            return None
+        return (
+            combined,
+            "conversation_multi_intent",
+            _dedupe((*warnings, *seg_warnings, "multi-intent: per-segment deterministic routing")),
+            _dedupe((*references, *seg_refs)),
+            "composite",
+            _dedupe(tuple(seg_tools)),
+        )
+
     def _format_multi_tool_response_for_session(self, results: tuple[AssistantToolResult, ...], request: LLMConversationRequest) -> str:
         """Same rendering as ``_format_multi_tool_response``, except that when
         every tool call in this turn failed (the opaque "safety validation"
@@ -832,7 +946,7 @@ class LLMConversationBrain:
                         user_id=request.user_ref,
                         conversation_id=request.session_id,
                         received_at=request.received_at,
-                        prompt=_base_prompt(request.text, None),
+                        prompt=_base_prompt(request.text, None, capabilities=self._capability_summary),
                         references=_dedupe((*references, *(f"tool:{name}" for name in executed))),
                         tools=tools,
                         tool_results=tuple(results),
@@ -1777,21 +1891,20 @@ class LLMConversationBrain:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_status")
             return render_status(), "conversation_mvp_status", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.GENERAL_CONVERSATION:
-            # hotfix/conversation-layer-safe-web-parity: render_general_
-            # conversation()'s feedback-style apology ("말씀해 주신 불편을
-            # 확인했습니다...") is the right honest answer for genuinely
-            # uninterpretable input ("맨날 없네요") but the wrong one for an
-            # ambiguous research-topic noun phrase ("단타 연구") that merely
-            # lacks a clear question/verb shape - that deserves a real,
-            # contextual answer (which the recent-history-aware LLM path
-            # below can give), not a canned complaint-handling response.
-            # Only defer when a real LLM is actually available
-            # (assistant_enabled) so a degraded/deterministic-only config
-            # keeps today's honest, non-fabricating apology text instead of
-            # silently going quiet.
-            if self._config.assistant_enabled and (
-                route.symbols or any(token in request.text.casefold() for token in _AMBIGUOUS_RESEARCH_TOPIC_TOKENS)
-            ):
+            # Gaon Agent Foundation V2: LLM-first general conversation.
+            # render_general_conversation()'s feedback-style apology
+            # ("말씀해 주신 불편을 확인했습니다...") is the honest answer only
+            # for a low-content malfunction-complaint ("맨날 없네요",
+            # "제가 업데이트를 잘못했나봐요 이상해졌넹") - see
+            # ``is_low_content_complaint``. Every other natural-language turn
+            # (identity, small talk, a knowledge question, an opinion, an
+            # ambiguous research-topic noun phrase like "단타 연구") is
+            # deferred to the capability-grounded LLM path below, which gives
+            # a real contextual answer instead of a canned complaint
+            # template. When no real LLM is available (assistant_enabled is
+            # False) the deterministic apology is kept so a degraded config
+            # never goes silently quiet.
+            if self._config.assistant_enabled and not is_low_content_complaint(request.text):
                 return None
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_general")
             return (
@@ -1830,6 +1943,22 @@ class LLMConversationBrain:
                     self._store_presentation_preference(request.session_id, preference, request)
                     return text, f"conversation_presentation_{route.intent.value}", _dedupe((*warnings, "evidence-bound natural presentation")), _dedupe((*references, "tool:krx_real_research")), "deterministic", ("krx_real_research",)
                 if self._tool_result_repository is not None and self._tool_result_repository.latest(request.session_id) is not None and _is_explicit_tool_result_synthesis_request(request.text):
+                    return None
+                # Gaon Agent Foundation V2: a bare "why" question that does
+                # NOT point back at a previous answer ("우주는 왜 어두워요?",
+                # "왜 하늘은 파래?") is a general knowledge question, not a
+                # request to re-explain a prior result. Defer only that
+                # narrow shape (EXPLAIN_PREVIOUS_RESULT intent, no backward
+                # reference, real LLM available) to the capability-grounded
+                # LLM instead of the "no previous result" notice. A
+                # discourse-marked follow-up ("왜 그렇게 판단했어?",
+                # "그럼 위험은?") and a bare instruction ("쉽게 설명해줘")
+                # keep the deterministic notice.
+                if (
+                    self._config.assistant_enabled
+                    and route.intent is ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT
+                    and not _references_prior_answer(request.text)
+                ):
                     return None
                 self._remember_mvp_response_context(request, route.intent, "conversation_mvp_missing_context")
                 return render_missing_context(), "conversation_mvp_missing_context", _dedupe(warnings), references, "deterministic", ()
@@ -4244,12 +4373,32 @@ def _tuple_of_str(value: object) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _base_prompt(text: str, context=None) -> str:
+_PRIOR_ANSWER_REFERENCE_MARKERS: tuple[str, ...] = (
+    "방금", "아까", "직전", "좀 전", "좀전", "위에서", "위 내용", "위 설명", "앞에서",
+    "앞서", "전에 말", "전에 설명", "그 결과", "그 답", "네 답", "그 설명", "그 내용",
+    "그거", "그건", "그게", "그것", "이거", "이걸", "저거", "말한 거", "말한거", "방금 그",
+    "그렇게", "그리 판단", "그럼", "그러면", "그러므로", "그래서",
+)
+
+
+def _references_prior_answer(text: str) -> bool:
+    """True when a follow-up turn actually points back at something already
+    said in this conversation (so "no previous result" is the honest answer),
+    as opposed to a standalone knowledge/opinion question that merely uses
+    "왜 / 설명 / 어떻게 생각".
+    """
+    normalized = "".join(text.casefold().split())
+    return any("".join(marker.split()) in normalized for marker in _PRIOR_ANSWER_REFERENCE_MARKERS)
+
+
+def _base_prompt(text: str, context=None, *, capabilities: str = "") -> str:
     context_text = f"\n\n{context.to_prompt_context()}" if context is not None else ""
+    capability_text = f"\n\n{capabilities}" if capabilities else ""
     return (
         "You are Gaon, a calm Korean AI Engineering Partner for Youngha. "
         "Do not claim live trading, automatic approval, private repo access, or unavailable integrations. "
-        f"{grounded_system_policy()} "
+        f"{grounded_system_policy()}"
+        f"{capability_text} "
         f"User message: {text}{context_text}"
     )
 

@@ -429,15 +429,23 @@ def render_greeting() -> str:
 
 
 def render_help() -> str:
+    # Gaon Agent Foundation V2: an honest capability overview grounded in the
+    # capability registry (gaon.runtime.gaon_agent.capabilities) rather than a
+    # fixed list of example prompts.
     return "\n".join(
         [
-            "영하님, 지금은 다음 요청을 안전하게 지원할 수 있습니다.",
-            "- 삼성전자 분석해줘",
-            "- 삼성전자와 SK하이닉스 비교해줘",
-            "- 왜 그렇게 판단했어?",
-            "- 쉽게 설명해줘",
-            "- 자세히 보여줘",
-            "주문, 자동 승인, Champion 자동 승격은 수행하지 않습니다.",
+            "영하님, 제가 지금 실제로 할 수 있는 일은 다음과 같습니다.",
+            "- 자연스러운 대화와 일반 질문 답변",
+            "- 진행 중인 연구 미션과 전략 후보·진행 상황·블로커 확인",
+            "- 전략 버전과 챔피언/후보 상태 확인",
+            "- KRX·야후 실데이터 기반 read-only 연구와 백테스트 (명시적으로 요청하시고, 승격은 사람 승인 후)",
+            "",
+            "아직 못 하는 일 (연결되면 안내드리겠습니다):",
+            "- 링크·웹 페이지 열기, 웹 검색",
+            "- 이미지·스크린샷 보기, 영상·자막 분석, PDF·문서 읽기",
+            "- 외부 주장을 검증 없이 사실로 저장하기",
+            "",
+            "절대 하지 않는 일: 실거래 주문, LIVE 전환, 챔피언 자동 승격, 승인 우회, 임의 명령 실행.",
         ]
     )
 
@@ -455,6 +463,37 @@ def render_status() -> str:
 
 def render_general_conversation() -> str:
     return "말씀해 주신 불편을 확인했습니다, 영하님. 이 대화에서 확인 가능한 상태와 연구 기록은 사실에 근거해 안내하고, 요청하지 않은 연구는 실행하지 않겠습니다."
+
+
+# Gaon Agent Foundation V2: markers of a genuine low-content malfunction /
+# absence / regret complaint ("맨날 없네요", "제가 업데이트를 잘못했나봐요
+# 이상해졌넹"). Only these keep the deterministic feedback response; every
+# other natural-language turn is LLM-first general conversation. Structural,
+# small, and deliberately NOT a per-sentence dictionary.
+_LOW_CONTENT_COMPLAINT_MARKERS: tuple[str, ...] = (
+    "없네", "없어요", "없음", "안 되네", "안되네", "안 돼", "안돼", "안 됨", "안됨",
+    "먹통", "고장", "잘못했나", "잘못한 거", "잘못한거", "이상해졌", "이상해 졌",
+    "엉망", "맨날", "또 안",
+)
+# If the turn is really asking something (identity / knowledge / opinion /
+# request for content) it is conversation, not a complaint.
+_CONVERSATIONAL_HOOK_MARKERS: tuple[str, ...] = (
+    "뭐", "무엇", "뭔", "누구", "언제", "어디", "어떻게", "이유가", "알려줘", "알려주",
+    "설명", "얘기", "이야기", "소개", "추천", "생각해", "어때", "궁금",
+)
+
+
+def is_low_content_complaint(text: str) -> bool:
+    normalized = text.strip().casefold()
+    if not normalized or len(normalized) > 60:
+        return False
+    if "?" in normalized:
+        return False
+    if not any(marker in normalized for marker in _LOW_CONTENT_COMPLAINT_MARKERS):
+        return False
+    if any(hook in normalized for hook in _CONVERSATIONAL_HOOK_MARKERS):
+        return False
+    return True
 
 
 def _levenshtein(a: str, b: str) -> int:
