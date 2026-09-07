@@ -533,11 +533,21 @@ class MissionSafeFailureExplanationTests(unittest.TestCase):
         self.assertIn("종료되지 않았습니다", message)
         self.assertIn("0/3", message)
 
-    def test_blocked_message_states_the_real_reason(self) -> None:
+    def test_blocked_message_explains_the_reason_without_leaking_the_raw_code(self) -> None:
+        # PR #213: the raw internal reason code / detail is NOT exposed by
+        # default - a natural-language explanation of the same cause is.
         blocked = record_blocked(self.mission, reason="provider_acquisition_blocker: provider_fetch_failure=15", now=LATER)
         message = mission_blocked_message(blocked)
-        self.assertIn("provider_fetch_failure", message)
+        self.assertNotIn("provider_fetch_failure", message)
+        self.assertNotIn("provider_acquisition_blocker", message)
+        self.assertIn("데이터 확보 문제", message)
         self.assertEqual(blocked.status, MissionStatus.BLOCKED)
+
+    def test_blocked_message_can_surface_the_raw_code_on_a_technical_request(self) -> None:
+        blocked = record_blocked(self.mission, reason="provider_acquisition_blocker: provider_fetch_failure=15", now=LATER)
+        message = mission_blocked_message(blocked, technical=True)
+        self.assertIn("provider_acquisition_blocker: provider_fetch_failure=15", message)
+        self.assertIn("데이터 확보 문제", message)
 
     def test_provider_acquisition_blocker_detection(self) -> None:
         self.assertTrue(

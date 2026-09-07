@@ -2254,13 +2254,109 @@ def mission_budget_exhausted_message(mission: ResearchMission) -> str:
     return "\n".join(lines)
 
 
-def mission_blocked_message(mission: ResearchMission) -> str:
+# ---------------------------------------------------------------------------
+# Centralized blocker/reason-code -> user-facing explanation
+# ---------------------------------------------------------------------------
+#
+# ``ResearchMission.blocked_reason`` (and analogous internal reason strings)
+# is stored verbatim as an engineering code, usually shaped ``"<code>:
+# <internal detail>"`` - e.g.
+#   "strategy_hypothesis_space_exhausted: bounded declarative strategy
+#    expansion budget exhausted"
+# A raw code like that must NEVER be the default user-facing text (it reads
+# as a leak and is unintelligible to the operator). This single table is the
+# ONE place a reason code is turned into natural Korean; every user-facing
+# renderer goes through ``render_blocked_reason_explanation`` rather than
+# interpolating ``mission.blocked_reason`` directly. A code that is not in
+# the table is described conservatively (never invented) and may include the
+# raw code so the operator still has something actionable. The raw code is
+# only ever shown when the caller passes ``technical=True`` (the user
+# explicitly asked for raw/internal/debug detail - see
+# ``wants_technical_blocker_detail``).
+_BLOCKED_REASON_EXPLANATIONS: dict[str, str] = {
+    "strategy_hypothesis_space_exhausted": (
+        "현재 설정된 전략 가설 범위 안에서 시도할 수 있는 후보를 모두 검토해서, 같은 방식으로는 "
+        "더 확장할 후보가 남아 있지 않아 연구가 멈춘 상태입니다."
+    ),
+    "selected_symbol_universe_exhausted": (
+        "이 미션에 지정된 종목들을 모두 한 번씩 검증해서, 같은 종목 범위 안에서는 더 확인할 "
+        "새 종목이 남아 있지 않아 연구가 멈춘 상태입니다."
+    ),
+    "provider_acquisition_blocker": (
+        "이번 연구 사이클에서 필요한 실제 시장 데이터를 가져오지 못해서, 전략이 나빠서가 아니라 "
+        "데이터 확보 문제로 연구를 잠시 멈춘 상태입니다. 데이터가 다시 확보되면 이어서 진행합니다."
+    ),
+    "data_acquisition": (
+        "실제 시장 데이터를 확보하지 못해 연구를 안전하게 멈춘 상태입니다. 임의의 값으로 "
+        "진행하지 않고, 데이터가 다시 준비되면 이어서 진행합니다."
+    ),
+}
+
+_TECHNICAL_DETAIL_TOKENS: tuple[str, ...] = (
+    "기술적", "기술적으로", "technical",
+    "원문", "원문그대로", "raw", "rawstatus", "rawcode",
+    "내부코드", "내부코드로", "블로커코드", "blocker코드", "blockercode",
+    "디버그", "debug",
+    "코드로", "코드그대로", "에러코드", "errorcode",
+    "internal", "internalcode",
+)
+
+
+def wants_technical_blocker_detail(text: str) -> bool:
+    """True when the user explicitly asks for the raw/internal/technical/
+    debug form of a blocker or status - the only condition under which a
+    user-facing renderer may surface the verbatim internal reason code."""
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    return _contains_any(normalized, _TECHNICAL_DETAIL_TOKENS)
+
+
+def blocked_reason_code(reason: str | None) -> str | None:
+    """The leading ``<code>`` of a stored reason string (the part before the
+    first ``:``), which is the stable key callers reason about. ``None`` for
+    an empty reason."""
+    if not reason:
+        return None
+    return reason.split(":", 1)[0].strip() or None
+
+
+def render_blocked_reason_explanation(reason: str | None, *, technical: bool = False) -> str:
+    """The single centralized reason-code -> user-facing-Korean path.
+
+    - A known code renders as its natural-language explanation.
+    - An unknown code is described conservatively (never fabricated) and
+      keeps the raw code appended so the operator still has a handle.
+    - ``technical=True`` (user asked for raw/internal/debug detail) always
+      appends the verbatim stored reason string.
+    """
+    if not reason:
+        base = "차단 사유가 기록되어 있지 않습니다."
+        return base
+    code = blocked_reason_code(reason)
+    known = _BLOCKED_REASON_EXPLANATIONS.get(code or "")
+    if known is not None:
+        base = known
+    else:
+        base = (
+            "현재 알려진 사유 목록에 없는 이유로 연구가 안전하게 멈춘 상태입니다. 임의로 결과를 "
+            f"만들지 않고, 원인이 해소되면 이어서 진행합니다 (내부 코드: {reason})."
+        )
+        return base
+    if technical:
+        return f"{base}\n\n(내부 코드: {reason})"
+    return base
+
+
+def mission_blocked_message(mission: ResearchMission, *, technical: bool = False) -> str:
     lines = [
         "영하님, 연구 목표는 계속 유지하고 있습니다.",
         "",
         mission_status_block(mission),
         "",
-        f"다만 다음 이유로 지금은 안전하게 추가 연구를 진행할 수 없습니다: {mission.blocked_reason or '알 수 없는 차단 사유'}.",
+        "다만 다음 이유로 지금은 안전하게 추가 연구를 진행할 수 없습니다:",
+        render_blocked_reason_explanation(mission.blocked_reason, technical=technical),
+        "",
         "임의로 결과를 만들지 않고, 연구가 다시 가능해지면 이어서 진행하겠습니다.",
     ]
     return "\n".join(lines)

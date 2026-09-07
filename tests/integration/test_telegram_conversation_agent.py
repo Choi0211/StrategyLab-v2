@@ -2222,7 +2222,12 @@ class TelegramConversationAgentTests(unittest.TestCase):
 
             for text in (first_text, second_text):
                 self.assertNotIn("말씀해 주신 불편을 확인했습니다", text, "must not fall back to GENERAL_CONVERSATION feedback")
-                self.assertIn(blocked_reason, text, "the real blocked_reason must be shown honestly")
+                # PR #213: the blocked mission is still explained honestly,
+                # but in natural Korean - the raw internal reason code is NOT
+                # exposed by default.
+                self.assertNotIn(blocked_reason, text, "raw internal blocker code must not leak by default")
+                self.assertNotIn("strategy_hypothesis_space_exhausted", text)
+                self.assertIn("더 확장할 후보가 남아 있지 않아", text)
             self.assertEqual(first_text, second_text, "the same question must produce the same honest answer both times")
 
             assistant_messages = [m for m in store.conversations.list_messages("telegram:100", limit=1000) if m.role == "assistant"]
