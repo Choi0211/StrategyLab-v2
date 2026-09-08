@@ -93,7 +93,7 @@ class TelegramConversationAgentTests(unittest.TestCase):
             # UNKNOWN boilerplate response).
             sent_texts = [text for _chat_id, text in client.sent]
             self.assertEqual(len(sent_texts), 6)
-            self.assertIn("다음 요청을 안전하게 지원할 수 있습니다", sent_texts[0])  # 뭘 할 수 있나요?
+            self.assertIn("제가 지금 실제로 할 수 있는 일은", sent_texts[0])  # 뭘 할 수 있나요?
             self.assertIn("이 대화에는 현재 응답할 수 있습니다", sent_texts[1])  # 현재 동작을 하고 있나요?
             self.assertIn("가온 Runtime은", sent_texts[2])  # Vps기반으로 구동되고있나요?
             self.assertIn("이 대화에는 현재 응답할 수 있습니다", sent_texts[3])  # 대화가 가능한가요?
