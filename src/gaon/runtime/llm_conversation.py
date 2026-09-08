@@ -1930,6 +1930,28 @@ class LLMConversationBrain:
             subject_explanation = self._try_mission_subject_explanation(request, route, warnings, references)
             if subject_explanation is not None:
                 return subject_explanation
+            # #214 Conversation-Integrity hotfix: a read-only turn that is a
+            # complete standalone question with its own non-research subject
+            # ("우주는 왜 어두운가요?", "그런데 우주는 왜 어두워?"), does not
+            # point back at anything already said, and names no research /
+            # mission subject, is general conversation - never an "explain
+            # the previous result" turn. It must not be resolved against a
+            # stale ``ConversationalMVPContext`` (which would re-render an
+            # unrelated 000370 / 005930 research report). Defer it to
+            # LLM-first general conversation. A bare "왜?" / "쉽게 말하면?"
+            # keeps ``_has_standalone_nonresearch_subject`` False and a
+            # research follow-up ("단타 연구 왜 멈췄어요?") keeps
+            # ``_turn_pertains_to_research_subject`` True, so read-only
+            # continuity is unaffected.
+            if (
+                self._config.assistant_enabled
+                and read_only_turn
+                and _is_autonomous_presentation_intent(route.intent)
+                and not _references_prior_answer(request.text)
+                and not _turn_pertains_to_research_subject(request.text)
+                and _has_standalone_nonresearch_subject(request.text)
+            ):
+                return None
             context = self._mvp_context_for(request.session_id)
             if context is None:
                 if not read_only_turn and route.symbols and route.intent in {ConversationalMVPIntent.INVESTMENT_DECISION_QUESTION, ConversationalMVPIntent.RECOMMENDATION_REQUEST, ConversationalMVPIntent.RISK_QUESTION, ConversationalMVPIntent.STRATEGY_QUESTION} and self._tool_executor is not None:
@@ -1962,6 +1984,31 @@ class LLMConversationBrain:
                     return None
                 self._remember_mvp_response_context(request, route.intent, "conversation_mvp_missing_context")
                 return render_missing_context(), "conversation_mvp_missing_context", _dedupe(warnings), references, "deterministic", ()
+            # #214 Conversation-Integrity hotfix: ``context`` is a single
+            # most-recent-tool-result cache. When THIS turn is a read-only
+            # question about the research / mission itself ("단타 연구 왜
+            # 멈췄어요?"), does not point back at the previous answer, and the
+            # cached context is stale (an earlier session or a background
+            # autonomous run hours/days ago - see
+            # ``_mvp_research_context_is_stale``), answer from the
+            # ResearchMission's authoritative persisted state instead of
+            # re-rendering that unrelated context (which would surface an old
+            # 000370 / 005930 autonomous research report as if it were
+            # fresh). Bare follow-ups ("왜?", "쉽게 말하면?") and prior-answer
+            # references are unaffected; so is a fresh in-conversation
+            # context (the promotion-candidate detail follow-up).
+            if (
+                read_only_turn
+                and _turn_pertains_to_research_subject(request.text)
+                and not _references_prior_answer(request.text)
+                and _mvp_research_context_is_stale(context, request.received_at)
+            ):
+                stale_mission = self._mission_for(request.session_id)
+                if stale_mission is None:
+                    stale_mission, _stale_amb = self._resolve_durable_owner_mission(request)
+                if stale_mission is not None:
+                    kind = "blocked_reason" if stale_mission.status is MissionStatus.BLOCKED else "mission_status"
+                    return self._render_subject_followup(request, stale_mission, kind, warnings, references)
             preference = presentation_preference_for_text(request.text, self._presentation_preference_for(request.session_id))
             self._store_presentation_preference(request.session_id, preference, request)
             self._remember_mvp_response_context(request, route.intent, f"conversation_mvp_{route.intent.value}")
@@ -2083,6 +2130,18 @@ class LLMConversationBrain:
         ):
             return None
         if has_explicit_research_execution_intent(request.text):
+            return None
+        # #214 Conversation-Integrity hotfix: a complete standalone question
+        # with its own non-research subject that does not point back at an
+        # earlier answer ("우주는 왜 어두운가요?", "그런데 우주는 왜 어두워?")
+        # is general conversation - it must NEVER inherit a tracked mission /
+        # candidate / blocked-reason read subject and be answered as a
+        # mission read. Defer (the caller then routes it LLM-first).
+        if (
+            _has_standalone_nonresearch_subject(request.text)
+            and not _turn_pertains_to_research_subject(request.text)
+            and not _references_prior_answer(request.text)
+        ):
             return None
         _followup_intent = read_only_intent(request.text)
         # Pure follow-up shapes that keep whatever subject the last read-only
@@ -4437,6 +4496,77 @@ def _requires_manual_boundary(text: str) -> bool:
 _AMBIGUOUS_RESEARCH_TOPIC_TOKENS: tuple[str, ...] = ("연구", "전략", "후보", "검증", "단타", "스윙", "중장기")
 
 
+# #214 post-deploy Conversation-Integrity hotfix ---------------------------
+# A stale ``ConversationalMVPContext`` (e.g. an earlier autonomous
+# ``autonomous_learning_v2`` research on 000370, or a leftover single-symbol
+# 005930 analysis) must never be re-rendered as the answer to a brand-new
+# general-knowledge question that ``classify_conversational_route`` merely
+# mis-tags as EXPLAIN_PREVIOUS_RESULT because it contains "왜". Doing so
+# surfaces an unrelated research report ("영하님, 000370 전략을 다시
+# 연구했습니다 ...") and reads exactly like a fresh research action even
+# though no tool ran. The two predicates below let the reasoning-followup
+# path tell such a standalone question apart from a genuine read-only
+# follow-up about the previous answer.
+
+_DISCOURSE_LEAD_FILLERS: tuple[str, ...] = (
+    "그런데", "그런대", "근데", "그럼", "그러면", "그래서", "그리고",
+    "아니", "음", "저기", "일단", "참", "그",
+)
+# Deliberately only the interrogatives the reported regression actually
+# used - a bare "왜?" / "왜 멈췄어요?" has nothing before the marker and
+# stays a follow-up.
+_STANDALONE_QUESTION_MARKERS: tuple[str, ...] = ("왜", "어째서")
+
+
+def _turn_pertains_to_research_subject(text: str) -> bool:
+    """True when a read-only follow-up names a research / mission subject of
+    its own - a KRX symbol or company alias, a research-topic / strategy
+    word ("단타", "연구", "전략", "후보", "검증", ...), a research-validation
+    facet ("OOS", "거래비용", "워크포워드", "시장국면", ... - anything
+    ``_is_stored_research_explanation_followup`` recognises), a named
+    strategy family, or a mission status / candidate read shape. False for a
+    standalone knowledge / identity / opinion question that merely uses
+    "왜 / 설명 / 쉽게" ("우주는 왜 어두운가요?"). Gates whether such a turn may
+    be resolved against persisted mission state or a stored
+    ``ConversationalMVPContext`` at all (see ``_try_conversational_mvp`` /
+    ``_try_mission_subject_explanation``)."""
+    # A literal 6-digit KRX code or a resolved company alias - NOT
+    # ``_extract_krx_symbols`` (which falls back to the whole known universe
+    # for any text and would make this predicate always true).
+    if re.search(r"(?<!\d)\d{6}(?!\d)", text) or extract_symbol_entities(text):
+        return True
+    if any(token in text for token in _AMBIGUOUS_RESEARCH_TOPIC_TOKENS):
+        return True
+    if requested_strategy_family(text) is not None:
+        return True
+    if is_research_progress_status_question(text) or is_mission_candidate_read_request(text):
+        return True
+    if _is_stored_research_explanation_followup(text):
+        return True
+    return False
+
+
+def _has_standalone_nonresearch_subject(text: str) -> bool:
+    """True when ``text`` is a complete standalone question that carries its
+    OWN subject phrase before the interrogative word ("우주는 왜 어두운가요?",
+    "그런데 우주는 왜 어두워?") rather than a bare follow-up about the last
+    answer ("왜?", "왜 멈췄어요?", "쉽게 말하면?"). Leading discourse fillers
+    ("그런데", "근데", ...) are stripped first."""
+    normalized = re.sub(r"[\s\W_]+", "", text.casefold(), flags=re.UNICODE)
+    if not normalized:
+        return False
+    for marker in _STANDALONE_QUESTION_MARKERS:
+        idx = normalized.find(marker)
+        if idx <= 0:
+            continue
+        lead = normalized[:idx]
+        for filler in _DISCOURSE_LEAD_FILLERS:
+            lead = lead.replace(filler, "")
+        if len(lead) >= 2:
+            return True
+    return False
+
+
 def _is_autonomous_learning_boundary_request(text: str) -> bool:
     normalized = text.casefold()
     if any(token in normalized for token in ("매수", "매도", "주문", "buy", "sell", "order", "broker", "kis", "shell", "powershell", "cmd", "sql", "secret")):
@@ -5697,6 +5827,24 @@ def _parse_utc(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+# #214 Conversation-Integrity hotfix: a genuine read-only follow-up to a
+# stored research result lands within minutes of it; a leftover
+# ``ConversationalMVPContext`` from an earlier session / a background
+# autonomous run hours or days ago is stale and must not be re-rendered as
+# the answer to a fresh research/mission question.
+_MVP_RESEARCH_CONTEXT_STALE_AFTER = timedelta(hours=2)
+
+
+def _mvp_research_context_is_stale(context: "ConversationalMVPContext", now: str) -> bool:
+    stamp = getattr(context, "updated_at", "") or getattr(context, "created_at", "")
+    if not stamp or not now:
+        return False
+    try:
+        return _parse_utc(now) - _parse_utc(str(stamp)) > _MVP_RESEARCH_CONTEXT_STALE_AFTER
+    except ValueError:
+        return False
 
 
 def _clarification_response(request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]]:
