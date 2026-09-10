@@ -41,7 +41,26 @@ from gaon.runtime.gaon_agent.multimodal import (
     MultimodalReference,
     describe_multimodal_request,
 )
-from gaon.runtime.gaon_agent.needs import NeedAssessment, RequestedGoal, assess_from_registry
+from gaon.runtime.gaon_agent.needs import (
+    Blocker,
+    BlockerKind,
+    NeedAssessment,
+    RequestedGoal,
+    assess_from_registry,
+    diagnose,
+)
+from gaon.runtime.gaon_agent.runtime_status import (
+    CapabilityRuntimeObservation,
+    ProviderRuntimeMonitor,
+    RuntimeAvailability,
+    RuntimeObservationSource,
+    RuntimeReason,
+    general_conversation_runtime,
+    is_connectivity_error,
+    observation_index,
+    resolve_runtime_observations,
+    runtime_capability_note,
+)
 from gaon.runtime.gaon_agent.turn_router import (
     GaonTurnRouter,
     RoutedTurn,
@@ -75,6 +94,19 @@ __all__ = [
     "NeedAssessment",
     "RequestedGoal",
     "assess_from_registry",
+    "Blocker",
+    "BlockerKind",
+    "diagnose",
+    "CapabilityRuntimeObservation",
+    "ProviderRuntimeMonitor",
+    "RuntimeAvailability",
+    "RuntimeObservationSource",
+    "RuntimeReason",
+    "general_conversation_runtime",
+    "is_connectivity_error",
+    "observation_index",
+    "resolve_runtime_observations",
+    "runtime_capability_note",
     "GaonTurnRouter",
     "RoutedTurn",
     "TurnLane",

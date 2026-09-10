@@ -34,6 +34,19 @@ health feeding capability state); blocker diagnosis that maps a stuck
 read-only URL provider to do this - shall I propose it as development work?");
 capability-gap reasoning wired into the conversation.
 
+**Delivered so far - Runtime Truth & Blocker Diagnosis**
+(`GaonCapabilityNeedRuntimeTruth.md`): a separate runtime-availability
+observation layer (`gaon_agent/runtime_status.py`) distinguishes a
+*configured* capability from whether its provider is reachable *right now* -
+so an identity / small-talk turn while the user's PC Ollama is off gets an
+honest "the conversation model is offline, server features still work" reply
+instead of a comprehension-failure fallback, while `RESEARCH_MISSION_READ`
+and the deterministic safety gate are unaffected. `needs.diagnose` adds a
+typed `Blocker` / `BlockerKind` vocabulary that keeps provider-offline
+distinct from not-implemented and from policy state. `CapabilityState` is
+unchanged; runtime state can only ever narrow a configured-`AVAILABLE`
+capability, never widen a privileged one.
+
 ## #216 - Gaon Safe Developer Agent
 
 Isolated `git worktree` + branch; read-only repository inspection; bounded code
