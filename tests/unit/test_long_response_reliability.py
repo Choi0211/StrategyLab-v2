@@ -116,9 +116,15 @@ class LongResponseReliabilityTests(unittest.TestCase):
 
         response = self._brain(provider).respond(_request("안녕하세요 가온"))
 
-        self.assertEqual(response.route, "fallback")
+        # A natural-language turn that needed the model now gets the honest
+        # runtime-truth reply (Capability & Need Registry) instead of the
+        # generic "fallback" route; both are safe, non-empty, and name the
+        # provider error in the warnings.
+        self.assertIn(response.route, ("fallback", "conversation_runtime_unavailable"))
         self.assertTrue(response.text.strip())
         self.assertIn("ProviderTimeoutError", " ".join(response.warnings))
+        if response.route == "conversation_runtime_unavailable":
+            self.assertRegex(response.text, r"(지연|다시 시도)")
 
     def test_telegram_transient_send_failure_retries_and_succeeds(self) -> None:
         client = _FlakyTelegramClient((ExternalServiceError("temporary"),))

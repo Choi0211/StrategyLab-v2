@@ -41,9 +41,13 @@ from gaon.runtime.conversational_mvp import (
 )
 from gaon.runtime.gaon_agent import (
     GaonTurnRouter,
+    ProviderRuntimeMonitor,
     TurnLane,
     capability_prompt_summary,
     default_capability_registry,
+    general_conversation_runtime,
+    is_connectivity_error,
+    runtime_capability_note,
 )
 from gaon.runtime.gaon_agent.multi_intent import recompose_answers
 from gaon.runtime.conversational_research_execution import (
@@ -562,6 +566,15 @@ class LLMConversationBrain:
         self._capability_registry = default_capability_registry()
         self._capability_summary = capability_prompt_summary(self._capability_registry)
         self._turn_router = GaonTurnRouter(self._capability_registry)
+        # Capability & Need Registry - runtime truth. A bounded-TTL cache of the last assistant-
+        # provider outcome (success / timeout / connection error). It lets
+        # Gaon answer "can I actually hold a natural conversation right now?"
+        # from a real signal - the production path is Gaon VPS -> Tailscale
+        # -> user PC -> Ollama, so GENERAL_CONVERSATION is configured
+        # AVAILABLE yet genuinely unusable whenever that PC is off - without
+        # adding a per-turn health request. It can only ever downgrade a
+        # configured-AVAILABLE capability; it never widens a privileged one.
+        self._runtime_monitor = ProviderRuntimeMonitor()
         self._in_agent_router = False
         self._cognitive = None
         connection = getattr(repository, "_connection", None)
@@ -764,10 +777,27 @@ class LLMConversationBrain:
                 request,
                 {"provider": provider_response.provider_name, "tool_calls": len(provider_response.tool_calls), "finish_reason": provider_response.finish_reason or "unknown", "truncated": provider_response.truncated},
             )
-            fallback_warning = next((warning for warning in provider_response.warnings if "provider error:" in warning or "provider fallback" in warning), None)
+            fallback_warning = next((warning for warning in provider_response.warnings if "provider error:" in warning or "provider fallback" in warning or "provider unhealthy" in warning), None)
             if fallback_warning is not None:
+                # A RoutingAssistantProvider swallowed a dead-provider error
+                # and handed back deterministic persona text. Record the
+                # runtime truth so the honest "the conversation model is
+                # offline" reply below (and later turns / capability answers)
+                # is grounded in a real signal, not a guess - but only for a
+                # genuine connectivity failure, never a content/safety
+                # rejection.
+                if is_connectivity_error(fallback_warning):
+                    self._runtime_monitor.record_failure(
+                        provider=self._config.assistant_provider, now=request.received_at, error_type=fallback_warning
+                    )
                 self._metrics.increment("gaon_llm_provider_fallbacks_total", reason="registry_fallback")
                 self._append_provider_event("LLMProviderFallbackUsed", request, {"provider": provider_response.provider_name, "reason": fallback_warning})
+            else:
+                self._runtime_monitor.record_success(
+                    provider=self._config.assistant_provider,
+                    now=request.received_at,
+                    latency_ms=provider_response.latency_ms,
+                )
             if provider_response.tool_calls and self._tool_executor is not None:
                 return self._execute_provider_tool_calls(provider, request, intent, provider_response, warnings, references, tools)
             fallback = self._try_deterministic_tool(request, warnings, references)
@@ -777,6 +807,10 @@ class LLMConversationBrain:
             follow_up = self._try_follow_up_tool(request, warnings, references)
             if follow_up is not None:
                 return follow_up
+            if fallback_warning is not None:
+                honest = self._runtime_unavailable_reply(request, (*warnings, fallback_warning), references)
+                if honest is not None:
+                    return honest
             if provider_response.truncated:
                 provider_response = self._continue_provider_response(provider, request, intent, provider_response, references)
             text = normalize_final_response(provider_response.text, request.text)
@@ -792,6 +826,10 @@ class LLMConversationBrain:
             )
         except ProviderError as exc:
             reason = exc.__class__.__name__
+            if is_connectivity_error(reason):
+                self._runtime_monitor.record_failure(
+                    provider=self._config.assistant_provider, now=request.received_at, error_type=reason
+                )
             if "Timeout" in reason:
                 self._metrics.increment("gaon_llm_provider_timeouts_total", provider=self._config.assistant_provider)
                 self._append_provider_event("LLMProviderRequestTimedOut", request, {"provider": self._config.assistant_provider, "error_type": reason})
@@ -802,7 +840,56 @@ class LLMConversationBrain:
             if fallback is not None:
                 self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=reason)
                 return fallback
+            honest = self._runtime_unavailable_reply(request, (*warnings, f"provider fallback: {reason}"), references)
+            if honest is not None:
+                return honest
             return _provider_unavailable_message(), "fallback", _dedupe((*warnings, f"provider fallback: {reason}")), references, "deterministic", ()
+
+    def _runtime_unavailable_reply(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """Honest, short reply for a natural-language turn that needed the
+        assistant provider while it is offline / timing out.
+
+        Grounded in :class:`ProviderRuntimeMonitor` - the real outcome of the
+        provider call this turn (or a very recent one), never a guess.
+        Returns ``None`` when ``GENERAL_CONVERSATION`` runtime is AVAILABLE
+        or merely UNKNOWN, so the caller keeps its existing behaviour in the
+        ambiguous case. Never fabricates an answer and never re-renders a
+        stale research subject - it states the model is unreachable and that
+        server-native reads still work.
+        """
+        observation = general_conversation_runtime(
+            self._capability_registry, self._runtime_monitor, now=request.received_at
+        )
+        note = runtime_capability_note(observation)
+        if not note:
+            return None
+        return (
+            note,
+            "conversation_runtime_unavailable",
+            _dedupe(
+                (
+                    *warnings,
+                    f"GENERAL_CONVERSATION runtime {observation.availability.value}; honest degradation, no fabricated answer",
+                )
+            ),
+            references,
+            "deterministic",
+            (),
+        )
+
+    def _runtime_capability_suffix(self, received_at: str) -> str:
+        """A single trailing sentence for a capability / help / status answer
+        when the conversation model is known to be offline right now; empty
+        string otherwise (including when its state is unknown)."""
+        observation = general_conversation_runtime(
+            self._capability_registry, self._runtime_monitor, now=received_at
+        )
+        return runtime_capability_note(observation)
 
     def _route_agent_turn(
         self,
@@ -1848,7 +1935,14 @@ class LLMConversationBrain:
             return render_greeting(), "conversation_mvp_greeting", _dedupe(warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.HELP:
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_help")
-            return render_help(), "conversation_mvp_help", _dedupe(warnings), references, "deterministic", ()
+            # Capability & Need Registry: a capability answer must reflect runtime truth, not
+            # just the static registry - if the conversation model is known
+            # offline right now, say the free-form conversation part is
+            # currently limited while the server-native reads still work.
+            suffix = self._runtime_capability_suffix(request.received_at)
+            help_text = render_help() if not suffix else f"{render_help()}\n\n{suffix}"
+            help_warnings = warnings if not suffix else (*warnings, "capability answer reflects runtime truth")
+            return help_text, "conversation_mvp_help", _dedupe(help_warnings), references, "deterministic", ()
         if (
             route.intent is ConversationalMVPIntent.STATUS_QUERY
             and _is_simple_conversational_status_request(request.text)
@@ -1889,7 +1983,10 @@ class LLMConversationBrain:
             return text, "conversation_mission_candidate_status", _dedupe((*warnings, "mission candidate status")), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.STATUS_QUERY and _is_simple_conversational_status_request(request.text):
             self._remember_mvp_response_context(request, route.intent, "conversation_mvp_status")
-            return render_status(), "conversation_mvp_status", _dedupe(warnings), references, "deterministic", ()
+            suffix = self._runtime_capability_suffix(request.received_at)
+            status_text = render_status() if not suffix else f"{render_status()}\n\n{suffix}"
+            status_warnings = warnings if not suffix else (*warnings, "capability answer reflects runtime truth")
+            return status_text, "conversation_mvp_status", _dedupe(status_warnings), references, "deterministic", ()
         if route.intent is ConversationalMVPIntent.GENERAL_CONVERSATION:
             # Gaon Agent Foundation V2: LLM-first general conversation.
             # render_general_conversation()'s feedback-style apology
