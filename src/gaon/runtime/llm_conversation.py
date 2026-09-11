@@ -72,7 +72,7 @@ from gaon.runtime.long_response import continuation_prompt, merge_response_parts
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_fixture_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, normalize_final_response, sanitize_research_tool_output, strict_real_research_grounding_violations
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_internal_identifier_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, mission_state_claim_violations, normalize_final_response, requests_low_level_implementation_detail, safe_capability_reply, sanitize_research_tool_output, strict_real_research_grounding_violations
 from gaon.runtime.research_failures import classify_tool_failure, warning_for_failure
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import has_explicit_research_execution_intent, route_read_only_tool
@@ -845,6 +845,22 @@ class LLMConversationBrain:
             text = normalize_final_response(provider_response.text, request.text)
             if is_korean_request(request.text) and provider_response.text != text:
                 warnings = (*warnings, "provider response normalized for Korean final answer")
+            # production hotfix (#217 follow-up, CASE 6/9): this is the raw
+            # free-form GENERAL_CONVERSATION draft - no tool executed, no
+            # structured evidence (a real tool call is already grounded via
+            # format_grounded_tool_response/sanitize_research_tool_output
+            # above). Reuses the same durable-owner mission resolution seam
+            # as the CASE-2 status path/_try_gap_analysis - no ad-hoc lookup.
+            hygiene_mission = self._mission_for(request.session_id)
+            if hygiene_mission is None:
+                hygiene_mission, _ambiguous = self._resolve_durable_owner_mission(request)
+            claim_violations = mission_state_claim_violations(text, hygiene_mission)
+            if claim_violations:
+                text = safe_capability_reply(hygiene_mission)
+                warnings = (*warnings, f"raw_provider_response_replaced_ungrounded_state_claim={','.join(claim_violations)}")
+            elif contains_internal_identifier_leakage(text) or requests_low_level_implementation_detail(text):
+                text = safe_capability_reply(hygiene_mission)
+                warnings = (*warnings, "raw_provider_response_replaced_internal_leakage_or_parameter_burden")
             return (
                 text,
                 provider_response.route,
@@ -961,10 +977,20 @@ class LLMConversationBrain:
         never by asking the user "무엇이 부족한가요?" back. See
         ``gaon.runtime.gaon_agent.gap_analysis.diagnose_gap`` - it only ever
         reads already-available, read-only state; it never executes
-        research or mutates the mission."""
+        research or mutates the mission.
+
+        production hotfix (#217 follow-up): a fresh session with no
+        mission of its own must still resolve the SAME durable, owner-
+        scoped mission the CASE-2 status path already finds via
+        ``_resolve_durable_owner_mission`` - otherwise a real owner with a
+        real (e.g. blocked) mission gets misdiagnosed as having none at
+        all. Reuses that existing seam directly; no second/ad-hoc
+        mission lookup."""
         if not is_gap_fill_request(request.text):
             return None
         mission = self._mission_for(request.session_id)
+        if mission is None:
+            mission, _ambiguous = self._resolve_durable_owner_mission(request)
         result = diagnose_gap(mission)
         return (
             result.text,
