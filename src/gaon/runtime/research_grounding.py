@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING
+
+from gaon.knowledge.research_mission import MissionStatus, mission_status_block
+
+if TYPE_CHECKING:
+    from gaon.knowledge.research_mission import ResearchMission
 
 
 RESEARCH_TOOLS = {
@@ -116,6 +121,108 @@ def normalize_final_response(text: str, user_text: str) -> str:
             "\ud604\uc7ac \uac80\uc99d\ub41c \uadfc\uac70\uac00 \ucda9\ubd84\ud558\uc9c0 \uc54a\uc544 \uc784\uc758\uc758 \uacb0\uacfc\ub97c \ub9cc\ub4e4\uc9c0 \uc54a\uaca0\uc2b5\ub2c8\ub2e4."
         )
     return cleaned
+
+
+# production hotfix (#217 follow-up, CASE 6): a raw free-form
+# GENERAL_CONVERSATION turn (no tool executed, no structured evidence -
+# see ``format_grounded_tool_response``/``sanitize_research_tool_output``
+# above for the tool-call path, which is already grounded) must never
+# hand the user an internal tool/function/provider/capability identifier
+# or push a low-level implementation parameter back onto them. Structural
+# (backtick + identifier shape), not a fixed name blacklist, so a new
+# internal name added later is still caught.
+_INTERNAL_IDENTIFIER_LEAKAGE_PATTERN = re.compile(r"`[a-zA-Z_][a-zA-Z0-9_]{2,}`")
+
+_LOW_LEVEL_PARAMETER_BURDEN_MARKERS: tuple[str, ...] = (
+    "\uc885\ubaa9 \ucf54\ub4dc", "\ud30c\ub77c\ubbf8\ud130\ub97c \uc54c\ub824", "\ud30c\ub77c\ubbf8\ud130\uac00 \ud544\uc694",
+    "\uac80\uc0c9 \uc870\uac74\uc744 \uad6c\uccb4\ud654", "\uad6c\uccb4\ud654\ud574 \uc8fc\uc138\uc694", "parameter\uac00 \ud544\uc694",
+)
+
+
+def contains_internal_identifier_leakage(text: str) -> bool:
+    """True when free-form assistant text exposes a backtick-quoted
+    identifier - the shape every internal tool/function/provider/
+    capability id in this codebase takes (see ``RESEARCH_TOOLS`` above,
+    the tool registry, capability ids) - instead of describing what it
+    does in natural language."""
+    return bool(_INTERNAL_IDENTIFIER_LEAKAGE_PATTERN.search(text))
+
+
+def requests_low_level_implementation_detail(text: str) -> bool:
+    """True when free-form assistant text pushes an implementation-level
+    parameter (a raw symbol code, a tool's own required argument) back
+    onto the user instead of using what the mission already knows or
+    picking a safe read-only default on the user's behalf."""
+    return any(marker in text for marker in _LOW_LEVEL_PARAMETER_BURDEN_MARKERS)
+
+
+# production hotfix (#217 follow-up, CASE 9): free-form GENERAL_
+# CONVERSATION text must never assert mission/promotion/approval/
+# candidate/production state on its own - only the authoritative
+# ``ResearchMission`` read model (or a grounded tool-formatted response
+# above) may. ``validation_completed``/``strategy_promoted``/
+# ``strategy_applied``/``production_active`` have no possible evidence in
+# this free-text path at all (a real one only ever comes from a grounded
+# tool response), so any mention is unconditionally a violation;
+# ``approval_pending``/``promotion_ready``/``candidate_selected`` are
+# checked against the mission's real persisted fields.
+STATE_CLAIM_MARKERS: dict[str, tuple[str, ...]] = {
+    "approval_pending": ("\uc2b9\uc778 \ud544\uc694", "\uc2b9\uc778 \ub300\uae30", "approval pending", "approval required", "\uc0ac\uc6a9\uc790 \uc2b9\uc778"),
+    "promotion_ready": ("\uc2b9\uaca9 \uc694\uccad \ub300\uae30", "\uc2b9\uaca9 \uc900\ube44", "promotion ready", "promotion-ready", "\uc2b9\uaca9 \uac00\ub2a5\ud55c \uc0c1\ud0dc"),
+    "candidate_selected": ("\ud6c4\ubcf4\ub97c \uc120\uc815\ud588", "candidate selected", "\ud6c4\ubcf4\ub97c \uc120\ud0dd\ud588"),
+    "validation_completed": ("\uac80\uc99d\uc744 \uc644\ub8cc", "\uac80\uc99d\uc774 \uc644\ub8cc", "validation completed"),
+    "strategy_promoted": ("\uc804\ub7b5\uc744 \uc2b9\uaca9", "\uc2b9\uaca9\ud588\uc2b5\ub2c8\ub2e4", "\uc2b9\uaca9\ub418\uc5c8\uc2b5\ub2c8\ub2e4", "strategy promoted"),
+    "strategy_applied": ("\uc804\ub7b5\uc744 \uc801\uc6a9\ud588", "\uc801\uc6a9\ub418\uc5c8\uc2b5\ub2c8\ub2e4", "strategy applied"),
+    "production_active": ("production active", "\uc2e4\uc804\uc5d0 \uc801\uc6a9", "\ub77c\uc774\ube0c\ub85c \uc804\ud658", "\uc6b4\uc601 \uc911\uc785\ub2c8\ub2e4"),
+}
+
+_NEVER_GROUNDED_IN_FREE_TEXT = frozenset(
+    {"validation_completed", "strategy_promoted", "strategy_applied", "production_active"}
+)
+
+
+def mission_state_claim_violations(text: str, mission: "ResearchMission | None") -> tuple[str, ...]:
+    """Which ``STATE_CLAIM_MARKERS`` categories ``text`` asserts that the
+    authoritative mission read model does not actually support. Empty
+    when every state claim present is grounded (or none is present)."""
+    violations: list[str] = []
+    for kind, markers in STATE_CLAIM_MARKERS.items():
+        if not any(marker in text for marker in markers):
+            continue
+        if kind in _NEVER_GROUNDED_IN_FREE_TEXT:
+            violations.append(kind)
+            continue
+        if mission is None:
+            violations.append(kind)
+            continue
+        if kind in ("approval_pending", "promotion_ready"):
+            if mission.status is not MissionStatus.AWAITING_HUMAN_APPROVAL:
+                violations.append(kind)
+        elif kind == "candidate_selected":
+            if mission.active_candidate_id is None:
+                violations.append(kind)
+    return tuple(violations)
+
+
+def safe_capability_reply(mission: "ResearchMission | None") -> str:
+    """Deterministic, hygiene-safe reply for a GENERAL_CONVERSATION turn
+    whose raw draft leaked an internal identifier, demanded a low-level
+    parameter, or asserted an ungrounded mission/promotion/production
+    state. Never claims an action was taken that was not; states only
+    what the mission already establishes (so it never re-asks for scope
+    the user already gave) and names any further gap as a currently-
+    unavailable capability, not a fabricated result."""
+    if mission is not None:
+        return (
+            "\uc601\ud558\ub2d8, \ud604\uc7ac \uc5f0\uad6c \ubc94\uc704\ub294 \uc774\ubbf8 \uc544\ub798\uc640 \uac19\uc774 \uc124\uc815\ub418\uc5b4 \uc788\uc2b5\ub2c8\ub2e4.\n\n"
+            f"{mission_status_block(mission)}\n\n"
+            "\uc0ac\uc6a9 \uac00\ub2a5\ud55c \uae30\uc874 \uc2dc\uc7a5 \ub370\uc774\ud130\uc640 \uc5f0\uad6c \uae30\ub85d\ubd80\ud130 \ud655\uc778\ud558\uaca0\uc2b5\ub2c8\ub2e4. "
+            "\ucd94\uac00 \uc678\ubd80 \uc790\ub8cc\uac00 \ud544\uc694\ud55c \ubd80\ubd84\uc740 \ud604\uc7ac \uc5f0\uacb0\ub418\uc9c0 \uc54a\uc740 \uae30\ub2a5\uc774\ub77c \uadf8 \ubd80\ubd84\ub9cc \ubcc4\ub3c4\ub85c \ub0a8\uaca8\ub450\uaca0\uc2b5\ub2c8\ub2e4."
+        )
+    return (
+        "\uc601\ud558\ub2d8, \ud604\uc7ac \uc9c4\ud589 \uc911\uc778 \uc5f0\uad6c Mission\uc774 \uc5c6\uc5b4 \uad6c\uccb4\uc801\uc73c\ub85c \ub3c4\uc640\ub4dc\ub9ac\uae30 \uc5b4\ub835\uc2b5\ub2c8\ub2e4. "
+        "\uc5b4\ub5a4 \uc2dc\uc7a5/\uc804\ub7b5\uc73c\ub85c \uc5f0\uad6c\ub97c \uc2dc\uc791\ud560\uc9c0 \uc54c\ub824\uc8fc\uc2dc\uba74 \uc0ac\uc6a9 \uac00\ub2a5\ud55c \ubc94\uc704\uc5d0\uc11c \ubc14\ub85c \ub3c4\uc640\ub4dc\ub9ac\uaca0\uc2b5\ub2c8\ub2e4."
+    )
 
 
 def grounded_system_policy() -> str:
