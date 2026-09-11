@@ -159,6 +159,30 @@ class GaonTurnRouter:
 
 
 # -- renderers ----------------------------------------------------------------
+_EXTERNAL_RESEARCH_TOKENS: tuple[str, ...] = ("인터넷에서", "웹에서", "온라인에서", "인터넷 검색", "웹 검색", "웹검색")
+_EXTERNAL_RESEARCH_VERBS: tuple[str, ...] = ("찾아", "검색해")
+
+
+def wants_external_web_research(text: str) -> bool:
+    """``True`` when the turn explicitly asks Gaon to go find material on
+    the internet/web itself (roadmap #217 follow-up: multi-intent partial
+    fulfilment - "부족한 자료도 인터넷에서 찾아서 계속 연구해줘"). Requires
+    both a place-token ("인터넷에서" / "웹에서" / ...) and a fetch verb
+    ("찾아" / "검색해") so an unrelated sentence never misfires this."""
+    normalized = text.casefold()
+    return any(token in normalized for token in _EXTERNAL_RESEARCH_TOKENS) and any(
+        verb in normalized for verb in _EXTERNAL_RESEARCH_VERBS
+    )
+
+
+def render_external_research_limitation() -> str:
+    return (
+        "참고로 지금은 인터넷에서 직접 자료를 찾아오는 기능이 아직 연결되어 있지 않아, "
+        "그 부분만은 자동으로 수행하지 못했습니다. 필요한 자료를 텍스트로 붙여 주시면 "
+        "그 내용을 반영해 연구를 이어가겠습니다."
+    )
+
+
 def render_url_limitation(registry: CapabilityRegistry) -> str:
     base = (
         "영하님, 저는 아직 링크를 직접 열어 내용을 가져올 수 없습니다. "

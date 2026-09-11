@@ -45,10 +45,17 @@ from gaon.runtime.gaon_agent import (
     TurnLane,
     capability_prompt_summary,
     default_capability_registry,
+    diagnose_gap,
     general_conversation_runtime,
     is_connectivity_error,
+    is_gap_fill_request,
+    extract_research_preferences,
+    mentions_research_preferences,
+    reconcile_with_mission,
     runtime_capability_note,
 )
+from gaon.runtime.gaon_agent.capabilities import WEB_SEARCH
+from gaon.runtime.gaon_agent.turn_router import render_external_research_limitation, wants_external_web_research
 from gaon.runtime.gaon_agent.multi_intent import recompose_answers
 from gaon.runtime.conversational_research_execution import (
     ConversationalResearchExecutionResult,
@@ -638,6 +645,19 @@ class LLMConversationBrain:
                 }.get(mission.status.value, GoalStatus.ACTIVE)
                 self._cognitive.transition_goal(goal.record_id, namespace=request.session_id, status=state, now=now)
         response_text = normalize_final_response(response_text, request.text)
+        # Multi-intent partial fulfilment (roadmap #217 follow-up): a turn
+        # that also asks Gaon to fetch material from the internet must never
+        # fail the whole request just because WEB_SEARCH is not wired yet -
+        # every other part of the answer above is already computed; only
+        # the unavailable part gets an honest, appended Need.
+        if (
+            not request.is_system_turn
+            and wants_external_web_research(request.text)
+            and not self._capability_registry.is_available(WEB_SEARCH)
+        ):
+            note = render_external_research_limitation()
+            if note not in response_text:
+                response_text = f"{response_text}\n\n{note}"
         generated_at = now
         response_id = f"conversation-assistant:{uuid4().hex}"
         response = LLMConversationResponse(
@@ -731,6 +751,15 @@ class LLMConversationBrain:
             if approval_required:
                 warnings = (*warnings, "provider bypassed for approval boundary")
             return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
+        limitation_followup = self._try_capability_limitation_followup(request, warnings, references)
+        if limitation_followup is not None:
+            return limitation_followup
+        gap_reply = self._try_gap_analysis(request, warnings, references)
+        if gap_reply is not None:
+            return gap_reply
+        preferences_reply = self._try_research_preferences(request, warnings, references)
+        if preferences_reply is not None:
+            return preferences_reply
         agent_turn = self._route_agent_turn(request, intent, context, warnings, references)
         if agent_turn is not None:
             return agent_turn
@@ -891,6 +920,86 @@ class LLMConversationBrain:
         )
         return runtime_capability_note(observation)
 
+    def _try_capability_limitation_followup(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """A bare backward reference ("이건요?") right after a URL / current-
+        info / multimodal capability-limitation reply must keep pointing at
+        THAT limitation, never jump to an unrelated tracked mission/blocker
+        subject (Gaon roadmap #217 follow-up). Reuses
+        ``conversation_integrity.read_only_intent``'s existing "reference"
+        classification and the existing ``last_read_subject`` slot - no new
+        continuity subsystem."""
+        if read_only_intent(request.text) != "reference":
+            return None
+        subject = self._read_subject_for(request.session_id)
+        if subject is None or subject.get("kind") != "capability_limitation":
+            return None
+        text = subject.get("detail_text")
+        if not text:
+            return None
+        return (
+            str(text),
+            "conversation_capability_limitation_subject_followup",
+            _dedupe((*warnings, "capability-limitation subject continuity; no mission/blocker jump")),
+            references,
+            "deterministic",
+            (),
+        )
+
+    def _try_gap_analysis(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """"부족한 부분을 채워주세요" (Gaon roadmap #217 follow-up): answer
+        from the durable mission + blocker + capability truth directly,
+        never by asking the user "무엇이 부족한가요?" back. See
+        ``gaon.runtime.gaon_agent.gap_analysis.diagnose_gap`` - it only ever
+        reads already-available, read-only state; it never executes
+        research or mutates the mission."""
+        if not is_gap_fill_request(request.text):
+            return None
+        mission = self._mission_for(request.session_id)
+        result = diagnose_gap(mission)
+        return (
+            result.text,
+            "conversation_gap_analysis",
+            _dedupe((*warnings, *(f"auto_check: {item}" for item in result.auto_checks_performed))),
+            references,
+            "deterministic",
+            (),
+        )
+
+    def _try_research_preferences(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """A turn stating a structured research preference (market scope,
+        trading style, timeframe, target win rate, aspirational daily
+        return) is reconciled with the existing durable mission - never
+        used to create a new mission, and never framed as a guarantee. See
+        ``gaon.runtime.gaon_agent.research_preferences``."""
+        if not mentions_research_preferences(request.text):
+            return None
+        preferences = extract_research_preferences(request.text)
+        mission = self._mission_for(request.session_id)
+        text = reconcile_with_mission(mission, preferences)
+        return (
+            text,
+            "conversation_research_preferences",
+            _dedupe((*warnings, "research preferences reconciled with existing mission scope; aspirational, not persisted")),
+            references,
+            "deterministic",
+            (),
+        )
+
     def _route_agent_turn(
         self,
         request: LLMConversationRequest,
@@ -929,7 +1038,15 @@ class LLMConversationBrain:
             return None
         if routed.lane is TurnLane.MULTI_INTENT:
             return self._answer_multi_intent(request, context, routed.segments, warnings, references)
-        # capability-limitation lanes: deterministic, honest, no fabrication
+        # capability-limitation lanes: deterministic, honest, no fabrication.
+        # Gaon roadmap #217 follow-up: record this as the tracked read
+        # subject (same ``last_read_subject`` slot #213/#214 already use for
+        # a mission/candidate subject, not a new store) so a bare backward
+        # reference next turn ("이건요?") re-answers about THIS limitation
+        # instead of falling through to whatever mission/blocker subject
+        # happened to be tracked earlier - see
+        # ``_try_capability_limitation_followup``.
+        self._remember_read_subject(request, None, kind="capability_limitation", detail_text=routed.text)
         return (
             routed.text,
             routed.route_name,
@@ -4111,12 +4228,13 @@ class LLMConversationBrain:
     def _remember_read_subject(
         self,
         request: LLMConversationRequest,
-        mission: ResearchMission,
+        mission: ResearchMission | None,
         *,
         kind: str,
         candidate_id: str | None = None,
         symbol: str | None = None,
         answer_kind: str | None = None,
+        detail_text: str | None = None,
     ) -> None:
         # PR #213 - follow-up context: ``last_read_subject`` carries enough
         # structured semantic context to answer pronouns and short
@@ -4133,23 +4251,25 @@ class LLMConversationBrain:
             return
         metadata = dict(session.metadata)
         payload = _mvp_metadata_root(metadata)
+        mission_id = mission.mission_id if mission is not None else None
         payload["last_read_subject"] = {
             "kind": kind,
             "subject_type": kind,
-            "subject_ref": candidate_id or symbol or mission.mission_id,
-            "mission_id": mission.mission_id,
-            "last_mission_id": mission.mission_id,
+            "subject_ref": candidate_id or symbol or mission_id,
+            "mission_id": mission_id,
+            "last_mission_id": mission_id,
             "candidate_id": candidate_id,
             "last_candidate_id": candidate_id,
             "symbol": symbol,
             "last_symbol": symbol,
-            "reason_code": mission.blocked_reason.split(":", 1)[0].strip() if mission.blocked_reason else None,
-            "reason_text": mission.blocked_reason,
-            "mission_status": mission.status.value,
+            "reason_code": mission.blocked_reason.split(":", 1)[0].strip() if mission is not None and mission.blocked_reason else None,
+            "reason_text": mission.blocked_reason if mission is not None else None,
+            "mission_status": mission.status.value if mission is not None else None,
             "intent": read_only_intent(request.text),
             "last_intent": read_only_intent(request.text),
             "answer_kind": answer_kind or kind,
             "last_answer_kind": answer_kind or kind,
+            "detail_text": detail_text,
             "text": _bounded_context_text(request.text),
             "updated_at": request.received_at,
         }
@@ -4210,7 +4330,12 @@ class LLMConversationBrain:
         if not isinstance(root, dict):
             return None
         subject = root.get("last_read_subject")
-        if not isinstance(subject, dict) or not subject.get("mission_id"):
+        if not isinstance(subject, dict):
+            return None
+        # A "capability_limitation" subject (roadmap #217 follow-up - a
+        # tracked URL/current-info/multimodal limitation reply) legitimately
+        # carries no mission_id; every other kind still requires one.
+        if not subject.get("mission_id") and subject.get("kind") != "capability_limitation":
             return None
         return subject
 

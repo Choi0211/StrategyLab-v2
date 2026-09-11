@@ -26,6 +26,12 @@ from gaon.runtime.gaon_agent.developer_boundary import (
     FORBIDDEN_IN_AGENT_LAYER,
     assert_not_privileged,
 )
+from gaon.runtime.gaon_agent.gap_analysis import (
+    GapAnalysisResult,
+    GapNeed,
+    diagnose_gap,
+    is_gap_fill_request,
+)
 from gaon.runtime.gaon_agent.evidence import (
     Claim,
     EvidenceIngestor,
@@ -48,6 +54,13 @@ from gaon.runtime.gaon_agent.needs import (
     RequestedGoal,
     assess_from_registry,
     diagnose,
+)
+from gaon.runtime.gaon_agent.research_preferences import (
+    ResearchPreferences,
+    extract_research_preferences,
+    mentions_research_preferences,
+    reconcile_with_mission,
+    render_research_preferences_summary,
 )
 from gaon.runtime.gaon_agent.runtime_status import (
     CapabilityRuntimeObservation,
@@ -97,6 +110,15 @@ __all__ = [
     "Blocker",
     "BlockerKind",
     "diagnose",
+    "GapAnalysisResult",
+    "GapNeed",
+    "diagnose_gap",
+    "is_gap_fill_request",
+    "ResearchPreferences",
+    "extract_research_preferences",
+    "mentions_research_preferences",
+    "reconcile_with_mission",
+    "render_research_preferences_summary",
     "CapabilityRuntimeObservation",
     "ProviderRuntimeMonitor",
     "RuntimeAvailability",
