@@ -1407,12 +1407,30 @@ def extract_or_update_mission(
 
     if existing is not None:
         status = existing.status
-        if status in (MissionStatus.BLOCKED,) and (kr_market_wide or len(explicit_symbols) >= 2 or continuation):
-            # A fresh instruction (explicit rescoping or an explicit request
-            # to keep going) reactivates a mission that was only blocked by a
-            # transient acquisition gap, without touching the promotion
-            # target or accumulated evidence.
+        blocked_reason = existing.blocked_reason
+        if (
+            status is MissionStatus.BLOCKED
+            and (kr_market_wide or len(explicit_symbols) >= 2 or continuation)
+            and is_retryable_mission_blocker(existing.blocked_reason)
+        ):
+            # fix/gaon-mission-continuation-grounding-integrity: a fresh
+            # instruction (explicit rescoping or an explicit request to
+            # keep going) reactivates a mission ONLY when its recorded
+            # blocker is a known, deterministically-classified transient/
+            # retryable one (is_retryable_mission_blocker) - e.g. a
+            # provider/data acquisition gap that a later cycle naturally
+            # clears on its own. A STRUCTURAL blocker (e.g.
+            # strategy_hypothesis_space_exhausted - the declared strategy
+            # hypothesis space is genuinely exhausted, not merely waiting
+            # on a retry) is never auto-cleared by conversation text
+            # alone; only a real new research cycle outcome may change it.
+            # blocked_reason is cleared here specifically because THIS
+            # transition is the one case where it is actually stale -
+            # never cleared elsewhere, so a structural blocker's reason
+            # stays intact and truthful for as long as the mission stays
+            # BLOCKED.
             status = MissionStatus.ACTIVE
+            blocked_reason = None
         return replace(
             existing,
             market=market,
@@ -1425,6 +1443,7 @@ def extract_or_update_mission(
             baseline_comparison=merged_baseline,
             target_promotion_ready_candidates=merged_target,
             status=status,
+            blocked_reason=blocked_reason,
             updated_at=now,
         )
 
@@ -1726,6 +1745,33 @@ def record_blocked(mission: ResearchMission, *, reason: str, now: str) -> Resear
     disappearing; the caller is expected to surface ``blocked_reason`` to
     the user."""
     return replace(mission, status=MissionStatus.BLOCKED, blocked_reason=reason, updated_at=now)
+
+
+# fix/gaon-mission-continuation-grounding-integrity: the only two
+# blocked_reason codes anywhere in this codebase (see every ``record_blocked``
+# call site and ``_BLOCKED_REASON_EXPLANATIONS`` below) that describe a
+# transient, retry-when-it-clears-itself condition rather than a structural
+# one. Deliberately not a bigger taxonomy than what the codebase actually
+# produces today.
+_RETRYABLE_BLOCKED_REASON_CODES = frozenset({"provider_acquisition_blocker", "data_acquisition"})
+
+
+def is_retryable_mission_blocker(reason: str | None) -> bool:
+    """Deterministic (never LLM-decided) policy: may a BLOCKED mission's
+    recorded blocker be cleared back to ACTIVE by a plain conversational
+    continuation/rescoping instruction alone, with no new research cycle
+    outcome?
+
+    True only for a known transient/acquisition-class blocker code
+    (``provider_acquisition_blocker``, ``data_acquisition``) - the kind a
+    later cycle naturally retries and clears on its own. Fails closed for
+    everything else: an unrecognized/dynamic code (e.g. a classified
+    provider-failure code baked in ad hoc), a known STRUCTURAL blocker
+    (``strategy_hypothesis_space_exhausted``, ``selected_symbol_universe_
+    exhausted``), or no reason at all all return False - only a real new
+    research cycle outcome (``record_blocked`` / an explicit unblock
+    elsewhere) may change status for those, never conversation text."""
+    return blocked_reason_code(reason) in _RETRYABLE_BLOCKED_REASON_CODES
 
 
 def is_cycle_budget_exhausted(output: Mapping[str, object]) -> bool:

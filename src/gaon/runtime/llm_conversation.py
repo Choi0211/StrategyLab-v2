@@ -72,7 +72,7 @@ from gaon.runtime.long_response import continuation_prompt, merge_response_parts
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.persona import RULE_BASED_ROUTE, persona_text, safety_warning
 from gaon.runtime.provider_registry import build_assistant_provider
-from gaon.runtime.research_grounding import contains_fixture_leakage, contains_internal_identifier_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, mission_state_claim_violations, normalize_final_response, requests_low_level_implementation_detail, safe_capability_reply, sanitize_research_tool_output, strict_real_research_grounding_violations
+from gaon.runtime.research_grounding import contains_fixture_leakage, contains_internal_identifier_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, ground_provider_user_reply, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, mission_state_claim_violations, normalize_final_response, requests_low_level_implementation_detail, safe_capability_reply, sanitize_research_tool_output, strict_real_research_grounding_violations
 from gaon.runtime.research_failures import classify_tool_failure, warning_for_failure
 from gaon.runtime.serialization import dumps_json, loads_json
 from gaon.runtime.llm_tool_routing import has_explicit_research_execution_intent, route_read_only_tool
@@ -845,22 +845,20 @@ class LLMConversationBrain:
             text = normalize_final_response(provider_response.text, request.text)
             if is_korean_request(request.text) and provider_response.text != text:
                 warnings = (*warnings, "provider response normalized for Korean final answer")
-            # production hotfix (#217 follow-up, CASE 6/9): this is the raw
-            # free-form GENERAL_CONVERSATION draft - no tool executed, no
-            # structured evidence (a real tool call is already grounded via
-            # format_grounded_tool_response/sanitize_research_tool_output
-            # above). Reuses the same durable-owner mission resolution seam
-            # as the CASE-2 status path/_try_gap_analysis - no ad-hoc lookup.
+            # production hotfix (#217 follow-up, CASE 6/9; the shared gate
+            # itself is fix/gaon-mission-continuation-grounding-integrity):
+            # this is the raw free-form GENERAL_CONVERSATION draft - no
+            # tool executed. Reuses the same durable-owner mission
+            # resolution seam as the CASE-2 status path/_try_gap_analysis -
+            # no ad-hoc lookup - and the SAME shared grounding gate
+            # ``_execute_provider_tool_calls`` below also calls, so neither
+            # path can silently diverge from the other.
             hygiene_mission = self._mission_for(request.session_id)
             if hygiene_mission is None:
                 hygiene_mission, _ambiguous = self._resolve_durable_owner_mission(request)
-            claim_violations = mission_state_claim_violations(text, hygiene_mission)
-            if claim_violations:
-                text = safe_capability_reply(hygiene_mission)
-                warnings = (*warnings, f"raw_provider_response_replaced_ungrounded_state_claim={','.join(claim_violations)}")
-            elif contains_internal_identifier_leakage(text) or requests_low_level_implementation_detail(text):
-                text = safe_capability_reply(hygiene_mission)
-                warnings = (*warnings, "raw_provider_response_replaced_internal_leakage_or_parameter_burden")
+            text, violation = ground_provider_user_reply(text, hygiene_mission)
+            if violation is not None:
+                warnings = (*warnings, f"raw_provider_response_replaced_{violation}")
             return (
                 text,
                 provider_response.route,
@@ -1212,6 +1210,20 @@ class LLMConversationBrain:
             text = normalize_final_response(text, request.text)
         if any(is_research_tool(result.name) for result in results) and is_korean_request(request.text) and text != raw_text:
             warnings = (*warnings, "provider response normalized for Korean final answer")
+        # fix/gaon-mission-continuation-grounding-integrity: this branch
+        # used to return straight past the raw-text branch's grounding
+        # gate entirely - a provider reply that happened to invoke a tool
+        # (CASE 9: "단타 연구해주세요" -> tool_calls=["market_data"]) could
+        # still re-ask for a symbol/scope the mission already records, or
+        # assert an ungrounded mission/promotion state, with nothing
+        # catching it. Same shared gate as the no-tool-call branch above -
+        # not a second, separately-maintained copy.
+        hygiene_mission = self._mission_for(request.session_id)
+        if hygiene_mission is None:
+            hygiene_mission, _ambiguous = self._resolve_durable_owner_mission(request)
+        text, violation = ground_provider_user_reply(text, hygiene_mission)
+        if violation is not None:
+            warnings = (*warnings, f"provider_tool_call_response_replaced_{violation}")
         return text, "provider_tool_call", _dedupe((*warnings, *final.warnings)), _dedupe((*references, *final.references, *(f"tool:{name}" for name in executed))), final.provider_name, tuple(executed)
 
     def _try_authoritative_research_tool(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
@@ -3403,6 +3415,50 @@ class LLMConversationBrain:
             return None
         return self._try_mission_driven_research_cycle(request, mission, warnings, references)
 
+    # fix/gaon-mission-continuation-grounding-integrity: the legacy
+    # autonomous-learning/-research "no context at all" dead ends below
+    # (_try_autonomous_research_conversation / _try_autonomous_learning_v2_
+    # conversation) predate ResearchMission entirely and have no idea it
+    # exists - confirmed production defect: "현재 연구 상태 알려주고 부족한
+    # 자료도 인터넷에서 찾아서 계속 연구해줘" hit exactly this branch and
+    # told the real owner "직전 연구나 전략 맥락이 없습니다" while their real,
+    # durable, BLOCKED KR/KOSPI+KOSDAQ/단타 mission sat right there. This is
+    # deliberately NOT a redesign of that legacy subsystem (still out of
+    # this hotfix's scope) - only a narrow truth-check inserted at its two
+    # "no context" exit points: if a durable mission (this session's own,
+    # or the same owner-scoped cross-transport lookup every other mission-
+    # aware path already uses) actually exists, answer from it via the
+    # SAME diagnose_gap the "부족한 부분을 채워주세요" path uses, instead of
+    # claiming no context exists at all. Returns ``None`` (caller falls
+    # through to its original hardcoded text unchanged) only when there
+    # truly is no mission anywhere for this owner.
+    def _durable_mission_grounded_no_context_fallback(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        mission = self._mission_for(request.session_id)
+        if mission is None:
+            mission, _ambiguous = self._resolve_durable_owner_mission(request)
+        if mission is None:
+            return None
+        result = diagnose_gap(mission)
+        return (
+            result.text,
+            "conversation_gap_analysis",
+            _dedupe(
+                (
+                    *warnings,
+                    f"durable_owner_mission_resolved={mission.mission_id}",
+                    *(f"auto_check: {item}" for item in result.auto_checks_performed),
+                )
+            ),
+            references,
+            "deterministic",
+            (),
+        )
+
     def _try_autonomous_research_conversation(self, request: LLMConversationRequest, route, warnings: tuple[str, ...], references: tuple[str, ...], *, read_only: bool = False) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
             return None
@@ -3458,6 +3514,9 @@ class LLMConversationBrain:
             self._remember_autonomous_learning_context(request, context, text)
             return text, "conversation_autonomous_learning_query", _dedupe((*warnings, "learning memory context read")), references, "deterministic", ()
         if context is None and not route.symbols:
+            grounded = self._durable_mission_grounded_no_context_fallback(request, warnings, references)
+            if grounded is not None:
+                return grounded
             return "영하님, 직전 연구나 전략 맥락이 없습니다. 먼저 분석할 종목이나 전략을 말씀해 주세요.", "conversation_autonomous_missing_context", _dedupe((*warnings, "autonomous research requires structured context")), references, "deterministic", ()
         if context is None:
             return None
@@ -3521,6 +3580,9 @@ class LLMConversationBrain:
             if omitted_subject is not None:
                 return omitted_subject
         if context is None and not route.symbols:
+            grounded = self._durable_mission_grounded_no_context_fallback(request, warnings, references)
+            if grounded is not None:
+                return grounded
             return "영하님, 직전 연구나 전략 맥락이 없습니다. 이어서 자율 연구할 종목을 먼저 삼성전자처럼 말씀해 주세요.", "conversation_autonomous_learning_missing_target", _dedupe((*warnings, "autonomous learning requires target")), references, "deterministic", ()
         symbol = _resolve_autonomous_symbol(route, context)
         if (
