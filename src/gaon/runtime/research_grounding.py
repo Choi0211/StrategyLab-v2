@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import re
 from typing import Iterable, TYPE_CHECKING
 
-from gaon.knowledge.research_mission import MissionStatus, mission_status_block
+from gaon.knowledge.research_mission import MissionStatus, MissionUniverseScope, mission_status_block
 
 if TYPE_CHECKING:
     from gaon.knowledge.research_mission import ResearchMission
@@ -123,20 +123,84 @@ def normalize_final_response(text: str, user_text: str) -> str:
     return cleaned
 
 
-# production hotfix (#217 follow-up, CASE 6): a raw free-form
-# GENERAL_CONVERSATION turn (no tool executed, no structured evidence -
-# see ``format_grounded_tool_response``/``sanitize_research_tool_output``
-# above for the tool-call path, which is already grounded) must never
-# hand the user an internal tool/function/provider/capability identifier
-# or push a low-level implementation parameter back onto them. Structural
-# (backtick + identifier shape), not a fixed name blacklist, so a new
-# internal name added later is still caught.
+# production hotfix (#217 follow-up, CASE 6; extended by
+# fix/gaon-mission-continuation-grounding-integrity to also cover the
+# tool-call reply path - see ``ground_provider_user_reply`` below, the
+# ONE shared gate both ``LLMConversationBrain._execute_provider_tool_
+# calls`` and its raw free-text branch now call): a user-facing
+# provider-generated reply must never hand the user an internal tool/
+# function/provider/capability identifier or push a low-level
+# implementation parameter back onto them. Structural (backtick +
+# identifier shape), not a fixed name blacklist, so a new internal name
+# added later is still caught.
 _INTERNAL_IDENTIFIER_LEAKAGE_PATTERN = re.compile(r"`[a-zA-Z_][a-zA-Z0-9_]{2,}`")
 
 _LOW_LEVEL_PARAMETER_BURDEN_MARKERS: tuple[str, ...] = (
     "\uc885\ubaa9 \ucf54\ub4dc", "\ud30c\ub77c\ubbf8\ud130\ub97c \uc54c\ub824", "\ud30c\ub77c\ubbf8\ud130\uac00 \ud544\uc694",
     "\uac80\uc0c9 \uc870\uac74\uc744 \uad6c\uccb4\ud654", "\uad6c\uccb4\ud654\ud574 \uc8fc\uc138\uc694", "parameter\uac00 \ud544\uc694",
 )
+
+# fix/gaon-mission-continuation-grounding-integrity: deterministic
+# detection of a reply that re-asks the user for context the durable
+# ResearchMission ALREADY records - the "known-context re-ask" gap (a raw
+# LLM turn ignoring mission scope and asking "which market/strategy/
+# symbol?" again). Keyed by a category, never a giant free-form phrase
+# blacklist: a category only ever counts as "known" when the mission
+# object itself actually carries that field (see
+# ``_mission_known_context_categories``) - information the user never
+# actually gave is never treated as already known.
+_KNOWN_CONTEXT_REASK_MARKERS: dict[str, tuple[str, ...]] = {
+    "market": (
+        "\uc5b4\ub290 \uc2dc\uc7a5", "\uc5b4\ub5a4 \uc2dc\uc7a5", "\uc2dc\uc7a5\uc744 \uc54c\ub824", "\uc2dc\uc7a5\uc774 \uad81\uae08", "\uc2dc\uc7a5\uc744 \ub9d0\uc500",
+    ),
+    "strategy_family": (
+        "\uc5b4\ub5a4 \uc804\ub7b5", "\ubb34\uc2a8 \uc804\ub7b5", "\uc804\ub7b5\uc744 \uc54c\ub824", "\uc804\ub7b5 \ubaa9\ud45c\ub97c", "\uc5b4\ub5a4 \ubc29\ubc95", "\ubc29\ubc95\uc744 \uc54c\ub824",
+    ),
+    "symbol": (
+        "\uc885\ubaa9 \ucf54\ub4dc", "\uc5b4\ub5a4 \uc885\ubaa9", "\uc885\ubaa9\uc744 \uc54c\ub824", "\uc885\ubaa9\uba85\uc744",
+    ),
+    "research_target": (
+        "\uc5f0\uad6c \ub300\uc0c1\uc744 \uc54c\ub824", "\ubb34\uc5c7\uc744 \uc5f0\uad6c", "\uc5b4\ub5a4 \uac83\uc744 \uc5f0\uad6c", "\uc5b4\ub5a4 \ubd84\uc57c",
+    ),
+}
+
+
+def _mission_known_context_categories(mission: "ResearchMission") -> frozenset[str]:
+    """Which known-context categories this mission's OWN persisted fields
+    actually establish. Never infers a category from anything the user
+    has not actually provided (a mission always has *some* market/
+    universe_scope value, but that alone does not mean "market" is
+    known - only a real, non-default signal - the recorded strategy
+    family, explicit symbols, or an explicit market-wide scope - counts)."""
+    known: set[str] = set()
+    if mission.strategy_family:
+        known.add("strategy_family")
+        known.add("research_target")
+    if mission.market:
+        known.add("market")
+        known.add("research_target")
+    if mission.symbols or mission.universe_scope is MissionUniverseScope.MARKET_WIDE:
+        known.add("symbol")
+    return frozenset(known)
+
+
+def requests_known_mission_context(text: str, mission: "ResearchMission | None") -> bool:
+    """True when ``text`` asks the user to (re-)supply scope information
+    the durable ``mission`` already records - market, strategy family,
+    symbol/universe, or "what should I research" in general. Deterministic
+    substring matching only (never an LLM asked to judge "is this
+    redundant?"); a category is only ever checked when the mission itself
+    actually carries that field, so information the user never gave is
+    never treated as already known."""
+    if mission is None:
+        return False
+    known = _mission_known_context_categories(mission)
+    if not known:
+        return False
+    return any(
+        category in known and any(marker in text for marker in markers)
+        for category, markers in _KNOWN_CONTEXT_REASK_MARKERS.items()
+    )
 
 
 def contains_internal_identifier_leakage(text: str) -> bool:
@@ -207,22 +271,50 @@ def mission_state_claim_violations(text: str, mission: "ResearchMission | None")
 def safe_capability_reply(mission: "ResearchMission | None") -> str:
     """Deterministic, hygiene-safe reply for a GENERAL_CONVERSATION turn
     whose raw draft leaked an internal identifier, demanded a low-level
-    parameter, or asserted an ungrounded mission/promotion/production
-    state. Never claims an action was taken that was not; states only
-    what the mission already establishes (so it never re-asks for scope
-    the user already gave) and names any further gap as a currently-
-    unavailable capability, not a fabricated result."""
-    if mission is not None:
-        return (
-            "\uc601\ud558\ub2d8, \ud604\uc7ac \uc5f0\uad6c \ubc94\uc704\ub294 \uc774\ubbf8 \uc544\ub798\uc640 \uac19\uc774 \uc124\uc815\ub418\uc5b4 \uc788\uc2b5\ub2c8\ub2e4.\n\n"
-            f"{mission_status_block(mission)}\n\n"
-            "\uc0ac\uc6a9 \uac00\ub2a5\ud55c \uae30\uc874 \uc2dc\uc7a5 \ub370\uc774\ud130\uc640 \uc5f0\uad6c \uae30\ub85d\ubd80\ud130 \ud655\uc778\ud558\uaca0\uc2b5\ub2c8\ub2e4. "
-            "\ucd94\uac00 \uc678\ubd80 \uc790\ub8cc\uac00 \ud544\uc694\ud55c \ubd80\ubd84\uc740 \ud604\uc7ac \uc5f0\uacb0\ub418\uc9c0 \uc54a\uc740 \uae30\ub2a5\uc774\ub77c \uadf8 \ubd80\ubd84\ub9cc \ubcc4\ub3c4\ub85c \ub0a8\uaca8\ub450\uaca0\uc2b5\ub2c8\ub2e4."
-        )
-    return (
-        "\uc601\ud558\ub2d8, \ud604\uc7ac \uc9c4\ud589 \uc911\uc778 \uc5f0\uad6c Mission\uc774 \uc5c6\uc5b4 \uad6c\uccb4\uc801\uc73c\ub85c \ub3c4\uc640\ub4dc\ub9ac\uae30 \uc5b4\ub835\uc2b5\ub2c8\ub2e4. "
-        "\uc5b4\ub5a4 \uc2dc\uc7a5/\uc804\ub7b5\uc73c\ub85c \uc5f0\uad6c\ub97c \uc2dc\uc791\ud560\uc9c0 \uc54c\ub824\uc8fc\uc2dc\uba74 \uc0ac\uc6a9 \uac00\ub2a5\ud55c \ubc94\uc704\uc5d0\uc11c \ubc14\ub85c \ub3c4\uc640\ub4dc\ub9ac\uaca0\uc2b5\ub2c8\ub2e4."
-    )
+    parameter, re-asked for scope the mission already records, or
+    asserted an ungrounded mission/promotion/production state. Never
+    claims an action was taken that was not.
+
+    fix/gaon-mission-continuation-grounding-integrity: delegates to
+    ``gaon.runtime.gaon_agent.gap_analysis.diagnose_gap`` - the SAME
+    authoritative-mission-truth renderer "\ubd80\uc871\ud55c \ubd80\ubd84\uc744 \ucc44\uc6cc\uc8fc\uc138\uc694" already
+    uses (states current scope, the real BLOCKED reason and next step, or
+    the awaiting-approval/no-gap/no-mission truth) - rather than a second,
+    separately-worded "safe reply" that could drift from it. A local
+    import avoids a module-load-order dependency between the two."""
+    from gaon.runtime.gaon_agent.gap_analysis import diagnose_gap
+
+    return diagnose_gap(mission).text
+
+
+def ground_provider_user_reply(
+    text: str, mission: "ResearchMission | None"
+) -> tuple[str, str | None]:
+    """The ONE shared deterministic safety/grounding pass every user-
+    facing provider-generated reply must go through - whether the
+    provider returned raw free text or executed a tool call first.
+
+    fix/gaon-mission-continuation-grounding-integrity: before this,
+    ``LLMConversationBrain`` applied ``mission_state_claim_violations`` /
+    ``contains_internal_identifier_leakage`` / ``requests_low_level_
+    implementation_detail`` only on the no-tool-call raw-text branch;
+    ``_execute_provider_tool_calls`` returned straight past all of them,
+    so a provider reply that happened to invoke a tool (CASE 9: "\ub2e8\ud0c0
+    \uc5f0\uad6c\ud574\uc8fc\uc138\uc694" -> tool_calls=["market_data"]) could still re-ask for a
+    symbol code the mission already has, with nothing catching it. Both
+    call sites now call this exact function so neither path can silently
+    bypass it.
+
+    Returns ``(possibly-replaced text, violation-kind-for-warnings-or-None)``.
+    """
+    claim_violations = mission_state_claim_violations(text, mission)
+    if claim_violations:
+        return safe_capability_reply(mission), f"ungrounded_state_claim={','.join(claim_violations)}"
+    if contains_internal_identifier_leakage(text) or requests_low_level_implementation_detail(text):
+        return safe_capability_reply(mission), "internal_leakage_or_parameter_burden"
+    if requests_known_mission_context(text, mission):
+        return safe_capability_reply(mission), "known_context_reask"
+    return text, None
 
 
 def grounded_system_policy() -> str:
