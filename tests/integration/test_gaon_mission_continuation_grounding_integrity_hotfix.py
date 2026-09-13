@@ -181,6 +181,23 @@ class _ToolThenTextProvider:
         return AssistantProviderResponse(text="", provider_name="fake", route="provider", tool_calls=self._tool_calls)
 
 
+class _NeverCalledProvider:
+    """Fails the test if the assistant provider is ever invoked - used to
+    prove a request is fully handled by a real deterministic tool route
+    (e.g. ``_try_authoritative_research_tool``) without ever reaching the
+    LLM/grounding-gate layer at all."""
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities("fake", "fake-never-called", False, False, 500)
+
+    def health(self) -> ProviderHealth:
+        return ProviderHealth("fake", True)
+
+    def respond(self, request) -> AssistantProviderResponse:
+        raise AssertionError("assistant provider must not be called for this request")
+
+
 class ProviderReplySharedGroundingGateTests(unittest.TestCase):
     """Mission seeded directly on the request's own session - no cross-
     transport fallback needed to isolate the grounding-gate behaviour
@@ -356,6 +373,106 @@ class Case6KnownContextReaskCoverageGapTests(unittest.TestCase):
         reply = "알림을 텔레그램과 이메일 중 어디로 보내드릴까요?"
         response = self._respond(reply, user_text="알림 설정을 바꾸고 싶어요")
         self.assertEqual(response.text, reply)
+
+
+# ===========================================================================
+# H. CASE D residual gap (#220 follow-up) - the "symbol" known-context
+# category only had 종목-worded re-ask markers; a real provider re-asking
+# with 심볼 (the English loanword) instead slipped through unchanged.
+# ===========================================================================
+class Case9SymbolReaskCoverageGapTests(unittest.TestCase):
+    """Regression for a production audit finding on "단타 연구해주세요" against
+    the durable KR/KOSPI+KOSDAQ/short_term_daytrade market-wide mission: the
+    real provider's tool-call-branch reply asked the user to supply a
+    specific stock 심볼 even though a market-wide mission never needs one -
+    ``_mission_known_context_categories`` already marks "symbol" as known
+    for a MARKET_WIDE mission, but every existing marker in that category
+    used 종목, never 심볼, so ``requests_known_mission_context`` missed it.
+    See the 심볼-worded marker additions in ``gaon.runtime.research_grounding``
+    (comment: "CASE D residual gap"). Mirrors
+    ``Case6KnownContextReaskCoverageGapTests`` rather than reusing it, so
+    this fix's regressions stay isolated and readable on their own."""
+
+    SESSION_ID = "web:case9-symbol-residual-gap-session"
+
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
+        migrate(self.connection)
+        self.repository = SQLiteConversationRepository(self.connection)
+        self.executor = SafeToolExecutor(default_tool_registry(self.connection), SQLiteToolAuditRepository(self.connection))
+        mission = _mission_blocked_with(_STRUCTURAL_REASON)
+        metadata = {"owner": "gaon", "conversation_mvp": {"schema_version": 1, "research_mission": mission.to_json()}}
+        self.repository.upsert_session(
+            LLMConversationSession(self.SESSION_ID, "web-user:owner", "web", "active", SEED_AT, SEED_AT, metadata)
+        )
+
+    def _brain(self, provider) -> LLMConversationBrain:
+        return LLMConversationBrain(
+            GaonRuntimeConfig(assistant_enabled=True, assistant_provider="openai-compatible"),
+            self.repository,
+            tool_executor=self.executor,
+            assistant_provider=provider,
+        )
+
+    def _request(self, text: str) -> LLMConversationRequest:
+        return LLMConversationRequest(self.SESSION_ID, "web-user:owner", "web", text, LATER, f"message:{text}")
+
+    def test_exact_production_reply_is_replaced_with_mission_grounded_reply(self) -> None:
+        # Verbatim reply captured from a production Web E2E audit run
+        # against POST /gaon/chat (message "단타 연구해주세요",
+        # provider="openai-compatible", route="provider_tool_call",
+        # tool_calls=[] - the provider's own attempted tool call did not
+        # execute, so the free-text final reply reached the shared
+        # grounding gate exactly as ``_execute_provider_tool_calls`` always
+        # routes it).
+        production_reply = (
+            "단타 전략 연구를 수행하려면 거래할 종목의 특정 심볼(예: KRX 코드)을 먼저 알려주시면 "
+            "연구를 시작할 수 있습니다. 현재 제공된 정보로는 심볼이 누락되어 실행이 불가능합니다.\n\n"
+            "예를 들어 \"005930\" (삼성전자)와 같은 심볼을 제공해 주시면,\n"
+            "1. 시장 데이터 수집\n2. 기술적/기초적 분석\n3. 단타 전략 백테스트\n4. 리스크 관리 방안 검토\n"
+            "순으로 연구를 진행할 수 있습니다.\n\n필요한 심볼을 알려주세요."
+        )
+        provider = _ToolThenTextProvider((AssistantToolCall("call-1", "runtime_status", {}),), production_reply)
+        response = self._brain(provider).respond(self._request("단타 연구해주세요"))
+        self.assertEqual(response.route, "provider_tool_call")
+        self.assertNotIn("필요한 심볼", response.text)
+        self.assertNotIn("심볼이 누락", response.text)
+        self.assertIn("단타", response.text)
+
+    def test_paraphrase_symbol_missing_is_replaced_on_the_raw_text_branch(self) -> None:
+        # Same marker gap, no-tool-call free-text branch - the shared gate
+        # must catch it identically on both branches.
+        provider = _FixedTextProvider("심볼이 누락되어 있어 지금은 실행할 수 없습니다. 심볼을 제공해 주세요.")
+        response = self._brain(provider).respond(self._request("단타 연구해주세요"))
+        self.assertEqual(response.route, "provider")
+        self.assertNotIn("심볼이 누락", response.text)
+        self.assertIn("단타", response.text)
+
+    def test_false_positive_symbol_mentioned_without_asking_passes_through(self) -> None:
+        # No false positives: a reply that merely MENTIONS symbols (never
+        # asks the user to supply one) must reach the user unchanged.
+        reply = "여러 심볼의 시세 데이터를 결합해 시장 폭 지표를 계산에 활용하고 있습니다."
+        provider = _FixedTextProvider(reply)
+        response = self._brain(provider).respond(self._request("단타 연구해주세요"))
+        self.assertEqual(response.text, reply)
+
+    def test_explicit_new_single_symbol_request_is_not_forced_onto_the_marketwide_mission(self) -> None:
+        # A legitimate NEW single-symbol request ("삼성전자 전략을 처음부터
+        # 다시 연구해줘") names its own subject and an explicit execution
+        # verb - ``_try_authoritative_research_tool`` (route
+        # ``tool_read_only_authoritative``) resolves "삼성전자" to its own
+        # symbol (005930) and runs the real single-symbol tool directly,
+        # entirely bypassing the provider/grounding-gate path this fix
+        # touches. A market-wide durable mission existing for the same
+        # owner must never redirect or block this - it must neither
+        # reach the provider (this test's provider raises if called) nor
+        # get rewritten with the market-wide mission's own scope/status.
+        response = self._brain(_NeverCalledProvider()).respond(self._request("삼성전자 전략을 처음부터 다시 연구해줘"))
+        self.assertEqual(response.route, "tool_read_only_authoritative")
+        self.assertIn("005930", response.text)
+        self.assertNotIn("KOSPI+KOSDAQ", response.text)
+        self.assertNotIn("promotion-ready", response.text)
 
 
 class MultiIntentDurableMissionGroundingTests(_DurableOwnerMissionHarness):
