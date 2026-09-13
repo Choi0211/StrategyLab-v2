@@ -469,7 +469,11 @@ class Case9SymbolReaskCoverageGapTests(unittest.TestCase):
         # reach the provider (this test's provider raises if called) nor
         # get rewritten with the market-wide mission's own scope/status.
         response = self._brain(_NeverCalledProvider()).respond(self._request("삼성전자 전략을 처음부터 다시 연구해줘"))
-        self.assertEqual(response.route, "tool_read_only_authoritative")
+        self.assertEqual(
+            response.route,
+            "tool_read_only_authoritative",
+            msg=f"DIAGNOSTIC text={response.text!r} warnings={response.warnings!r} references={response.references!r}",
+        )
         self.assertIn("005930", response.text)
         self.assertNotIn("KOSPI+KOSDAQ", response.text)
         self.assertNotIn("promotion-ready", response.text)
