@@ -272,6 +272,92 @@ class ProviderReplySharedGroundingGateTests(unittest.TestCase):
 # autonomous-learning "no context" dead end, combined with the Defect A
 # reactivation-policy fix (both apply on the SAME real production phrase).
 # ===========================================================================
+class Case6KnownContextReaskCoverageGapTests(unittest.TestCase):
+    """Regression for a residual CASE 6 ("방법을 찾아주세요") gap found in a
+    post-#219 production E2E verification: the durable mission already
+    records KR/KOSPI+KOSDAQ/short_term_daytrade context, but the provider's
+    generic re-ask used 찾다/방향/무엇을 phrasing (never 연구/전략/분야), so it
+    passed straight through ``requests_known_mission_context``. See the
+    ``research_target`` marker additions in
+    ``gaon.runtime.research_grounding`` (comment: "CASE 6 residual gap").
+
+    Mirrors ``ProviderReplySharedGroundingGateTests`` above rather than
+    reusing it, so this fix's regressions stay isolated and readable on
+    their own."""
+
+    SESSION_ID = "web:case6-residual-gap-session"
+
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
+        migrate(self.connection)
+        self.repository = SQLiteConversationRepository(self.connection)
+        self.executor = SafeToolExecutor(default_tool_registry(self.connection), SQLiteToolAuditRepository(self.connection))
+        mission = _mission_blocked_with(_STRUCTURAL_REASON)
+        metadata = {"owner": "gaon", "conversation_mvp": {"schema_version": 1, "research_mission": mission.to_json()}}
+        self.repository.upsert_session(
+            LLMConversationSession(self.SESSION_ID, "web-user:owner", "web", "active", SEED_AT, SEED_AT, metadata)
+        )
+
+    def _brain(self, provider) -> LLMConversationBrain:
+        return LLMConversationBrain(
+            GaonRuntimeConfig(assistant_enabled=True, assistant_provider="openai-compatible"),
+            self.repository,
+            tool_executor=self.executor,
+            assistant_provider=provider,
+        )
+
+    def _respond(self, provider_text: str, *, user_text: str = "방법을 찾아주세요"):
+        provider = _FixedTextProvider(provider_text)
+        request = LLMConversationRequest(self.SESSION_ID, "web-user:owner", "web", user_text, LATER, f"message:{user_text}")
+        return self._brain(provider).respond(request)
+
+    def test_exact_production_reply_is_replaced_with_mission_grounded_reply(self) -> None:
+        # Verbatim reply read from the production conversation_messages
+        # table for session "web:post219-case6-1789232662" (message_id
+        # "conversation-assistant:7cbae10f41e24a8582d84003da061420",
+        # 2026-09-12T17:04:22Z) - the exact text that leaked through in the
+        # post-#219 production E2E run.
+        production_reply = (
+            "방법을 찾고자 하시는 분야나 구체적인 내용을 알려주시면, 제가 도움을 드릴 수 있습니다. "
+            "예를 들어, 특정 시장 분석 방법, 전략 개발 방법, 데이터 검색 방법 등에 대해 궁금하신 부분이 "
+            "있으신가요? 추가 정보를 제공해주시면 관련 도구를 활용해 구체적인 답변을 드리겠습니다."
+        )
+        response = self._respond(production_reply)
+        self.assertEqual(response.route, "provider")
+        self.assertNotIn("찾고자 하시는", response.text)
+        self.assertIn("단타", response.text)
+
+    def test_paraphrase_which_direction_to_search_is_replaced(self) -> None:
+        response = self._respond("어떤 방향으로 찾을까요? 조금 더 구체적으로 알려주시면 진행하겠습니다.")
+        self.assertNotIn("방향으로 찾", response.text)
+        self.assertIn("단타", response.text)
+
+    def test_paraphrase_what_are_you_looking_for_is_replaced(self) -> None:
+        response = self._respond("무엇을 찾는 건가요? 알려주시면 관련 도구로 도와드리겠습니다.")
+        self.assertNotIn("무엇을 찾는", response.text)
+        self.assertIn("단타", response.text)
+
+    def test_false_positive_timeframe_question_not_in_mission_passes_through(self) -> None:
+        # The mission has no recorded timeframe/candle-interval - a
+        # genuine clarification for it must reach the user unchanged.
+        reply = "정확히 어떤 시간봉(분봉/일봉)을 기준으로 연구할지 알려주시면 더 정확히 도와드릴 수 있습니다."
+        response = self._respond(reply)
+        self.assertEqual(response.text, reply)
+
+    def test_false_positive_new_required_constraint_question_passes_through(self) -> None:
+        # A genuinely missing constraint (risk limit) - never recorded on
+        # the mission - must still be askable.
+        reply = "혹시 하루 최대 손실 한도를 알려주시면 그 기준에 맞춰 연구를 진행하겠습니다."
+        response = self._respond(reply)
+        self.assertEqual(response.text, reply)
+
+    def test_false_positive_general_non_research_clarification_passes_through(self) -> None:
+        reply = "알림을 텔레그램과 이메일 중 어디로 보내드릴까요?"
+        response = self._respond(reply, user_text="알림 설정을 바꾸고 싶어요")
+        self.assertEqual(response.text, reply)
+
+
 class MultiIntentDurableMissionGroundingTests(_DurableOwnerMissionHarness):
     _PHRASE = "현재 연구 상태 알려주고 부족한 자료도 인터넷에서 찾아서 계속 연구해줘"
 
