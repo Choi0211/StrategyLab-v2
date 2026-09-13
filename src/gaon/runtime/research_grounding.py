@@ -158,6 +158,19 @@ _KNOWN_CONTEXT_REASK_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "symbol": (
         "\uc885\ubaa9 \ucf54\ub4dc", "\uc5b4\ub5a4 \uc885\ubaa9", "\uc885\ubaa9\uc744 \uc54c\ub824", "\uc885\ubaa9\uba85\uc744",
+        # production hotfix (#220 follow-up, CASE D residual gap): a
+        # market-wide mission's own "symbol" category (see
+        # ``_mission_known_context_categories`` - set when
+        # ``universe_scope is MARKET_WIDE``) only ever had \uc885\ubaa9-worded
+        # markers, but the real provider re-asked using \uc2ec\ubcfc (the English
+        # loanword) instead - exact production repro: "\uac70\ub798\ud560 \uc885\ubaa9\uc758
+        # \ud2b9\uc815 \uc2ec\ubcfc(\uc608: KRX \ucf54\ub4dc)\uc744 \uba3c\uc800 \uc54c\ub824\uc8fc\uc2dc\uba74 ... \ud544\uc694\ud55c \uc2ec\ubcfc\uc744
+        # \uc54c\ub824\uc8fc\uc138\uc694." Never caught \uc885\ubaa9-only markers above. These
+        # fragments generalize that same "asking for a specific symbol"
+        # intent (never the literal full sentence) - a market-wide mission
+        # never legitimately needs one, so this is never a false positive
+        # for this category.
+        "\uc2ec\ubcfc\uc744 \uc54c\ub824", "\uc2ec\ubcfc\uc774 \ub204\ub77d", "\ud544\uc694\ud55c \uc2ec\ubcfc", "\uc2ec\ubcfc\uc744 \uc81c\uacf5",
     ),
     # production hotfix (#219 follow-up, CASE 6 residual gap): a generic-
     # "what are you trying to find" re-ask uses \ucc3e\ub2e4/\ubc29\ud5a5/\ubb34\uc5c7\uc744
