@@ -159,8 +159,19 @@ _KNOWN_CONTEXT_REASK_MARKERS: dict[str, tuple[str, ...]] = {
     "symbol": (
         "\uc885\ubaa9 \ucf54\ub4dc", "\uc5b4\ub5a4 \uc885\ubaa9", "\uc885\ubaa9\uc744 \uc54c\ub824", "\uc885\ubaa9\uba85\uc744",
     ),
+    # production hotfix (#219 follow-up, CASE 6 residual gap): a generic-
+    # "what are you trying to find" re-ask uses \ucc3e\ub2e4/\ubc29\ud5a5/\ubb34\uc5c7\uc744
+    # phrasing instead of \uc5f0\uad6c/\uc804\ub7b5/\ubd84\uc57c, so it fell through every
+    # existing marker (exact production repro: "\ubc29\ubc95\uc744 \ucc3e\uace0\uc790 \ud558\uc2dc\ub294
+    # \ubd84\uc57c\ub098 \uad6c\uccb4\uc801\uc778 \ub0b4\uc6a9\uc744 \uc54c\ub824\uc8fc\uc2dc\uba74..."). These three fragments
+    # generalize that same "asking what to find/research" intent (never the
+    # literal full sentence) and stay under ``research_target`` - the
+    # existing umbrella category already gated on the mission actually
+    # having a market or strategy_family, so a genuinely-missing new
+    # constraint (timeframe, risk limit, etc.) is never blocked by these.
     "research_target": (
         "\uc5f0\uad6c \ub300\uc0c1\uc744 \uc54c\ub824", "\ubb34\uc5c7\uc744 \uc5f0\uad6c", "\uc5b4\ub5a4 \uac83\uc744 \uc5f0\uad6c", "\uc5b4\ub5a4 \ubd84\uc57c",
+        "\ubb34\uc5c7\uc744 \ucc3e", "\ubc29\ud5a5\uc73c\ub85c \ucc3e", "\ucc3e\uace0\uc790 \ud558\uc2dc\ub294",
     ),
 }
 
