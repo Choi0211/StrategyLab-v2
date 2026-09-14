@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 import hashlib
 import io
 import json
@@ -381,6 +382,129 @@ def is_market_research_request(text: str) -> bool:
             "backtest",
         ),
     )
+
+
+class GaonMarketContext(str, Enum):
+    """Gaon conversation-level market context - distinct from, but built
+    entirely on top of, ``MarketScope.market`` (KR/US/MULTI/GLOBAL/...)
+    above. Web and Telegram both resolve this SAME context through the ONE
+    function below (``resolve_gaon_market_context``), so a research
+    mission / candidate / conversation context can never silently cross
+    from one market into another."""
+
+    KR_STOCK = "KR_STOCK"
+    US_STOCK = "US_STOCK"
+    GLOBAL_STOCK = "GLOBAL_STOCK"
+    BINANCE_CRYPTO = "BINANCE_CRYPTO"
+
+
+# Binance/crypto has no MarketScope branch above (KISMasterUniverseProvider's
+# exchange masters do not cover it, and it must not gain one here either -
+# gaon.adapters.binance already owns the actual read-only Binance state/
+# research reading; this module only needs to RECOGNIZE that a turn is
+# about Binance, never to re-implement research for it). This is a narrow,
+# explicit keyword gate, the same style precedent as
+# gaon.cognitive.presentation.binance_snapshot_reply's own crypto gate.
+_BINANCE_CRYPTO_TERMS: tuple[str, ...] = (
+    "바이낸스",
+    "코인",
+    "암호화폐",
+    "가상화폐",
+    "비트코인",
+    "이더리움",
+    "binance",
+    "crypto",
+    "cryptocurrency",
+    "bitcoin",
+    "ethereum",
+    "btcusdt",
+    "ethusdt",
+)
+
+_CRYPTO_PAIR_RE = re.compile(r"\b[A-Z0-9]{2,10}USDT\b")
+
+
+def _has_binance_crypto_signal(text: str) -> bool:
+    if _has_any(_norm(text), _BINANCE_CRYPTO_TERMS):
+        return True
+    return bool(_CRYPTO_PAIR_RE.search(text.upper()))
+
+
+def _has_kr_stock_symbol_signal(text: str) -> bool:
+    if re.search(r"(?<!\d)\d{6}(?!\d)", text):
+        return True
+    # Reuses the SAME known-company-name alias map extract_or_update_mission
+    # already trusts (gaon.knowledge.research_mission), instead of a second,
+    # parallel "which company is this" list - lazy import avoids a
+    # module-load-time cycle (research_mission itself lazily imports this
+    # module for the same reason).
+    from gaon.knowledge.research_mission import _KNOWN_KR_SYMBOL_ALIASES
+
+    normalized = _norm(text)
+    return any(alias in normalized for alias in _KNOWN_KR_SYMBOL_ALIASES)
+
+
+# A generic "any bare uppercase token" regex (mirroring
+# extract_market_symbols' own US ticker pattern) is deliberately NOT used
+# here as a market-classification SIGNAL (unlike extract_market_symbols,
+# which only ever runs after a US scope is already confirmed by a real
+# keyword, so a stray match there is harmless): this codebase's own
+# Korean/English-mixed research vocabulary is full of short bare-uppercase
+# tokens that are not tickers at all - "OOS" (out-of-sample), a single
+# candidate label like "후보 A", "MDD", "KPI" - and misreading any of them
+# as a US ticker would wrongly resolve/guess a market. A small, explicit
+# well-known-ticker allowlist is the "안정적으로 판별" (stable
+# classification) the four-market policy requires; extending it is safe
+# and additive.
+_KNOWN_US_TICKER_ALIASES: frozenset[str] = frozenset(
+    {
+        "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "TSLA", "META", "NVDA",
+        "NFLX", "AMD", "INTC", "IBM", "BA", "JPM", "DIS",
+    }
+)
+
+
+def _has_us_stock_symbol_signal(text: str) -> bool:
+    tokens = re.findall(r"(?<![A-Za-z0-9])([A-Z]{1,5})(?![A-Za-z0-9])", text)
+    return any(token in _KNOWN_US_TICKER_ALIASES for token in tokens)
+
+
+def resolve_gaon_market_context(text: str) -> "GaonMarketContext | None":
+    """Classify one conversation turn into exactly one of
+    ``BINANCE_CRYPTO`` / ``KR_STOCK`` / ``US_STOCK`` / ``GLOBAL_STOCK`` -
+    reusing ``resolve_market_scope`` in full for the KR/US/GLOBAL branches
+    (no duplicate market-keyword engine) and adding only the Binance/
+    crypto keyword gate that resolver does not cover.
+
+    Returns ``None`` when the text is empty, names no recognizable market,
+    or names signals for MORE THAN ONE market at once (e.g. both a KR and
+    a crypto term) - callers must never guess in either case, matching the
+    same fail-closed contract ``resolve_market_scope`` already uses for an
+    unrecognized market."""
+    if not text or not text.strip():
+        return None
+
+    has_crypto = _has_binance_crypto_signal(text)
+
+    scope = resolve_market_scope(text)
+    has_kr = (scope is not None and scope.market == "KR") or (
+        scope is None and _has_kr_stock_symbol_signal(text)
+    )
+    has_us = (scope is not None and scope.market == "US") or (
+        scope is None and not has_kr and _has_us_stock_symbol_signal(text)
+    )
+    has_global = scope is not None and scope.market in ("GLOBAL", "MULTI")
+
+    if sum((has_crypto, has_kr, has_us, has_global)) != 1:
+        return None
+
+    if has_crypto:
+        return GaonMarketContext.BINANCE_CRYPTO
+    if has_global:
+        return GaonMarketContext.GLOBAL_STOCK
+    if has_kr:
+        return GaonMarketContext.KR_STOCK
+    return GaonMarketContext.US_STOCK
 
 
 def extract_market_symbols(text: str, scope: MarketScope | None) -> tuple[str, ...]:

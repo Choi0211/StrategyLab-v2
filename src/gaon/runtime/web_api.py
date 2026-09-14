@@ -77,8 +77,10 @@ from gaon.runtime.llm_conversation import (
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
 from gaon.runtime.research_failures import classify_exception, warning_for_failure
+from gaon.control.strategy_console import StrategyConsoleReadModel
 from gaon.runtime.sqlite_lock import DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS
 from gaon.runtime.storage import RuntimeStateStore
+from gaon.runtime.strategy_version_repository import StrategyVersionSQLiteRepository
 
 _CANDIDATE_DETAIL_PATH = re.compile(r"^/gaon/research/candidates/(?P<candidate_id>[^/]+)$")
 
@@ -180,6 +182,37 @@ class GaonWebChatAdapter:
         )
         durable_mission, _ambiguous = self._brain._resolve_durable_owner_mission(request)
         return durable_mission
+
+    def strategy_version_status(self, family_id: str) -> Mapping[str, object]:
+        """Read-only: the canonical ACTIVE/PREVIOUS/APPLY_READY/RETIRED
+        strategy-version state for ``family_id``, from the SAME
+        ``StrategyVersionRegistry``/``StrategyConsoleReadModel`` read-model
+        (``gaon.control.strategy_version``/``gaon.control.strategy_console``)
+        the (currently web-local-only) strategy console is designed
+        against - not a second read path. ``available_for_rollback`` is
+        computed from the registry's OWN recorded ``previous`` versions
+        (never a backup-file-existence guess) - see
+        ``docs/architecture/GaonStrategyRollbackContract.md`` for the full
+        contract this replaces (file-existence-only ``backup_status``).
+        Never writes anything - see that same doc for why a rollback
+        ACTION is intentionally not exposed here yet."""
+        registry = StrategyVersionSQLiteRepository(self._repository._connection).get(family_id)
+        view = StrategyConsoleReadModel(registry).render()
+        return {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "family_id": family_id,
+            "active": view["active"],
+            "apply_ready": view["apply_ready"],
+            "previous": view["previous"],
+            "retired": view["retired"],
+            "actions": view["actions"],
+            "available_for_rollback": len(view["previous"]) > 0,
+            "strategy_mutated": False,
+            "order_executed": False,
+            "champion_promoted": False,
+            "live_activated": False,
+            "approval_bypassed": False,
+        }
 
     def list_conversations(self, *, user_ref: str, include_archived: bool = True) -> tuple:
         return list_conversations(self._repository._connection, user_ref=f"web-user:{user_ref}", include_archived=include_archived)
@@ -322,6 +355,7 @@ def dispatch_request(
             "research_mission": "/gaon/research/mission",
             "pending_approvals": "/gaon/research/pending-approvals",
             "storage_status": "/gaon/storage/status",
+            "strategy_version_status": "/gaon/strategy/version_status",
             "strategy_mutated": False,
             "order_executed": False,
             "champion_promoted": False,
@@ -359,6 +393,8 @@ def dispatch_request(
         return _handle_candidate_detail(adapter, query, detail_match.group("candidate_id"))
     if method == "GET" and route_path == "/gaon/storage/status":
         return _handle_storage_status()
+    if method == "GET" and route_path == "/gaon/strategy/version_status":
+        return _handle_strategy_version_status(adapter, query)
     if method == "GET" and route_path == "/gaon/chat/conversations":
         return _handle_conversations_list(adapter, query)
     if method == "GET" and route_path == "/gaon/chat/messages":
@@ -505,6 +541,20 @@ def _user_ref_from_query(query: Mapping[str, list[str]]) -> str | None:
     if not values or not values[0].strip():
         return None
     return values[0].strip()
+
+
+def _family_id_from_query(query: Mapping[str, list[str]]) -> str | None:
+    values = query.get("family_id")
+    if not values or not values[0].strip():
+        return None
+    return values[0].strip()
+
+
+def _handle_strategy_version_status(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    family_id = _family_id_from_query(query)
+    if family_id is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
+    return 200, adapter.strategy_version_status(family_id)
 
 
 def _mission_payload(mission: ResearchMission | None) -> Mapping[str, object]:

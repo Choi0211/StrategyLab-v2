@@ -187,8 +187,8 @@ class AutonomousResearchCompletionAcceptanceTests(unittest.TestCase):
         self.assertIn("hypothesis_summary", matching[0])
         self.assertIn("breakout_lookback", matching[0]["hypothesis_summary"])
 
-    def test_schema_version_is_42(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 42)
+    def test_schema_version_is_43(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 43)
 
 
 if __name__ == "__main__":

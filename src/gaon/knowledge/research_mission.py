@@ -1292,12 +1292,79 @@ def _mission_active_candidate_engine_supported(mission: ResearchMission) -> bool
         return False
 
 
-def is_mission_compatible_with_request(mission: ResearchMission, text: str) -> bool:
+_MISSION_MARKET_TO_GAON_CONTEXT: Mapping[str, str] = {
+    "KR": "KR_STOCK",
+    "US": "US_STOCK",
+    "GLOBAL": "GLOBAL_STOCK",
+    "MULTI": "GLOBAL_STOCK",
+}
+
+
+def is_mission_market_compatible(
+    mission: ResearchMission,
+    text: str,
+    *,
+    market_context: "object | None" = None,
+) -> bool:
+    """Narrow, MARKET-ONLY compatibility check - deliberately does not
+    consider strategy_family (see ``is_mission_compatible_with_request``,
+    which composes this with the family check for owner-mission lookup;
+    a bare market check is also needed on its own for the SAME-session
+    guard in ``LLMConversationBrain``, where a strategy-family pivot
+    within one mission is legitimate - feature/conversation-paradigm-
+    family-routing (A9) - and must not be treated as an incompatibility).
+
+    ``market_context`` (a ``gaon.research.global_market.GaonMarketContext``
+    or ``None``) is the caller's EFFECTIVE Gaon market context for this
+    turn - explicit-in-``text`` if named, else the durable stored context
+    (see ``gaon.runtime.gaon_market_context``). ``market_context=None``
+    (the default) always returns True: a mission belongs to exactly one
+    Gaon market context (today, in production, always KR_STOCK - see
+    ResearchMission.market's own KR-only default); if this turn's
+    effective market context resolves to a DIFFERENT context than the
+    mission's own market, the mission is never compatible - this is the
+    fail-closed guard that keeps a Binance/US/global-scoped follow-up from
+    ever being answered from an unrelated KR ResearchMission's candidates/
+    evidence, and symmetrically protects a non-KR context from a KR
+    mission. A mission market with no known mapping (e.g. the legacy JP/
+    HK/CN scope values no production mission ever sets) is always
+    compatible, matching this predicate's pre-existing behavior."""
+    if market_context is None:
+        return True
+    from gaon.research.global_market import resolve_gaon_market_context
+
+    effective_context = resolve_gaon_market_context(text) or market_context
+    mission_context = _MISSION_MARKET_TO_GAON_CONTEXT.get(mission.market)
+    if (
+        effective_context is not None
+        and mission_context is not None
+        and getattr(effective_context, "value", effective_context) != mission_context
+    ):
+        return False
+    return True
+
+
+def is_mission_compatible_with_request(
+    mission: ResearchMission,
+    text: str,
+    *,
+    market_context: "object | None" = None,
+) -> bool:
+    """``market_context`` is optional and defaults to None (this
+    predicate's pre-existing text-only behavior is unchanged for any
+    caller that does not pass it) - but every cross-transport/cross-
+    session owner-mission lookup MUST pass it (see
+    ``is_mission_market_compatible``), since that is the one place a
+    mission from a DIFFERENT market context could otherwise be silently
+    handed back as "compatible": a durable KR mission answering a
+    Binance/US/global-scoped follow-up, or vice versa."""
     requested_family = _extract_strategy_family(text)
     if requested_family is not None and mission.strategy_family is not None and requested_family != mission.strategy_family:
         return False
     kr_market_wide, _ = _kr_market_wide_requested(text)
     if kr_market_wide and mission.market != "KR":
+        return False
+    if not is_mission_market_compatible(mission, text, market_context=market_context):
         return False
     # fix/engine-integrity-known-gap-hardening: never resolve a durable
     # owner mission as a continuation target when its active candidate's
