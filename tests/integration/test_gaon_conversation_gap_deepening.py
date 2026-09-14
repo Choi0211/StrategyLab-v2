@@ -209,7 +209,8 @@ class GaonConversationGapDeepeningTests(unittest.TestCase):
         self.assertEqual(payload["route"], "conversation_mission_blocked_autonomous_direction")
         self.assertNotIn("무엇이 부족", payload["text"])
         self.assertNotIn("strategy_hypothesis_space_exhausted", payload["text"])
-        self.assertIn("지금 안전하게 자동으로 실행할 수 있는 추가 조치는 없으며", payload["text"])
+        self.assertIn("가온이 자동으로 선택한 다음 연구 방향", payload["text"])
+        self.assertIn("종목/기간/전략 유형을 다시 고를 필요는 없습니다", payload["text"])
         _assert_no_internal_leakage(self, payload["text"], "CASE3 blocked")
 
     # ================================================================
