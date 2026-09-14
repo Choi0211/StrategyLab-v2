@@ -195,13 +195,22 @@ class GaonConversationGapDeepeningTests(unittest.TestCase):
         self.assertNotIn("무엇이 부족", payload["text"])
         self.assertIn("연구를 시작", payload["text"])
 
+    # feature/gaon-autonomous-blocked-research-next-step: this seeded
+    # mission is BLOCKED on the structural strategy_hypothesis_space_
+    # exhausted reason with no candidate history, so bounded stagnation
+    # recovery finds nothing eligible and "부족한 부분을 채워주세요" is
+    # routed through the same autonomous recovery-or-diagnose path a plain
+    # continuation message uses, landing on the evidence-grounded
+    # research-direction diagnosis rather than the older static
+    # gap_analysis text.
     def test_case3_gap_fill_with_blocked_mission_translates_blocker_into_a_need(self) -> None:
         self._seed_mission(blocked=True)
         payload = self._send("부족한 부분을 채워주세요")
-        self.assertEqual(payload["route"], "conversation_gap_analysis")
+        self.assertEqual(payload["route"], "conversation_mission_blocked_autonomous_direction")
         self.assertNotIn("무엇이 부족", payload["text"])
         self.assertNotIn("strategy_hypothesis_space_exhausted", payload["text"])
-        self.assertIn("다음 단계는 새로운 전략 가설군 또는 추가 데이터/검증 축을 확장하는 것입니다", payload["text"])
+        self.assertIn("가온이 자동으로 선택한 다음 연구 방향", payload["text"])
+        self.assertIn("종목/기간/전략 유형을 다시 고를 필요는 없습니다", payload["text"])
         _assert_no_internal_leakage(self, payload["text"], "CASE3 blocked")
 
     # ================================================================
