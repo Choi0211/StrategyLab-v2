@@ -232,7 +232,8 @@ class GapAnalysisDurableOwnerMissionTests(_DurableOwnerMissionHarness):
         # and a concrete next requirement grounded in the mission's own
         # (here: empty) candidate history, and never re-asks the user to
         # pick a direction.
-        self.assertIn("지금 안전하게 자동으로 실행할 수 있는 추가 조치는 없으며", payload["text"])
+        self.assertIn("가온이 자동으로 선택한 다음 연구 방향", payload["text"])
+        self.assertIn("종목/기간/전략 유형을 다시 고를 필요는 없습니다", payload["text"])
         self.assertNotIn("어떤", payload["text"])
         _assert_no_internal_leakage(self, payload["text"], "CASE3 durable-owner gap")
 

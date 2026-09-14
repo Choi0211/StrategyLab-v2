@@ -23,11 +23,16 @@ tested pieces of machinery, in order:
 1. ``attempt_bounded_stagnation_recovery`` - bounded recovery that reopens a
    STAGNANT candidate that stalled purely on the progress-stall bookkeeping
    threshold (not a genuine dead end). When it succeeds, the mission is
-   already ACTIVE again with a real candidate to continue validating -
-   the caller resumes the EXISTING mission-driven research cycle
-   (``LLMConversationBrain._try_mission_driven_research_cycle``) unchanged,
-   so this is "execute the existing safe research continuation path", not a
-   new one.
+   already ACTIVE again with a real candidate to continue validating - a
+   genuine continuation request (``LLMConversationBrain.
+   _try_mission_driven_research_cycle`` with ``read_only=False``, its
+   default) resumes the EXISTING mission-driven research cycle unchanged
+   with it, so that is "execute the existing safe research continuation
+   path", not a new one. A gap-fill request ("부족한 부분을 채워주세요",
+   ``read_only=True``) reports the same reactivation honestly but never
+   executes the research cycle itself - gap-fill's own contract
+   (``gaon.runtime.gaon_agent.gap_analysis``) is to only ever read and
+   answer from already-available state.
 2. The Hotfix #168 FAILURE ANALYSIS -> RESEARCH PRIORITY -> RESEARCH
    DIRECTION planning stage (``analyze_mission_failure`` /
    ``propose_research_priority`` / ``plan_research_direction`` /
@@ -134,25 +139,55 @@ class StructuralBlockerContinuationOutcome:
     message: str | None
 
 
-def _plan_and_render(mission: ResearchMission, *, session_id: str, now: str):
+def _plan_and_render(mission: ResearchMission, *, session_id: str, now: str, has_recoverable_candidate: bool = False):
     """Shared FAILURE ANALYSIS -> RESEARCH PRIORITY -> RESEARCH DIRECTION
     computation (identical inputs/outputs to the background autonomous-
     research tick's own planning stage - Hotfix #168), plus the Korean
     rendering of its result. Returns ``(message, analysis, direction)`` so
     a caller with a real database connection can persist
-    ``analysis``/``direction`` afterward without recomputing them."""
+    ``analysis``/``direction`` afterward without recomputing them.
+
+    ``propose_research_priority`` is given the SAME real, env-derived
+    Binance research context (``_binance_config_from_env``, lazily
+    imported to avoid ``autonomous_research_runtime``'s existing import
+    cycle back into this package) the background tick passes it - never a
+    hardcoded ``None`` - so a live-conversation diagnosis never fabricates
+    a "Binance evidence incomplete" flag for a mission state the
+    background tick would report differently once it runs.
+
+    ``has_recoverable_candidate`` must be the caller's own already-computed
+    ``attempt_bounded_stagnation_recovery`` result (never recomputed here)
+    so the rendered claim of "no safe automatic action exists" stays
+    truthful for a caller (``diagnose_structural_blocker``) that checked
+    recoverability without itself being able to apply it.
+    """
+    from gaon.runtime.autonomous_research_runtime import _binance_config_from_env
+
     analysis = analyze_mission_failure(mission, session_ref=session_id, now=now)
-    priority = propose_research_priority(mission, None)
+    priority = propose_research_priority(mission, _binance_config_from_env())
     has_untried_family = next_untried_family(candidate_records(mission)) is not None
     direction = plan_research_direction(
         analysis,
         priority,
         has_untried_family=has_untried_family,
-        has_recoverable_candidate=False,
+        has_recoverable_candidate=has_recoverable_candidate,
         now=now,
     )
     failure_label = _FAILURE_CLASS_LABEL_KO.get(analysis.dominant_failure_class, "미분류 사유")
-    requirement = _EVIDENCE_REQUIREMENT_KO.get(analysis.dominant_failure_class, "사람의 검토")
+    if has_recoverable_candidate:
+        next_step_line = (
+            "안전하게 자동으로 재개할 수 있는 기존 후보가 확인되었습니다. "
+            "이 텍스트 안전화 경로에서는 실행하지 않지만, 별도의 방향 선택을 다시 요청하지 않고 "
+            "기존 미션의 실행 경로가 이어서 검증할 수 있습니다."
+        )
+    else:
+        requirement = _EVIDENCE_REQUIREMENT_KO.get(analysis.dominant_failure_class, "사람의 검토")
+        next_step_line = (
+            f"가온이 자동으로 선택한 다음 연구 방향은 '{failure_label}' 해소입니다. "
+            f"필요한 증거/조건은 {requirement}입니다. "
+            "이 대화 턴에서는 실제 외부 증거 수집이나 새 전략 가설 생성을 실행하지 않았으며, "
+            "현재 지원되는 안전한 자동 실행 경로가 없는 경우 저장된 ResearchDirection 상태로 대기합니다."
+        )
     lines = [
         "영하님, 자동으로 확인한 결과는 다음과 같습니다.",
         "",
@@ -161,16 +196,17 @@ def _plan_and_render(mission: ResearchMission, *, session_id: str, now: str):
         render_blocked_reason_explanation(mission.blocked_reason),
         "",
         f"기존 후보들의 종료 사유를 분석한 결과 지배적 원인은 '{failure_label}'입니다.",
-        f"지금 안전하게 자동으로 실행할 수 있는 추가 조치는 없으며, 다음 단계로 필요한 것은 {requirement}입니다.",
+        next_step_line,
         "",
-        "이 진단은 읽기 전용으로 자동 기록했을 뿐이며, 전략 config 변경, 후보 승격, 주문 실행, 승인 우회는 "
-        "수행하지 않았습니다. 이 다음은 사람의 확인/승인이 필요한 부분만 남아 있습니다.",
+        "사용자가 종목/기간/전략 유형을 다시 고를 필요는 없습니다. 이 진단은 연구 방향만 자동 기록하며, "
+        "전략 config 변경, 후보 승격, 주문 실행, 승인 우회는 수행하지 않았습니다. "
+        "bounded 전략 문법 확장처럼 현재 자동 연구 capability 밖의 변경이 필요한 경우에만 사람/개발자 검토가 필요합니다.",
     ]
     return "\n".join(lines), analysis, direction
 
 
 def diagnose_structural_blocker(mission: ResearchMission, *, session_id: str, now: str) -> str:
-    """Pure (no persistence, no recovery attempt) rendering of the same
+    """Pure (no persistence, no recovery EXECUTION) rendering of the same
     FAILURE ANALYSIS -> RESEARCH PRIORITY -> RESEARCH DIRECTION planning
     stage as :func:`attempt_structural_blocker_autonomous_continuation`'s
     no-recovery branch. Used directly by
@@ -182,8 +218,20 @@ def diagnose_structural_blocker(mission: ResearchMission, *, session_id: str, no
     row itself - the caller with real connection access
     (``attempt_structural_blocker_autonomous_continuation``) owns
     persistence so there is exactly one write path, not two.
+
+    Still calls the read-only, side-effect-free ``attempt_bounded_
+    stagnation_recovery`` first (lazily imported, same import-cycle reason
+    as ``attempt_structural_blocker_autonomous_continuation``) purely to
+    learn whether a safe recovery candidate exists - never to apply or
+    persist it - so this text-only path never falsely tells the user "no
+    safe automatic action exists" when one genuinely does.
     """
-    message, _analysis, _direction = _plan_and_render(mission, session_id=session_id, now=now)
+    from gaon.runtime.autonomous_research_runtime import attempt_bounded_stagnation_recovery
+
+    _recovered_mission, has_recoverable_candidate = attempt_bounded_stagnation_recovery(mission, now=now)
+    message, _analysis, _direction = _plan_and_render(
+        mission, session_id=session_id, now=now, has_recoverable_candidate=has_recoverable_candidate
+    )
     return message
 
 

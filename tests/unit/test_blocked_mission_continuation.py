@@ -169,7 +169,8 @@ class AttemptStructuralBlockerAutonomousContinuationDiagnosisTests(unittest.Test
         # 시장/전략 스타일로 연구를 시작할지 알려주시면..."); the new
         # diagnosis states what Gaon itself determined instead.
         self.assertNotIn("알려주시면", message)
-        self.assertIn("지금 안전하게 자동으로 실행할 수 있는 추가 조치는 없으며", message)
+        self.assertIn("가온이 자동으로 선택한 다음 연구 방향", message)
+        self.assertIn("종목/기간/전략 유형을 다시 고를 필요는 없습니다", message)
 
     def test_dominant_failure_class_reflects_the_real_candidate_history(self) -> None:
         mission = self._exhausted_mission_with_dominant_class(

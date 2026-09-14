@@ -133,7 +133,10 @@ class StructuralBlockerAutonomousDiagnosisTests(_SeededMissionHarness):
     def test_continuation_reaches_the_autonomous_direction_route(self) -> None:
         payload = self._send("계속 연구해주세요")
         self.assertEqual(payload["route"], "conversation_mission_blocked_autonomous_direction")
-        self.assertIn("지금 안전하게 자동으로 실행할 수 있는 추가 조치는 없으며", payload["text"])
+        self.assertIn("가온이 자동으로 선택한 다음 연구 방향", payload["text"])
+        self.assertIn("종목/기간/전략 유형을 다시 고를 필요는 없습니다", payload["text"])
+        self.assertNotIn("연구를 시작해드릴게요", payload["text"])
+        self.assertNotIn("전략 후보 3개 중", payload["text"])
 
     def test_gap_fill_reaches_the_same_autonomous_direction_route_as_continuation(self) -> None:
         # Both phrasings must converge on the identical diagnosis for the
@@ -145,8 +148,8 @@ class StructuralBlockerAutonomousDiagnosisTests(_SeededMissionHarness):
 
     def test_never_claims_a_privileged_action_was_taken(self) -> None:
         payload = self._send("계속 연구해주세요")
-        self.assertIn("전략 config 변경, 후보 승격, 주문 실행, 승인 우회는", payload["text"])
-        self.assertIn("사람의 확인/승인이 필요한 부분만 남아 있습니다", payload["text"])
+        self.assertIn("전략 config 변경, 후보 승격, 주문 실행, 승인 우회는 수행하지 않았습니다", payload["text"])
+        self.assertIn("현재 자동 연구 capability 밖의 변경이 필요한 경우에만 사람/개발자 검토가 필요합니다", payload["text"])
 
 
 # ===========================================================================
@@ -269,7 +272,7 @@ class ProviderPathAutonomousDiagnosisTests(unittest.TestCase):
         self.assertEqual(response.route, "provider_tool_call")
         self.assertNotIn("종목 코드", response.text)
         self.assertNotIn("strategy_hypothesis_space_exhausted", response.text)
-        self.assertIn("지금 안전하게 자동으로 실행할 수 있는 추가 조치는 없으며", response.text)
+        self.assertIn("가온이 자동으로 선택한 다음 연구 방향", response.text)
         for marker in _NEVER_ASK_USER_TO_CHOOSE_MARKERS:
             self.assertNotIn(marker, response.text)
 
@@ -277,7 +280,7 @@ class ProviderPathAutonomousDiagnosisTests(unittest.TestCase):
         provider = _FixedTextProvider("어떤 분야의 방법을 찾으시는지 알려주세요.")
         response = self._brain(provider).respond(self._request("방법을 찾아주세요"))
         self.assertEqual(response.route, "provider")
-        self.assertIn("지금 안전하게 자동으로 실행할 수 있는 추가 조치는 없으며", response.text)
+        self.assertIn("가온이 자동으로 선택한 다음 연구 방향", response.text)
 
     def test_clean_reply_with_no_violation_still_passes_through_unchanged(self) -> None:
         # No false positive: this feature only ever replaces an ALREADY-

@@ -991,20 +991,25 @@ class LLMConversationBrain:
         resolved mission is structurally BLOCKED on
         ``strategy_hypothesis_space_exhausted``, "부족한 부분을 채워주세요"
         must not stop at the static blocked explanation either - it is
-        routed through the exact same autonomous recovery-or-diagnose path
-        ``_try_mission_driven_research_cycle`` now runs for a plain
-        continuation message, so both phrasings converge on one answer
-        instead of two differently-worded ones. Falls back to the
-        original ``diagnose_gap`` text unchanged whenever that call
-        declines (e.g. no tool executor configured) or the mission is not
-        BLOCKED on this specific structural reason."""
+        routed through the same autonomous recovery-or-diagnose path
+        ``_try_mission_driven_research_cycle`` runs for a plain
+        continuation message (``read_only=True``), so both phrasings
+        converge on the same diagnosis when no recovery candidate exists.
+        Unlike a real continuation request, this call never lets a
+        successful recovery fall through into an actual research cycle -
+        gap-fill only ever reports state, per this method's own read-only
+        contract above; a genuine continuation is still required to
+        execute anything. Falls back to the original ``diagnose_gap`` text
+        unchanged whenever that call declines (e.g. no tool executor
+        configured) or the mission is not BLOCKED on this specific
+        structural reason."""
         if not is_gap_fill_request(request.text):
             return None
         mission = self._mission_for(request.session_id)
         if mission is None:
             mission, _ambiguous = self._resolve_durable_owner_mission(request)
         if mission is not None and is_structural_hypothesis_space_blocker(mission):
-            routed = self._try_mission_driven_research_cycle(request, mission, warnings, references)
+            routed = self._try_mission_driven_research_cycle(request, mission, warnings, references, read_only=True)
             if routed is not None:
                 return routed
         result = diagnose_gap(mission)
@@ -2641,6 +2646,7 @@ class LLMConversationBrain:
         references: tuple[str, ...],
         *,
         preferred_breadth_symbols: tuple[str, ...] = (),
+        read_only: bool = False,
     ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         """Continues an active market-wide / selected-symbols mission with one
         bounded research cycle for its ACTIVE STRATEGY CANDIDATE, instead of
@@ -2656,6 +2662,16 @@ class LLMConversationBrain:
         cycle continues. A hard blocker (provider/data acquisition failure
         across the whole cycle) is recorded explicitly on the mission
         rather than being misread as a negative strategy result.
+
+        ``read_only=True`` (used only by ``_try_gap_analysis``'s "부족한
+        부분을 채워주세요" dispatch) stops immediately after a successful
+        structural-blocker stagnation recovery instead of falling through
+        into the real bounded research cycle below - gap-fill's own
+        contract (see ``gaon.runtime.gaon_agent.gap_analysis``) is to never
+        execute research or mutate the mission beyond that one bounded,
+        already-tested reactivation step; a plain continuation request
+        (``read_only=False``, the default) is unaffected and keeps
+        resuming the real cycle exactly as before.
         """
         if self._tool_executor is None:
             return None
@@ -2678,7 +2694,7 @@ class LLMConversationBrain:
             # (selected-symbol-universe exhaustion, a transient provider/
             # data blocker) is untouched - unchanged below.
             if is_structural_hypothesis_space_blocker(mission):
-                connection = getattr(self._repository, "_connection", None)
+                connection = self._connection()
                 outcome = attempt_structural_blocker_autonomous_continuation(
                     mission, session_id=request.session_id, connection=connection, now=request.received_at
                 )
@@ -2686,6 +2702,29 @@ class LLMConversationBrain:
                     mission = outcome.recovered_mission
                     self._remember_mission(request, mission)
                     warnings = _dedupe((*warnings, "structural_blocker_autonomous_recovery=stagnation_reopen"))
+                    if read_only:
+                        active = get_active_candidate(mission)
+                        candidate_ref = active.candidate_id if active is not None else "알 수 없음"
+                        text = (
+                            f"영하님, 확인해보니 '{candidate_ref}' 후보는 진행 정체 판단 기준(사이클 임계값)에서만 "
+                            "멈춰 있었을 뿐 실제로는 막다른 상황이 아니어서, 검증을 이어갈 수 있는 상태로 되돌렸습니다.\n\n"
+                            f"{mission_status_block(mission)}\n\n"
+                            "실제 연구 사이클은 아직 실행하지 않았습니다. 종목/기간/전략 유형을 다시 고를 필요는 없으며, "
+                            "기존 미션의 다음 실행 기회에서 이 후보의 검증을 이어갈 수 있습니다."
+                        )
+                        return (
+                            text,
+                            "conversation_mission_blocked_autonomous_recovery_reported",
+                            _dedupe(
+                                (
+                                    *warnings,
+                                    "gap-fill read-only; recovery reactivated the mission but no research tool executed",
+                                )
+                            ),
+                            references,
+                            "deterministic",
+                            (),
+                        )
                 else:
                     self._remember_mission(request, mission)
                     return (
