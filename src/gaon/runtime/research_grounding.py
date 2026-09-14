@@ -305,7 +305,32 @@ def safe_capability_reply(mission: "ResearchMission | None") -> str:
     uses (states current scope, the real BLOCKED reason and next step, or
     the awaiting-approval/no-gap/no-mission truth) - rather than a second,
     separately-worded "safe reply" that could drift from it. A local
-    import avoids a module-load-order dependency between the two."""
+    import avoids a module-load-order dependency between the two.
+
+    feature/gaon-autonomous-blocked-research-next-step: when the mission
+    is BLOCKED specifically on the structural ``strategy_hypothesis_space_
+    exhausted`` reason, delegates instead to ``gaon.runtime.gaon_agent.
+    blocked_mission_continuation.diagnose_structural_blocker`` - the same
+    evidence-grounded FAILURE ANALYSIS -> RESEARCH PRIORITY -> RESEARCH
+    DIRECTION diagnosis the live conversational continuation path now
+    runs for this exact reason - instead of the older generic, always-
+    identical ``diagnose_gap`` text. This function only ever replaces an
+    already-generated provider reply's TEXT (there is no tool-execution
+    capability at this layer), so it can only ever state the diagnosed
+    next step, never attempt the bounded stagnation-recovery execution
+    path that call site tries first; ``mission.updated_at`` stands in for
+    ``now`` since nothing here is persisted (unlike that call site, which
+    supplies the real request timestamp and a database connection to
+    record the analysis/direction)."""
+    if mission is not None:
+        from gaon.runtime.gaon_agent.blocked_mission_continuation import (
+            diagnose_structural_blocker,
+            is_structural_hypothesis_space_blocker,
+        )
+
+        if is_structural_hypothesis_space_blocker(mission):
+            return diagnose_structural_blocker(mission, session_id=mission.mission_id, now=mission.updated_at)
+
     from gaon.runtime.gaon_agent.gap_analysis import diagnose_gap
 
     return diagnose_gap(mission).text

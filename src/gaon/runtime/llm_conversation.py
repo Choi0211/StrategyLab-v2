@@ -43,12 +43,14 @@ from gaon.runtime.gaon_agent import (
     GaonTurnRouter,
     ProviderRuntimeMonitor,
     TurnLane,
+    attempt_structural_blocker_autonomous_continuation,
     capability_prompt_summary,
     default_capability_registry,
     diagnose_gap,
     general_conversation_runtime,
     is_connectivity_error,
     is_gap_fill_request,
+    is_structural_hypothesis_space_blocker,
     extract_research_preferences,
     mentions_research_preferences,
     reconcile_with_mission,
@@ -983,12 +985,28 @@ class LLMConversationBrain:
         ``_resolve_durable_owner_mission`` - otherwise a real owner with a
         real (e.g. blocked) mission gets misdiagnosed as having none at
         all. Reuses that existing seam directly; no second/ad-hoc
-        mission lookup."""
+        mission lookup.
+
+        feature/gaon-autonomous-blocked-research-next-step: when the
+        resolved mission is structurally BLOCKED on
+        ``strategy_hypothesis_space_exhausted``, "부족한 부분을 채워주세요"
+        must not stop at the static blocked explanation either - it is
+        routed through the exact same autonomous recovery-or-diagnose path
+        ``_try_mission_driven_research_cycle`` now runs for a plain
+        continuation message, so both phrasings converge on one answer
+        instead of two differently-worded ones. Falls back to the
+        original ``diagnose_gap`` text unchanged whenever that call
+        declines (e.g. no tool executor configured) or the mission is not
+        BLOCKED on this specific structural reason."""
         if not is_gap_fill_request(request.text):
             return None
         mission = self._mission_for(request.session_id)
         if mission is None:
             mission, _ambiguous = self._resolve_durable_owner_mission(request)
+        if mission is not None and is_structural_hypothesis_space_blocker(mission):
+            routed = self._try_mission_driven_research_cycle(request, mission, warnings, references)
+            if routed is not None:
+                return routed
         result = diagnose_gap(mission)
         return (
             result.text,
@@ -2642,9 +2660,51 @@ class LLMConversationBrain:
         if self._tool_executor is None:
             return None
         if mission.status is MissionStatus.BLOCKED:
-            self._remember_mission(request, mission)
-            text = mission_blocked_message(mission)
-            return text, "conversation_mission_blocked", _dedupe((*warnings, "mission blocked; safe explanation only")), references, "deterministic", ()
+            # feature/gaon-autonomous-blocked-research-next-step: a
+            # continuation-shaped message ("단타 연구해주세요", "계속
+            # 연구해주세요") against a mission BLOCKED specifically on the
+            # bounded strategy-hypothesis-space-exhausted structural
+            # reason must not just re-render the same static blocked
+            # explanation forever - Gaon autonomously tries the existing
+            # bounded stagnation-recovery path first (reopening a
+            # candidate that only stalled on the progress-stall bookkeeping
+            # threshold, never a genuine dead end), and only if that finds
+            # nothing runs the same evidence-grounded FAILURE ANALYSIS ->
+            # RESEARCH PRIORITY -> RESEARCH DIRECTION planning the
+            # background autonomous-research tick already performs for
+            # this exact dead end (Hotfix #168/#169), so the reply states a
+            # concrete, capability-grounded next step instead of asking the
+            # user to choose a direction. Every other BLOCKED reason
+            # (selected-symbol-universe exhaustion, a transient provider/
+            # data blocker) is untouched - unchanged below.
+            if is_structural_hypothesis_space_blocker(mission):
+                connection = getattr(self._repository, "_connection", None)
+                outcome = attempt_structural_blocker_autonomous_continuation(
+                    mission, session_id=request.session_id, connection=connection, now=request.received_at
+                )
+                if outcome.recovered_mission is not None:
+                    mission = outcome.recovered_mission
+                    self._remember_mission(request, mission)
+                    warnings = _dedupe((*warnings, "structural_blocker_autonomous_recovery=stagnation_reopen"))
+                else:
+                    self._remember_mission(request, mission)
+                    return (
+                        outcome.message,
+                        "conversation_mission_blocked_autonomous_direction",
+                        _dedupe(
+                            (
+                                *warnings,
+                                "structural blocker; autonomous failure-analysis/research-direction diagnosis; no research tool executed",
+                            )
+                        ),
+                        references,
+                        "deterministic",
+                        (),
+                    )
+            if mission.status is MissionStatus.BLOCKED:
+                self._remember_mission(request, mission)
+                text = mission_blocked_message(mission)
+                return text, "conversation_mission_blocked", _dedupe((*warnings, "mission blocked; safe explanation only")), references, "deterministic", ()
 
         active = get_active_candidate(mission)
         if (

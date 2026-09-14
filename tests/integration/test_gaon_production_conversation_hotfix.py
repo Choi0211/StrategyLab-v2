@@ -203,9 +203,20 @@ class ContextualWhyRoutingTests(_DurableOwnerMissionHarness):
 # owner who has a real (blocked) one.
 # ===========================================================================
 class GapAnalysisDurableOwnerMissionTests(_DurableOwnerMissionHarness):
+    # feature/gaon-autonomous-blocked-research-next-step: this mission is
+    # BLOCKED on the structural strategy_hypothesis_space_exhausted reason
+    # (see _blocked_mission_json), so "부족한 부분을 채워주세요" is now
+    # routed through the same autonomous recovery-or-diagnose path a plain
+    # continuation message uses (LLMConversationBrain.
+    # _try_mission_driven_research_cycle), not the older static
+    # gap_analysis.diagnose_gap text - this fixture mission has no
+    # candidate history at all, so bounded stagnation recovery finds
+    # nothing eligible and the reply falls through to the evidence-grounded
+    # research-direction diagnosis (route
+    # conversation_mission_blocked_autonomous_direction).
     def test_gap_fill_on_fresh_session_finds_the_durable_owner_mission(self) -> None:
         payload = self._send("부족한 부분을 채워주세요")
-        self.assertEqual(payload["route"], "conversation_gap_analysis")
+        self.assertEqual(payload["route"], "conversation_mission_blocked_autonomous_direction")
         self.assertNotIn("현재 진행 중인 연구 Mission이 없습니다", payload["text"])
         self.assertIn("단타", payload["text"])
 
@@ -216,7 +227,13 @@ class GapAnalysisDurableOwnerMissionTests(_DurableOwnerMissionHarness):
     def test_gap_fill_never_leaks_raw_blocker_code(self) -> None:
         payload = self._send("부족한 부분을 채워주세요")
         self.assertNotIn("strategy_hypothesis_space_exhausted", payload["text"])
-        self.assertIn("다음 단계는 새로운 전략 가설군 또는 추가 데이터/검증 축을 확장하는 것입니다", payload["text"])
+        # No longer the generic, always-identical canned sentence - the
+        # reply now states the actually-diagnosed dominant failure class
+        # and a concrete next requirement grounded in the mission's own
+        # (here: empty) candidate history, and never re-asks the user to
+        # pick a direction.
+        self.assertIn("지금 안전하게 자동으로 실행할 수 있는 추가 조치는 없으며", payload["text"])
+        self.assertNotIn("어떤", payload["text"])
         _assert_no_internal_leakage(self, payload["text"], "CASE3 durable-owner gap")
 
     def test_status_then_gap_fill_target_the_identical_mission(self) -> None:

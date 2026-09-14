@@ -12,6 +12,12 @@ See ``docs/architecture/GaonAgentFoundationV2.md`` for the design and
 
 from __future__ import annotations
 
+from gaon.runtime.gaon_agent.blocked_mission_continuation import (
+    StructuralBlockerContinuationOutcome,
+    attempt_structural_blocker_autonomous_continuation,
+    diagnose_structural_blocker,
+    is_structural_hypothesis_space_blocker,
+)
 from gaon.runtime.gaon_agent.capabilities import (
     Capability,
     CapabilityRegistry,
@@ -81,6 +87,10 @@ from gaon.runtime.gaon_agent.turn_router import (
 )
 
 __all__ = [
+    "StructuralBlockerContinuationOutcome",
+    "attempt_structural_blocker_autonomous_continuation",
+    "diagnose_structural_blocker",
+    "is_structural_hypothesis_space_blocker",
     "Capability",
     "CapabilityRegistry",
     "CapabilityState",
