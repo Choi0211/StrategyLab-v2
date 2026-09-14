@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -89,6 +89,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         39: _upgrade_v39_to_v40,
         40: _upgrade_v40_to_v41,
         41: _upgrade_v41_to_v42,
+        42: _upgrade_v42_to_v43,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1492,6 +1493,32 @@ def _upgrade_v41_to_v42(connection: sqlite3.Connection) -> None:
             ON research_hypothesis_execution_lineage(session_ref, created_at);
         CREATE INDEX IF NOT EXISTS idx_research_hypothesis_execution_lineage_candidate
             ON research_hypothesis_execution_lineage(candidate_id);
+    """)
+
+
+def _upgrade_v42_to_v43(connection: sqlite3.Connection) -> None:
+    """feature/gaon-strategy-version-rollback-contract: durable storage for
+    ``gaon.control.strategy_version.StrategyVersionRegistry`` - previously
+    an in-memory-only dataclass with "no production wiring, no deploy" (see
+    its own module docstring). One row per ``family_id``, storing the
+    registry's own ``to_json()``/``from_json()`` round-trip verbatim (the
+    same "one JSON blob column" pattern ``conversation_sessions.
+    metadata_json`` already uses) - no new column mapping for
+    ``spec_rules``/``validation_summary``, which are themselves free-form
+    JSON. This makes the canonical ACTIVE/PREVIOUS/APPLY_READY/RETIRED
+    read-model (``gaon.control.strategy_console.StrategyConsoleReadModel``)
+    durable across process restarts, so ``GET /gaon/strategy/version_status``
+    (``gaon.runtime.web_api``) reports truthful state instead of resetting
+    every time the process restarts. Single additive table, no existing
+    table touched, no write path added here - see
+    ``gaon.runtime.strategy_version_repository`` for the repository this
+    table backs."""
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS strategy_version_registries (
+            family_id TEXT PRIMARY KEY,
+            registry_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
     """)
 
 

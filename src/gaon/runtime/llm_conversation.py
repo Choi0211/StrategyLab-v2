@@ -82,7 +82,8 @@ from gaon.runtime.conversation_integrity import (
     read_only_intent,
     read_only_turn_may_not_mutate_mission,
 )
-from gaon.research.global_market import extract_market_symbols, resolve_market_scope
+from gaon.research.global_market import GaonMarketContext, extract_market_symbols, resolve_gaon_market_context, resolve_market_scope
+from gaon.runtime.gaon_market_context import read_market_context, store_market_context
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest
 from gaon.knowledge.research_mission import (
     MissionStatus,
@@ -104,6 +105,7 @@ from gaon.knowledge.research_mission import (
     is_generic_continuation_request,
     is_mission_candidate_read_request,
     is_mission_compatible_with_request,
+    is_mission_market_compatible,
     is_research_progress_status_question,
     is_stop_or_negation_request,
     is_strategy_family_coverage_question,
@@ -609,6 +611,19 @@ class LLMConversationBrain:
             raise ConfigurationError("conversation input is too long")
         now = request.received_at
         session = self._ensure_session(request, now)
+        # fix/gaon-market-context-isolation: a request that itself names a
+        # market (BINANCE_CRYPTO/KR_STOCK/US_STOCK/GLOBAL_STOCK) persists it
+        # durably on THIS session, so a later generic follow-up ("계속
+        # 연구해줘", "이 전략은?") - which names no market of its own - keeps
+        # the same market context instead of defaulting anywhere. Web and
+        # Telegram both flow through this exact function, so both transports
+        # share this one policy. Never touches conversation_mvp/
+        # research_mission - see gaon.runtime.gaon_market_context.
+        if not request.is_system_turn and text:
+            explicit_market_context = resolve_gaon_market_context(text)
+            if explicit_market_context is not None and read_market_context(session.metadata) != explicit_market_context:
+                session = replace(session, metadata=store_market_context(session.metadata, explicit_market_context))
+                self._repository.upsert_session(session)
         intent = parse_intent(text)
         approval_required = _requires_manual_boundary(text)
         user_message_id = request.message_id or f"conversation-user:{uuid4().hex}"
@@ -1345,6 +1360,23 @@ class LLMConversationBrain:
         # never inferred as "please research again".
         read_only_turn = read_only_turn_may_not_mutate_mission(request.text)
         existing_mission = self._mission_for(request.session_id)
+        # fix/gaon-market-context-isolation: even a SESSION-LOCAL mission
+        # must never be continued/merged-into for a turn whose effective
+        # market context (explicit-in-text, else durably stored on this
+        # same session) names a DIFFERENT market than the mission's own -
+        # e.g. a KR mission already active in this exact chat must not
+        # silently answer/absorb a later "바이낸스 코인은 어때?" turn.
+        # Narrow market-only check (is_mission_market_compatible, not the
+        # full is_mission_compatible_with_request) so an in-mission
+        # strategy-family pivot (feature/conversation-paradigm-family-
+        # routing, A9) is completely unaffected. existing_mission is left
+        # exactly as persisted - this only stops THIS turn from treating
+        # it as the continuation target.
+        if existing_mission is not None and not is_mission_market_compatible(
+            existing_mission, request.text, market_context=self._effective_market_context(request)
+        ):
+            existing_mission = None
+            warnings = _dedupe((*warnings, "session-local mission market context mismatch; not continued this turn"))
         # fix/cross-transport-owner-research-mission: True only when
         # existing_mission below is resolved from a DIFFERENT (owner-
         # matched) session's durable mission, never this session's own.
@@ -4310,12 +4342,30 @@ class LLMConversationBrain:
     # - Returns ambiguous=True (never guesses) when more than one
     #   DISTINCT, compatible mission exists for this owner - the caller
     #   must ask for clarification rather than pick one arbitrarily.
+    # fix/gaon-market-context-isolation: the caller's EFFECTIVE Gaon market
+    # context for this turn - explicit-in-``request.text`` if the text
+    # itself names a market (BINANCE_CRYPTO/KR_STOCK/US_STOCK/GLOBAL_STOCK),
+    # else whatever was durably stored on THIS session from an earlier turn
+    # (see ``gaon.runtime.gaon_market_context``). Returns None when neither
+    # is available - callers must treat that as "no known market context",
+    # never as KR_STOCK by default.
+    def _effective_market_context(self, request: LLMConversationRequest) -> "GaonMarketContext | None":
+        explicit = resolve_gaon_market_context(request.text) if request.text else None
+        if explicit is not None:
+            return explicit
+        try:
+            session = self._repository.get_session(request.session_id)
+        except KeyError:
+            return None
+        return read_market_context(session.metadata)
+
     def _resolve_durable_owner_mission(self, request: LLMConversationRequest) -> tuple[ResearchMission | None, bool]:
         owner_ref = self._canonical_owner_ref(request.source, request.session_id, request.user_ref)
         if owner_ref is None:
             return None, False
         candidates = self._durable_owner_mission_candidates(owner_ref, exclude_session_id=request.session_id)
-        compatible = [mission for _session_id, mission in candidates if is_mission_compatible_with_request(mission, request.text)]
+        market_context = self._effective_market_context(request)
+        compatible = [mission for _session_id, mission in candidates if is_mission_compatible_with_request(mission, request.text, market_context=market_context)]
         distinct: dict[str, ResearchMission] = {}
         for mission in compatible:
             distinct.setdefault(mission.mission_id, mission)
