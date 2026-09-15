@@ -1360,6 +1360,7 @@ class LLMConversationBrain:
         # never inferred as "please research again".
         read_only_turn = read_only_turn_may_not_mutate_mission(request.text)
         existing_mission = self._mission_for(request.session_id)
+        effective_market_context = self._effective_market_context(request)
         # fix/gaon-market-context-isolation: even a SESSION-LOCAL mission
         # must never be continued/merged-into for a turn whose effective
         # market context (explicit-in-text, else durably stored on this
@@ -1373,7 +1374,7 @@ class LLMConversationBrain:
         # exactly as persisted - this only stops THIS turn from treating
         # it as the continuation target.
         if existing_mission is not None and not is_mission_market_compatible(
-            existing_mission, request.text, market_context=self._effective_market_context(request)
+            existing_mission, request.text, market_context=effective_market_context
         ):
             existing_mission = None
             warnings = _dedupe((*warnings, "session-local mission market context mismatch; not continued this turn"))
@@ -1505,6 +1506,27 @@ class LLMConversationBrain:
             and is_generic_continuation_request(request.text)
             and not has_explicit_new_mission_scope(request.text)
         )
+        # fix/gaon-market-context-and-strategy-rollback-contract follow-up:
+        # the real automated research engine is KR-only today (see
+        # ``ResearchMission.market``'s KR-only default and
+        # ``docs/architecture/GaonMarketContext.md``). ``extract_or_update_
+        # mission`` itself has no market-context awareness - a fresh
+        # instruction that names an explicit non-KR market AND a strategy
+        # family in the same turn (e.g. "미국 나스닥 단타 전략 연구해줘",
+        # "바이낸스 단타 전략 연구해줘") satisfies its verb+family research-
+        # intent signal and would otherwise silently manufacture a brand-new
+        # ``market="KR"`` placeholder mission with an empty symbol set -
+        # never what the user asked for, and never something a later "계속
+        # 연구해줘" should inherit as if it were real KR research. Only
+        # applies when there is no existing mission to continue (an already
+        #-compatible in-progress mission's own family pivot is untouched);
+        # a genuinely ambiguous/no-market turn (``effective_market_context
+        # is None``) keeps today's KR-default behavior unchanged.
+        suppress_unsupported_market_mission = (
+            existing_mission is None
+            and effective_market_context is not None
+            and effective_market_context is not GaonMarketContext.KR_STOCK
+        )
         if read_only_turn:
             # Read-only turn: never derive/merge/persist a mission from this
             # message. ``mission`` is exactly the already-persisted mission
@@ -1515,9 +1537,15 @@ class LLMConversationBrain:
             if request.text and read_only_intent(request.text):
                 warnings = _dedupe((*warnings, f"read_only_conversation_intent={read_only_intent(request.text)}; no mission mutation; no research tool calls"))
         else:
-            mission = None if suppress_placeholder_mission else extract_or_update_mission(request.text, existing=existing_mission, now=request.received_at)
+            mission = (
+                None
+                if (suppress_placeholder_mission or suppress_unsupported_market_mission)
+                else extract_or_update_mission(request.text, existing=existing_mission, now=request.received_at)
+            )
             if suppress_placeholder_mission:
                 warnings = _dedupe((*warnings, "generic continuation with no existing mission/context and no explicit new scope; no placeholder mission created"))
+            if suppress_unsupported_market_mission:
+                warnings = _dedupe((*warnings, f"unsupported research market {effective_market_context.value}; no KR ResearchMission created"))
             if mission is not None:
                 self._remember_mission(request, mission)
 

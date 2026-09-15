@@ -99,6 +99,21 @@ class RuntimeServiceTest(unittest.TestCase):
         finally:
             store.close()
 
+    def test_telegram_empty_successful_poll_is_metrics_only(self) -> None:
+        store = RuntimeStateStore(":memory:")
+        client = _FakeTelegramClient(())
+        try:
+            worker = TelegramPollingWorker(_execute_telegram_config(), store, client_factory=lambda _: client)
+            result = worker.tick()
+            self.assertTrue(result.attempted)
+            self.assertEqual(result.results, ())
+            count = store._connection.execute(
+                "SELECT COUNT(*) FROM durable_events WHERE event_type = 'TelegramPollingTickCompleted'"
+            ).fetchone()[0]
+            self.assertEqual(count, 0)
+        finally:
+            store.close()
+
     def test_telegram_worker_skips_disabled_and_dry_run_without_network(self) -> None:
         store = RuntimeStateStore(":memory:")
         try:

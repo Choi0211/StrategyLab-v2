@@ -151,14 +151,16 @@ def production_sqlite_lock_stability_release_check() -> dict[str, object]:
         counts_before = _table_counts(store._connection)
         worker = TelegramPollingWorker(config, store, client_factory=lambda _: _EmptyTelegramClient())
 
+        # Exercise the telemetry append boundary directly. Empty successful
+        # Telegram polls are metrics-only now, so worker.tick() intentionally
+        # does not attempt a durable append when there are no updates.
         with patch.object(SQLiteEventStore, "append", side_effect=_sqlite3.OperationalError("database is locked")):
-            telemetry_result = worker.tick()
-        telemetry_lock_isolated = telemetry_result.attempted
+            telemetry_lock_isolated = worker._append_event("TelegramPollingTickCompleted", now, {"updates": 1}) is False
 
         unexpected_propagated = False
         try:
             with patch.object(SQLiteEventStore, "append", side_effect=_sqlite3.OperationalError("no such table: durable_events")):
-                worker.tick()
+                worker._append_event("TelegramPollingTickCompleted", now, {"updates": 1})
         except _sqlite3.OperationalError:
             unexpected_propagated = True
 
