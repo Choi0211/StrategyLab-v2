@@ -285,6 +285,76 @@ class KrBinanceContaminationTests(unittest.TestCase):
         self.assertFalse(ambiguous)
 
 
+class UnsupportedMarketFreshResearchDoesNotCreateKrMissionTests(unittest.TestCase):
+    """PR #225 closed cross-market CONTINUATION contamination, but
+    ``extract_or_update_mission`` itself has no market-context awareness:
+    a FRESH instruction (no existing mission) that names both an explicit
+    non-KR market and a strategy family in the same turn (e.g. "미국 나스닥
+    단타 전략 연구해줘") satisfies that function's verb+family research-
+    intent signal on its own and would otherwise silently manufacture a
+    brand-new ``market="KR"`` placeholder ResearchMission with an empty
+    symbol set - never what was asked, and never something a later "계속
+    연구해줘" should be able to inherit as if it were real KR research."""
+
+    def setUp(self) -> None:
+        self.store = RuntimeStateStore(":memory:")
+        self.addCleanup(self.store.close)
+
+    def test_binance_family_request_does_not_create_kr_mission(self) -> None:
+        config = _no_owner_config()
+        chat_id = "1001"
+        _telegram_send(config, self.store._connection, "바이낸스 단타 전략 연구해줘", chat_id=chat_id, update_id=1)
+
+        from gaon.runtime.llm_conversation import SQLiteConversationRepository
+
+        repo = SQLiteConversationRepository(self.store._connection)
+        session = repo.get_session(f"telegram:{chat_id}")
+        self.assertIsNone(session.metadata.get("conversation_mvp"))
+
+    def test_us_family_request_does_not_create_kr_mission(self) -> None:
+        config = _no_owner_config()
+        chat_id = "1002"
+        _telegram_send(config, self.store._connection, "미국 나스닥 단타 전략 연구해줘", chat_id=chat_id, update_id=1)
+
+        from gaon.runtime.llm_conversation import SQLiteConversationRepository
+
+        repo = SQLiteConversationRepository(self.store._connection)
+        session = repo.get_session(f"telegram:{chat_id}")
+        conversation_mvp = session.metadata.get("conversation_mvp")
+        research_mission = (conversation_mvp or {}).get("research_mission")
+        self.assertIsNone(research_mission)
+
+    def test_kr_family_request_still_creates_kr_mission_unaffected(self) -> None:
+        """Same verb+family signal, but with no non-KR market named (today's
+        supported default) - unaffected by the new guard."""
+        config = _no_owner_config()
+        chat_id = "1003"
+        _telegram_send(config, self.store._connection, "삼성전자 단타 전략 연구해줘", chat_id=chat_id, update_id=1)
+
+        from gaon.runtime.llm_conversation import SQLiteConversationRepository
+
+        repo = SQLiteConversationRepository(self.store._connection)
+        session = repo.get_session(f"telegram:{chat_id}")
+        research_mission = session.metadata["conversation_mvp"]["research_mission"]
+        self.assertEqual(research_mission["market"], "KR")
+
+    def test_binance_family_follow_up_does_not_inherit_a_kr_mission(self) -> None:
+        """A generic follow-up after the suppressed Binance turn must not
+        resume/see any KR mission either - none exists to resume."""
+        config = _no_owner_config()
+        chat_id = "1004"
+        _telegram_send(config, self.store._connection, "바이낸스 단타 전략 연구해줘", chat_id=chat_id, update_id=1)
+        reply, _agent = _telegram_send(config, self.store._connection, "계속 연구해줘", chat_id=chat_id, update_id=2)
+
+        from gaon.runtime.llm_conversation import SQLiteConversationRepository
+
+        repo = SQLiteConversationRepository(self.store._connection)
+        session = repo.get_session(f"telegram:{chat_id}")
+        conversation_mvp = session.metadata.get("conversation_mvp")
+        research_mission = (conversation_mvp or {}).get("research_mission") if conversation_mvp else None
+        self.assertIsNone(research_mission)
+
+
 class AmbiguousNoContextFailClosedTests(unittest.TestCase):
     """A genuinely ambiguous request (signals for more than one market at
     once) must never be silently resolved to any one of them, and must

@@ -1,8 +1,8 @@
 # Gaon Strategy Rollback Contract
 
-Status: PARTIAL (StrategyLab-v2 canonical read-model shipped; Binance
-dashboard repository consumer change is a separate, follow-up PR in
-`binance_ai_bot`)
+Status: PARTIAL (StrategyLab-v2 canonical read-model and the Binance dashboard
+read-only consumer are deployed. The explicit, approval-gated rollback MUTATION
+action remains intentionally unexposed.)
 
 ## Problem
 
@@ -106,30 +106,19 @@ docstrings said so explicitly: "no production wiring, no deploy").
   promotion workflow registers) is exactly the kind of two-repo
   integration work called out below.
 
-## What the `binance_ai_bot` repository still needs to change
+## Binance dashboard integration status
 
-This cannot be done in this PR (per the task's constraint that a single
-PR may only touch this repository). The Binance dashboard repository
-needs a follow-up change:
+The separate `binance_ai_bot` repository has since shipped the read-only
+consumer: `/api/strategy_params/backup_status` reads this service's canonical
+`GET /gaon/strategy/version_status?family_id=binance-price-action` status. The
+legacy local revert path fails closed rather than mutating strategy state.
 
-1. Replace `/api/strategy_params/backup_status`'s file-existence check
-   with either:
-   - **(preferred)** a server-side call to this repository's
-     `GET /gaon/strategy/version_status?family_id=<binance family id>`
-     (over the existing Gaon Web API the dashboard already talks to for
-     chat - see `docs/architecture/GaonBinanceConversationDashboardIntegration.md`),
-     using the response's `available_for_rollback` field directly instead
-     of `os.path.exists(...)`; or
-   - if the Binance bot process needs to keep deciding this locally
-     without a network call to StrategyLab-v2, mirror the SAME
-     ACTIVE/PREVIOUS/APPLY_READY/RETIRED state machine
-     (`gaon.control.strategy_version.StrategyVersionRegistry`'s lifecycle
-     is small and dependency-free) against its own `strategy_params.json`
-     history instead of a bare file-existence check, so "available" means
-     "a verified, restorable previous version exists," not "some file is
-     present on disk" (a stale, corrupt, or unrelated leftover file must
-     not enable the button).
-2. When the button IS shown and pressed, the actual rollback action
+The remaining work is deliberately narrower:
+
+1. The status/read path is complete. A genuine PREVIOUS version, not a
+   backup-file existence check, is the only condition that may advertise
+   rollback availability.
+2. When the button IS shown and pressed in a future mutation-enabled release, the actual rollback action
    (writing the previous `strategy_params.json` back, restarting/
    reloading the strategy) is owned entirely by the Binance repository's
    own deployment/rollback scripts (`deploy/scripts/rollback_service.sh`

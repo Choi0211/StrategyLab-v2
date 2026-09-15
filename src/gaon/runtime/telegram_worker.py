@@ -82,7 +82,13 @@ class TelegramPollingWorker:
             return self._record_failure(exc, now)
         self._metrics.increment("telegram_poll_ticks", status="ok")
         self._metrics.increment("telegram_poll_updates", amount=len(results), status="observed")
-        self._append_event("TelegramPollingTickCompleted", now, {"updates": len(results), "statuses": _status_counts(results)})
+        # Empty successful polls are high-frequency operational heartbeats, not
+        # durable business/audit events. Persisting one every second made the
+        # append-only event store grow without bound while conveying no new
+        # state. Metrics still observe every tick; durable completion events
+        # are retained whenever at least one Telegram update was processed.
+        if results:
+            self._append_event("TelegramPollingTickCompleted", now, {"updates": len(results), "statuses": _status_counts(results)})
         return TelegramPollingTickResult(enabled=True, attempted=True, results=results)
 
     def _should_poll(self) -> bool:
