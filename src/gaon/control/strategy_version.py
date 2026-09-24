@@ -163,11 +163,20 @@ class StrategyVersionRegistry:
                 return v
         raise KeyError(strategy_version_id)
 
-    def active(self) -> StrategyVersion | None:
-        for v in self._versions:
-            if v.status is StrategyVersionStatus.ACTIVE:
-                return v
-        return None
+    def active(self, direction: str | None = None) -> StrategyVersion | None:
+        """Return the active version, optionally scoped to LONG/SHORT.
+
+        Legacy undirected families retain the historical single-ACTIVE behavior.
+        Directional families may have one ACTIVE per direction.
+        """
+        normalized = _normalize_direction(direction) if direction is not None else None
+        matches = [v for v in self._versions if v.status is StrategyVersionStatus.ACTIVE]
+        if normalized is not None:
+            matches = [v for v in matches if v.direction == normalized]
+        return matches[-1] if matches else None
+
+    def active_by_direction(self) -> dict[str, StrategyVersion | None]:
+        return {"LONG": self.active("LONG"), "SHORT": self.active("SHORT")}
 
     def selectable_versions(self) -> "list[StrategyVersion]":
         """Versions a user may (re-)activate: APPLY_READY / PREVIOUS, never
@@ -192,10 +201,11 @@ class StrategyVersionRegistry:
         if self._versions[target_index].status is StrategyVersionStatus.RETIRED:
             raise ValueError(f"{strategy_version_id} is RETIRED and cannot be activated")
 
+        target_direction = self._versions[target_index].direction
         for i, v in enumerate(self._versions):
             if i == target_index:
                 continue
-            if v.status is StrategyVersionStatus.ACTIVE:
+            if v.status is StrategyVersionStatus.ACTIVE and v.direction == target_direction:
                 self._replace(i, status=StrategyVersionStatus.PREVIOUS, deactivated_at=at)
 
         self._replace(

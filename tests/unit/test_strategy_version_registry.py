@@ -132,3 +132,26 @@ class NoDestructiveHistoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class DirectionalActivationTests(unittest.TestCase):
+    def test_long_and_short_can_be_active_at_the_same_time(self) -> None:
+        reg = StrategyVersionRegistry()
+        long_v = reg.register_apply_ready(family_id="binance-futures", candidate_id="long", spec_fingerprint="long-fp", spec_rules={}, validation_summary={}, at="2026-09-24T10:00:00Z", direction="LONG")
+        short_v = reg.register_apply_ready(family_id="binance-futures", candidate_id="short", spec_fingerprint="short-fp", spec_rules={}, validation_summary={}, at="2026-09-24T10:01:00Z", direction="SHORT")
+        reg.mark_active(long_v.strategy_version_id, at="2026-09-24T11:00:00Z")
+        reg.mark_active(short_v.strategy_version_id, at="2026-09-24T11:01:00Z")
+        self.assertEqual(reg.active("LONG").strategy_version_id, long_v.strategy_version_id)
+        self.assertEqual(reg.active("SHORT").strategy_version_id, short_v.strategy_version_id)
+        self.assertEqual(sum(1 for v in reg.history() if v.status is StrategyVersionStatus.ACTIVE), 2)
+
+    def test_replacing_long_does_not_demote_active_short(self) -> None:
+        reg = StrategyVersionRegistry()
+        long_a = reg.register_apply_ready(family_id="binance-futures", candidate_id="la", spec_fingerprint="la", spec_rules={}, validation_summary={}, at="2026-09-24T10:00:00Z", direction="LONG")
+        short_a = reg.register_apply_ready(family_id="binance-futures", candidate_id="sa", spec_fingerprint="sa", spec_rules={}, validation_summary={}, at="2026-09-24T10:01:00Z", direction="SHORT")
+        long_b = reg.register_apply_ready(family_id="binance-futures", candidate_id="lb", spec_fingerprint="lb", spec_rules={}, validation_summary={}, at="2026-09-24T10:02:00Z", direction="LONG")
+        reg.mark_active(long_a.strategy_version_id, at="2026-09-24T11:00:00Z")
+        reg.mark_active(short_a.strategy_version_id, at="2026-09-24T11:01:00Z")
+        reg.mark_active(long_b.strategy_version_id, at="2026-09-24T11:02:00Z")
+        self.assertEqual(reg.active("LONG").strategy_version_id, long_b.strategy_version_id)
+        self.assertEqual(reg.active("SHORT").strategy_version_id, short_a.strategy_version_id)
+        self.assertEqual(reg.get(long_a.strategy_version_id).status, StrategyVersionStatus.PREVIOUS)

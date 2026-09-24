@@ -136,10 +136,15 @@ class StrategyConsoleReadModel:
                 by_status[version.status].append(version.to_json())
 
         active = self._registry.active()
+        directional = self._registry.active_by_direction()
         actions = [a for a in (_action_for(v) for v in history) if a is not None]
 
         view: dict[str, object] = {
             "active": active.to_json() if active is not None else None,
+            "active_by_direction": {
+                key: value.to_json() if value is not None else None
+                for key, value in directional.items()
+            },
             "apply_ready": by_status[StrategyVersionStatus.APPLY_READY],
             "previous": by_status[StrategyVersionStatus.PREVIOUS],
             "retired": by_status[StrategyVersionStatus.RETIRED],

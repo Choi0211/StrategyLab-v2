@@ -202,6 +202,7 @@ class GaonWebChatAdapter:
             "schema_version": WEB_API_SCHEMA_VERSION,
             "family_id": family_id,
             "active": view["active"],
+            "active_by_direction": view["active_by_direction"],
             "apply_ready": view["apply_ready"],
             "previous": view["previous"],
             "retired": view["retired"],
