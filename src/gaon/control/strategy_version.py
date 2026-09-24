@@ -41,6 +41,8 @@ class StrategyVersion:
     validation_summary: Mapping[str, object]
     status: StrategyVersionStatus
     created_at: str
+    display_id: str | None = None
+    direction: str | None = None
     approved_at: str | None = None
     activated_at: str | None = None
     deactivated_at: str | None = None
@@ -57,6 +59,8 @@ class StrategyVersion:
             "validation_summary": dict(self.validation_summary),
             "status": self.status.value,
             "created_at": self.created_at,
+            "display_id": self.display_id,
+            "direction": self.direction,
             "approved_at": self.approved_at,
             "activated_at": self.activated_at,
             "deactivated_at": self.deactivated_at,
@@ -75,6 +79,8 @@ class StrategyVersion:
             validation_summary=dict(raw.get("validation_summary") or {}),
             status=StrategyVersionStatus(str(raw["status"])),
             created_at=str(raw["created_at"]),
+            display_id=_opt(raw.get("display_id")),
+            direction=_opt(raw.get("direction")),
             approved_at=_opt(raw.get("approved_at")),
             activated_at=_opt(raw.get("activated_at")),
             deactivated_at=_opt(raw.get("deactivated_at")),
@@ -85,6 +91,15 @@ class StrategyVersion:
 
 def _opt(value: object) -> str | None:
     return str(value) if value is not None else None
+
+
+def _normalize_direction(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().upper()
+    if normalized not in {"LONG", "SHORT"}:
+        raise ValueError("direction must be LONG or SHORT")
+    return normalized
 
 
 class StrategyVersionRegistry:
@@ -105,7 +120,10 @@ class StrategyVersionRegistry:
         spec_rules: Mapping[str, object],
         validation_summary: Mapping[str, object],
         at: str,
+        direction: str | None = None,
     ) -> StrategyVersion:
+        normalized_direction = _normalize_direction(direction)
+        display_id = self._next_display_id(at=at, direction=normalized_direction)
         version = StrategyVersion(
             strategy_version_id=f"strategy-version:{uuid4().hex[:12]}",
             family_id=family_id,
@@ -115,10 +133,25 @@ class StrategyVersionRegistry:
             validation_summary=dict(validation_summary),
             status=StrategyVersionStatus.APPLY_READY,
             created_at=at,
+            display_id=display_id,
+            direction=normalized_direction,
             approved_at=at,
         )
         self._versions.append(version)
         return version
+
+    def _next_display_id(self, *, at: str, direction: str | None) -> str | None:
+        if direction not in {"LONG", "SHORT"}:
+            return None
+        date = at[:10].replace("-", "")
+        if len(date) != 8 or not date.isdigit():
+            return None
+        prefix = f"{date[2:]}-{'L' if direction == 'LONG' else 'S'}"
+        used = {v.display_id for v in self._versions if v.display_id}
+        sequence = 1
+        while f"{prefix}{sequence:03d}" in used:
+            sequence += 1
+        return f"{prefix}{sequence:03d}"
 
     # --- reads -----------------------------------------------------------
     def history(self) -> "list[StrategyVersion]":

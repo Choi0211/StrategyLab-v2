@@ -47,6 +47,26 @@ class RegisterAndListTests(unittest.TestCase):
         with self.assertRaises(Exception):
             v.status = StrategyVersionStatus.ACTIVE  # frozen
 
+    def test_direction_creates_stable_human_display_id_without_replacing_internal_id(self) -> None:
+        reg = StrategyVersionRegistry()
+        a = reg.register_apply_ready(family_id="binance-price-action", candidate_id="c1", spec_fingerprint="a", spec_rules={}, validation_summary={}, at="2026-09-23T10:00:00Z", direction="LONG")
+        b = reg.register_apply_ready(family_id="binance-price-action", candidate_id="c2", spec_fingerprint="b", spec_rules={}, validation_summary={}, at="2026-09-23T11:00:00Z", direction="LONG")
+        c = reg.register_apply_ready(family_id="binance-price-action", candidate_id="c3", spec_fingerprint="c", spec_rules={}, validation_summary={}, at="2026-09-23T12:00:00Z", direction="SHORT")
+        self.assertTrue(a.strategy_version_id.startswith("strategy-version:"))
+        self.assertEqual((a.display_id, b.display_id, c.display_id), ("260923-L001", "260923-L002", "260923-S001"))
+        self.assertEqual((a.direction, c.direction), ("LONG", "SHORT"))
+
+    def test_legacy_registration_keeps_direction_and_display_id_optional(self) -> None:
+        reg = StrategyVersionRegistry()
+        v = _register(reg, fingerprint="fp-a", candidate_id="legacy", at=T)
+        self.assertIsNone(v.direction)
+        self.assertIsNone(v.display_id)
+
+    def test_invalid_direction_is_rejected(self) -> None:
+        reg = StrategyVersionRegistry()
+        with self.assertRaises(ValueError):
+            reg.register_apply_ready(family_id="x", candidate_id="c", spec_fingerprint="f", spec_rules={}, validation_summary={}, at=T, direction="BOTH")
+
     def test_history_lists_every_registered_version_newest_last(self) -> None:
         reg = StrategyVersionRegistry()
         _register(reg, fingerprint="fp-a", candidate_id="KR-ST-010", at="2026-09-06T00:00:00Z")

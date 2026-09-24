@@ -512,8 +512,10 @@ class DailyBriefingSchedulerTests(unittest.TestCase):
             compose_unresolved_review=lambda: "review text",
             dry_run=False,
         )
+        # 2026-08-17 is a KRX closure date, so durable jobs are claimed and
+        # rescheduled but delivery is intentionally suppressed.
         first_scheduler.run_due(now="2026-08-17T07:00:00Z")
-        self.assertEqual(len(client.sent), 3)  # pre + post + unresolved_review all due by then
+        self.assertEqual(len(client.sent), 0)
 
         # Simulate a process restart: brand new scheduler instance, same
         # durable repository, no in-memory state carried over.
@@ -527,9 +529,9 @@ class DailyBriefingSchedulerTests(unittest.TestCase):
             dry_run=False,
         )
         second_scheduler.run_due(now="2026-08-17T08:00:00Z")
-        self.assertEqual(len(client.sent), 3)  # nothing new due yet - no duplicate sends
+        self.assertEqual(len(client.sent), 0)  # nothing new due yet - no duplicate sends
         second_scheduler.run_due(now="2026-08-18T00:00:00Z")
-        self.assertEqual(len(client.sent), 4)  # only pre-market's next occurrence is due
+        self.assertEqual(len(client.sent), 1)  # next open day's pre-market occurrence is due
 
     def test_a_failing_composer_does_not_block_other_due_jobs(self) -> None:
         repository = self._repository()

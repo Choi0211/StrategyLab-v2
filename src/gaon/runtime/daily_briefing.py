@@ -528,7 +528,10 @@ class DailyBriefingScheduler:
             composer = self._composers.get(briefing_kind)
             try:
                 text = composer() if composer is not None else ""
-                sent = send_daily_briefing(self._client, self._chat_id, text, kind=briefing_kind, dry_run=self._dry_run)
+                if not _krx_open_at_utc(now, job.schedule.timezone):
+                    sent = ()
+                else:
+                    sent = send_daily_briefing(self._client, self._chat_id, text, kind=briefing_kind, dry_run=self._dry_run)
                 self._repository.complete_run(
                     run, ScheduledRunStatus.SUCCEEDED, completed_at=now, result={"messages_sent": str(len(sent))}
                 )
@@ -731,6 +734,21 @@ def _daily_briefing_job_definitions(
         max_attempts=2,
     )
     return pre_market, post_market, unresolved_review
+
+
+def _krx_open_at_utc(now: str, tz_name: str = DEFAULT_MARKET_TIMEZONE) -> bool:
+    """Return whether the KRX is open on the local calendar date.
+
+    Daily briefing jobs remain durable daily schedules, but delivery is suppressed
+    on weekends and explicit KRX closure dates. This keeps the scheduler simple
+    while preventing empty market briefings on closed days.
+    """
+    _validate_utc(now)
+    from gaon.research.krx_real_pipeline import KRXTradingCalendar
+
+    parsed = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    local_day = parsed.astimezone(timezone_for(tz_name)).date().isoformat()
+    return KRXTradingCalendar().is_open(local_day)
 
 
 def _next_daily_utc(now: str, hhmm: str, tz_name: str) -> str:
