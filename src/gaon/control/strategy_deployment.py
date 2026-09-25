@@ -141,7 +141,10 @@ class StrategyDeploymentController:
         steps: list[DeployStep] = []
 
         target = self._registry.get(strategy_version_id)  # KeyError propagates - unknown id is a caller bug
-        previous_active = self._registry.active()
+        # Directional families may have one ACTIVE per side.  A LONG apply must
+        # never use/restore the SHORT ACTIVE (and vice versa).  Legacy undirected
+        # versions retain the historical single-ACTIVE behaviour.
+        previous_active = self._registry.active(target.direction) if target.direction else self._registry.active()
         applied_to_runtime = False
 
         try:
