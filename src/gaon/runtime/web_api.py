@@ -215,6 +215,26 @@ class GaonWebChatAdapter:
             "approval_bypassed": False,
         }
 
+    def activate_strategy_version(self, *, family_id: str, strategy_version_id: str, confirm: bool, now: str) -> Mapping[str, object]:
+        """Persist an explicitly confirmed APPLY_READY/PREVIOUS version as ACTIVE.
+
+        Registry-only lifecycle mutation: no Binance/runtime mutation and no order.
+        Direction isolation is enforced by StrategyVersionRegistry.mark_active().
+        """
+        if not confirm:
+            return {"ok": False, "error": "explicit confirmation required", "strategy_mutated": False, "order_executed": False, "live_activated": False, "approval_bypassed": False}
+        repo = StrategyVersionSQLiteRepository(self._repository._connection)
+        registry = repo.get(family_id)
+        try:
+            target = registry.get(strategy_version_id)
+        except KeyError:
+            return {"ok": False, "error": "strategy version not found", "strategy_mutated": False, "order_executed": False, "live_activated": False, "approval_bypassed": False}
+        if target.family_id != family_id or target.status.value not in {"apply_ready", "previous"}:
+            return {"ok": False, "error": "strategy version is not selectable", "strategy_mutated": False, "order_executed": False, "live_activated": False, "approval_bypassed": False}
+        active = registry.mark_active(strategy_version_id, at=now)
+        repo.save(family_id, registry, now=now)
+        return {"ok": True, "family_id": family_id, "active": active.to_json(), "active_by_direction": StrategyConsoleReadModel(registry).render()["active_by_direction"], "strategy_mutated": True, "order_executed": False, "live_activated": False, "approval_bypassed": False}
+
     def list_conversations(self, *, user_ref: str, include_archived: bool = True) -> tuple:
         return list_conversations(self._repository._connection, user_ref=f"web-user:{user_ref}", include_archived=include_archived)
 
@@ -396,6 +416,14 @@ def dispatch_request(
         return _handle_storage_status()
     if method == "GET" and route_path == "/gaon/strategy/version_status":
         return _handle_strategy_version_status(adapter, query)
+    if method == "POST" and route_path == "/gaon/strategy/version/activate":
+        family_id = _require_str_field(body, "family_id")
+        version_id = _require_str_field(body, "strategy_version_id")
+        if family_id is None or version_id is None:
+            return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id and strategy_version_id are required"}
+        confirm = isinstance(body, Mapping) and body.get("confirm") is True
+        result = adapter.activate_strategy_version(family_id=family_id, strategy_version_id=version_id, confirm=confirm, now=_utc_now())
+        return (200 if result.get("ok") else 409), result
     if method == "GET" and route_path == "/gaon/chat/conversations":
         return _handle_conversations_list(adapter, query)
     if method == "GET" and route_path == "/gaon/chat/messages":
