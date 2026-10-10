@@ -8,6 +8,9 @@ from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.migrations import migrate
+from gaon.runtime.serialization import dumps_json
+from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+from gaon.knowledge.strategy_candidate import new_candidate
 
 
 NOW = "2026-07-19T00:00:00Z"
@@ -41,6 +44,37 @@ class NativeLLMToolCallingTests(unittest.TestCase):
         self.assertEqual(response.tool_calls, ("runtime_status",))
         self.assertIn("런타임 상태", response.text)
         self.assertEqual(self.audit.list()[0].tool_name, "runtime_status")
+        self.assertTrue(provider.received_tools)
+        self.assertTrue(provider.received_tool_results)
+
+    def test_provider_first_mission_state_call_is_runtime_bound_and_read_only(self) -> None:
+        mission = extract_or_update_mission(
+            "국내 주식 전체를 대상으로 단타 전략을 연구해주세요", existing=None, now=NOW
+        )
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=NOW)
+        mission = add_candidate(mission, candidate, now=NOW)
+        metadata = {"conversation_mvp": {"research_mission": mission.to_json()}}
+        self.connection.execute(
+            "INSERT INTO conversation_sessions(session_id, user_ref, source, status, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("session:native-tools", "user:youngha", "test", "active", NOW, NOW, dumps_json(metadata)),
+        )
+        provider = FakeToolProvider(
+            ((AssistantToolCall("call-mission", "research_mission_state", {}),),),
+            "현재 연구 후보 상태를 확인했습니다, 영하님.",
+        )
+
+        response = self._brain(provider).respond(_request("현재 후보 상태 알려줘"))
+
+        self.assertEqual(response.route, "provider_tool_call")
+        self.assertEqual(response.tool_calls, ("research_mission_state",))
+        record = self.audit.list(tool_name="research_mission_state")[0]
+        arguments = record.request["arguments"]
+        self.assertEqual(arguments["session_id"], "session:native-tools")
+        self.assertEqual(arguments["fallback_session_ids"], [])
+        self.assertEqual(
+            self.connection.execute("SELECT metadata_json FROM conversation_sessions WHERE session_id = ?", ("session:native-tools",)).fetchone()[0],
+            dumps_json(metadata),
+        )
         self.assertTrue(provider.received_tools)
         self.assertTrue(provider.received_tool_results)
 

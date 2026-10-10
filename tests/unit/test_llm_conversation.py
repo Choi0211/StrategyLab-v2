@@ -47,6 +47,20 @@ class LLMConversationBrainTests(unittest.TestCase):
         self.assertEqual(response.provider, "deterministic")
         self.assertIn("provider bypassed for approval boundary", response.warnings)
 
+
+    def test_conversational_mvp_admission_is_transport_agnostic(self) -> None:
+        from gaon.runtime.llm_conversation import _is_conversational_mvp_source
+
+        request = LLMConversationRequest(
+            session_id="api:session-1",
+            user_ref="api-user:youngha",
+            source="api",
+            text="후보 상태 알려줘",
+            received_at="2026-10-05T00:00:00Z",
+            message_id="api:message-1",
+        )
+        self.assertTrue(_is_conversational_mvp_source(request))
+
     def test_versioned_message_json_round_trip(self) -> None:
         message = LLMConversationMessage("m1", "s1", "user", "안녕", "greeting", "input", ("ref",), ("warn",), (), "2026-07-19T00:00:00Z")
         restored = LLMConversationMessage.from_json(message.to_json())
@@ -60,14 +74,14 @@ class LLMConversationBrainTests(unittest.TestCase):
             LLMConversationMessage.from_json(payload)
 
     def test_provider_response_is_used_when_enabled(self) -> None:
-        config = GaonRuntimeConfig(assistant_enabled=True)
+        config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="openai-compatible")
         brain = LLMConversationBrain(config, self.repository)
         from gaon.runtime import llm_conversation
 
         original = llm_conversation.build_assistant_provider
         llm_conversation.build_assistant_provider = lambda _config: _FakeProvider()
         try:
-            response = brain.respond(_request("도움말"))
+            response = brain.respond(_request("재밌는 이야기 하나 해줘"))
         finally:
             llm_conversation.build_assistant_provider = original
         self.assertEqual(response.text, "영하님, provider response입니다.")

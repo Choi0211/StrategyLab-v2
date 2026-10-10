@@ -164,6 +164,8 @@ CONVERSATION_MVP_CONTEXT_VERSION = 1
 MAX_CONVERSATION_INPUT_CHARS = 4096
 TOOL_RESULT_TTL_SECONDS = {
     "runtime_status": 60,
+    "research_mission_state": 60,
+    "validation_status": 300,
     "champion_status": 900,
     "v5_pipeline_history": 900,
     "research_memory_search": 300,
@@ -777,12 +779,44 @@ class LLMConversationBrain:
         preferences_reply = self._try_research_preferences(request, warnings, references)
         if preferences_reply is not None:
             return preferences_reply
+
+        # LLM-first conversation routing: when a real assistant provider is
+        # available, ordinary human conversation reaches it before the legacy
+        # deterministic conversation/MVP routers. Deterministic routing keeps
+        # first priority only for system continuation turns and explicit
+        # research/stop commands where mission mutation/continuation semantics
+        # are part of the safety boundary. With a deterministic provider (or
+        # assistant disabled), the existing fully local behavior is preserved.
+        provider_first = self._config.assistant_enabled and self._config.assistant_provider != "deterministic"
+
+        # Capability limits (URL/current-info/media that Gaon cannot actually
+        # inspect) and explicit multi-intent decomposition are integrity
+        # boundaries, not legacy topic routing. Keep this narrow agent seam
+        # before the provider so the model cannot fabricate unavailable access
+        # and a compound request is not silently answered as one intent. For
+        # ordinary single-intent conversation it returns PASS_THROUGH/None.
         agent_turn = self._route_agent_turn(request, intent, context, warnings, references)
         if agent_turn is not None:
             return agent_turn
-        mvp = self._try_conversational_mvp(request, warnings, references)
-        if mvp is not None:
-            return mvp
+
+        conversational_intent = classify_conversational_route(request.text).intent
+        deterministic_precedence = (
+            request.is_system_turn
+            or is_stop_or_negation_request(request.text)
+            or has_explicit_research_execution_intent(request.text)
+            # These are intentionally deterministic conversation contracts,
+            # not topic-keyword routing: a low-content malfunction complaint
+            # gets the known feedback response, and a capability/help question
+            # must reflect the authoritative capability registry rather than a
+            # model's self-description. Ordinary conversation remains LLM-first.
+            or is_low_content_complaint(request.text)
+            or conversational_intent is ConversationalMVPIntent.HELP
+        )
+        if not provider_first or deterministic_precedence:
+            mvp = self._try_conversational_mvp(request, warnings, references)
+            if mvp is not None:
+                return mvp
+
         if not self._config.assistant_enabled:
             return persona_text(intent), RULE_BASED_ROUTE, _dedupe(warnings), references, "deterministic", ()
         authoritative = self._try_authoritative_research_tool(request, warnings, references)
@@ -846,6 +880,33 @@ class LLMConversationBrain:
                 )
             if provider_response.tool_calls and self._tool_executor is not None:
                 return self._execute_provider_tool_calls(provider, request, intent, provider_response, warnings, references, tools)
+
+            # The model had first opportunity to understand the turn and call
+            # an authoritative read tool. For mission/candidate state questions
+            # specifically, a no-tool free-form answer is not trusted as state
+            # evidence: fall back to the established mission-aware read model.
+            # This is a safety/grounding fallback, not a first-pass router.
+            read_subject = self._read_subject_for(request.session_id)
+            mission_subject_followup = (
+                read_only_turn_may_not_mutate_mission(request.text)
+                and (
+                    _turn_pertains_to_research_subject(request.text)
+                    or (read_subject is not None and read_subject.get("kind") != "capability_limitation")
+                )
+            )
+            if provider_first and (
+                _provider_requires_mission_state_fallback(request.text)
+                or mission_subject_followup
+            ):
+                state_fallback = self._try_conversational_mvp(
+                    request,
+                    (*warnings, "provider-first mission-state fallback: no authoritative state tool call"),
+                    references,
+                )
+                if state_fallback is not None:
+                    self._metrics.increment("gaon_llm_provider_fallbacks_total", reason="mission_state_not_tool_grounded")
+                    return state_fallback
+
             fallback = self._try_deterministic_tool(request, warnings, references)
             if fallback is not None:
                 self._metrics.increment("gaon_llm_provider_fallbacks_total", reason="deterministic_safe_tool")
@@ -896,11 +957,20 @@ class LLMConversationBrain:
             else:
                 self._metrics.increment("gaon_llm_provider_parse_failures_total", provider=self._config.assistant_provider)
                 self._append_provider_event("LLMProviderRequestFailed", request, {"provider": self._config.assistant_provider, "error_type": reason})
-            fallback = self._try_deterministic_tool(request, (*warnings, f"provider fallback: {reason}"), references)
+            fallback_warnings = (*warnings, f"provider fallback: {reason}")
+            agent_fallback = self._route_agent_turn(request, intent, context, fallback_warnings, references)
+            if agent_fallback is not None:
+                self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=reason)
+                return agent_fallback
+            mvp_fallback = self._try_conversational_mvp(request, fallback_warnings, references)
+            if mvp_fallback is not None:
+                self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=reason)
+                return mvp_fallback
+            fallback = self._try_deterministic_tool(request, fallback_warnings, references)
             if fallback is not None:
                 self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=reason)
                 return fallback
-            honest = self._runtime_unavailable_reply(request, (*warnings, f"provider fallback: {reason}"), references)
+            honest = self._runtime_unavailable_reply(request, fallback_warnings, references)
             if honest is not None:
                 return honest
             return _provider_unavailable_message(), "fallback", _dedupe((*warnings, f"provider fallback: {reason}")), references, "deterministic", ()
@@ -1193,7 +1263,14 @@ class LLMConversationBrain:
         results: list[AssistantToolResult] = []
         executed: list[str] = []
         for call in selected:
-            result = self._tool_executor.execute(ToolRequest(call.name, call.arguments, request.user_ref, request.received_at))
+            arguments = dict(call.arguments)
+            if call.name == "research_mission_state":
+                # Session/owner identifiers are runtime-bound context, never
+                # model-selected arguments. Overwrite any provider-supplied
+                # values defensively even though they are omitted from the
+                # provider-facing schema.
+                arguments.update(self._research_mission_tool_context(request))
+            result = self._tool_executor.execute(ToolRequest(call.name, arguments, request.user_ref, request.received_at))
             self._record_tool_result(request.session_id, result, request.received_at)
             output = sanitize_research_tool_output(call.name, result.output, request.text) if result.status == "success" and is_research_tool(call.name) else result.output
             results.append(AssistantToolResult(call.call_id, call.name, {"status": result.status, "output": output, "warnings": list(result.warnings)}))
@@ -4387,6 +4464,28 @@ class LLMConversationBrain:
             return None
         return read_market_context(session.metadata)
 
+    def _research_mission_tool_context(self, request: LLMConversationRequest) -> dict[str, object]:
+        """Bind ``research_mission_state`` to this request's authorized scope.
+
+        The provider receives a zero-argument tool schema. Session identifiers
+        are injected here from runtime state, and cross-transport fallbacks are
+        limited to sessions that pass the existing explicit configured-owner
+        identity + mission compatibility rules.
+        """
+        fallback_session_ids: list[str] = []
+        owner_ref = self._canonical_owner_ref(request.source, request.session_id, request.user_ref)
+        if owner_ref is not None:
+            market_context = self._effective_market_context(request)
+            for session_id, mission in self._durable_owner_mission_candidates(
+                owner_ref, exclude_session_id=request.session_id
+            ):
+                if is_mission_compatible_with_request(mission, request.text, market_context=market_context):
+                    fallback_session_ids.append(session_id)
+        return {
+            "session_id": request.session_id,
+            "fallback_session_ids": fallback_session_ids,
+        }
+
     def _resolve_durable_owner_mission(self, request: LLMConversationRequest) -> tuple[ResearchMission | None, bool]:
         owner_ref = self._canonical_owner_ref(request.source, request.session_id, request.user_ref)
         if owner_ref is None:
@@ -4943,9 +5042,30 @@ def _base_prompt(text: str, context=None, *, capabilities: str = "") -> str:
     return (
         "You are Gaon, a calm Korean AI Engineering Partner for Youngha. "
         "Do not claim live trading, automatic approval, private repo access, or unavailable integrations. "
+        "Treat recent conversation history as conversational memory, not as proof of current operational state. "
+        "When the user asks for current ResearchMission or candidate status, call research_mission_state; "
+        "do not substitute research_operation_status. When the user asks for current validation state, call validation_status. "
+        "Use champion_status and v5_pipeline_history for those current states instead of inferring them from old chat context. "
         f"{grounded_system_policy()}"
         f"{capability_text} "
         f"User message: {text}{context_text}"
+    )
+
+
+def _provider_requires_mission_state_fallback(text: str) -> bool:
+    """Whether a provider answer must be backed by mission state evidence.
+
+    This is intentionally a *fallback* predicate. The provider sees the turn
+    first and may call ``research_mission_state``. Only when it returns a
+    free-form answer without that authoritative read do these mission/candidate
+    query shapes fall back to the deterministic mission read model.
+    """
+    return (
+        is_research_progress_status_question(text)
+        or is_mission_candidate_read_request(text)
+        or is_best_candidate_query(text)
+        or is_strategy_family_coverage_question(text)
+        or wants_technical_blocker_detail(text)
     )
 
 
@@ -4980,7 +5100,7 @@ def _requires_manual_boundary(text: str) -> bool:
 
 # hotfix/conversation-layer-safe-web-parity: see the GENERAL_CONVERSATION
 # branch of _try_conversational_mvp above.
-_AMBIGUOUS_RESEARCH_TOPIC_TOKENS: tuple[str, ...] = ("연구", "전략", "후보", "검증", "단타", "스윙", "중장기")
+_AMBIGUOUS_RESEARCH_TOPIC_TOKENS: tuple[str, ...] = ("연구", "전략", "후보", "검증", "단타", "스윙", "중장기", "승격", "promotion")
 
 
 # #214 post-deploy Conversation-Integrity hotfix ---------------------------
@@ -5071,110 +5191,61 @@ _WEB_READ_ONLY_PROBE_MARKER_SUFFIX = " readonly"
 
 
 def _is_conversational_mvp_source(request: LLMConversationRequest) -> bool:
-    # hotfix/conversation-layer-safe-web-parity: a real Web Dashboard human
-    # message (GaonWebChatAdapter.handle always stamps source="web" and a
-    # "web:"-prefixed message_id, mirroring Telegram's own "telegram:"
-    # prefix) is now admitted to the same conversational-MVP pipeline
-    # Telegram uses, so Web gets the same mission-aware STATUS/READ,
-    # availability, and multi-turn ConversationalMVPContext follow-up
-    # handling Telegram already has - transport should only change how a
-    # message arrives, not which conversation brain answers it. This is
-    # deliberately NOT done in isolation: _try_authoritative_research_tool,
-    # _try_deterministic_tool, and assistant_tool_definitions were first
-    # gated behind has_explicit_research_execution_intent so that widening
-    # this predicate cannot, by itself, let a Web status/read question reach
-    # a real research-execution tool it could not reach before.
-    #
-    # A web read_only=True diagnostic probe (GaonWebChatAdapter.handle
-    # appends its own _READ_ONLY_TEXT_MARKER, "readonly", as a text suffix -
-    # never sent by real dashboard chat traffic, which always defaults
-    # read_only=False) is deliberately excluded here: that literal suffix is
-    # ALSO one of research_mission._READ_ONLY_INTENT_TOKENS
-    # (is_explicit_read_only_query), a marker designed for Telegram natural
-    # language ("실행하지 말고 read-only로 알려주세요"), not for a bare
-    # runtime-status probe. Admitting it would let an unrelated status ping
-    # get reinterpreted as a research-mission read-only question. A
-    # read_only probe is meant to stay a side-effect-free diagnostic ping
-    # through the pre-existing deterministic-tool path, not gain
-    # ConversationalMVPContext state.
-    #
-    # fix/cross-transport-mission-read-routing production bug fix: this
-    # exclusion was unconditional, so it ALSO caught a genuine, specific
-    # mission-status question ("단타 연구는 잘되고 있나요?") whenever it
-    # happened to be sent with read_only=True (e.g. a diagnostic parity
-    # check calling POST /gaon/chat directly) - completely independent of
-    # whether the operator's configured durable owner mission actually
-    # existed. Excluded from the conversational-MVP pipeline, such a
-    # message fell through to the raw assistant-provider/tool-executor
-    # path with no mission awareness at all, where a real LLM provider
-    # could plausibly pick the generic, mission-unaware
-    # "research_operation_status" tool (a different data model entirely -
-    # research_quality/strategy_config/rollback audit rows, never
-    # ResearchMission/StrategyCandidateRecord) instead of ever reading the
-    # real, existing durable mission - directly contradicting the actual
-    # persisted state. Only the UNDERLYING (marker-stripped) text is
-    # checked here, and only against the SAME two predicates
-    # ``_try_conversational_mvp`` itself already uses further below to
-    # answer such a question deterministically with zero research tool
-    # calls (is_research_progress_status_question /
-    # is_mission_candidate_read_request) - a bare, non-research runtime
-    # ping ("가온 상태 알려줘") still satisfies neither once the marker
-    # itself is stripped out first (is_mission_candidate_read_request's
-    # own explicit-read-only-marker branch only ever matches the marker
-    # STILL being present in the text, which it no longer is here), so it
-    # keeps being excluded exactly as before - this only widens the gate
-    # for a message that was ALREADY, on its own words, an honestly-
-    # answerable mission read/status question.
-    if request.source == "web" and request.text.casefold().endswith(_WEB_READ_ONLY_PROBE_MARKER_SUFFIX):
+    """Admit real conversational ingress by provenance, not transport name.
+
+    A transport is conversational when its message id carries the same
+    namespace prefix as ``request.source`` (``web:...``, ``telegram:...``,
+    and equally a future ``api:...``). This removes the old Web/Telegram
+    whitelist without treating arbitrary synthetic/test requests as human
+    ingress merely because they happen to have a session id.
+
+    A small set of deterministic conversation release-check session
+    namespaces remains explicitly admitted because those probes intentionally
+    exercise the conversational layer without coming through an external
+    adapter. The synthetic ``readonly`` diagnostic suffix keeps its narrow
+    no-mission-read exclusion.
+    """
+    release_check_prefixes = (
+        "gaon-conversation-release-check:",
+        "gaon-conversation-context-release-check:",
+        "gaon-conversational-reasoning-release-check:",
+        "gaon-natural-conversation-release-check:",
+        "gaon-presentation-integrity-release-check:",
+        "gaon-conversational-research-execution-release-check:",
+        "gaon-conversational-reexecution-integrity-release-check:",
+    )
+    release_check = request.session_id.startswith(release_check_prefixes)
+
+    # CLI/operator probes outside the explicit conversation release checks are
+    # synthetic diagnostics and should exercise the lower deterministic
+    # safe-tool router directly, not acquire conversational session semantics.
+    if request.source == "cli" and request.user_ref == "cli" and not release_check:
+        return False
+
+    if request.text.casefold().endswith(_WEB_READ_ONLY_PROBE_MARKER_SUFFIX):
         underlying_text = request.text[: -len(_WEB_READ_ONLY_PROBE_MARKER_SUFFIX)]
-        # fix/web-conversation-family-coverage-read: the admission gate for a
-        # read_only=True web message must cover EVERY deterministic,
-        # zero-research-tool, no-mutation mission read ``_try_conversational_
-        # mvp`` can answer - not only progress-status / candidate-read.
-        # Before this, a read-only "그중 제일 좋은 건?" (candidate-portfolio
-        # comparison) or "돌파 말고 다른 전략도 연구하고 있어?" (family
-        # coverage) was excluded here, never resolved the durable owner
-        # mission, and was answered by a mission-unaware generic path -
-        # directly contradicting the progress-status question asked moments
-        # earlier that DID resolve the same mission.
-        # A bare reasoning follow-up ("왜?", "그건 왜?") right after a
-        # read-only mission read is also a zero-research-tool, no-mutation
-        # question ``_try_mission_subject_explanation`` answers from the
-        # tracked read subject; when there is no subject it returns None and
-        # falls through exactly as before, so admitting it is safe.
-        _followup_intent = classify_conversational_route(underlying_text).intent in {
+        followup_intent = classify_conversational_route(underlying_text).intent in {
             ConversationalMVPIntent.EXPLAIN_PREVIOUS_RESULT,
             ConversationalMVPIntent.CONTEXTUAL_FOLLOWUP,
         }
-        # PR #213: an explicit technical/raw/debug detail request about the
-        # blocker ("blocker 코드 원문 그대로 알려줘", "내부 코드로 알려줘") is
-        # a zero-research-tool, no-mutation read answered from persisted
-        # state - admit it so the read-only subject-continuity path can
-        # surface the raw code when (and only when) it was explicitly
-        # requested, instead of the generic "I don't understand" fallback.
-        # A bare runtime/availability ping ("가온 상태 알려줘") is still not
-        # admitted here.
-        _technical_detail_read = wants_technical_blocker_detail(underlying_text)
+        technical_detail_read = wants_technical_blocker_detail(underlying_text)
         if not (
             is_research_progress_status_question(underlying_text)
             or is_mission_candidate_read_request(underlying_text)
             or is_best_candidate_query(underlying_text)
             or is_strategy_family_coverage_question(underlying_text)
-            or _followup_intent
-            or _technical_detail_read
+            or followup_intent
+            or technical_detail_read
         ):
             return False
-    return (
-        (request.source == "telegram" and str(request.message_id or "").startswith("telegram:"))
-        or (request.source == "web" and str(request.message_id or "").startswith("web:"))
-        or request.session_id.startswith("gaon-conversation-release-check:")
-        or request.session_id.startswith("gaon-conversation-context-release-check:")
-        or request.session_id.startswith("gaon-conversational-reasoning-release-check:")
-        or request.session_id.startswith("gaon-natural-conversation-release-check:")
-        or request.session_id.startswith("gaon-presentation-integrity-release-check:")
-        or request.session_id.startswith("gaon-conversational-research-execution-release-check:")
-        or request.session_id.startswith("gaon-conversational-reexecution-integrity-release-check:")
-    )
+
+    if release_check:
+        return True
+
+    source = str(request.source or "").strip()
+    message_id = str(request.message_id or "")
+    ingress_provenance = bool(source and message_id.startswith(f"{source}:"))
+    return bool(ingress_provenance and request.session_id.strip() and request.user_ref.strip())
 
 
 def _contains_supported_conversational_mvp_token(text: str) -> bool:
@@ -6155,6 +6226,48 @@ def _format_tool_response(tool_name: str, output: dict[str, object], user_text: 
     grounded = format_grounded_tool_response(tool_name, output, user_text)
     if grounded is not None:
         return grounded
+    if tool_name == "research_mission_state":
+        if output.get("ambiguous"):
+            return str(output.get("message") or "여러 Research Mission이 있어 하나를 확정할 수 없습니다, 영하님.")
+        if not output.get("active"):
+            return str(output.get("message") or "현재 확인 가능한 Research Mission이 없습니다, 영하님.")
+        mission = _as_dict(output.get("mission"))
+        candidates = _as_list(output.get("candidates"))
+        lines = [
+            "현재 Research Mission 상태입니다, 영하님.",
+            f"- Mission: {mission.get('mission_id') or 'unknown'} / {mission.get('status') or 'unknown'}",
+            f"- 범위: {mission.get('scope') or mission.get('market') or 'unknown'}",
+            f"- 진행 사이클: {mission.get('cycles_completed', 0)} / 승격 준비: {mission.get('promotion_progress') or 'unknown'}",
+            f"- 활성 후보: {mission.get('active_candidate_id') or '없음'}",
+        ]
+        if mission.get("blocked_reason"):
+            lines.append(f"- Blocker: {mission.get('blocked_reason')}")
+        if candidates:
+            lines.append("- 후보:")
+            for raw in candidates[:8]:
+                item = _as_dict(raw)
+                lines.append(
+                    f"  · {item.get('candidate_id') or 'unknown'} / {item.get('strategy_family') or 'unknown'} / "
+                    f"{item.get('status') or 'unknown'} / valid {item.get('valid_symbols', 0)}/{item.get('attempted_symbols', 0)}"
+                )
+        return "\n".join(lines)
+    if tool_name == "validation_status":
+        validations = _as_list(output.get("validations"))
+        revalidations = _as_list(output.get("paper_revalidations"))
+        if not validations and not revalidations:
+            return "현재 저장된 최신 검증/재검증 결과가 없습니다, 영하님."
+        lines = ["최신 검증 상태입니다, 영하님."]
+        for raw in validations[:3]:
+            item = _as_dict(raw)
+            lines.append(
+                f"- Validation {item.get('validation_id')}: {item.get('status')} / score={item.get('score')} / {item.get('generated_at')}"
+            )
+        for raw in revalidations[:3]:
+            item = _as_dict(raw)
+            lines.append(
+                f"- Paper revalidation {item.get('revalidation_id')}: {item.get('status')} / champion={item.get('champion_version_id')} / {item.get('generated_at')}"
+            )
+        return "\n".join(lines)
     if tool_name == "champion_status":
         if not output.get("active"):
             return "현재 등록된 활성 Champion은 없습니다, 영하님."
@@ -6243,7 +6356,12 @@ def _format_tool_result_response(result: AssistantToolResult) -> str | None:
     output_wrapper = result.result.get("output")
     if not isinstance(output_wrapper, dict):
         return None
-    return format_grounded_tool_response(result.name, output_wrapper)
+    grounded = format_grounded_tool_response(result.name, output_wrapper)
+    if grounded is not None:
+        return grounded
+    if result.name in {"research_mission_state", "validation_status"}:
+        return _format_tool_response(result.name, output_wrapper)
+    return None
 
 
 def _provider_unavailable_message() -> str:
