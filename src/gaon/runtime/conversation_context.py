@@ -117,12 +117,21 @@ class ConversationContextOrchestrator:
         return ConversationContextBundle(session_id=session_id, items=tuple(bounded), warnings=tuple(warnings), max_chars=self._max_chars)
 
     def build_for_query(self, session_id: str, query: str) -> ConversationContextBundle:
-        """Do not attach global research snapshots to unrelated conversation."""
-        lowered = query.casefold()
-        if any(token in lowered for token in (
-            "연구", "전략", "시장", "주식", "삼성", "종목", "검증", "research", "strategy", "candidate",
-        )):
-            return self.build(session_id)
+        """Build prompt context for one live conversation turn.
+
+        Only recent conversation history is injected automatically. Global
+        research/validation/champion/pipeline snapshots age independently
+        from the chat, so attaching them to every research-adjacent prompt
+        can make the model answer from stale operational state. Those
+        snapshots are exposed through explicit read-only tools instead and
+        are fetched only when a turn actually needs them. ``build()`` stays
+        available as the broader diagnostic/export view.
+
+        ``query`` remains in the public signature for compatibility and for
+        future query-aware summarisation; it no longer acts as a keyword
+        gate for global operational context.
+        """
+        _ = query
         items = self._fit_budget(self._recent_conversation(session_id))
         return ConversationContextBundle(session_id, tuple(items), (), self._max_chars)
 

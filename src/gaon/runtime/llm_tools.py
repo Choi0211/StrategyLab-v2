@@ -53,6 +53,11 @@ class ToolDefinition:
     risk_level: ToolRiskLevel
     required_args: tuple[str, ...] = ()
     allowed_args: tuple[str, ...] = ()
+    # Runtime-bound arguments are injected by the conversation brain and are
+    # never exposed in the provider-facing tool schema. They let a read-only
+    # tool receive authoritative session/owner context without trusting the
+    # model to supply or choose internal identifiers.
+    context_args: tuple[str, ...] = ()
     # Fixture-gated tools return synthetic self-improving-research demo data
     # (see gaon.research.self_improving) rather than evidence about the
     # user's actual strategy or the runtime's operational state. They must
@@ -245,6 +250,28 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         lambda _args: _runtime_status(connection),
     )
     registry.register(
+        ToolDefinition(
+            "research_mission_state",
+            "Read the current conversation owner's authoritative ResearchMission and candidate portfolio without mutating it.",
+            ToolRiskLevel.READ_ONLY,
+            context_args=("session_id", "fallback_session_ids"),
+        ),
+        lambda args: _research_mission_state(
+            connection,
+            str(args.get("session_id", "")),
+            tuple(str(item) for item in args.get("fallback_session_ids", ()) if str(item)),
+        ),
+    )
+    registry.register(
+        ToolDefinition(
+            "validation_status",
+            "Read the latest strategy validation and paper revalidation reports without changing strategy state.",
+            ToolRiskLevel.READ_ONLY,
+            allowed_args=("limit",),
+        ),
+        lambda args: _validation_status(connection, int(args.get("limit", 3))),
+    )
+    registry.register(
         ToolDefinition("champion_status", "Read active champion registry slot.", ToolRiskLevel.READ_ONLY, allowed_args=("slot",)),
         lambda args: _champion_status(connection, str(args.get("slot", "default"))),
     )
@@ -433,6 +460,154 @@ def _runtime_status(connection: sqlite3.Connection) -> dict[str, object]:
     return {"schema_version": int(row[0]) if row else None, "ready": row is not None}
 
 
+def _research_mission_state(
+    connection: sqlite3.Connection,
+    session_id: str,
+    fallback_session_ids: tuple[str, ...] = (),
+) -> dict[str, object]:
+    """Read authoritative ResearchMission state from explicitly bound sessions.
+
+    ``fallback_session_ids`` is supplied only by the conversation brain after
+    its configured-owner identity check. The provider never sees or chooses
+    these identifiers. Distinct missions fail closed as ambiguous rather
+    than silently selecting the newest row.
+    """
+    from gaon.knowledge.research_mission import ResearchMission, candidate_records, get_active_candidate
+
+    ordered_session_ids = tuple(dict.fromkeys(item for item in (session_id, *fallback_session_ids) if item))
+    found: dict[str, tuple[str, ResearchMission]] = {}
+    for bound_session_id in ordered_session_ids:
+        row = connection.execute(
+            "SELECT metadata_json FROM conversation_sessions WHERE session_id = ?",
+            (bound_session_id,),
+        ).fetchone()
+        if row is None:
+            continue
+        try:
+            metadata = loads_json(str(row[0]))
+        except (TypeError, ValueError):
+            continue
+        root = metadata.get("conversation_mvp") if isinstance(metadata, dict) else None
+        raw = root.get("research_mission") if isinstance(root, dict) else None
+        if not isinstance(raw, dict):
+            continue
+        try:
+            mission = ResearchMission.from_json(raw)
+        except (KeyError, TypeError, ValueError):
+            continue
+        found.setdefault(mission.mission_id, (bound_session_id, mission))
+
+    if not found:
+        return {
+            "active": False,
+            "ambiguous": False,
+            "mission": None,
+            "candidates": [],
+            "message": "현재 확인 가능한 Research Mission이 없습니다.",
+        }
+    if len(found) > 1:
+        return {
+            "active": True,
+            "ambiguous": True,
+            "mission": None,
+            "mission_ids": sorted(found),
+            "candidates": [],
+            "message": "서로 다른 Research Mission이 여러 개 있어 현재 대화만으로 하나를 고를 수 없습니다.",
+        }
+
+    source_session_id, mission = next(iter(found.values()))
+    candidates = candidate_records(mission)
+    active_candidate = get_active_candidate(mission)
+    return {
+        "active": True,
+        "ambiguous": False,
+        "source_session_id": source_session_id,
+        "mission": {
+            "mission_id": mission.mission_id,
+            "status": mission.status.value,
+            "market": mission.market,
+            "scope": mission.scope_label,
+            "strategy_family": mission.strategy_family,
+            "originating_request": mission.originating_request,
+            "cycles_completed": mission.cycles_completed,
+            "blocked_reason": mission.blocked_reason,
+            "active_candidate_id": mission.active_candidate_id,
+            "promotion_progress": mission.progress_label,
+            "updated_at": mission.updated_at,
+        },
+        "active_candidate": active_candidate.candidate_id if active_candidate is not None else None,
+        "candidates": [
+            {
+                "candidate_id": candidate.candidate_id,
+                "strategy_family": candidate.strategy_family,
+                "status": candidate.status.value,
+                "attempted_symbols": candidate.attempted_symbols,
+                "valid_symbols": candidate.valid_symbols,
+                "trade_count": candidate.trade_count,
+                "cycles_completed": candidate.cycles_completed,
+                "validation_stage_status": dict(candidate.validation_stage_status),
+                "last_director_action": candidate.last_director_action,
+                "rejected_reason": candidate.rejected_reason,
+                "updated_at": candidate.updated_at,
+            }
+            for candidate in candidates
+        ],
+    }
+
+
+def _validation_status(connection: sqlite3.Connection, limit: int) -> dict[str, object]:
+    if limit < 1 or limit > 10:
+        raise ToolSecurityError("limit must be between 1 and 10")
+
+    def table_exists(name: str) -> bool:
+        return connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", (name,)
+        ).fetchone() is not None
+
+    validations: list[dict[str, object]] = []
+    revalidations: list[dict[str, object]] = []
+    if table_exists("validation_reports"):
+        rows = connection.execute(
+            "SELECT validation_id, backtest_run_id, fingerprint, status, score, policy_version, generated_at "
+            "FROM validation_reports ORDER BY generated_at DESC, validation_id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        validations = [
+            {
+                "validation_id": str(row[0]),
+                "backtest_run_id": str(row[1]),
+                "fingerprint": str(row[2]),
+                "status": str(row[3]),
+                "score": int(row[4]),
+                "policy_version": str(row[5]),
+                "generated_at": str(row[6]),
+            }
+            for row in rows
+        ]
+    if table_exists("paper_revalidation_reports"):
+        rows = connection.execute(
+            "SELECT revalidation_id, status, policy_version, session_id, champion_version_id, generated_at "
+            "FROM paper_revalidation_reports ORDER BY generated_at DESC, revalidation_id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        revalidations = [
+            {
+                "revalidation_id": str(row[0]),
+                "status": str(row[1]),
+                "policy_version": str(row[2]),
+                "session_id": str(row[3]),
+                "champion_version_id": str(row[4]),
+                "generated_at": str(row[5]),
+            }
+            for row in rows
+        ]
+    return {
+        "validations": validations,
+        "paper_revalidations": revalidations,
+        "empty": not validations and not revalidations,
+    }
+
+
 def _champion_status(connection: sqlite3.Connection, slot: str) -> dict[str, object]:
     row = connection.execute("SELECT active_version_id, payload_json, updated_at FROM champion_registry WHERE slot = ?", (slot,)).fetchone()
     if row is None:
@@ -529,7 +704,7 @@ def _validate_tool_name(name: str) -> None:
 
 
 def _validate_arguments(definition: ToolDefinition, arguments: dict[str, object]) -> None:
-    allowed = set(definition.allowed_args) | set(definition.required_args)
+    allowed = set(definition.allowed_args) | set(definition.required_args) | set(definition.context_args)
     missing = [arg for arg in definition.required_args if arg not in arguments]
     if missing:
         raise ToolSecurityError(f"missing required tool arguments: {','.join(missing)}")
@@ -565,6 +740,8 @@ def _assistant_tool_definition(definition: ToolDefinition) -> AssistantToolDefin
     properties = {name: {"type": "string"} for name in definition.allowed_args + definition.required_args}
     if definition.name == "v5_pipeline_history":
         properties["limit"] = {"type": "integer", "minimum": 1, "maximum": 20}
+    elif definition.name == "validation_status":
+        properties["limit"] = {"type": "integer", "minimum": 1, "maximum": 10}
     parameters: dict[str, object] = {"type": "object", "properties": properties, "additionalProperties": False}
     if definition.required_args:
         parameters["required"] = list(definition.required_args)

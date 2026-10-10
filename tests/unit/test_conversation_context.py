@@ -39,6 +39,23 @@ class ConversationContextTests(unittest.TestCase):
         self.assertLessEqual(len(context.to_prompt_context()), 500)
         self.assertTrue(context.references)
 
+
+    def test_query_context_keeps_recent_chat_but_excludes_global_operational_snapshots(self) -> None:
+        brain = LLMConversationBrain(GaonRuntimeConfig(), self.repository)
+        brain.respond(_request("단타 전략 얘기해보자", "message:research-chat"))
+        self.connection.execute(
+            "INSERT INTO gaon_v5_pipeline_runs(run_id, correlation_id, status, current_stage, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("run-query", "corr-query", "completed", "completed", '{"status":"completed"}', "2026-10-05T00:00:00Z", "2026-10-05T00:00:00Z"),
+        )
+
+        context = ConversationContextOrchestrator(self.connection, self.repository).build_for_query(
+            "telegram:1", "현재 연구 전략과 검증 상태 알려줘"
+        )
+
+        self.assertTrue(context.items)
+        self.assertTrue(all(item.source_type is ContextSourceType.RECENT_CONVERSATION for item in context.items))
+        self.assertNotIn("run-query", context.to_prompt_context())
+
     def test_runtime_tables_are_used_without_fabrication(self) -> None:
         self.connection.execute(
             "INSERT INTO gaon_v5_pipeline_runs(run_id, correlation_id, status, current_stage, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",

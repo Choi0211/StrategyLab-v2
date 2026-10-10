@@ -11,6 +11,9 @@ from gaon.runtime.llm_tools import (
     default_tool_registry,
 )
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
+from gaon.runtime.serialization import dumps_json
+from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
+from gaon.knowledge.strategy_candidate import new_candidate
 
 
 class LLMToolFrameworkTests(unittest.TestCase):
@@ -69,6 +72,45 @@ class LLMToolFrameworkTests(unittest.TestCase):
         result = SafeToolExecutor(default_tool_registry(self.connection), self.audit).execute(_request("v5_pipeline_history", {"limit": 999}))
 
         self.assertEqual(result.status, "denied")
+
+    def test_research_mission_state_reads_only_bound_session_state(self) -> None:
+        now = "2026-10-05T00:00:00Z"
+        mission = extract_or_update_mission("국내 주식 전체를 대상으로 단타 전략을 연구해주세요", existing=None, now=now)
+        candidate = new_candidate("breakout_standard", sequence=next_candidate_sequence(mission), now=now)
+        mission = add_candidate(mission, candidate, now=now)
+        metadata = {"conversation_mvp": {"research_mission": mission.to_json()}}
+        self.connection.execute(
+            "INSERT INTO conversation_sessions(session_id, user_ref, source, status, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("session:bound", "user:test", "api", "active", now, now, dumps_json(metadata)),
+        )
+
+        executor = SafeToolExecutor(default_tool_registry(self.connection), self.audit)
+        result = executor.execute(_request(
+            "research_mission_state",
+            {"session_id": "session:bound", "fallback_session_ids": []},
+        ))
+
+        self.assertEqual(result.status, "success")
+        self.assertTrue(result.output["active"])
+        self.assertEqual(result.output["mission"]["mission_id"], mission.mission_id)
+        self.assertEqual(result.output["candidates"][0]["candidate_id"], candidate.candidate_id)
+
+    def test_research_mission_context_args_are_hidden_from_provider_schema(self) -> None:
+        executor = SafeToolExecutor(default_tool_registry(self.connection), self.audit)
+        definitions = {definition.name: definition for definition in executor.assistant_tool_definitions("후보 상태 알려줘")}
+
+        mission_tool = definitions["research_mission_state"]
+        properties = mission_tool.parameters.get("properties", {})
+        self.assertNotIn("session_id", properties)
+        self.assertNotIn("fallback_session_ids", properties)
+
+    def test_validation_status_is_explicit_read_tool(self) -> None:
+        executor = SafeToolExecutor(default_tool_registry(self.connection), self.audit)
+        result = executor.execute(_request("validation_status", {"limit": 3}))
+
+        self.assertEqual(result.status, "success")
+        self.assertTrue(result.output["empty"])
+
 
 
 class FixtureGatedToolExposureTests(unittest.TestCase):
