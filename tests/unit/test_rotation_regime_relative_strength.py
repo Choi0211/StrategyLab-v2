@@ -21,6 +21,7 @@ from gaon.knowledge.strategy_candidate import (
     REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
     RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES,
     STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
+    STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES,
     expand_strategy_space_candidate,
     new_candidate,
 )
@@ -31,6 +32,7 @@ LATER = "2026-09-07T00:00:00Z"
 _BREAKOUT = (*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES)
 _NON_BREAKOUT = tuple(t.family for t in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES)
 _REGIME = tuple(t.family for t in REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES)
+_STRUCTURAL = tuple(t.family for t in STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES)
 _RS = tuple(t.family for t in RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES)
 
 
@@ -57,7 +59,8 @@ class RegimeFamilyEntersTheRotationTests(unittest.TestCase):
         seen, terminal = _drain(_history(*[t.family for t in _BREAKOUT]), multi_symbol=False)
         # order: non-breakout paradigms, then regime-filtered, then terminal.
         self.assertEqual(seen[: len(_NON_BREAKOUT)], list(_NON_BREAKOUT))
-        self.assertEqual(seen[len(_NON_BREAKOUT):], list(_REGIME))
+        self.assertEqual(seen[len(_NON_BREAKOUT):len(_NON_BREAKOUT)+len(_REGIME)], list(_REGIME))
+        self.assertEqual(seen[-len(_STRUCTURAL):], list(_STRUCTURAL))
         self.assertIsNone(terminal.candidate)
         self.assertEqual(terminal.reason, "strategy_hypothesis_space_exhausted")
 

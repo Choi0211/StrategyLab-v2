@@ -56,7 +56,7 @@ from gaon.runtime.gaon_agent import (
     reconcile_with_mission,
     runtime_capability_note,
 )
-from gaon.runtime.gaon_agent.capabilities import URL_FETCH, WEB_SEARCH
+from gaon.runtime.gaon_agent.capabilities import IMAGE_VISION, URL_FETCH, VIDEO_FRAME_ANALYSIS, VIDEO_METADATA, VIDEO_TRANSCRIPT, WEB_SEARCH
 from gaon.runtime.gaon_agent.turn_router import contains_external_url, is_current_info_question, render_external_research_limitation, wants_external_web_research
 from gaon.runtime.gaon_agent.multi_intent import recompose_answers
 from gaon.runtime.conversational_research_execution import (
@@ -773,6 +773,9 @@ class LLMConversationBrain:
         limitation_followup = self._try_capability_limitation_followup(request, warnings, references)
         if limitation_followup is not None:
             return limitation_followup
+        external_followup = self._try_external_read_tool_followup(request, warnings, references)
+        if external_followup is not None:
+            return external_followup
         gap_reply = self._try_gap_analysis(request, warnings, references)
         if gap_reply is not None:
             return gap_reply
@@ -1132,6 +1135,51 @@ class LLMConversationBrain:
             "deterministic",
             (),
         )
+
+    def _try_external_read_tool_followup(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """Keep a bare reference attached to the most recent successful
+        external read result instead of letting an unrelated ResearchMission
+        blocker capture it.  Reuses the stored bounded result; it performs no
+        new network request and no state-changing action.
+        """
+        if read_only_intent(request.text) != "reference" or self._tool_result_repository is None:
+            return None
+        latest = self._tool_result_repository.latest(request.session_id)
+        if latest is None or latest.status != "success":
+            return None
+        if latest.tool_name == "url_fetch":
+            source = str(latest.output.get("final_url") or latest.output.get("source") or "").strip()
+            body = str(latest.output.get("text") or "").strip()
+            text = "방금 직접 읽은 링크의 결과를 기준으로 말씀드리겠습니다."
+            if source:
+                text += f"\n- source={source}"
+            if body:
+                text += f"\n\n추출 내용:\n{body[:3000]}"
+            return (
+                text, "tool_external_follow_up", warnings,
+                _dedupe((*references, "tool:url_fetch")), "deterministic", (),
+            )
+        if latest.tool_name == "web_search":
+            rows = latest.output.get("results")
+            if not isinstance(rows, list):
+                return None
+            lines = ["방금 확인한 웹 검색 결과를 이어서 보겠습니다."]
+            for row in rows[:5]:
+                if not isinstance(row, dict):
+                    continue
+                title = str(row.get("title") or "검색 결과").strip()
+                snippet = str(row.get("snippet") or "").strip()
+                lines.append(f"- {title}" + (f": {snippet[:500]}" if snippet else ""))
+            return (
+                "\n".join(lines), "tool_external_follow_up", warnings,
+                _dedupe((*references, "tool:web_search")), "deterministic", (),
+            )
+        return None
 
     def _try_gap_analysis(
         self,
@@ -4798,6 +4846,31 @@ class LLMConversationBrain:
         subject = root.get("last_read_subject")
         if not isinstance(subject, dict):
             return None
+        # Capability truth is dynamic.  A limitation reply persisted before
+        # web/URL/vision/video tooling was deployed must never survive as the
+        # semantic subject of a later bare follow-up after that capability is
+        # now available.  Invalidate only known legacy "not connected / can
+        # not open" wording and only when the corresponding current registry
+        # capability is actually available; transient provider/cookie errors
+        # remain valid subjects and are not erased by this rule.
+        if subject.get("kind") == "capability_limitation":
+            detail = str(subject.get("detail_text") or "")
+            stale_checks = (
+                (("인터넷에서 직접 자료를 찾아오는 기능이 아직 연결되어 있지 않아", "실시간 정보(날씨·시세·환율·뉴스 등)를 조회할 수 있는 도구가 연결되어 있지 않아"), WEB_SEARCH),
+                (("아직 링크를 직접 열어 내용을 가져올 수 없습니다",), URL_FETCH),
+                (("이미지를 직접", "이미지 분석"), IMAGE_VISION),
+                (("영상이나 자막을 직접 가져와 분석할 수 있는 기능이 없습니다",), VIDEO_METADATA),
+            )
+            for phrases, capability_id in stale_checks:
+                if any(phrase in detail for phrase in phrases) and self._capability_registry.is_available(capability_id):
+                    return None
+            if (
+                "자막" in detail
+                and "기능이 없습니다" in detail
+                and self._capability_registry.is_available(VIDEO_TRANSCRIPT)
+                and self._capability_registry.is_available(VIDEO_FRAME_ANALYSIS)
+            ):
+                return None
         # A "capability_limitation" subject (roadmap #217 follow-up - a
         # tracked URL/current-info/multimodal limitation reply) legitimately
         # carries no mission_id; every other kind still requires one.

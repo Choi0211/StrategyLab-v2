@@ -414,24 +414,27 @@ class StagnationRotationTests(unittest.TestCase):
         from gaon.knowledge.strategy_candidate import (
             NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
             REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+            STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES,
         )
 
         rotation_families = [
-            *(t.family for t in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES),
-            *(t.family for t in REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES),
+            *((t.family, "strategy_paradigm_rotation") for t in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES),
+            *((t.family, "strategy_paradigm_rotation") for t in REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES),
+            *((t.family, "structural_filter_hypothesis_expansion") for t in STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES),
         ]
         candidates = list(
             new_candidate(template.family, sequence=index + 1, now=NOW)
             for index, template in enumerate((*ALL_STRATEGY_FAMILY_TEMPLATES, *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES))
         )
         rotated: list[str] = []
-        for _ in range(len(rotation_families)):
+        for expected_family, expected_reason in rotation_families:
             expansion = expand_strategy_space_candidate(tuple(candidates), sequence=len(candidates) + 1, now=LATER)
-            self.assertEqual(expansion.reason, "strategy_paradigm_rotation")
+            self.assertEqual(expansion.reason, expected_reason)
             assert expansion.candidate is not None
+            self.assertEqual(expansion.candidate.strategy_family, expected_family)
             rotated.append(expansion.candidate.strategy_family)
             candidates.append(expansion.candidate)
-        self.assertEqual(rotated, rotation_families)
+        self.assertEqual(rotated, [family for family, _ in rotation_families])
 
         expansion = expand_strategy_space_candidate(tuple(candidates), sequence=len(candidates) + 1, now=LATER)
         self.assertEqual(expansion.reason, "strategy_hypothesis_space_exhausted")

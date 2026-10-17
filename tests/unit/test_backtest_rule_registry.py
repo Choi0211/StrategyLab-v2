@@ -420,8 +420,8 @@ class ExistingFamilyBehaviorUnchangedTests(unittest.TestCase):
         import pathlib
 
         golden = json.loads(pathlib.Path(__file__).with_name("test_backtest_rule_registry_golden.json").read_text(encoding="utf-8"))
-        self.assertEqual(set(golden), set(_TEMPLATE_BY_FAMILY))
-        for family in _TEMPLATE_BY_FAMILY:
+        self.assertTrue(set(golden).issubset(set(_TEMPLATE_BY_FAMILY)))
+        for family in golden:
             with self.subTest(family=family):
                 spec = build_candidate_spec(family, created_at=NOW)
                 result = _run(spec)

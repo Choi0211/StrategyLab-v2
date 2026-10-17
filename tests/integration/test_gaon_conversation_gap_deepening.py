@@ -218,19 +218,20 @@ class GaonConversationGapDeepeningTests(unittest.TestCase):
     # tracked subject; a bare "이건요?" follow-up must not jump to an
     # unrelated mission blocker.
     # ================================================================
-    def test_case4_url_input_uses_the_honest_url_limitation_lane(self) -> None:
+    def test_case4_url_input_no_longer_claims_url_fetch_is_unavailable(self) -> None:
         self._seed_mission(blocked=True)
         payload = self._send("https://www.instagram.com/p/DcHnMH-kzA5/")
-        self.assertEqual(payload["route"], "conversation_capability_limited_url")
-        self.assertIn("링크를 직접 열어", payload["text"])
+        self.assertIn(payload["route"], {"tool_server_native_fallback", "tool_server_native_fallback_failed"})
+        self.assertNotEqual(payload["route"], "conversation_capability_limited_url")
+        self.assertNotIn("아직 링크를 직접 열어", payload["text"])
         self.assertNotIn("단타", payload["text"])
 
-    def test_case5_bare_reference_after_url_keeps_the_url_subject(self) -> None:
+    def test_case5_bare_reference_after_successful_url_reuses_external_read_not_mission_blocker(self) -> None:
         self._seed_mission(blocked=True)
-        self._send("https://www.instagram.com/p/DcHnMH-kzA5/")
+        first = self._send("https://www.nber.org/papers/w10144")
+        self.assertEqual(first["route"], "tool_server_native_fallback")
         payload = self._send("이건요?")
-        self.assertEqual(payload["route"], "conversation_capability_limitation_subject_followup")
-        self.assertIn("링크를 직접 열어", payload["text"])
+        self.assertEqual(payload["route"], "tool_external_follow_up")
         self.assertNotIn("단타", payload["text"])
         self.assertNotIn("strategy_hypothesis_space_exhausted", payload["text"])
 

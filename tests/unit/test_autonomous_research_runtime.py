@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
 from dataclasses import replace
 
@@ -11,8 +12,25 @@ from gaon.knowledge.research_mission import (
     next_candidate_sequence,
     record_blocked,
 )
-from gaon.knowledge.strategy_candidate import StrategyCandidateStatus, new_candidate
-from gaon.runtime.autonomous_research_runtime import attempt_bounded_stagnation_recovery
+from gaon.knowledge.strategy_candidate import (
+    ALL_STRATEGY_FAMILY_TEMPLATES,
+    NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
+    REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+    STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
+    STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES,
+    StrategyCandidateStatus,
+    new_candidate,
+)
+from gaon.runtime.autonomous_research_runtime import (
+    AutonomousResearchTickResult,
+    _next_interval_for_result,
+    attempt_bounded_stagnation_recovery,
+    attempt_bounded_strategy_space_recovery,
+    ensure_autonomous_research_job,
+    run_due_autonomous_research,
+)
+from gaon.runtime.migrations import migrate
+from gaon.runtime.scheduled_automation import ScheduledJobRepository
 
 _NOW = "2026-08-22T00:00:05Z"
 
@@ -107,6 +125,100 @@ class AttemptBoundedStagnationRecoveryTests(unittest.TestCase):
         self.assertTrue(did_recover)
         active = get_active_candidate(recovered)
         self.assertEqual(active.candidate_id, first.candidate_id)
+
+
+class BoundedStrategySpaceRecoveryTests(unittest.TestCase):
+    def test_blocked_mission_discovers_a_newly_deployed_structural_family(self) -> None:
+        mission = _market_wide_mission()
+        old_space = (
+            *ALL_STRATEGY_FAMILY_TEMPLATES,
+            *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
+            *NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
+            *REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+        )
+        for template in old_space:
+            mission = add_candidate(
+                mission,
+                new_candidate(template.family, sequence=next_candidate_sequence(mission), now=_NOW),
+                now=_NOW,
+            )
+        mission = record_blocked(
+            mission,
+            reason="strategy_hypothesis_space_exhausted: bounded declarative strategy expansion budget exhausted",
+            now=_NOW,
+        )
+
+        recovered, candidate, reason = attempt_bounded_strategy_space_recovery(mission, now=_NOW)
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.strategy_family, STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES[0].family)
+        self.assertEqual(reason, "structural_filter_hypothesis_expansion")
+        self.assertEqual(recovered.status, MissionStatus.ACTIVE)
+        self.assertIsNone(recovered.blocked_reason)
+        self.assertEqual(get_active_candidate(recovered).candidate_id, candidate.candidate_id)
+
+    def test_unrelated_blocker_is_not_changed(self) -> None:
+        mission = record_blocked(_market_wide_mission(), reason="provider_unavailable: fixture", now=_NOW)
+        recovered, candidate, reason = attempt_bounded_strategy_space_recovery(mission, now=_NOW)
+        self.assertIs(recovered, mission)
+        self.assertIsNone(candidate)
+        self.assertIsNone(reason)
+
+
+class AutonomousResearchBackoffTests(unittest.TestCase):
+    def test_unchanged_exhaustion_backs_off_to_six_hours(self) -> None:
+        result = AutonomousResearchTickResult(attempted=True, action="hypothesis_value_space_exhausted")
+        self.assertEqual(_next_interval_for_result(result, 900), 21600)
+
+    def test_awaiting_evidence_backs_off_to_six_hours(self) -> None:
+        result = AutonomousResearchTickResult(attempted=True, action="research_direction_awaiting_evidence")
+        self.assertEqual(_next_interval_for_result(result, 900), 21600)
+
+    def test_generic_blocked_state_backs_off_to_one_hour(self) -> None:
+        result = AutonomousResearchTickResult(attempted=True, action="blocked_no_recovery")
+        self.assertEqual(_next_interval_for_result(result, 900), 3600)
+
+
+    def test_scheduler_persists_six_hour_next_run_after_unchanged_exhaustion(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        migrate(connection)
+        repo = ScheduledJobRepository(connection)
+        now = "2026-10-17T12:00:00Z"
+        self.assertTrue(ensure_autonomous_research_job(repo, now=now))
+
+        class Worker:
+            def tick(self):
+                return AutonomousResearchTickResult(attempted=True, action="hypothesis_value_space_exhausted")
+
+        results = run_due_autonomous_research(repo, Worker(), now=now)
+        self.assertEqual(results[0].action, "hypothesis_value_space_exhausted")
+        enabled = [job for job in repo.list() if job.enabled]
+        self.assertEqual(len(enabled), 1)
+        self.assertEqual(enabled[0].schedule.next_run_at, "2026-10-17T18:00:00Z")
+
+    def test_scheduler_keeps_fifteen_minutes_after_progress(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        migrate(connection)
+        repo = ScheduledJobRepository(connection)
+        now = "2026-10-17T12:00:00Z"
+        self.assertTrue(ensure_autonomous_research_job(repo, now=now))
+
+        class Worker:
+            def tick(self):
+                return AutonomousResearchTickResult(attempted=True, action="strategy_space_expanded")
+
+        run_due_autonomous_research(repo, Worker(), now=now)
+        enabled = [job for job in repo.list() if job.enabled]
+        self.assertEqual(len(enabled), 1)
+        self.assertEqual(enabled[0].schedule.next_run_at, "2026-10-17T12:15:00Z")
+
+    def test_real_progress_keeps_normal_interval(self) -> None:
+        for action in ("strategy_space_expanded", "candidate_created", "cycle_executed", "direction_evidence_acquired"):
+            with self.subTest(action=action):
+                result = AutonomousResearchTickResult(attempted=True, action=action)
+                self.assertEqual(_next_interval_for_result(result, 900), 900)
 
 
 if __name__ == "__main__":
