@@ -467,7 +467,7 @@ class SourceDiscoveryPlanner:
             return (
                 (
                     DiscoveryProvider.ACADEMIC_SEARCH,
-                    f"{topic} empirical evidence",
+                    f"{normalize_query(question.question)} empirical evidence",
                     (
                         SourceType.ACADEMIC_PAPER,
                         SourceType.RESEARCH_REPORT,

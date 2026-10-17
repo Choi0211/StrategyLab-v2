@@ -189,8 +189,9 @@ def build_research_question(
         topic_key=topic_key,
         gap_type=KnowledgeGapType.MISSING_DIRECTIONAL_EVIDENCE,
         question=(
-            "financial markets trading transaction cost sensitivity slippage impact "
-            "trading frequency turnover breakout trend following strategy robustness"
+            "transaction costs and slippage in algorithmic trading strategies "
+            "trading turnover transaction cost impact strategy performance "
+            "trend following momentum breakout trading rule"
         ),
         priority=ResearchPriority.MEDIUM,
         required_evidence=(

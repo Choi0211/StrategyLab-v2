@@ -102,10 +102,12 @@ PRODUCTION_EXTERNAL_CONTENT_ALLOWED_HOSTS = (
     "zenodo.org",
     "figshare.com",
     "www.nber.org",
+    "api.elsevier.com",
 )
 PRODUCTION_EXTERNAL_ALLOWED_CONTENT_TYPES = (
     "text/plain",
     "text/html",
+    "text/xml",
     "application/json",
     "application/pdf",
 )

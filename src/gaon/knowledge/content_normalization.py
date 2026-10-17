@@ -261,7 +261,7 @@ class SafeContentNormalizer:
     def _normalize_by_type(self, content_type: str, content: bytes) -> str:
         if content_type == "text/plain":
             return _decode_utf8(content)
-        if content_type == "text/html":
+        if content_type in ("text/html", "text/xml", "application/xml"):
             parser = _TextHTMLParser()
             parser.feed(_decode_utf8(content))
             return " ".join(parser.parts)

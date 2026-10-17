@@ -189,6 +189,8 @@ class SourceDiscoveryTests(unittest.TestCase):
         )
 
         self.assertGreaterEqual(len(plan.queries), 1)
+        self.assertIn("Test research question", plan.queries[0].query)
+        self.assertIn("empirical evidence", plan.queries[0].query)
 
     def test_hotfix1922_breakout_strategy_query_uses_financial_terms(self) -> None:
         plan = SourceDiscoveryPlanner().build(
