@@ -54,6 +54,10 @@ from gaon.research.global_market import (
 from gaon.research.live_trading_intelligence import (
     adaptive_budget, adaptive_batches, production_feedback, live_report_lines,
 )
+from gaon.research.multi_symbol_validation import (
+    MultiSymbolValidationError,
+    build_relative_strength_validation_dataset,
+)
 
 
 MULTI_SYMBOL_SCHEMA_VERSION = 1
@@ -71,6 +75,11 @@ DEFAULT_REQUEST_TEXT = (
     "20일 고가 돌파, 종가 > MA20 > MA60, 거래량 20일 평균 이상, "
     "손절 -5%, 10일 저점 이탈 청산"
 )
+def _relative_strength_active(strategy: CanonicalStrategySpec) -> bool:
+    raw = strategy.filters.get("relative_strength_min")
+    return raw is not None and bool(raw.value)
+
+
 PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT = """가온아 아래 5개 종목의 실제 KRX 데이터를 사용해서 이 전략이 여러 종목에서도 일반적으로 유효한지 다중종목 연구해줘.
 
 대상 종목:
@@ -732,6 +741,7 @@ class AutonomousMultiSymbolResearchOrchestrator:
         self._provider = provider or build_market_data_provider_from_env(os.environ)
         self._runner = runner or RuleBasedBacktestEngine()
         self._dataset_cache: dict[str, MarketDataset] = {}
+        self._quality_cache: dict[str, DataQualityReport] = {}
 
     def run(
         self,
@@ -799,9 +809,15 @@ class AutonomousMultiSymbolResearchOrchestrator:
         assumptions = default_execution_assumptions()
         evidence: list[SymbolResearchEvidence] = []
         self._dataset_cache = {}
+        self._quality_cache = {}
         provider_name = getattr(self._provider, "source", "unknown")
+        relative_strength = _relative_strength_active(strategy)
         for symbol in universe.symbols:
-            item = self._symbol_evidence(rid, request_text, symbol, start_date, end_date, strategy, assumptions, at)
+            peers = tuple(peer for peer in universe.symbols if peer.upper() != symbol.upper()) if relative_strength else ()
+            item = self._symbol_evidence(
+                rid, request_text, symbol, start_date, end_date, strategy, assumptions, at,
+                peer_symbols=peers,
+            )
             evidence.append(item)
         summary = aggregate_symbol_evidence(tuple(evidence))
         adaptive_sampling = {
@@ -834,9 +850,15 @@ class AutonomousMultiSymbolResearchOrchestrator:
                     for symbol in batch:
                         if any(item.symbol == symbol.upper() for item in evidence):
                             continue
+                        peer_pool = tuple(
+                            dict.fromkeys(
+                                [item.symbol for item in evidence if item.symbol.upper() != symbol.upper()]
+                                + [peer for peer in batch if peer.upper() != symbol.upper()]
+                            )
+                        ) if relative_strength else ()
                         evidence.append(self._symbol_evidence(
                             rid, request_text, symbol, start_date, end_date,
-                            strategy, assumptions, at,
+                            strategy, assumptions, at, peer_symbols=peer_pool,
                         ))
                     summary = aggregate_symbol_evidence(tuple(evidence))
                     if summary.sample_confidence != "low":
@@ -893,6 +915,28 @@ class AutonomousMultiSymbolResearchOrchestrator:
             SQLiteMultiSymbolResearchRepository(self._connection).add_run(run)
         return run
 
+    def _load_dataset_quality(
+        self, symbol: str, *, start_date: str, end_date: str
+    ) -> tuple[MarketDataset, DataQualityReport]:
+        key = symbol.upper()
+        cached_dataset = self._dataset_cache.get(key)
+        cached_quality = self._quality_cache.get(key)
+        if cached_dataset is not None and cached_quality is not None:
+            return cached_dataset, cached_quality
+        if getattr(self._provider, "market_agnostic", False):
+            dataset = self._provider.fetch_bars(key, start_date=start_date, end_date=end_date)
+            validator = getattr(self._provider, "validate_dataset", None)
+            quality = validator(dataset) if callable(validator) else DataQualityEngine().validate(dataset, min_bars=60)
+            if self._connection is not None:
+                SQLiteDatasetRegistry(self._connection).put_dataset(dataset, quality)
+        else:
+            dataset, quality, _inserted = KRXDatasetBuilder(self._connection, self._provider).build(
+                key, start_date=start_date, end_date=end_date
+            )
+        self._dataset_cache[key] = dataset
+        self._quality_cache[key] = quality
+        return dataset, quality
+
     def _symbol_evidence(
         self,
         run_id: str,
@@ -903,26 +947,41 @@ class AutonomousMultiSymbolResearchOrchestrator:
         strategy: CanonicalStrategySpec,
         assumptions: BacktestExecutionAssumptionSet,
         at: str,
+        *,
+        peer_symbols: tuple[str, ...] = (),
     ) -> SymbolResearchEvidence:
         try:
-            if getattr(self._provider,"market_agnostic",False):
-                dataset=self._provider.fetch_bars(symbol,start_date=start_date,end_date=end_date); validator=getattr(self._provider,"validate_dataset",None); quality=validator(dataset) if callable(validator) else DataQualityEngine().validate(dataset,min_bars=60)
-                if self._connection is not None: SQLiteDatasetRegistry(self._connection).put_dataset(dataset,quality)
-            else:
-                dataset,quality,_inserted=KRXDatasetBuilder(self._connection,self._provider).build(symbol,start_date=start_date,end_date=end_date)
-            self._dataset_cache[symbol.upper()] = dataset
+            dataset, quality = self._load_dataset_quality(symbol, start_date=start_date, end_date=end_date)
             blocking = _multi_symbol_blocking_findings(quality, dataset)
             if blocking:
                 return _blocked_symbol_evidence(run_id, symbol, dataset, quality, blocking, at)
             symbol_strategy = replace(strategy, spec_id=f"{strategy.spec_id}:{symbol}", symbol=symbol.upper(), created_at=at)
-            result = self._runner.run(f"{run_id}:{symbol}:original", symbol_strategy, dataset, assumptions, generated_at=at)
+            execution_dataset = dataset
+            if _relative_strength_active(symbol_strategy):
+                if not peer_symbols:
+                    raise MultiSymbolValidationError("relative-strength breadth validation needs at least one real peer symbol")
+                peer_datasets: list[MarketDataset] = []
+                for peer in peer_symbols:
+                    if peer.upper() == symbol.upper():
+                        continue
+                    peer_dataset, peer_quality = self._load_dataset_quality(peer, start_date=start_date, end_date=end_date)
+                    peer_blocking = _multi_symbol_blocking_findings(peer_quality, peer_dataset)
+                    if peer_blocking:
+                        raise MultiSymbolValidationError(f"peer {peer.upper()} has blocking data-quality findings")
+                    peer_datasets.append(peer_dataset)
+                execution_dataset = build_relative_strength_validation_dataset(
+                    dataset, peer_datasets, primary_symbol=symbol.upper()
+                )
+            result = self._runner.run(
+                f"{run_id}:{symbol}:original", symbol_strategy, execution_dataset, assumptions, generated_at=at
+            )
             return SymbolResearchEvidence(
                 f"{run_id}:evidence:{symbol.upper()}",
                 symbol.upper(),
                 True,
                 None,
-                dataset.dataset_id,
-                dataset.fingerprint,
+                execution_dataset.dataset_id,
+                execution_dataset.fingerprint,
                 quality.status.value,
                 dataset.metadata.source,
                 result.source.value,
@@ -979,7 +1038,22 @@ class AutonomousMultiSymbolResearchOrchestrator:
                 if dataset is None:
                     continue
                 candidate_strategy = replace(candidate.strategy, symbol=item.symbol, spec_id=f"{candidate.strategy.spec_id}:{item.symbol}")
-                result = self._runner.run(f"{run_id}:{item.symbol}:{candidate.candidate_id}", candidate_strategy, dataset, assumptions, generated_at=at)
+                execution_dataset = dataset
+                if _relative_strength_active(candidate_strategy):
+                    peer_datasets = [
+                        self._dataset_cache[other.symbol]
+                        for other in eligible
+                        if other.symbol != item.symbol and other.symbol in self._dataset_cache
+                    ]
+                    try:
+                        execution_dataset = build_relative_strength_validation_dataset(
+                            dataset, peer_datasets, primary_symbol=item.symbol
+                        )
+                    except MultiSymbolValidationError:
+                        continue
+                result = self._runner.run(
+                    f"{run_id}:{item.symbol}:{candidate.candidate_id}", candidate_strategy, execution_dataset, assumptions, generated_at=at
+                )
                 rows.append(CandidateSymbolEvidence(candidate.candidate_id, item.symbol, True, result.metrics.to_json(), result))
         return tuple(rows)
 

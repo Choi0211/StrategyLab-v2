@@ -1552,23 +1552,26 @@ def next_unexplored_symbols(mission: ResearchMission, *, batch_size: int = 5) ->
 
 
 def mission_multi_symbol_context_available(mission: ResearchMission) -> bool:
-    """Does this mission carry a REAL multi-symbol validation context -
-    a primary symbol plus at least one real peer?
+    """Can this mission obtain a REAL multi-symbol validation context?
 
-    True only when the mission has an explicit set of two or more
-    symbols. Those are concrete, caller-supplied tickers whose bars the
-    dataset builder can actually populate, so the relative-strength
-    family can be walk-forward / robustness validated against real,
-    time-aligned peers (``MultiSymbolValidationContext``).
+    Explicit missions need at least two caller-supplied symbols. A KR
+    ``market_wide`` mission is also peer-capable because its existing
+    multi-symbol research path resolves a real KRX universe and fetches
+    real bars for a bounded sample; the relative-strength breadth runner
+    then builds a timestamp-aligned primary+peer dataset and fails closed
+    if those peers cannot actually be acquired. No ticker or bar is
+    synthesized here.
 
-    A single-symbol mission, or a ``market_wide`` mission with no
-    explicit peer list, returns False: the rotation keeps the
-    relative-strength family OUT of the promotion-capable path and the
-    exhausted verdict carries
-    ``relative_strength_requires_multi_symbol_context``. A peer set is
-    never synthesised to flip this to True.
+    A single-symbol mission remains False and therefore never receives a
+    relative-strength candidate without a real peer acquisition path.
     """
-    return len(mission.symbols) >= 2
+    if len(mission.symbols) >= 2:
+        return True
+    return (
+        mission.universe_scope is MissionUniverseScope.MARKET_WIDE
+        and mission.market.upper() == "KR"
+        and bool(mission.exchanges)
+    )
 
 
 def mission_cycle_request_text(mission: ResearchMission, request_text: str | None = None) -> str:
@@ -2231,7 +2234,7 @@ def render_mission_family_coverage(mission: ResearchMission) -> str:
             lines.append(_candidate_line(candidate))
     elif has_peer_context:
         lines.append(
-            f"  - {_label(rs_family)}: 아직 생성된 후보 없음. 이 미션은 명시적 peer 종목이 있어 "
+            f"  - {_label(rs_family)}: 아직 생성된 후보 없음. 이 미션은 실제 다중종목 peer 획득 경로가 있어 "
             "다음 로테이션에서 정상 후보로 진입할 수 있습니다."
         )
     else:

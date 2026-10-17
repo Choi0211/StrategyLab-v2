@@ -36,6 +36,7 @@ MAX_VIDEO_DURATION_SECONDS = 4 * 60 * 60
 DEFAULT_YOUTUBE_COOKIE_FILE = Path("/var/lib/strategylab/secrets/youtube-cookies.txt")
 DEFAULT_YOUTUBE_POT_SERVER_HOME = Path("/var/lib/strategylab/bgutil-ytdlp-pot-provider/server")
 DDG_ENDPOINT = "https://html.duckduckgo.com/html/"
+BING_ENDPOINT = "https://www.bing.com/search"
 YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"})
 _SAFE_DOC_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".csv", ".json"})
 _SAFE_RESEARCH_PATH_PREFIXES = (RESEARCH_INPUT_ROOT,)
@@ -114,17 +115,7 @@ def _document_path(path: str) -> Path:
     return p
 
 
-def web_search(args: dict[str, object]) -> dict[str, object]:
-    """Bounded real web search through DuckDuckGo's HTML endpoint."""
-    query = str(args.get("query", "")).strip()
-    if len(query) < 2:
-        raise ValueError("query must be at least 2 characters")
-    query = query[:240]
-    try:
-        max_results = int(args.get("max_results", 5))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("max_results must be an integer") from exc
-    max_results = max(1, min(max_results, 8))
+def _search_duckduckgo(query: str, max_results: int) -> list[dict[str, object]]:
     body = urllib.parse.urlencode({"q": query}).encode()
     req = urllib.request.Request(
         DDG_ENDPOINT,
@@ -157,8 +148,74 @@ def web_search(args: dict[str, object]) -> dict[str, object]:
             results.append({"title": title[:500], "url": href[:2000], "snippet": snippet[:1200]})
         if len(results) >= max_results:
             break
+    return results
+
+
+def _search_bing(query: str, max_results: int) -> list[dict[str, object]]:
+    url = BING_ENDPOINT + "?" + urllib.parse.urlencode({"q": query, "count": max_results})
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 StrategyLab-Gaon/1.0", "Accept": "text/html"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=12) as response:
+        raw = _read_bounded_response(response, limit=700_000)
+    soup = BeautifulSoup(raw, "html.parser")
+    results: list[dict[str, object]] = []
+    for item in soup.select("li.b_algo"):
+        anchor = item.select_one("h2 a")
+        if anchor is None:
+            continue
+        href = str(anchor.get("href") or "").strip()
+        if not href.startswith("https://"):
+            continue
+        title = anchor.get_text(" ", strip=True)
+        snippet_el = item.select_one(".b_caption p") or item.select_one("p")
+        snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
+        results.append({"title": title[:500], "url": href[:2000], "snippet": snippet[:1200]})
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def web_search(args: dict[str, object]) -> dict[str, object]:
+    """Bounded public-web search with a deterministic provider fallback.
+
+    DuckDuckGo remains the primary source. Bing HTML is consulted only when
+    DDG errors or returns no usable HTTPS results. Both are untrusted text
+    evidence and neither response can mutate research/trading state.
+    """
+    query = str(args.get("query", "")).strip()
+    if len(query) < 2:
+        raise ValueError("query must be at least 2 characters")
+    query = query[:240]
+    try:
+        max_results = int(args.get("max_results", 5))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_results must be an integer") from exc
+    max_results = max(1, min(max_results, 8))
+
+    attempts: list[dict[str, object]] = []
+    providers = (("duckduckgo-html", _search_duckduckgo), ("bing-html-fallback", _search_bing))
+    results: list[dict[str, object]] = []
+    selected_provider = "none"
+    failures = 0
+    for provider_name, search_fn in providers:
+        try:
+            candidate_results = search_fn(query, max_results)
+            attempts.append({"provider": provider_name, "status": "ok", "result_count": len(candidate_results)})
+            if candidate_results:
+                results = candidate_results
+                selected_provider = provider_name
+                break
+        except Exception as exc:  # noqa: BLE001 - a provider outage must fall through safely.
+            failures += 1
+            attempts.append({"provider": provider_name, "status": "failed", "error_type": exc.__class__.__name__})
+    if not results and failures == len(providers):
+        raise BoundedResearchToolError("all bounded web-search providers failed")
     return {
-        "provider": "duckduckgo-html",
+        "provider": selected_provider,
+        "provider_attempts": attempts,
         "query": query,
         "results": results,
         "result_count": len(results),
