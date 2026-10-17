@@ -263,7 +263,7 @@ def commit_changes(args: dict[str, object]) -> dict[str, object]:
     add = _run(["git", "add", "--", *changed], cwd=path, timeout=30)
     if add.returncode != 0:
         return DeveloperActionResult(False, "commit", task, str(path), _branch(task), "git add failed", add.stdout[-MAX_TEST_OUTPUT:]).to_json()
-    proc = _run(["git", "commit", "-m", message], cwd=path, timeout=60)
+    proc = _run(["git", "-c", "user.name=Gaon Developer Agent", "-c", "user.email=gaon-dev@localhost.invalid", "commit", "-m", message], cwd=path, timeout=60)
     result = DeveloperActionResult(proc.returncode == 0, "commit", task, str(path), _branch(task), output=proc.stdout[-MAX_TEST_OUTPUT:]).to_json()
     result["changed_paths"] = changed
     return result
