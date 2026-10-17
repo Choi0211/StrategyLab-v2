@@ -84,10 +84,11 @@ class RenderMissionFamilyCoverageTests(unittest.TestCase):
         # never claims a family with no candidate is being researched
         self.assertNotIn("momentum_roc_standard(momentum_roc_standard): 후보 있음", text)
 
-    def test_relative_strength_fail_closed_without_explicit_peer_context(self) -> None:
+    def test_relative_strength_market_wide_reports_real_peer_acquisition_path(self) -> None:
         text = render_mission_family_coverage(_mission(["breakout_standard"], with_active=True))
-        self.assertIn("relative_strength_requires_multi_symbol_context", text)
-        self.assertIn("가짜 peer", text)
+        self.assertNotIn("relative_strength_requires_multi_symbol_context", text)
+        self.assertIn("실제 다중종목 peer 획득 경로", text)
+        self.assertIn("다음 로테이션", text)
 
     def test_relative_strength_available_direction_with_explicit_peers(self) -> None:
         text = render_mission_family_coverage(

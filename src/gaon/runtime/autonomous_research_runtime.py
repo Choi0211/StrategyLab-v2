@@ -286,6 +286,7 @@ class AutonomousResearchRuntimeWorker:
         metrics: MetricsCollector | None = None,
         now_factory: Callable[[], str] | None = None,
         evidence_executor_factory: Callable[[], object | None] | None = None,
+        operational_feedback_provider: Callable[[], object | None] | None = None,
     ) -> None:
         self._config = config
         self._connection = connection
@@ -302,6 +303,10 @@ class AutonomousResearchRuntimeWorker:
         # per the Section 0 safety contract. Tests/release checks inject a
         # fixture-backed factory instead, never real network.
         self._evidence_executor_factory = evidence_executor_factory or self._default_evidence_executor_factory
+        # Keep the bounded worker deterministic when constructed directly
+        # (unit/release checks). Production runtime wiring injects the real
+        # read-only execution telemetry provider explicitly below.
+        self._operational_feedback_provider = operational_feedback_provider
         # Set only by _advance_evidence_mutation_chain's own "return None"
         # sites, read only by _plan_research_direction's fallback branch
         # immediately afterward within the same tick() call - see
@@ -318,6 +323,15 @@ class AutonomousResearchRuntimeWorker:
         from gaon.research.direction_evidence import build_production_executor
 
         return build_production_executor()
+
+    @staticmethod
+    def _default_operational_feedback_provider():
+        from gaon.research.live_trading_intelligence import production_feedback
+
+        # Prefer the runtime with directly measured fill commission traces.
+        # If unavailable, fall back to the stock execution ledger. Both are
+        # strictly read-only and neither can mutate/order/promote.
+        return production_feedback("BINANCE") or production_feedback()
 
     def tick(self) -> AutonomousResearchTickResult:
         now = self._now_factory()
@@ -520,7 +534,10 @@ class AutonomousResearchRuntimeWorker:
         existing_evidence = evidence_repo.list_for_direction(direction.direction_id)
         if not existing_evidence:
             executor = self._evidence_executor_factory()
-            acquisition = acquire_direction_evidence(direction, analysis, executor=executor, now=now)
+            acquisition = acquire_direction_evidence(
+                direction, analysis, executor=executor, now=now,
+                operational_feedback_provider=self._operational_feedback_provider,
+            )
             evidence_repo.save(acquisition)
             self._metrics.increment("autonomous_research_runtime_ticks", status="direction_evidence_acquired")
             return AutonomousResearchTickResult(
@@ -559,7 +576,8 @@ class AutonomousResearchRuntimeWorker:
             executor = self._evidence_executor_factory()
             retry_key = f"retry:{now[:10]}"
             acquisition = acquire_direction_evidence(
-                direction, analysis, executor=executor, now=now, attempt_key=retry_key
+                direction, analysis, executor=executor, now=now, attempt_key=retry_key,
+                operational_feedback_provider=self._operational_feedback_provider,
             )
             inserted = evidence_repo.save(acquisition)
             if inserted:
@@ -872,7 +890,8 @@ class AutonomousResearchRuntimeService:
         self._now_factory = now_factory or _utc_now
         self._interval_seconds = interval_seconds
         self._worker = worker or AutonomousResearchRuntimeWorker(
-            config, repository._connection, metrics=self._metrics, now_factory=self._now_factory
+            config, repository._connection, metrics=self._metrics, now_factory=self._now_factory,
+            operational_feedback_provider=AutonomousResearchRuntimeWorker._default_operational_feedback_provider,
         )
 
     def tick(self) -> AutonomousResearchRuntimeTickResult:

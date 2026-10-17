@@ -9,10 +9,11 @@ real peer universe could still never rotate into the relative-strength
 family.
 
 This wires ``mission_multi_symbol_context_available(mission)`` into that
-call site: True only when the mission carries an explicit multi-symbol
-set (a primary + at least one real peer). A single-symbol mission stays
-fail-closed, with ``relative_strength_requires_multi_symbol_context`` on
-the exhausted verdict. No fake peer is ever synthesised.
+call site. Explicit missions need a primary + real peer; KR market-wide
+missions are also peer-capable because their existing multi-symbol path
+selects a bounded REAL KRX universe and fails closed if peer acquisition
+fails. A single-symbol mission stays fail-closed. No fake peer is ever
+synthesised.
 """
 
 from __future__ import annotations
@@ -87,8 +88,10 @@ def _drain(multi_symbol: bool):
 
 
 class MissionMultiSymbolContextHelperTests(unittest.TestCase):
-    def test_zero_or_one_symbol_has_no_multi_symbol_context(self) -> None:
-        self.assertFalse(mission_multi_symbol_context_available(_mission(())))
+    def test_market_wide_kr_mission_has_real_peer_acquisition_path(self) -> None:
+        self.assertTrue(mission_multi_symbol_context_available(_mission(())))
+
+    def test_single_selected_symbol_has_no_multi_symbol_context(self) -> None:
         self.assertFalse(mission_multi_symbol_context_available(_mission(("005930",))))
 
     def test_two_or_more_symbols_is_a_real_multi_symbol_context(self) -> None:
@@ -132,6 +135,12 @@ class HelperResultActuallyUnlocksRelativeStrengthTests(unittest.TestCase):
 
     def test_multi_symbol_helper_value_lets_relative_strength_into_the_rotation(self) -> None:
         flag = mission_multi_symbol_context_available(_mission(("005930", "000660")))
+        seen, terminal = _drain(flag)
+        self.assertEqual(seen[-len(_RS):], list(_RS))
+        self.assertNotIn("relative_strength_requires_multi_symbol_context", terminal.evidence_signals)
+
+    def test_market_wide_helper_value_also_unlocks_relative_strength(self) -> None:
+        flag = mission_multi_symbol_context_available(_mission(()))
         seen, terminal = _drain(flag)
         self.assertEqual(seen[-len(_RS):], list(_RS))
         self.assertNotIn("relative_strength_requires_multi_symbol_context", terminal.evidence_signals)

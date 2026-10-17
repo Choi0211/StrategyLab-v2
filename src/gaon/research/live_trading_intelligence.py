@@ -98,6 +98,9 @@ class LiveFeedback:
     total_commission: float | None = None
     partial_fill_count: int = 0
     source_modes: tuple[str,...] = ()
+    observed_commission_rate: float | None = None
+    commission_observation_count: int = 0
+    slippage_observation_count: int = 0
 
     def to_json(self):
         return {
@@ -112,6 +115,18 @@ class LiveFeedback:
             "total_commission":self.total_commission,
             "partial_fill_count":self.partial_fill_count,
             "source_modes":list(self.source_modes),
+            "observed_commission_rate":self.observed_commission_rate,
+            "commission_observation_count":self.commission_observation_count,
+            "slippage_observation_count":self.slippage_observation_count,
+            "cost_model_observation_status": (
+                "commission_observed_slippage_missing"
+                if self.commission_observation_count > 0 and self.slippage_observation_count == 0
+                else "execution_costs_observed"
+                if self.commission_observation_count > 0 and self.slippage_observation_count > 0
+                else "execution_history_only"
+                if self.completed_trade_count > 0
+                else "no_execution_sample"
+            ),
             "strategy_mutated":False,"order_executed":False,
             "champion_promoted":False,"approval_required":True,
         }
@@ -260,7 +275,7 @@ def _binance_feedback(root: str|Path|None=None):
             events.append((mode,str(item.get("symbol","")).upper(),pnl,str(item.get("closed_at",""))))
     if not events: return None
     total=sum(x[2] for x in events); wins=sum(x[2]>0 for x in events)
-    commissions=0.0; partial=0; verified=0
+    commissions=0.0; commission_notional=0.0; commission_observations=0; partial=0; verified=0
     verifier=(base/"trade_capture_verification_log.jsonl").resolve(strict=False)
     if verifier.is_file() and verifier.stat().st_size<=5_000_000:
         try:
@@ -274,8 +289,16 @@ def _binance_feedback(root: str|Path|None=None):
                         for fill_key in ("entry_fill_trace","exit_fill_trace"):
                             detail=(checks.get(fill_key) or {}).get("detail") if isinstance(checks,dict) else None
                             if isinstance(detail,dict):
-                                try: commissions+=float(detail.get("total_commission",0.0) or 0.0)
-                                except (TypeError,ValueError): pass
+                                try:
+                                    commission=float(detail.get("total_commission",0.0) or 0.0)
+                                    qty=abs(float(detail.get("total_qty",0.0) or 0.0))
+                                    avg_price=abs(float(detail.get("avg_price",0.0) or 0.0))
+                                    commissions += commission
+                                    if commission >= 0.0 and qty > 0.0 and avg_price > 0.0:
+                                        commission_notional += qty * avg_price
+                                        commission_observations += 1
+                                except (TypeError,ValueError):
+                                    pass
                                 partial+=1 if detail.get("partial_fill_detected") else 0
                         verified+=1
         except OSError: pass
@@ -288,7 +311,13 @@ def _binance_feedback(root: str|Path|None=None):
         classes.append("transaction_cost_observed")
         hypotheses.append(_hyp("binance-transaction-cost","실제 체결 수수료가 관측되어 백테스트 비용 가정과의 차이를 검증해야 한다.",tuple(f"binance-verifier:{i}" for i in range(min(verified,50)))))
     if partial: classes.append("partial_fill_observed")
-    return LiveFeedback("BINANCE",len(events),round(wins/len(events),6),0,0,0,0,tuple(dict.fromkeys(classes)),_dedupe(hypotheses),round(total,8),round(commissions,8),partial,tuple(dict.fromkeys(modes)))
+    observed_rate = round(commissions / commission_notional, 10) if commission_notional > 0 else None
+    return LiveFeedback(
+        "BINANCE",len(events),round(wins/len(events),6),0,0,0,0,
+        tuple(dict.fromkeys(classes)),_dedupe(hypotheses),round(total,8),
+        round(commissions,8),partial,tuple(dict.fromkeys(modes)),
+        observed_rate,commission_observations,0,
+    )
 
 def production_feedback(market: str|None=None):
     if str(market or "").upper() in {"BINANCE","BINANCE_CRYPTO","CRYPTO"}:
@@ -344,6 +373,10 @@ def live_report_lines(feedback: LiveFeedback|None):
         lines.append(f"- 확인 가능한 완료 거래 {feedback.completed_trade_count}건 / 승률 {w}")
         if feedback.total_realized_pnl is not None: lines.append(f"- 누적 실현손익: {feedback.total_realized_pnl:+.4f} USDT")
         if feedback.total_commission is not None: lines.append(f"- 확인된 체결 수수료 합계: {feedback.total_commission:.4f} USDT")
+        if feedback.observed_commission_rate is not None:
+            lines.append(f"- fill notional 기준 관측 수수료율: {feedback.observed_commission_rate*100:.4f}% ({feedback.commission_observation_count}개 fill trace)")
+        if feedback.slippage_observation_count == 0 and feedback.commission_observation_count:
+            lines.append("- 슬리피지는 아직 직접 계측되지 않아 비용모델 일치 여부를 확정하지 않습니다.")
         if feedback.partial_fill_count: lines.append(f"- 부분 체결 관측: {feedback.partial_fill_count}건")
     else: lines.append("- 확인 가능한 완료 거래 표본이 아직 부족합니다.")
     if feedback.open_position_count: lines.append(f"- 열린 포지션 {feedback.open_position_count}건을 상태 파일에서 확인했습니다.")

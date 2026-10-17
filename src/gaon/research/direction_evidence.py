@@ -406,6 +406,61 @@ def _academic_requirement_state(
     return RequirementSatisfactionState.FAILED_TERMINAL, blockers
 
 
+def _operational_requirement_result(
+    component: EvidenceRequirementComponent,
+    provider: Callable[[], object | None] | None,
+) -> RequirementResult:
+    if provider is None:
+        return RequirementResult(
+            component_id=component.component_id,
+            kind=component.kind,
+            state=RequirementSatisfactionState.REQUIRES_OPERATIONAL_EVIDENCE,
+            evidence_source_count=0,
+            blockers=("operational_evidence_provider_not_configured",),
+            executor_terminal_state=None,
+        )
+    try:
+        feedback = provider()
+    except Exception as exc:  # noqa: BLE001 - telemetry failure must fail closed.
+        return RequirementResult(
+            component_id=component.component_id, kind=component.kind,
+            state=RequirementSatisfactionState.FAILED_RETRYABLE, evidence_source_count=0,
+            blockers=(f"operational_evidence_provider_failed:{exc.__class__.__name__}",),
+            executor_terminal_state="operational_provider_failure",
+        )
+    if feedback is None:
+        return RequirementResult(
+            component_id=component.component_id, kind=component.kind,
+            state=RequirementSatisfactionState.REQUIRES_OPERATIONAL_EVIDENCE, evidence_source_count=0,
+            blockers=("operational_execution_history_unavailable",), executor_terminal_state=None,
+        )
+    payload = feedback.to_json() if hasattr(feedback, "to_json") else dict(feedback) if isinstance(feedback, Mapping) else {}
+    completed = int(payload.get("completed_trade_count") or 0)
+    commission_obs = int(payload.get("commission_observation_count") or 0)
+    slippage_obs = int(payload.get("slippage_observation_count") or 0)
+    if completed <= 0 and commission_obs <= 0:
+        return RequirementResult(
+            component_id=component.component_id, kind=component.kind,
+            state=RequirementSatisfactionState.REQUIRES_OPERATIONAL_EVIDENCE, evidence_source_count=0,
+            blockers=("operational_execution_sample_empty",), executor_terminal_state="operational_no_sample",
+        )
+    blockers = ["cost_model_match_not_yet_confirmed"]
+    rate = payload.get("observed_commission_rate")
+    if rate is not None:
+        blockers.append(f"observed_commission_rate={float(rate):.10f}")
+    if slippage_obs <= 0:
+        blockers.append("slippage_not_instrumented")
+    # Real execution evidence is now consumed by the direction-level chain,
+    # but remains PARTIAL until both model inputs are directly measured and
+    # compared. Observation is never mislabeled as confirmation.
+    return RequirementResult(
+        component_id=component.component_id, kind=component.kind,
+        state=RequirementSatisfactionState.PARTIAL,
+        evidence_source_count=max(completed, commission_obs),
+        blockers=tuple(blockers), executor_terminal_state="operational_execution_observed",
+    )
+
+
 def acquire_direction_evidence(
     direction: ResearchDirection,
     analysis: FailureAnalysis,
@@ -413,6 +468,7 @@ def acquire_direction_evidence(
     executor: AutonomousExternalResearchExecutor | None,
     now: str,
     attempt_key: str | None = None,
+    operational_feedback_provider: Callable[[], object | None] | None = None,
 ) -> DirectionEvidenceAcquisition:
     """Candidate-independent orchestration: ResearchDirection -> bounded
     ResearchQuestion(s) -> (optionally) the existing production executor ->
@@ -422,10 +478,11 @@ def acquire_direction_evidence(
     for this call" and is treated as an honest ``PROVIDER_NOT_CONFIGURED``
     for every academic component - it never silently skips the requirement
     or fabricates a result. The operational-evidence component is NEVER
-    routed through ``executor`` at all; it unconditionally resolves to
-    ``REQUIRES_OPERATIONAL_EVIDENCE`` regardless of whether ``executor`` is
-    given, because no pre-candidate code path can ever supply live
-    execution telemetry.
+    routed through ``executor``; when an explicit read-only
+    ``operational_feedback_provider`` is supplied, real execution telemetry
+    can satisfy it PARTIALLY. Missing telemetry preserves the historical
+    ``REQUIRES_OPERATIONAL_EVIDENCE`` state, and observations never become
+    a claim that the modeled cost assumptions match live execution.
     """
     # session_ref is part of the id/fingerprint itself (not only the
     # repository's unique index) - two different sessions that happen to
@@ -462,16 +519,7 @@ def acquire_direction_evidence(
     question_ids: list[str] = []
     for component in components:
         if component.kind is EvidenceRequirementKind.OPERATIONAL_LIVE_EXECUTION:
-            results.append(
-                RequirementResult(
-                    component_id=component.component_id,
-                    kind=component.kind,
-                    state=RequirementSatisfactionState.REQUIRES_OPERATIONAL_EVIDENCE,
-                    evidence_source_count=0,
-                    blockers=("operational_evidence_requires_live_candidate",),
-                    executor_terminal_state=None,
-                )
-            )
+            results.append(_operational_requirement_result(component, operational_feedback_provider))
             continue
 
         question = build_research_question(direction, analysis, component, now=now)

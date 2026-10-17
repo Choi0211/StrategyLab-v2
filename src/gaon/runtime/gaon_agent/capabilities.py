@@ -225,7 +225,7 @@ def default_capability_registry() -> CapabilityRegistry:
                 requires_approval=False,
                 safety_class=SafetyClass.READ_ONLY,
                 summary="Search the public web through a bounded live search provider.",
-                provider="duckduckgo-html bounded search",
+                provider="duckduckgo-html primary + bing-html bounded fallback",
             ),
             cap(
                 URL_FETCH,

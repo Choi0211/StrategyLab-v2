@@ -197,6 +197,25 @@ class AcquireDirectionEvidenceTests(_TempStorageMixin, unittest.TestCase):
         self.assertEqual(operational.state, RequirementSatisfactionState.REQUIRES_OPERATIONAL_EVIDENCE)
         self.assertEqual(operational.evidence_source_count, 0)
 
+    def test_I2_real_operational_feedback_is_consumed_but_never_claims_cost_model_match(self) -> None:
+        direction, analysis = _release_check_direction(NOW)
+        feedback = {
+            "completed_trade_count": 24,
+            "commission_observation_count": 12,
+            "observed_commission_rate": 0.0005,
+            "slippage_observation_count": 0,
+        }
+        result = acquire_direction_evidence(
+            direction, analysis, executor=_passing_executor(self.storage_root), now=NOW,
+            operational_feedback_provider=lambda: feedback,
+        )
+        operational = next(r for r in result.requirement_results if r.kind is EvidenceRequirementKind.OPERATIONAL_LIVE_EXECUTION)
+        self.assertEqual(operational.state, RequirementSatisfactionState.PARTIAL)
+        self.assertEqual(operational.evidence_source_count, 24)
+        self.assertIn("slippage_not_instrumented", operational.blockers)
+        self.assertTrue(any(item.startswith("observed_commission_rate=") for item in operational.blockers))
+        self.assertNotEqual(result.overall_state, OverallAcquisitionState.ACQUIRED)
+
     def test_J_operational_requirement_never_satisfiable_regardless_of_executor(self) -> None:
         direction, analysis = _release_check_direction(NOW)
         executors = (

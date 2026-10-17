@@ -7,6 +7,43 @@ from PIL import Image
 import gaon.runtime.research_media_tools as tools
 
 class ResearchMediaToolTests(unittest.TestCase):
+    def test_web_search_prefers_duckduckgo_when_it_returns_results(self):
+        ddg = [{"title": "A", "url": "https://example.com/a", "snippet": "alpha"}]
+        with patch.object(tools, "_search_duckduckgo", return_value=ddg) as primary, patch.object(
+            tools, "_search_bing", return_value=[]
+        ) as fallback:
+            result = tools.web_search({"query": "momentum costs", "max_results": 3})
+        self.assertEqual(result["provider"], "duckduckgo-html")
+        self.assertEqual(result["results"], ddg)
+        primary.assert_called_once()
+        fallback.assert_not_called()
+
+    def test_web_search_falls_back_to_bing_after_primary_failure(self):
+        bing = [{"title": "B", "url": "https://example.org/b", "snippet": "beta"}]
+        with patch.object(tools, "_search_duckduckgo", side_effect=TimeoutError("fixture")), patch.object(
+            tools, "_search_bing", return_value=bing
+        ):
+            result = tools.web_search({"query": "transaction costs"})
+        self.assertEqual(result["provider"], "bing-html-fallback")
+        self.assertEqual(result["results"], bing)
+        self.assertEqual(result["provider_attempts"][0]["status"], "failed")
+        self.assertEqual(result["provider_attempts"][1]["status"], "ok")
+
+    def test_web_search_falls_back_after_primary_empty_result(self):
+        bing = [{"title": "B", "url": "https://example.org/b", "snippet": "beta"}]
+        with patch.object(tools, "_search_duckduckgo", return_value=[]), patch.object(
+            tools, "_search_bing", return_value=bing
+        ):
+            result = tools.web_search({"query": "relative strength"})
+        self.assertEqual(result["provider"], "bing-html-fallback")
+        self.assertEqual([x["result_count"] for x in result["provider_attempts"]], [0, 1])
+
+    def test_web_search_fails_closed_when_both_providers_error(self):
+        with patch.object(tools, "_search_duckduckgo", side_effect=TimeoutError()), patch.object(
+            tools, "_search_bing", side_effect=OSError()
+        ):
+            with self.assertRaises(tools.BoundedResearchToolError):
+                tools.web_search({"query": "relative strength"})
     def test_vtt_normalization_is_bounded_text(self):
         raw=b"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello <c>world</c>\n\n00:00:01.000 --> 00:00:02.000\nHello world\nNext line\n"
         self.assertEqual(tools._vtt_to_text(raw), "Hello world\nNext line")

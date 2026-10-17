@@ -2,6 +2,7 @@ import sqlite3
 import unittest
 
 from gaon.research.autonomous_retest import _ReleaseCheckBacktestRunner, _ReleaseCheckProvider
+from gaon.knowledge.strategy_candidate import build_candidate_spec, spec_rules_to_json
 from gaon.research.multi_symbol import (
     DEFAULT_CURATED_SYMBOLS,
     PRODUCTION_MULTI_SYMBOL_REQUEST_TEXT,
@@ -25,6 +26,15 @@ from gaon.runtime.routing_debug import telegram_routing_debug_payload
 
 
 NOW = "2026-07-27T00:00:00Z"
+
+
+class _CapturingRunner(_ReleaseCheckBacktestRunner):
+    def __init__(self) -> None:
+        self.calls = []
+
+    def run(self, run_id, strategy, dataset, assumptions, *, generated_at=None):
+        self.calls.append((run_id, strategy.symbol, tuple(s.symbol for s in dataset.symbols), dataset.dataset_id))
+        return super().run(run_id, strategy, dataset, assumptions, generated_at=generated_at)
 REQUEST = "20일 고가 돌파 종가 > MA20 > MA60 거래량 20일 평균 이상 손절 -5% 10일 저점 이탈 청산"
 
 
@@ -100,6 +110,44 @@ class MultiSymbolResearchTests(unittest.TestCase):
         self.assertFalse(run.to_json()["automatic_champion_promotion"])
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM multi_symbol_symbol_evidence").fetchone()[0], 5)
         self.assertGreater(self.connection.execute("SELECT COUNT(*) FROM multi_symbol_candidate_evidence").fetchone()[0], 0)
+
+    def test_relative_strength_breadth_uses_real_peer_dataset_for_every_primary(self) -> None:
+        runner = _CapturingRunner()
+        candidate_spec = spec_rules_to_json(build_candidate_spec("breakout_relative_strength", created_at=NOW))
+        run = AutonomousMultiSymbolResearchOrchestrator(
+            self.connection, _ReleaseCheckProvider(), runner
+        ).run(
+            "relative strength breadth",
+            run_id="unit:relative-strength-breadth",
+            symbols=("005930", "000660", "005380"),
+            candidate_spec=candidate_spec,
+            generated_at=NOW,
+        )
+
+        self.assertEqual(len(run.evidence), 3)
+        self.assertTrue(all(item.eligible for item in run.evidence))
+        self.assertTrue(all(":rs-multi-symbol" in str(item.dataset_id) for item in run.evidence))
+        original_calls = [call for call in runner.calls if call[0].endswith(":original")]
+        self.assertEqual(len(original_calls), 3)
+        for _run_id, primary, symbols, dataset_id in original_calls:
+            self.assertEqual(len(symbols), 3)
+            self.assertIn(primary, symbols)
+            self.assertIn(":rs-multi-symbol", dataset_id)
+
+    def test_relative_strength_explicit_single_symbol_fails_closed(self) -> None:
+        candidate_spec = spec_rules_to_json(build_candidate_spec("breakout_relative_strength", created_at=NOW))
+        run = AutonomousMultiSymbolResearchOrchestrator(
+            self.connection, _ReleaseCheckProvider(), _ReleaseCheckBacktestRunner()
+        ).run(
+            "relative strength no peer",
+            run_id="unit:relative-strength-no-peer",
+            symbols=("005930",),
+            candidate_spec=candidate_spec,
+            generated_at=NOW,
+        )
+        self.assertEqual(len(run.evidence), 1)
+        self.assertFalse(run.evidence[0].eligible)
+        self.assertIn("MultiSymbolValidationError", str(run.evidence[0].blocked_reason))
 
     def test_status_and_history_exclude_release_artifacts(self) -> None:
         AutonomousMultiSymbolResearchOrchestrator(self.connection, _ReleaseCheckProvider(), _ReleaseCheckBacktestRunner()).run(
