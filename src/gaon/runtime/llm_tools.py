@@ -672,18 +672,62 @@ def _v5_pipeline_history(connection: sqlite3.Connection, limit: int) -> dict[str
 
 def _research_memory_search(connection: sqlite3.Connection, args: dict[str, object]) -> dict[str, object]:
     repository = SQLiteResearchMemoryRepository(connection)
-    results = repository.search(
+    legacy = repository.search(
         strategy_family=str(args["strategy_family"]) if "strategy_family" in args else None,
         market=str(args["market"]) if "market" in args else None,
         timeframe=str(args["timeframe"]) if "timeframe" in args else None,
         query=str(args["query"]) if "query" in args else None,
         tag=str(args["tag"]) if "tag" in args else None,
     )
+    combined = [item.to_json() for item in legacy]
+    try:
+        from gaon.learning.production import SQLiteLearningRepository
+
+        strategy_family = str(args["strategy_family"]) if "strategy_family" in args else None
+        market = str(args["market"]) if "market" in args else None
+        query = str(args.get("query") or "").casefold().strip()
+        generic_learning_query = any(
+            token in query for token in (
+                "무엇을 배웠", "뭘 배웠", "배운 점", "학습 기록", "학습기록",
+                "기억", "learning memory", "what learned", "what have you learned",
+            )
+        )
+        records = SQLiteLearningRepository(connection).list_all()
+        for record in sorted(records, key=lambda item: (item.updated_at, item.record_id), reverse=True):
+            if strategy_family and record.strategy != strategy_family:
+                continue
+            if market and record.market != market:
+                continue
+            if query and not generic_learning_query and query not in record.content.casefold() and query not in record.strategy.casefold():
+                continue
+            combined.append({
+                "memory_id": record.record_id,
+                "strategy_family": record.strategy,
+                "market": record.market,
+                "timeframe": "learning_v3",
+                "hypothesis": record.content,
+                "result_summary": record.content,
+                "critic_summary": f"confidence={record.confidence.value}; conflict_penalty={record.confidence.conflict_penalty}",
+                "improvement_summary": "advisory learning memory; no automatic promotion",
+                "final_status": record.record_type.value,
+                "tags": ["learning_v3", record.record_type.value],
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
+                "source_run_id": record.audit_ref,
+                "fingerprint": record.record_id,
+                "source_refs": [e.reference for e in record.evidence],
+                "confidence": record.confidence.to_dict(),
+            })
+    except (sqlite3.OperationalError, ValueError):
+        # Older/read-only DBs can still serve legacy memory safely.
+        pass
     return {
-        "provider": "sqlite:research_memories",
-        "count": len(results),
-        "results": [item.to_json() for item in results[:10]],
+        "provider": "sqlite:research_memories+learning_v3",
+        "count": len(combined),
+        "results": combined[:10],
         "automatic_promotion": False,
+        "strategy_mutated": False,
+        "order_executed": False,
     }
 
 

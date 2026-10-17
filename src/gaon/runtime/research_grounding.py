@@ -517,13 +517,63 @@ def _format_memory(output: dict[str, object]) -> str:
             "\uac00\uc124/\uc81c\uc548: \ud604\uc7ac \uc804\ub7b5 \uc870\uac74\uc744 \uae30\uc900\uc73c\ub85c \uc0c8 \uc5f0\uad6c \uae30\ub85d\uc744 \ub9cc\ub4e4\uac70\ub098 \ubc31\ud14c\uc2a4\ud2b8 \uacb0\uacfc\ub97c \uba3c\uc800 \uc5f0\uacb0\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4."
         )
     results = output.get("results")
-    lines = [f"\uc601\ud558\ub2d8, \uc800\uc7a5\ub41c \uc5f0\uad6c \uba54\ubaa8\ub9ac\uc5d0\uc11c {count}\uac74\uc744 \ucc3e\uc558\uc2b5\ub2c8\ub2e4.", "\uac80\uc99d\ub41c \ub370\uc774\ud130:"]
+    has_learning_v3 = isinstance(results, list) and any(
+        isinstance(item, dict) and item.get("timeframe") == "learning_v3" for item in results
+    )
+    heading = "저장된 학습 기록:" if has_learning_v3 else "검증된 데이터:"
+    lines = [f"\uc601\ud558\ub2d8, \uc800\uc7a5\ub41c \uc5f0\uad6c \uba54\ubaa8\ub9ac\uc5d0\uc11c {count}\uac74\uc744 \ucc3e\uc558\uc2b5\ub2c8\ub2e4.", heading]
     if isinstance(results, list):
         for item in results[:3]:
-            if isinstance(item, dict):
-                lines.append(f"- {item.get('memory_id') or item.get('run_id') or 'memory'} / {item.get('strategy_family') or item.get('family') or 'unknown'}")
-    lines.append("\uc815\uc131 \ubd84\uc11d: \uc704 \ud56d\ubaa9\uc740 \uc800\uc7a5\ub41c \uc5f0\uad6c \uae30\uc5b5\uc744 \uae30\uc900\uc73c\ub85c\ub9cc \uc694\uc57d\ud588\uc2b5\ub2c8\ub2e4.")
+            if not isinstance(item, dict):
+                continue
+            memory_id = item.get("memory_id") or item.get("run_id") or "memory"
+            family = item.get("strategy_family") or item.get("family") or "unknown"
+            if item.get("timeframe") == "learning_v3":
+                confidence = _as_dict(item.get("confidence"))
+                content = str(item.get("result_summary") or item.get("hypothesis") or "")
+                lesson = _render_learning_v3_lesson(content)
+                lines.append(
+                    f"- {family}: {item.get('final_status', 'research_outcome')} / "
+                    f"confidence={confidence.get('value', 'unknown')}"
+                )
+                if confidence.get("conflict_penalty", 0):
+                    lines.append(f"  · 반대 근거 페널티={confidence.get('conflict_penalty')}")
+                if lesson:
+                    lines.append(f"  · {lesson}")
+                lines.append(f"  · memory={memory_id}")
+            else:
+                lines.append(f"- {memory_id} / {family}")
+    lines.append("\uc815\uc131 \ubd84\uc11d: \uc704 \ud56d\ubaa9\uc740 \uc800\uc7a5\ub41c \uc5f0\uad6c \uae30\uc5b5\uc744 \uae30\uc900\uc73c\ub85c\ub9cc \uc694\uc57d\ud588\uc2b5\ub2c8\ub2e4. Confidence\ub294 \uc5f0\uad6c \uc6b0\uc120\uc21c\uc704 \ubcf4\uc870 \uc2e0\ud638\uc774\uba70 \uc2b9\uaca9/\uc8fc\ubb38 \uad8c\ud55c\uc774 \uc544\ub2d9\ub2c8\ub2e4.")
     return "\n".join(lines)
+
+
+def _render_learning_v3_lesson(content: str) -> str:
+    fields: dict[str, str] = {}
+    for part in content.split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        fields[key.strip()] = value.strip()
+    if "observed_commission_rate" in fields:
+        raw = fields.get("observed_commission_rate", "unknown")
+        try:
+            rate = f"{float(raw) * 100:.4f}%"
+        except (TypeError, ValueError):
+            rate = raw
+        slippage = fields.get("slippage_observations", "unknown")
+        return (
+            f"실제 체결 수수료율={rate}, 완료거래={fields.get('completed_trades', 'unknown')}건, "
+            f"슬리피지 관측={slippage}건, 비용모델 일치={fields.get('cost_model_match', 'unknown')}"
+        )
+    if "economic_status" in fields:
+        return (
+            f"경제성={fields.get('economic_status')}, 성과표본="
+            f"{fields.get('performance_symbols', 'unknown')}종목/{fields.get('performance_trades', 'unknown')}거래, "
+            f"중앙수익률={fields.get('median_return', 'unknown')}, "
+            f"수익종목비율={fields.get('profitable_symbol_ratio', 'unknown')}, "
+            f"기각사유={fields.get('rejected_reason', 'none')}"
+        )
+    return content[:240]
 
 
 def _format_autonomous_research_cycle(output: dict[str, object]) -> str:

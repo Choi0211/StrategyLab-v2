@@ -766,17 +766,21 @@ def spec_rules_to_json(spec: CanonicalStrategySpec) -> dict[str, object]:
     }
 
 
-def next_untried_family(existing: tuple["StrategyCandidateRecord", ...]) -> str | None:
-    """Picks the next strategy family not yet represented by any candidate
-    in ``existing``, in template order - diversity across supported
-    families before any local parameter mutation, per Patch 8.2's research
-    diversity requirement. Returns None once every template has been
-    tried at least once (callers may then choose to stop generating new
-    candidates within this mission, or fall back to local mutation of the
-    most promising family - not implemented here to keep this module's
-    surface small; see the completion report)."""
+def next_untried_family(
+    existing: tuple["StrategyCandidateRecord", ...],
+    *,
+    family_preferences: Mapping[str, float] | None = None,
+) -> str | None:
+    """Pick the next untried family, optionally using learned priors.
+
+    Learning is only an ordering hint. It never skips a family permanently,
+    changes any rule, widens the bounded family inventory, or bypasses the
+    existing validation/promotion gates. With no priors this is byte-for-byte
+    equivalent to historical template order.
+    """
     used = {candidate.strategy_family for candidate in existing}
-    for template in STRATEGY_FAMILY_TEMPLATES:
+    templates = _rank_templates_by_learning(STRATEGY_FAMILY_TEMPLATES, family_preferences)
+    for template in templates:
         if template.family not in used:
             return template.family
     return None
@@ -788,6 +792,7 @@ def expand_strategy_space_candidate(
     sequence: int,
     now: str,
     multi_symbol_context_available: bool = False,
+    family_preferences: Mapping[str, float] | None = None,
 ) -> StrategySpaceExpansion:
     """Generates the next bounded, evidence-linked strategy hypothesis.
 
@@ -856,7 +861,7 @@ def expand_strategy_space_candidate(
 
     for reason, ordering, round_templates in phases:
         ranked = (
-            round_templates
+            _rank_templates_by_learning(round_templates, family_preferences)
             if ordering == "ordered"
             else _rank_expansion_templates(evidence_signals, round_templates)
         )
@@ -882,6 +887,28 @@ def expand_strategy_space_candidate(
         evidence_signals=tuple(dict.fromkeys((*evidence_signals, *rs_context_signal))),
         skipped_fingerprints=tuple(skipped),
         search_budget=len(phases[-1][2]),
+    )
+
+
+def _rank_templates_by_learning(
+    templates: tuple[StrategyFamilyTemplate, ...],
+    family_preferences: Mapping[str, float] | None,
+) -> tuple[StrategyFamilyTemplate, ...]:
+    """Stable learned-prior ordering for otherwise ordered phases.
+
+    Unseen families receive 0.0, successful historical families can move
+    earlier, and repeatedly failed families move later. Equal scores retain
+    the declared template order. This does not alter evidence-ranked breakout
+    phases, where current-mission blocker evidence remains authoritative.
+    """
+    if not family_preferences:
+        return templates
+    indexed = tuple(enumerate(templates))
+    return tuple(
+        item[1] for item in sorted(
+            indexed,
+            key=lambda item: (-float(family_preferences.get(item[1].family, 0.0)), item[0]),
+        )
     )
 
 

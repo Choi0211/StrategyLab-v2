@@ -333,6 +333,28 @@ class AutonomousResearchRuntimeWorker:
         # strictly read-only and neither can mutate/order/promote.
         return production_feedback("BINANCE") or production_feedback()
 
+    def _sync_mission_learning(self, mission: ResearchMission, *, now: str) -> None:
+        """Backfill/update durable Learning V3 from persisted mission history.
+
+        Every candidate is idempotently re-evaluated against its material
+        evidence. Unchanged candidate state is a no-op, so restarts/ticks do
+        not create duplicate versions. Learning failure never blocks the
+        research scheduler.
+        """
+        try:
+            from gaon.learning.production import ProductionLearningEngine
+
+            engine = ProductionLearningEngine(self._connection)
+            writes = 0
+            for candidate in candidate_records(mission):
+                if engine.learn_candidate(mission, candidate, now=now).written:
+                    writes += 1
+            self._metrics.increment(
+                "gaon_learning_v3_backfill", amount=writes, status="updated" if writes else "noop"
+            )
+        except Exception:  # noqa: BLE001 - learning is advisory and fail-open for research progression.
+            self._metrics.increment("gaon_learning_v3_backfill", status="failed")
+
     def tick(self) -> AutonomousResearchTickResult:
         now = self._now_factory()
         try:
@@ -345,6 +367,7 @@ class AutonomousResearchRuntimeWorker:
             mission = brain._mission_for(session_id)
             if mission is None:
                 return AutonomousResearchTickResult(attempted=True, action="skipped_no_mission")
+            self._sync_mission_learning(mission, now=now)
             if mission.status in (
                 MissionStatus.AWAITING_HUMAN_APPROVAL,
                 MissionStatus.COMPLETED,
