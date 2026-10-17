@@ -70,6 +70,14 @@ class MultiTurnConversationTests(unittest.TestCase):
         self.assertEqual(response.tool_calls, ())
         self.assertNotEqual(response.route, "tool_follow_up")
 
+    def test_fresh_url_request_is_not_diverted_into_prior_result_synthesis(self) -> None:
+        response = self.brain._try_multi_result_synthesis(
+            _request("https://www.nber.org/papers/w10144 이 링크를 읽고 핵심 내용을 알려줘"),
+            (),
+            (),
+        )
+        self.assertIsNone(response)
+
     def test_multi_result_synthesis_reuses_fresh_champion_and_pipeline_results(self) -> None:
         provider = _SynthesisProvider("현재 Champion과 v5 파이프라인 상태를 함께 보면 승인 대기 단계입니다, 영하님.")
         brain = self._brain(provider=provider, assistant_provider="openai-compatible")

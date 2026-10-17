@@ -4936,6 +4936,12 @@ class LLMConversationBrain:
     def _try_multi_result_synthesis(self, request: LLMConversationRequest, warnings: tuple[str, ...], references: tuple[str, ...]) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_result_repository is None or self._tool_executor is None:
             return None
+        # A fresh external URL is a new read target, not a request to combine
+        # prior champion/runtime/pipeline tool results.  Words such as
+        # "핵심", "정리" or "내용" commonly accompany URL-reading
+        # requests and must not divert the turn into stale-result synthesis.
+        if contains_external_url(request.text):
+            return None
         if not _is_synthesis_request(request.text):
             return None
         required = _requested_synthesis_tools(request.text)
