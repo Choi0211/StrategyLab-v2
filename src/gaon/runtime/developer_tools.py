@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import json
 import os
 from pathlib import Path
 import re
-import shlex
+import socket
 import subprocess
 from typing import Iterable
 from uuid import uuid4
@@ -93,11 +94,7 @@ def _run(args: list[str], *, cwd: Path, timeout: int = 60, input_text: str | Non
 
 
 def _git_command(*args: str) -> list[str]:
-    command = ["git"]
-    if os.environ.get("GH_TOKEN"):
-        command += ["-c", "credential.helper=!/usr/bin/gh auth git-credential"]
-    command += list(args)
-    return command
+    return ["git", *args]
 
 
 def _remote_url() -> str:
@@ -272,14 +269,34 @@ def commit_changes(args: dict[str, object]) -> dict[str, object]:
     return result
 
 
+def _github_helper_request(payload: dict[str, object]) -> dict[str, object]:
+    socket_path = os.environ.get("GAON_DEVELOPER_GIT_SOCKET", "/run/strategylab/gaon-dev-git.sock")
+    raw = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    if len(raw) > 20_000:
+        raise ValueError("developer GitHub helper request too large")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(185)
+        client.connect(socket_path)
+        client.sendall(raw)
+        chunks=[]; total=0
+        while total < 50_000:
+            chunk=client.recv(min(4096,50_000-total))
+            if not chunk: break
+            chunks.append(chunk); total += len(chunk)
+            if b"\n" in chunk: break
+    response=json.loads(b"".join(chunks).split(b"\n",1)[0].decode("utf-8"))
+    if not isinstance(response,dict): raise RuntimeError("invalid developer GitHub helper response")
+    return response
+
+
 def push_branch(args: dict[str, object]) -> dict[str, object]:
     task = _task_id(args.get("task_id"))
     path = _worktree(task)
     if not path.is_dir():
         raise FileNotFoundError("developer worktree does not exist")
     branch = _branch(task)
-    proc = _run(_git_command("push", "-u", "origin", branch), cwd=path, timeout=120)
-    return DeveloperActionResult(proc.returncode == 0, "push", task, str(path), branch, output=proc.stdout[-MAX_TEST_OUTPUT:]).to_json()
+    response = _github_helper_request({"action": "push", "task_id": task})
+    return DeveloperActionResult(bool(response.get("ok")), "push", task, str(path), branch, output=str(response.get("output") or response.get("message") or "")[-MAX_TEST_OUTPUT:]).to_json()
 
 
 def create_pr(args: dict[str, object]) -> dict[str, object]:
@@ -292,10 +309,8 @@ def create_pr(args: dict[str, object]) -> dict[str, object]:
     if len(title) < 3:
         raise ValueError("PR title required")
     branch = _branch(task)
-    if not os.environ.get("GH_TOKEN"):
-        return DeveloperActionResult(False, "create_pr", task, str(path), branch, "GitHub credential is not configured").to_json()
-    proc = _run(["/usr/bin/gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body or "Gaon developer-agent generated change for human review."], cwd=path, timeout=120)
-    return DeveloperActionResult(proc.returncode == 0, "create_pr", task, str(path), branch, output=proc.stdout[-MAX_TEST_OUTPUT:]).to_json()
+    response = _github_helper_request({"action": "create_pr", "task_id": task, "title": title, "body": body})
+    return DeveloperActionResult(bool(response.get("ok")), "create_pr", task, str(path), branch, output=str(response.get("output") or response.get("message") or "")[-MAX_TEST_OUTPUT:]).to_json()
 
 
 WRITE_ACTIONS = {
