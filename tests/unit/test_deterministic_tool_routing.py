@@ -39,6 +39,12 @@ class DeterministicToolRoutingTests(unittest.TestCase):
                 self.assertFalse(has_explicit_research_continuation_intent(text))
                 self.assertFalse(has_explicit_research_execution_intent(text))
 
+    def test_anaphoric_research_commands_require_session_local_subject_resolution(self) -> None:
+        for text in ("그거 다시 연구해줘", "그거 연구 좀 해주세요", "그 후보 연구해주세요"):
+            with self.subTest(text=text):
+                self.assertTrue(has_explicit_research_execution_intent(text))
+                self.assertFalse(has_explicit_research_continuation_intent(text))
+
     def test_champion_status_mappings(self) -> None:
         for text in ("현재 챔피언 상태 알려줘", "지금 챔피언 뭐야?", "champion 상태", "champion 알려줘"):
             with self.subTest(text=text):

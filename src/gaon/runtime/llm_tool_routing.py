@@ -60,6 +60,9 @@ _FLEXIBLE_RESEARCH_IMPERATIVE_RE = re.compile(
 _RESEARCH_CONTINUATION_IMPERATIVE_RE = re.compile(
     r"연구(?:(?:를|을|좀|계속|진행))*?(?:해줘|해주세요|해봐)"
 )
+_ANAPHORIC_RESEARCH_REFERENCE_RE = re.compile(
+    r"(?:그거|그걸|그것|이거|이걸|이것|저거|저걸|저것|그후보|그전략|이후보|이전략)"
+)
 
 
 def has_explicit_research_continuation_intent(text: str) -> bool:
@@ -72,7 +75,13 @@ def has_explicit_research_continuation_intent(text: str) -> bool:
     instead of falling through to provider-only conversation/state reads.
     """
     normalized = _normalize(text)
-    return bool(normalized and _RESEARCH_CONTINUATION_IMPERATIVE_RE.search(normalized))
+    if not normalized or _ANAPHORIC_RESEARCH_REFERENCE_RE.search(normalized):
+        # Pronoun/candidate references require session-local subject
+        # resolution first.  Treating them as a generic mission continuation
+        # would let a selected candidate from another owner transport/session
+        # leak into a brand-new session.
+        return False
+    return bool(_RESEARCH_CONTINUATION_IMPERATIVE_RE.search(normalized))
 
 
 def has_explicit_research_execution_intent(text: str) -> bool:
