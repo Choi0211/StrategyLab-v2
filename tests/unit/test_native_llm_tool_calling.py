@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall, ProviderCapabilities, ProviderHealth
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository
-from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
+from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, ToolResult, default_tool_registry
 from gaon.runtime.migrations import migrate
 from gaon.runtime.serialization import dumps_json
 from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
@@ -76,6 +77,27 @@ class NativeLLMToolCallingTests(unittest.TestCase):
             dumps_json(metadata),
         )
         self.assertTrue(provider.received_tools)
+        self.assertTrue(provider.received_tool_results)
+
+    def test_provider_document_read_with_http_url_is_repaired_to_url_fetch(self) -> None:
+        provider = FakeToolProvider(
+            ((AssistantToolCall("call-url", "document_read", {"path": "https://www.nber.org/papers/w10144"}),),),
+            "링크 내용을 확인했습니다, 영하님.",
+        )
+        brain = self._brain(provider)
+        captured = []
+
+        def fake_execute(request):
+            captured.append(request)
+            return ToolResult("url_fetch", "success", {"source": "https://www.nber.org/papers/w10144", "text": "fixture"})
+
+        with patch.object(self.executor, "execute", side_effect=fake_execute):
+            response = brain.respond(_request("https://www.nber.org/papers/w10144 이 링크를 읽고 핵심을 알려줘"))
+
+        self.assertEqual(response.route, "provider_tool_call")
+        self.assertEqual(response.tool_calls, ("url_fetch",))
+        self.assertEqual(captured[0].tool_name, "url_fetch")
+        self.assertEqual(captured[0].arguments, {"url": "https://www.nber.org/papers/w10144"})
         self.assertTrue(provider.received_tool_results)
 
     def test_provider_multi_tool_call_executes_registered_read_only_tools(self) -> None:
