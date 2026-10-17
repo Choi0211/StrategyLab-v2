@@ -6438,6 +6438,20 @@ def _runtime_tick(
         briefing_result = briefing_worker.tick()
         autonomous_research_result = autonomous_research_service.tick()
         storage_maintenance_result = storage_maintenance_service.tick()
+        # Gaon Learning V3: absorb fresh Paper/Live execution observations
+        # as advisory evidence-backed memory. This is read-only with respect
+        # to trading/deployment and a learning failure never blocks runtime.
+        try:
+            from gaon.learning.production import ProductionLearningEngine
+            from gaon.research.live_trading_intelligence import production_feedback
+
+            ProductionLearningEngine(store._connection).sync_operational_feedback(
+                production_feedback("BINANCE"),
+                now=(briefing_now_factory() if briefing_now_factory is not None else datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
+            )
+            metrics.increment("gaon_learning_v3_operational_sync", status="ok")
+        except Exception:  # noqa: BLE001 - advisory learning must not stop Gaon.
+            metrics.increment("gaon_learning_v3_operational_sync", status="failed")
         return {
             "telegram": telegram_result,
             "daily_briefing": briefing_result,

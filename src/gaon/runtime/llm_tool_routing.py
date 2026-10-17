@@ -462,6 +462,13 @@ def _research_retest_history(value: str) -> bool:
 
 
 def _research_memory(value: str) -> bool:
+    learned = (
+        "지금까지무엇을배웠", "지금까지뭘배웠", "무엇을배웠", "뭘배웠",
+        "배운점", "학습기록", "학습내용", "learningmemory", "whatlearned",
+        "whathaveyoulearned",
+    )
+    if _contains_any(value, learned):
+        return True
     memory = ("비슷한", "유사", "지난연구", "이전연구", "연구했", "기억", "메모리", "memory", "저장된", "찾아")
     research = ("전략", "연구", "strategy", "research", "기록")
     return _contains_any(value, memory) and _contains_any(value, research)

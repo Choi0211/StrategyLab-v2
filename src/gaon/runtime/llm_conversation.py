@@ -591,6 +591,7 @@ class LLMConversationBrain:
         self._in_agent_router = False
         self._cognitive = None
         connection = getattr(repository, "_connection", None)
+        self._db_connection = connection
         if connection is not None and connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cognitive_records'"
         ).fetchone():
@@ -604,6 +605,35 @@ class LLMConversationBrain:
             # per-user goal/preference write. See gaon.cognitive.
             # sustainability module docstring for the full contract.
             ensure_sustainability_objective(connection, now=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    def _learning_family_preferences(self, mission: ResearchMission) -> dict[str, float]:
+        if self._db_connection is None:
+            return {}
+        try:
+            from gaon.learning.production import ProductionLearningEngine
+
+            priors = ProductionLearningEngine(self._db_connection).family_priors(market=str(mission.market))
+            if priors:
+                self._metrics.increment("gaon_learning_v3_reads", status="prior_used")
+            return priors
+        except Exception:  # noqa: BLE001 - learning memory must never block research execution.
+            self._metrics.increment("gaon_learning_v3_reads", status="failed")
+            return {}
+
+    def _learn_candidate_state(self, mission: ResearchMission, candidate, *, now: str):
+        if self._db_connection is None:
+            return None
+        try:
+            from gaon.learning.production import ProductionLearningEngine
+
+            result = ProductionLearningEngine(self._db_connection).learn_candidate(mission, candidate, now=now)
+            self._metrics.increment(
+                "gaon_learning_v3_writes", status="written" if result.written else result.reason[:48]
+            )
+            return result
+        except Exception:  # noqa: BLE001 - advisory learning can fail without corrupting mission progression.
+            self._metrics.increment("gaon_learning_v3_writes", status="failed")
+            return None
 
     def respond(self, request: LLMConversationRequest) -> LLMConversationResponse:
         text = request.text.strip()
@@ -3085,7 +3115,13 @@ class LLMConversationBrain:
                     warnings = (*warnings, f"user_requested_family={requested_family}:{active.candidate_id}")
 
         if active is None:
-            family = next_untried_family(candidate_records(mission))
+            learning_preferences = self._learning_family_preferences(mission)
+            family = next_untried_family(
+                candidate_records(mission), family_preferences=learning_preferences
+            )
+            if learning_preferences:
+                warnings = _dedupe((*warnings, "learning_memory_prior_used=true"))
+                references = _dedupe((*references, "learning-memory:v3"))
             if family is None:
                 expansion = expand_strategy_space_candidate(
                     candidate_records(mission),
@@ -3095,6 +3131,7 @@ class LLMConversationBrain:
                     # rotation only when the mission actually carries a
                     # real peer universe; otherwise it stays fail-closed.
                     multi_symbol_context_available=mission_multi_symbol_context_available(mission),
+                    family_preferences=learning_preferences,
                 )
                 if expansion.candidate is None:
                     updated = record_blocked(
@@ -3310,6 +3347,10 @@ class LLMConversationBrain:
             now=request.received_at,
         )
         updated_mission = update_candidate(updated_mission, updated_candidate, now=request.received_at)
+        learning_update = self._learn_candidate_state(updated_mission, updated_candidate, now=request.received_at)
+        if learning_update is not None and learning_update.written:
+            warnings = _dedupe((*warnings, f"learning_memory_updated={learning_update.record_type}"))
+            references = _dedupe((*references, "learning-memory:v3"))
 
         if attempted and valid == 0 and provider_blocked:
             # Every sample in this cycle failed for provider/data-
@@ -3610,6 +3651,10 @@ class LLMConversationBrain:
                 else:
                     updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
         updated_mission = update_candidate(updated_mission, updated_candidate, now=request.received_at)
+        learning_update = self._learn_candidate_state(updated_mission, updated_candidate, now=request.received_at)
+        if learning_update is not None and learning_update.written:
+            warnings = _dedupe((*warnings, f"learning_memory_updated={learning_update.record_type}"))
+            references = _dedupe((*references, "learning-memory:v3"))
         next_action, next_reason = next_blocker_driven_research_action(updated_candidate)
 
         if is_stagnant(updated_candidate):
@@ -3750,6 +3795,10 @@ class LLMConversationBrain:
         updated_mission = update_candidate(mission, rotated, now=request.received_at)
         updated_mission = set_active_candidate(updated_mission, None, now=request.received_at)
         updated_mission = clear_focus_symbol(updated_mission, now=request.received_at)
+        learning_update = self._learn_candidate_state(updated_mission, rotated, now=request.received_at)
+        if learning_update is not None and learning_update.written:
+            warnings = _dedupe((*warnings, f"learning_memory_updated={learning_update.record_type}"))
+            references = _dedupe((*references, "learning-memory:v3"))
         self._remember_mission(request, updated_mission)
         text = (
             f"{render_candidate_block(rotated)}\n\n"
@@ -3845,6 +3894,42 @@ class LLMConversationBrain:
             (),
         )
 
+    def _try_durable_learning_memory_query(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """Answer a pure "what have you learned?" turn from durable memory.
+
+        This is deliberately read-only and runs before legacy conversational
+        context lookup: Learning V3 survives process restarts and new chats,
+        so lack of a recent autonomous-learning response must not be reported
+        as "no learning" when SQLite contains evidence-backed lessons.
+        """
+        if self._tool_executor is None:
+            return None
+        result = self._tool_executor.execute(
+            ToolRequest(
+                "research_memory_search",
+                _default_tool_arguments("research_memory_search", request.text),
+                request.user_ref,
+                request.received_at,
+            )
+        )
+        self._record_tool_result(request.session_id, result, request.received_at)
+        if result.status != "success" or int(result.output.get("count", 0) or 0) <= 0:
+            return None
+        text = _format_tool_response("research_memory_search", result.output, request.text)
+        return (
+            text,
+            "conversation_learning_memory_v3",
+            _dedupe((*warnings, *result.warnings, "durable learning memory read")),
+            _dedupe((*references, "tool:research_memory_search", "learning-memory:v3")),
+            "deterministic",
+            ("research_memory_search",),
+        )
+
     def _try_autonomous_research_conversation(self, request: LLMConversationRequest, route, warnings: tuple[str, ...], references: tuple[str, ...], *, read_only: bool = False) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
         if self._tool_executor is None:
             return None
@@ -3894,6 +3979,9 @@ class LLMConversationBrain:
         if mode is None:
             return None
         if mode == "learning_query":
+            durable = self._try_durable_learning_memory_query(request, warnings, references)
+            if durable is not None:
+                return durable
             if context is None or context.last_result_kind not in _AUTONOMOUS_CONTEXT_KINDS:
                 return "영하님, 현재 저장된 검증된 학습 기록은 없습니다. 먼저 종목이나 전략을 분석한 뒤 자율 연구를 실행해 주세요.", "conversation_autonomous_learning_empty", _dedupe(warnings), references, "deterministic", ()
             text = _render_autonomous_learning_query(context.last_detail_payload)
@@ -5704,7 +5792,11 @@ def _default_tool_arguments(tool_name: str, text: str) -> dict[str, object]:
     if tool_name == "strategy_quality_score":
         return {"scenario": "balanced"}
     if tool_name == "research_memory_search":
-        return {"query": text[:120]}
+        arguments: dict[str, object] = {"query": text[:120]}
+        family = requested_strategy_family(text)
+        if family is not None:
+            arguments["strategy_family"] = family
+        return arguments
     if tool_name == "krx_real_research":
         return {"request_text": text, "symbol": "005930"}
     if tool_name == "research_retest":

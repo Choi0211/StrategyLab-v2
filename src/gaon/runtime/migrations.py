@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 43
+SCHEMA_VERSION = 44
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -90,6 +90,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         40: _upgrade_v40_to_v41,
         41: _upgrade_v41_to_v42,
         42: _upgrade_v42_to_v43,
+        43: _upgrade_v43_to_v44,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1522,7 +1523,68 @@ def _upgrade_v42_to_v43(connection: sqlite3.Connection) -> None:
     """)
 
 
+
+def _upgrade_v43_to_v44(connection: sqlite3.Connection) -> None:
+    """Gaon Learning V3: durable, versioned evidence-backed LearningRecord
+    storage used by the autonomous research loop.
+
+    These tables are advisory memory only. They do not contain deploy/order
+    state and no trigger or foreign key can mutate a strategy, promote a
+    Champion, or execute a trade. ``learning_records`` stores the current
+    LearningRecord envelope, ``learning_record_versions`` keeps immutable
+    prior versions, and ``learning_audit_events`` keeps append-only audit
+    envelopes. All payloads round-trip the existing gaon.learning contracts.
+    """
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS learning_records (
+            record_id TEXT PRIMARY KEY,
+            record_type TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            project TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            market TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            conflict_penalty REAL NOT NULL,
+            version INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_learning_records_scope
+            ON learning_records(scope, project, market, strategy, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_learning_records_type
+            ON learning_records(record_type, market, updated_at);
+        CREATE TABLE IF NOT EXISTS learning_record_versions (
+            record_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(record_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS learning_audit_events (
+            event_id TEXT PRIMARY KEY,
+            target_ref TEXT NOT NULL,
+            action TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_learning_audit_target
+            ON learning_audit_events(target_ref, created_at);
+    """)
+
 def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     columns = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
-    if column not in columns:
+    if column in columns:
+        return
+    try:
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as exc:
+        # Concurrent migration race: another owner can add the same column
+        # after our PRAGMA read but before ALTER TABLE. Treat ONLY that exact
+        # now-present-column state as idempotent success; every other SQLite
+        # error still propagates fail-closed.
+        if "duplicate column name" not in str(exc).casefold():
+            raise
+        refreshed = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in refreshed:
+            raise

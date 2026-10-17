@@ -175,7 +175,7 @@ class StrategyVersionStatusHttpWiringTests(unittest.TestCase):
 
 class StrategyVersionSchemaTests(unittest.TestCase):
     def test_schema_version_is_current(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 43)
+        self.assertEqual(SCHEMA_VERSION, 44)
 
 
 if __name__ == "__main__":
