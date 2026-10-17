@@ -261,7 +261,7 @@ def default_capability_registry() -> CapabilityRegistry:
                 requires_approval=False,
                 safety_class=SafetyClass.READ_ONLY,
                 summary="Read bounded YouTube metadata without downloading the full video.",
-                provider="yt-dlp",
+                provider="yt-dlp + YouTube oEmbed metadata fallback",
             ),
             cap(
                 VIDEO_TRANSCRIPT,
@@ -270,7 +270,7 @@ def default_capability_registry() -> CapabilityRegistry:
                 requires_approval=False,
                 safety_class=SafetyClass.READ_ONLY,
                 summary="Retrieve bounded YouTube subtitles or automatic captions when available.",
-                provider="yt-dlp caption metadata + HTTPS caption fetch",
+                provider="yt-dlp caption metadata + HTTPS caption fetch; optional authorized cookie file",
             ),
             cap(
                 VIDEO_FRAME_ANALYSIS,
@@ -279,7 +279,7 @@ def default_capability_registry() -> CapabilityRegistry:
                 requires_approval=False,
                 safety_class=SafetyClass.READ_ONLY,
                 summary="Extract bounded YouTube frames with ffmpeg and analyse them with the vision model.",
-                provider="yt-dlp + ffmpeg + qwen3-vl:4b",
+                provider="yt-dlp + ffmpeg + qwen3-vl:4b; optional authorized cookie file",
             ),
             cap(
                 EVIDENCE_INGEST,

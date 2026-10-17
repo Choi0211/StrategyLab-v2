@@ -2,6 +2,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 from PIL import Image
 import gaon.runtime.research_media_tools as tools
 
@@ -27,6 +28,18 @@ class ResearchMediaToolTests(unittest.TestCase):
                 with self.assertRaises(PermissionError): tools.document_read({"path":"/etc/passwd"})
             finally:
                 tools.RESEARCH_INPUT_ROOT=old
+
+
+    def test_video_info_uses_oembed_when_youtube_challenges_server_ip(self):
+        with patch.object(tools, "_youtube_info", side_effect=RuntimeError("YouTube challenged this server IP; configure GAON_YOUTUBE_COOKIES_FILE with an authorized Netscape-format cookie file")), patch.object(
+            tools, "_youtube_oembed", return_value={"title": "Fixture video", "author_name": "Fixture author", "thumbnail_url": "https://i.ytimg.com/vi/abc/hqdefault.jpg"}
+        ):
+            result = tools.video_info({"url": "https://youtu.be/abc"})
+        self.assertEqual(result["metadata_source"], "youtube-oembed")
+        self.assertEqual(result["title"], "Fixture video")
+        self.assertFalse(result["transcript_text_available"])
+        self.assertFalse(result["frame_analysis_available"])
+        self.assertIn("cookie", result["access_limitation"])
 
     def test_youtube_host_gate(self):
         self.assertEqual(tools._youtube_url("https://youtu.be/abc"),"https://youtu.be/abc")
