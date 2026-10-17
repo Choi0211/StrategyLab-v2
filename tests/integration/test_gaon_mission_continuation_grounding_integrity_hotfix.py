@@ -497,9 +497,10 @@ class MultiIntentDurableMissionGroundingTests(_DurableOwnerMissionHarness):
         status_payload = self._send("연구 상태 알려줘")
         self.assertEqual(status_payload["route"], "conversation_mission_blocked")
 
-    def test_stays_honest_about_missing_internet_fetch_capability(self) -> None:
+    def test_no_longer_claims_internet_fetch_is_unavailable(self) -> None:
         payload = self._send(self._PHRASE)
-        self.assertIn("인터넷", payload["text"])
+        self.assertNotIn("인터넷에서 직접 자료를 찾아오는 기능이 아직 연결되어 있지 않아", payload["text"])
+        self.assertNotIn("링크를 직접 열어 내용을 가져올 수 없습니다", payload["text"])
 
     def test_never_fabricates_research_completion_or_promotion(self) -> None:
         payload = self._send(self._PHRASE)

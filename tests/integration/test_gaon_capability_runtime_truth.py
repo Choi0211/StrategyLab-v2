@@ -275,17 +275,22 @@ class _RuntimeTruthMixin:
     # ================================================================
     # capability-limitation lanes are unchanged by provider health
     # ================================================================
-    def test_url_request_offline_still_uses_the_url_limitation_lane(self) -> None:
+    def test_url_request_offline_uses_server_native_fetch_instead_of_mission_blocker(self) -> None:
         self._seed_mission()
         payload = self._send("https://www.instagram.com/p/DcHnMH-kzA5/\n이건 어때요?")
-        self.assertEqual(payload["route"], "conversation_capability_limited_url")
-        self.assertIn("링크를 직접 열어", payload["text"])
+        self.assertIn(payload["route"], {"tool_server_native_fallback", "tool_server_native_fallback_failed"})
+        self.assertNotEqual(payload["route"], "conversation_mission_blocked")
+        if payload["route"] == "tool_server_native_fallback":
+            self.assertIn("url_fetch", payload["tool_calls"])
+            self.assertIn("링크를 직접 읽었습니다", payload["text"])
 
-    def test_current_info_request_offline_still_uses_the_current_info_lane(self) -> None:
+    def test_current_info_request_offline_uses_server_native_web_search(self) -> None:
         self._seed_mission()
         payload = self._send("오늘 날씨는 어때요?")
-        self.assertEqual(payload["route"], "conversation_capability_limited_current_info")
-        self.assertIn("실시간 정보", payload["text"])
+        self.assertEqual(payload["route"], "tool_server_native_fallback")
+        self.assertIn("web_search", payload["tool_calls"])
+        self.assertIn("웹 검색 도구", payload["text"])
+        self.assertNotEqual(payload["route"], "conversation_mission_blocked")
 
     # ================================================================
     # multi-intent partial fulfilment

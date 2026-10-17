@@ -56,8 +56,8 @@ from gaon.runtime.gaon_agent import (
     reconcile_with_mission,
     runtime_capability_note,
 )
-from gaon.runtime.gaon_agent.capabilities import WEB_SEARCH
-from gaon.runtime.gaon_agent.turn_router import render_external_research_limitation, wants_external_web_research
+from gaon.runtime.gaon_agent.capabilities import URL_FETCH, WEB_SEARCH
+from gaon.runtime.gaon_agent.turn_router import contains_external_url, is_current_info_question, render_external_research_limitation, wants_external_web_research
 from gaon.runtime.gaon_agent.multi_intent import recompose_answers
 from gaon.runtime.conversational_research_execution import (
     ConversationalResearchExecutionResult,
@@ -962,6 +962,10 @@ class LLMConversationBrain:
             if agent_fallback is not None:
                 self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=reason)
                 return agent_fallback
+            server_native = self._try_server_native_external_fallback(request, fallback_warnings, references)
+            if server_native is not None:
+                self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=f"{reason}_server_native")
+                return server_native
             mvp_fallback = self._try_conversational_mvp(request, fallback_warnings, references)
             if mvp_fallback is not None:
                 self._metrics.increment("gaon_llm_provider_fallbacks_total", reason=reason)
@@ -974,6 +978,84 @@ class LLMConversationBrain:
             if honest is not None:
                 return honest
             return _provider_unavailable_message(), "fallback", _dedupe((*warnings, f"provider fallback: {reason}")), references, "deterministic", ()
+
+    def _try_server_native_external_fallback(
+        self,
+        request: LLMConversationRequest,
+        warnings: tuple[str, ...],
+        references: tuple[str, ...],
+    ) -> tuple[str, str, tuple[str, ...], tuple[str, ...], str, tuple[str, ...]] | None:
+        """Use server-native read tools when the conversational LLM is unavailable.
+
+        URL fetch and public web search do not depend on the assistant model.
+        A provider outage must therefore never make these capabilities look
+        unavailable or let an unrelated ResearchMission blocker swallow the
+        turn.  This is read-only and executes at most one bounded tool call.
+        """
+        if self._tool_executor is None:
+            return None
+        tool_name: str | None = None
+        arguments: dict[str, object] = {}
+        if contains_external_url(request.text) and self._capability_registry.is_available(URL_FETCH):
+            match = re.search(r"https?://\S+", request.text, flags=re.IGNORECASE)
+            if match is not None:
+                tool_name = "url_fetch"
+                arguments = {"url": match.group(0).rstrip(".,);]〉》")}
+        elif (is_current_info_question(request.text) or wants_external_web_research(request.text)) and self._capability_registry.is_available(WEB_SEARCH):
+            tool_name = "web_search"
+            arguments = {"query": request.text, "max_results": 5}
+        if tool_name is None:
+            return None
+
+        result = self._tool_executor.execute(ToolRequest(tool_name, arguments, request.user_ref, request.received_at))
+        self._record_tool_result(request.session_id, result, request.received_at)
+        if result.status == "success":
+            if tool_name == "web_search":
+                rows = result.output.get("results")
+                lines = ["대화용 LLM 연결과 무관하게 서버의 웹 검색 도구로 확인했습니다."]
+                if isinstance(rows, list) and rows:
+                    for row in rows[:5]:
+                        if isinstance(row, dict):
+                            title = str(row.get("title") or "검색 결과").strip()
+                            snippet = str(row.get("snippet") or "").strip()
+                            url = str(row.get("url") or "").strip()
+                            item = f"- {title}"
+                            if snippet:
+                                item += f": {snippet[:500]}"
+                            if url:
+                                item += f" ({url})"
+                            lines.append(item)
+                else:
+                    lines.append("- 검색 결과가 없습니다.")
+                text = "\n".join(lines)
+            else:
+                source = str(result.output.get("final_url") or result.output.get("source") or arguments.get("url") or "")
+                body = str(result.output.get("text") or "").strip()
+                text = f"대화용 LLM 연결과 무관하게 서버에서 링크를 직접 읽었습니다.\n- source={source}"
+                if body:
+                    text += f"\n\n추출 내용:\n{body[:3000]}"
+            return (
+                text,
+                "tool_server_native_fallback",
+                _dedupe((*warnings, "assistant provider unavailable; server-native read tool used")),
+                _dedupe((*references, f"tool:{tool_name}")),
+                "deterministic",
+                (tool_name,),
+            )
+
+        error_type = str(result.output.get("error_type") or "ToolError")
+        text = (
+            "대화용 LLM은 연결되지 않았지만 서버 도구로 직접 확인을 시도했습니다. "
+            f"다만 이번 {tool_name} 호출은 완료되지 않았습니다 ({error_type})."
+        )
+        return (
+            text,
+            "tool_server_native_fallback_failed",
+            _dedupe((*warnings, "assistant provider unavailable; server-native read tool failed honestly")),
+            _dedupe((*references, f"tool:{tool_name}")),
+            "deterministic",
+            (),
+        )
 
     def _runtime_unavailable_reply(
         self,

@@ -23,6 +23,7 @@ from docx import Document
 from PIL import Image
 from pypdf import PdfReader
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError
 
 from gaon.knowledge.content_acquisition import ContentAcquisitionPolicy, SameHostRedirectHandler, validate_content_url
 
@@ -349,6 +350,16 @@ def _youtube_url(url: str) -> str:
     return str(url).strip()
 
 
+def _youtube_cookie_file() -> str | None:
+    raw = os.environ.get("GAON_YOUTUBE_COOKIES_FILE", "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser().resolve()
+    if not path.is_file():
+        raise RuntimeError("configured YouTube cookie file does not exist")
+    return str(path)
+
+
 def _youtube_info(url: str, *, fmt: str | None = None) -> dict[str, object]:
     opts: dict[str, object] = {
         "quiet": True,
@@ -359,10 +370,21 @@ def _youtube_info(url: str, *, fmt: str | None = None) -> dict[str, object]:
         "extractor_retries": 1,
         "noplaylist": True,
     }
+    cookiefile = _youtube_cookie_file()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
     if fmt:
         opts["format"] = fmt
-    with YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except DownloadError as exc:
+        message = str(exc)
+        if "not a bot" in message.casefold() or "sign in" in message.casefold():
+            raise RuntimeError(
+                "YouTube challenged this server IP; configure GAON_YOUTUBE_COOKIES_FILE with an authorized Netscape-format cookie file"
+            ) from exc
+        raise
     if not isinstance(info, dict):
         raise RuntimeError("video metadata unavailable")
     duration = int(info.get("duration") or 0)
@@ -371,9 +393,40 @@ def _youtube_info(url: str, *, fmt: str | None = None) -> dict[str, object]:
     return info
 
 
+def _youtube_oembed(url: str) -> dict[str, object]:
+    endpoint = "https://www.youtube.com/oembed?" + urllib.parse.urlencode({"url": url, "format": "json"})
+    req = urllib.request.Request(endpoint, headers={"User-Agent": "StrategyLab-Gaon/1.0", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=12) as response:
+        payload = json.loads(_read_bounded_response(response, limit=256_000))
+    if not isinstance(payload, dict):
+        raise RuntimeError("YouTube oEmbed metadata unavailable")
+    return payload
+
+
 def video_info(args: dict[str, object]) -> dict[str, object]:
     url = _youtube_url(str(args.get("url", "")))
-    info = _youtube_info(url)
+    try:
+        info = _youtube_info(url)
+    except RuntimeError as exc:
+        if "YouTube challenged this server IP" not in str(exc):
+            raise
+        meta = _youtube_oembed(url)
+        return {
+            "source": url,
+            "id": None,
+            "title": meta.get("title"),
+            "duration": None,
+            "uploader": meta.get("author_name"),
+            "upload_date": None,
+            "thumbnail_url": meta.get("thumbnail_url"),
+            "subtitles_languages": [],
+            "automatic_captions_languages": [],
+            "transcript_text_available": False,
+            "frame_analysis_available": False,
+            "metadata_source": "youtube-oembed",
+            "access_limitation": "youtube_bot_challenge_requires_authorized_cookie_file",
+            "untrusted_evidence": True,
+        }
     return {
         "source": url,
         "id": info.get("id"),
@@ -385,6 +438,7 @@ def video_info(args: dict[str, object]) -> dict[str, object]:
         "automatic_captions_languages": sorted((info.get("automatic_captions") or {}).keys()),
         "transcript_text_available": bool(info.get("subtitles") or info.get("automatic_captions")),
         "frame_analysis_available": bool(os.environ.get("GAON_VISION_MODEL")) and bool(_ffmpeg_path()),
+        "metadata_source": "yt-dlp",
         "untrusted_evidence": True,
     }
 
