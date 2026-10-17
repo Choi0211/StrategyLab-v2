@@ -446,7 +446,7 @@ def format_grounded_tool_response(tool_name: str, output: dict[str, object], use
 
 
 def is_strict_real_research_tool(tool_name: str) -> bool:
-    return tool_name in {"krx_real_research", "autonomous_research_cycle", "autonomous_learning_research", "research_retest", "multi_symbol_research"}
+    return tool_name in {"krx_real_research", "autonomous_research_cycle", "autonomous_learning_research", "research_retest", "multi_symbol_research", "evidence_validate"}
 
 
 def contains_ungrounded_real_research_claim(text: str, output: dict[str, object]) -> bool:

@@ -308,12 +308,12 @@ class DiagnoseTests(unittest.TestCase):
         kinds = {b.kind for b in assessment.blockers}
         self.assertIn(BlockerKind.APPROVAL_REQUIRED, kinds)
 
-    def test_missing_capability_is_a_capability_unavailable_blocker(self) -> None:
-        goal = RequestedGoal("링크 열기", required_capabilities=(URL_FETCH,))
+    def test_unknown_capability_is_a_capability_unavailable_blocker(self) -> None:
+        goal = RequestedGoal("future", required_capabilities=("FUTURE_CAPABILITY",))
         assessment = diagnose(goal, self.registry, runtime_observations=self._observations(T0))
-        self.assertEqual(assessment.missing_capabilities, (URL_FETCH,))
+        self.assertEqual(assessment.missing_capabilities, ("FUTURE_CAPABILITY",))
         self.assertEqual(assessment.primary_blocker.kind, BlockerKind.CAPABILITY_UNAVAILABLE)
-        self.assertTrue(assessment.code_change_potentially_required)
+        self.assertFalse(assessment.code_change_potentially_required)
 
     def test_missing_user_input_data_and_evidence_produce_typed_blockers(self) -> None:
         goal = RequestedGoal("분석", required_capabilities=(GENERAL_CONVERSATION,))

@@ -12,8 +12,16 @@ from uuid import uuid4
 from gaon.runtime.assistant_provider import AssistantToolDefinition
 from gaon.runtime.llm_tool_routing import has_explicit_research_execution_intent
 from gaon.runtime.research_grounding import is_strict_real_research_tool
-from gaon.runtime.external_research import ExternalResearchTool, structured_data
+from gaon.runtime.external_research import structured_data
+from gaon.runtime.research_media_tools import (web_search as live_web_search, url_read, document_read, image_inspect, image_vision, video_info, video_transcript, video_frame_analysis, paper_search)
+from gaon.runtime.research_learning import learn, recall, discover_papers, validate as validate_evidence
 from gaon.runtime.serialization import dumps_json, loads_json
+from gaon.runtime.developer_tools import (
+    repository_read, developer_status, worktree_create, apply_patch as developer_apply_patch,
+    run_tests as developer_run_tests, commit_changes as developer_commit, push_branch as developer_push,
+    create_pr as developer_create_pr,
+)
+from gaon.research.live_trading_intelligence import production_feedback
 from gaon.knowledge.telegram_autonomous_learning import telegram_autonomous_learning_payload
 from gaon.research.quant_scientist import feature_discovery_payload
 from gaon.research.quant_research import KRXMarketDataTool
@@ -44,6 +52,13 @@ class ToolRiskLevel(str, Enum):
     SAFE_WRITE = "safe_write"
     APPROVAL_REQUIRED = "approval_required"
     PROHIBITED = "prohibited"
+
+
+_PROVIDER_SAFE_WRITE_TOOLS = frozenset({"evidence_learn", "evidence_validate"})
+_APPROVED_DEVELOPER_TOOLS = frozenset({
+    "developer_worktree_create", "developer_apply_patch", "developer_run_tests",
+    "developer_commit", "developer_push", "developer_create_pr",
+})
 
 
 @dataclass(frozen=True)
@@ -195,7 +210,7 @@ class SafeToolExecutor:
         return tuple(
             _assistant_tool_definition(definition)
             for definition in self._registry.list()
-            if definition.risk_level is ToolRiskLevel.READ_ONLY
+            if (definition.risk_level is ToolRiskLevel.READ_ONLY or (definition.risk_level is ToolRiskLevel.SAFE_WRITE and definition.name in _PROVIDER_SAFE_WRITE_TOOLS))
             and (not definition.fixture_gated or _fixture_gate_allows(definition.name, request_text))
             and (not is_strict_real_research_tool(definition.name) or execution_intent)
         )
@@ -245,6 +260,27 @@ def _fixture_gate_allows(tool_name: str, request_text: str) -> bool:
 
 def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
     registry = ToolRegistry()
+    registry.register(ToolDefinition("research_paper_discovery", "Discover current academic papers through Crossref; metadata only, never a validated trading strategy.", ToolRiskLevel.READ_ONLY, required_args=("query",), allowed_args=("max_results",)), discover_papers)
+    registry.register(ToolDefinition("evidence_learn", "Persist a bounded URL/document as provenance-tagged unvalidated research evidence; never changes trading state.", ToolRiskLevel.SAFE_WRITE, allowed_args=("url", "path")), learn)
+    registry.register(ToolDefinition("evidence_recall", "Retrieve excerpts from previously collected research evidence.", ToolRiskLevel.READ_ONLY, required_args=("query",)), recall)
+    registry.register(ToolDefinition("evidence_validate", "Attach independent real-market or operational evidence to a stored research source; advisory only, no strategy mutation.", ToolRiskLevel.SAFE_WRITE, required_args=("evidence_id",), allowed_args=("market", "symbol")), lambda args: validate_evidence(connection, args))
+    registry.register(ToolDefinition("paper_search", "Search real Crossref academic paper metadata.", ToolRiskLevel.READ_ONLY, required_args=("query",), allowed_args=("max_results",)), paper_search)
+    registry.register(ToolDefinition("url_fetch", "Fetch bounded public HTTPS HTML/text/XML/PDF content with SSRF protection.", ToolRiskLevel.READ_ONLY, required_args=("url",)), url_read)
+    registry.register(ToolDefinition("document_read", "Read PDF, DOCX, TXT, MD, CSV or JSON from the authorized research input directory.", ToolRiskLevel.READ_ONLY, required_args=("path",)), document_read)
+    registry.register(ToolDefinition("image_inspect", "Read bounded image dimensions and metadata without semantic interpretation.", ToolRiskLevel.READ_ONLY, allowed_args=("path", "url")), image_inspect)
+    registry.register(ToolDefinition("image_vision", "Semantically analyse a bounded image or chart using the configured vision model.", ToolRiskLevel.READ_ONLY, allowed_args=("path", "url", "prompt")), image_vision)
+    registry.register(ToolDefinition("video_info", "Read bounded YouTube metadata and caption availability.", ToolRiskLevel.READ_ONLY, required_args=("url",)), video_info)
+    registry.register(ToolDefinition("video_transcript", "Retrieve bounded YouTube subtitles or automatic captions when available.", ToolRiskLevel.READ_ONLY, required_args=("url",), allowed_args=("language",)), video_transcript)
+    registry.register(ToolDefinition("video_frame_analysis", "Extract bounded YouTube frames and analyse them with the vision model.", ToolRiskLevel.READ_ONLY, required_args=("url",), allowed_args=("timestamps", "prompt")), video_frame_analysis)
+    registry.register(ToolDefinition("live_execution_feedback", "Read paper/live execution outcomes, fees and partial-fill evidence from local trading runtime artifacts.", ToolRiskLevel.READ_ONLY, allowed_args=("market",)), lambda args: (production_feedback(str(args.get("market", ""))) or _empty_live_feedback(str(args.get("market", "")))).to_json())
+    registry.register(ToolDefinition("repository_read", "Read an allowlisted text file from the Gaon repository.", ToolRiskLevel.READ_ONLY, required_args=("path",)), repository_read)
+    registry.register(ToolDefinition("developer_status", "Read an isolated developer worktree status.", ToolRiskLevel.READ_ONLY, required_args=("task_id",)), developer_status)
+    registry.register(ToolDefinition("developer_worktree_create", "Create an isolated gaon-dev worktree from origin/main; one-shot approval required.", ToolRiskLevel.APPROVAL_REQUIRED, required_args=("task_id",)), worktree_create)
+    registry.register(ToolDefinition("developer_apply_patch", "Apply a bounded unified diff only to allowlisted files inside an isolated worktree; approval required.", ToolRiskLevel.APPROVAL_REQUIRED, required_args=("task_id", "patch")), developer_apply_patch)
+    registry.register(ToolDefinition("developer_run_tests", "Run bounded Python unittest targets inside an isolated worktree; approval required.", ToolRiskLevel.APPROVAL_REQUIRED, required_args=("task_id",), allowed_args=("targets",)), developer_run_tests)
+    registry.register(ToolDefinition("developer_commit", "Commit allowlisted worktree changes to its gaon-dev branch; approval required.", ToolRiskLevel.APPROVAL_REQUIRED, required_args=("task_id", "message")), developer_commit)
+    registry.register(ToolDefinition("developer_push", "Push only the isolated gaon-dev branch; approval required.", ToolRiskLevel.APPROVAL_REQUIRED, required_args=("task_id",)), developer_push)
+    registry.register(ToolDefinition("developer_create_pr", "Open a PR from the isolated gaon-dev branch to main; approval required and never merges.", ToolRiskLevel.APPROVAL_REQUIRED, required_args=("task_id", "title"), allowed_args=("body",)), developer_create_pr)
     registry.register(
         ToolDefinition("runtime_status", "Read runtime database schema and availability.", ToolRiskLevel.READ_ONLY),
         lambda _args: _runtime_status(connection),
@@ -280,27 +316,27 @@ def default_tool_registry(connection: sqlite3.Connection) -> ToolRegistry:
         lambda args: _v5_pipeline_history(connection, int(args.get("limit", 5))),
     )
     registry.register(
-        ToolDefinition("web_search", "Read normalized external web research fixture results with citations.", ToolRiskLevel.READ_ONLY, required_args=("query",), allowed_args=("max_results",)),
-        lambda args: ExternalResearchTool().search(str(args["query"]), max_results=int(args.get("max_results", 5))),
+        ToolDefinition("web_search", "Search the live public web through a bounded read-only provider.", ToolRiskLevel.READ_ONLY, required_args=("query",), allowed_args=("max_results",)),
+        live_web_search,
     )
     registry.register(
-        ToolDefinition("news_search", "Read normalized external news fixture results with citations.", ToolRiskLevel.READ_ONLY, required_args=("query",), allowed_args=("max_results",)),
-        lambda args: structured_data("news_search", args),
+        ToolDefinition("news_search", "Search current public news/web results through the bounded live web provider.", ToolRiskLevel.READ_ONLY, required_args=("query",), allowed_args=("max_results",)),
+        live_web_search,
     )
     registry.register(
-        ToolDefinition("weather_current", "Read current weather from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("location",)),
+        ToolDefinition("weather_current", "Read current weather from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("location",), fixture_gated=True),
         lambda args: structured_data("weather_current", args),
     )
     registry.register(
-        ToolDefinition("weather_forecast", "Read weather forecast from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("location",)),
+        ToolDefinition("weather_forecast", "Read weather forecast from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("location",), fixture_gated=True),
         lambda args: structured_data("weather_forecast", args),
     )
     registry.register(
-        ToolDefinition("exchange_rate", "Read exchange-rate data from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("base", "quote")),
+        ToolDefinition("exchange_rate", "Read exchange-rate data from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("base", "quote"), fixture_gated=True),
         lambda args: structured_data("exchange_rate", args),
     )
     registry.register(
-        ToolDefinition("market_data", "Read market data from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol",)),
+        ToolDefinition("market_data", "Read market data from a configured read-only provider.", ToolRiskLevel.READ_ONLY, allowed_args=("symbol",), fixture_gated=True),
         lambda args: structured_data("market_data", args),
     )
     registry.register(
@@ -695,6 +731,11 @@ def _research_operation_status(connection: sqlite3.Connection, limit: int) -> di
     }
 
 
+def _empty_live_feedback(market: str):
+    from gaon.research.live_trading_intelligence import LiveFeedback
+    return LiveFeedback(str(market or "MULTI").upper(), 0, None, 0, 0, 0, 0, ("live_evidence_unavailable",), ())
+
+
 def _validate_tool_name(name: str) -> None:
     if re.fullmatch(r"[a-z][a-z0-9_]{1,63}", name) is None:
         raise ValueError("tool name must be a safe identifier")
@@ -716,10 +757,17 @@ def _validate_arguments(definition: ToolDefinition, arguments: dict[str, object]
 def _enforce_policy(definition: ToolDefinition, request: ToolRequest) -> None:
     if definition.risk_level is ToolRiskLevel.PROHIBITED:
         raise ToolSecurityError("prohibited tool cannot be executed")
-    if definition.risk_level is ToolRiskLevel.APPROVAL_REQUIRED and request.approval_ref is None:
-        raise ToolSecurityError("approval required tool requires approval_ref")
-    if definition.risk_level is not ToolRiskLevel.READ_ONLY:
-        raise ToolSecurityError("only read-only tools are enabled for the conversational release")
+    if definition.risk_level is ToolRiskLevel.READ_ONLY:
+        return
+    if definition.risk_level is ToolRiskLevel.SAFE_WRITE and definition.name in _PROVIDER_SAFE_WRITE_TOOLS:
+        return
+    if definition.risk_level is ToolRiskLevel.APPROVAL_REQUIRED:
+        if request.approval_ref is None:
+            raise ToolSecurityError("approval required tool requires approval_ref")
+        if definition.name not in _APPROVED_DEVELOPER_TOOLS:
+            raise ToolSecurityError("approval does not grant this tool")
+        return
+    raise ToolSecurityError("tool risk level is not enabled")
 
 
 def _redact(payload: dict[str, object]) -> dict[str, object]:
@@ -742,6 +790,8 @@ def _assistant_tool_definition(definition: ToolDefinition) -> AssistantToolDefin
         properties["limit"] = {"type": "integer", "minimum": 1, "maximum": 20}
     elif definition.name == "validation_status":
         properties["limit"] = {"type": "integer", "minimum": 1, "maximum": 10}
+    elif definition.name in {"web_search", "paper_search", "research_paper_discovery"}:
+        properties["max_results"] = {"type": "integer", "minimum": 1, "maximum": 10}
     parameters: dict[str, object] = {"type": "object", "properties": properties, "additionalProperties": False}
     if definition.required_args:
         parameters["required"] = list(definition.required_args)

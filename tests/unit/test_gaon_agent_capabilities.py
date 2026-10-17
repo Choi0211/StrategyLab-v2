@@ -38,13 +38,18 @@ class CapabilityRegistryTests(unittest.TestCase):
         available = {c.id for c in self.registry.by_state(CapabilityState.AVAILABLE)}
         self.assertEqual(
             available,
-            {"GENERAL_CONVERSATION", "RESEARCH_MISSION_READ", "STRATEGY_STATUS_READ", "MARKET_DATA_READ"},
+            {
+                "GENERAL_CONVERSATION", "RESEARCH_MISSION_READ", "STRATEGY_STATUS_READ", "MARKET_DATA_READ",
+                "WEB_SEARCH", "URL_FETCH", "DOCUMENT_READ", "IMAGE_VISION", "VIDEO_METADATA",
+                "VIDEO_TRANSCRIPT", "VIDEO_FRAME_ANALYSIS", "EVIDENCE_INGEST", "EVIDENCE_VALIDATE", "REPOSITORY_READ",
+            },
         )
 
-    def test_future_capabilities_are_unavailable_not_available(self) -> None:
-        for capability_id in (URL_FETCH, IMAGE_VISION, CODE_MODIFY_DEV, "WEB_SEARCH", "VIDEO_TRANSCRIPT", "DOCUMENT_READ"):
-            self.assertEqual(self.registry.state(capability_id), CapabilityState.UNAVAILABLE)
-            self.assertFalse(self.registry.is_available(capability_id))
+    def test_external_research_and_media_capabilities_are_available(self) -> None:
+        for capability_id in (URL_FETCH, IMAGE_VISION, "WEB_SEARCH", "VIDEO_TRANSCRIPT", "DOCUMENT_READ"):
+            self.assertEqual(self.registry.state(capability_id), CapabilityState.AVAILABLE)
+            self.assertTrue(self.registry.is_available(capability_id))
+        self.assertEqual(self.registry.state(CODE_MODIFY_DEV), CapabilityState.APPROVAL_REQUIRED)
 
     def test_privileged_capabilities_are_forbidden(self) -> None:
         for capability_id in FORBIDDEN_IN_AGENT_LAYER:
@@ -56,35 +61,33 @@ class CapabilityRegistryTests(unittest.TestCase):
     def test_unknown_capability_id_fails_closed_to_unavailable(self) -> None:
         self.assertEqual(self.registry.state("NOT_A_REAL_CAPABILITY"), CapabilityState.UNAVAILABLE)
 
-    def test_require_available_raises_for_unavailable(self) -> None:
+    def test_require_available_accepts_wired_and_rejects_unknown(self) -> None:
         with self.assertRaises(CapabilityUnavailableError):
-            self.registry.require_available(URL_FETCH)
+            self.registry.require_available("NOT_A_REAL_CAPABILITY")
+        self.assertIsNotNone(self.registry.require_available(URL_FETCH))
         self.assertIsNotNone(self.registry.require_available(GENERAL_CONVERSATION))
 
     def test_prompt_summary_never_advertises_an_unavailable_capability(self) -> None:
         summary = capability_prompt_summary(self.registry)
         self.assertIn("CAN do now", summary)
-        self.assertIn("CANNOT do yet", summary)
-        # the "cannot" section names the missing abilities; the summary must
-        # never say Gaon can open links / browse / see images.
         lowered = summary.lower()
-        self.assertIn("cannot", lowered)
-        self.assertNotIn("can open links", lowered)
-        self.assertIn("never claim to have opened a link", lowered)
+        self.assertIn("search the public web", lowered)
+        self.assertIn("dedicated vision model", lowered)
+        self.assertIn("only claim", lowered)
+        self.assertIn("actually returned evidence", lowered)
 
 
 class NeedAssessmentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.registry = default_capability_registry()
 
-    def test_missing_capability_recommends_a_code_change_next_step(self) -> None:
-        goal = RequestedGoal("read this instagram link", required_capabilities=(URL_FETCH,))
+    def test_unknown_capability_recommends_a_code_change_next_step(self) -> None:
+        goal = RequestedGoal("future feature", required_capabilities=("FUTURE_CAPABILITY",))
         assessment = assess_from_registry(goal, self.registry)
         self.assertIsInstance(assessment, NeedAssessment)
-        self.assertEqual(assessment.missing_capabilities, (URL_FETCH,))
+        self.assertEqual(assessment.missing_capabilities, ("FUTURE_CAPABILITY",))
         self.assertFalse(assessment.is_fulfillable_now)
-        self.assertTrue(assessment.code_change_potentially_required)
-        self.assertIn("not wired yet", assessment.recommended_next_step)
+        self.assertFalse(assessment.code_change_potentially_required)
 
     def test_forbidden_capability_routes_to_a_safety_controller(self) -> None:
         goal = RequestedGoal("promote the champion", required_capabilities=(CHAMPION_PROMOTION,))
