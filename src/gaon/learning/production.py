@@ -61,6 +61,31 @@ def _due_at_days(now: str, days: int) -> str:
     return (_parse_utc(now) + timedelta(days=max(1, int(days)))).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def learning_freshness_multiplier(record: LearningRecord, reference_time: str | datetime) -> float:
+    """Return bounded influence for a memory based on revalidation freshness.
+
+    Overdue memories remain visible historical evidence; they are never
+    deleted or silently rewritten. Only their advisory ranking influence
+    decays until fresh evidence creates a new record version/due date.
+    """
+    reference = _parse_utc(reference_time) if isinstance(reference_time, str) else reference_time.astimezone(UTC)
+    due = _parse_utc(record.revalidation.due_at)
+    if reference <= due:
+        return 1.0
+    overdue_days = (reference - due).total_seconds() / 86400.0
+    if overdue_days <= 7:
+        return 0.85
+    if overdue_days <= 30:
+        return 0.65
+    if overdue_days <= 90:
+        return 0.40
+    return 0.20
+
+
+def effective_learning_confidence(record: LearningRecord, reference_time: str | datetime) -> float:
+    return round(record.confidence.value * learning_freshness_multiplier(record, reference_time), 6)
+
+
 class SQLiteLearningRepository:
     """SQLite-backed repository for the existing LearningRecord contract."""
 
@@ -489,27 +514,28 @@ class ProductionLearningEngine:
                 writes += 1
         return writes
 
-    def family_priors(self, *, market: str) -> dict[str, float]:
-        return {item.family: item.score for item in self.family_prior_details(market=market)}
+    def family_priors(self, *, market: str, reference_time: str | None = None) -> dict[str, float]:
+        return {item.family: item.score for item in self.family_prior_details(market=market, reference_time=reference_time)}
 
-    def family_prior_details(self, *, market: str) -> tuple[FamilyLearningPrior, ...]:
+    def family_prior_details(self, *, market: str, reference_time: str | None = None) -> tuple[FamilyLearningPrior, ...]:
         by_family: dict[str, list[LearningRecord]] = {}
         for record in self.repository.filter(scope=LEARNING_SCOPE, project=LEARNING_PROJECT, market=market):
             if record.strategy in {"execution-cost", "autonomous-research"} or record.strategy.startswith("runtime:"):
                 continue
             by_family.setdefault(record.strategy, []).append(record)
         priors: list[FamilyLearningPrior] = []
+        ref = reference_time or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         for family, records in by_family.items():
             successes = sum(r.record_type is LearningRecordType.SUCCESS_PATTERN for r in records)
             failures = sum(r.record_type is LearningRecordType.FAILURE_PATTERN for r in records)
-            confidence = sum(r.confidence.value for r in records) / len(records)
+            confidence = sum(effective_learning_confidence(r, ref) for r in records) / len(records)
             stored_conflict = sum(r.confidence.conflict_penalty for r in records) / len(records)
             structural_conflict = min(0.55, 0.15 * min(successes, failures)) if successes and failures else 0.0
             conflict = max(stored_conflict, structural_conflict)
             score = 0.0
             for record in records:
                 effective_conflict = max(record.confidence.conflict_penalty, structural_conflict)
-                weight = record.confidence.value * (1.0 - effective_conflict)
+                weight = effective_learning_confidence(record, ref) * (1.0 - effective_conflict)
                 if record.record_type is LearningRecordType.SUCCESS_PATTERN:
                     score += weight
                 elif record.record_type is LearningRecordType.FAILURE_PATTERN:

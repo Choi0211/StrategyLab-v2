@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 import re
 import sqlite3
@@ -681,7 +682,9 @@ def _research_memory_search(connection: sqlite3.Connection, args: dict[str, obje
     )
     combined = [item.to_json() for item in legacy]
     try:
-        from gaon.learning.production import SQLiteLearningRepository
+        from gaon.learning.production import (
+            SQLiteLearningRepository, effective_learning_confidence, learning_freshness_multiplier,
+        )
 
         strategy_family = str(args["strategy_family"]) if "strategy_family" in args else None
         market = str(args["market"]) if "market" in args else None
@@ -693,6 +696,7 @@ def _research_memory_search(connection: sqlite3.Connection, args: dict[str, obje
             )
         )
         records = SQLiteLearningRepository(connection).list_all()
+        reference_time = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         for record in sorted(records, key=lambda item: (item.updated_at, item.record_id), reverse=True):
             if strategy_family and record.strategy != strategy_family:
                 continue
@@ -700,6 +704,12 @@ def _research_memory_search(connection: sqlite3.Connection, args: dict[str, obje
                 continue
             if query and not generic_learning_query and query not in record.content.casefold() and query not in record.strategy.casefold():
                 continue
+            freshness = learning_freshness_multiplier(record, reference_time)
+            effective_confidence = effective_learning_confidence(record, reference_time)
+            confidence_payload = record.confidence.to_dict()
+            confidence_payload["effective_value"] = effective_confidence
+            confidence_payload["freshness_multiplier"] = freshness
+            confidence_payload["revalidation_state"] = "overdue" if freshness < 1.0 else record.revalidation.status.value
             combined.append({
                 "memory_id": record.record_id,
                 "strategy_family": record.strategy,
@@ -707,7 +717,7 @@ def _research_memory_search(connection: sqlite3.Connection, args: dict[str, obje
                 "timeframe": "learning_v3",
                 "hypothesis": record.content,
                 "result_summary": record.content,
-                "critic_summary": f"confidence={record.confidence.value}; conflict_penalty={record.confidence.conflict_penalty}",
+                "critic_summary": f"confidence={record.confidence.value}; effective_confidence={effective_confidence}; conflict_penalty={record.confidence.conflict_penalty}",
                 "improvement_summary": "advisory learning memory; no automatic promotion",
                 "final_status": record.record_type.value,
                 "tags": ["learning_v3", record.record_type.value],
@@ -716,7 +726,8 @@ def _research_memory_search(connection: sqlite3.Connection, args: dict[str, obje
                 "source_run_id": record.audit_ref,
                 "fingerprint": record.record_id,
                 "source_refs": [e.reference for e in record.evidence],
-                "confidence": record.confidence.to_dict(),
+                "confidence": confidence_payload,
+                "revalidation": record.revalidation.to_dict(),
             })
     except (sqlite3.OperationalError, ValueError):
         # Older/read-only DBs can still serve legacy memory safely.

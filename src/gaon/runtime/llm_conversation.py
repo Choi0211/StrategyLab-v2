@@ -606,13 +606,15 @@ class LLMConversationBrain:
             # sustainability module docstring for the full contract.
             ensure_sustainability_objective(connection, now=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
-    def _learning_family_preferences(self, mission: ResearchMission) -> dict[str, float]:
+    def _learning_family_preferences(self, mission: ResearchMission, *, now: str) -> dict[str, float]:
         if self._db_connection is None:
             return {}
         try:
             from gaon.learning.production import ProductionLearningEngine
 
-            priors = ProductionLearningEngine(self._db_connection).family_priors(market=str(mission.market))
+            priors = ProductionLearningEngine(self._db_connection).family_priors(
+                market=str(mission.market), reference_time=now
+            )
             if priors:
                 self._metrics.increment("gaon_learning_v3_reads", status="prior_used")
             return priors
@@ -3115,7 +3117,7 @@ class LLMConversationBrain:
                     warnings = (*warnings, f"user_requested_family={requested_family}:{active.candidate_id}")
 
         if active is None:
-            learning_preferences = self._learning_family_preferences(mission)
+            learning_preferences = self._learning_family_preferences(mission, now=request.received_at)
             family = next_untried_family(
                 candidate_records(mission), family_preferences=learning_preferences
             )

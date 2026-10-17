@@ -532,10 +532,15 @@ def _format_memory(output: dict[str, object]) -> str:
                 confidence = _as_dict(item.get("confidence"))
                 content = str(item.get("result_summary") or item.get("hypothesis") or "")
                 lesson = _render_learning_v3_lesson(content)
+                effective = confidence.get("effective_value", confidence.get("value", "unknown"))
+                freshness = confidence.get("freshness_multiplier", 1.0)
+                revalidation_state = confidence.get("revalidation_state", "pending")
                 lines.append(
                     f"- {family}: {item.get('final_status', 'research_outcome')} / "
-                    f"confidence={confidence.get('value', 'unknown')}"
+                    f"confidence={confidence.get('value', 'unknown')} / effective={effective}"
                 )
+                if revalidation_state == "overdue":
+                    lines.append(f"  · 재검증 기한 경과 / freshness={freshness}")
                 if confidence.get("conflict_penalty", 0):
                     lines.append(f"  · 반대 근거 페널티={confidence.get('conflict_penalty')}")
                 if lesson:
