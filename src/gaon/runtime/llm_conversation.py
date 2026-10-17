@@ -77,7 +77,7 @@ from gaon.runtime.provider_registry import build_assistant_provider
 from gaon.runtime.research_grounding import contains_fixture_leakage, contains_internal_identifier_leakage, contains_ungrounded_real_research_claim, contains_unverified_fixture_metrics, contains_wrapper_tags, format_grounded_tool_response, ground_provider_user_reply, grounded_system_policy, is_korean_request, is_research_tool, is_strict_real_research_tool, looks_like_english_final, mission_state_claim_violations, normalize_final_response, requests_low_level_implementation_detail, safe_capability_reply, sanitize_research_tool_output, strict_real_research_grounding_violations
 from gaon.runtime.research_failures import classify_tool_failure, warning_for_failure
 from gaon.runtime.serialization import dumps_json, loads_json
-from gaon.runtime.llm_tool_routing import has_explicit_research_execution_intent, route_read_only_tool
+from gaon.runtime.llm_tool_routing import has_explicit_research_continuation_intent, has_explicit_research_execution_intent, route_read_only_tool
 from gaon.runtime.conversation_integrity import (
     read_only_intent,
     read_only_turn_may_not_mutate_mission,
@@ -1794,6 +1794,11 @@ class LLMConversationBrain:
             )
             and (
                 is_generic_continuation_request(request.text)
+                # A short, explicit research command ("연구 좀 해주세요",
+                # "단타 연구해주세요") names no new scope but does clearly
+                # authorize execution.  With an existing mission it means
+                # continue THAT mission; never invent a new mission here.
+                or has_explicit_research_continuation_intent(request.text)
                 or candidate_continuation_precedence
                 or robustness_continuation_precedence
                 or multi_symbol_breadth_request

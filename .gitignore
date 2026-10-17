@@ -231,4 +231,4 @@ kis_token.json
 .tmp-v5-*/
 
 # Local exploratory research workspace (canonical product research lives under src/ and docs/)
-research/
+/research/

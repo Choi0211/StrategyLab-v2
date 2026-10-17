@@ -336,7 +336,11 @@ class AuthoritativeMissionStateGuardTests(_DurableOwnerMissionHarness):
             self.assertNotIn(reask_marker, payload["text"])
 
     def test_state_claim_violation_is_recorded_in_warnings(self) -> None:
-        payload = self._send("단타 연구해주세요")
+        # Explicit research imperatives now correctly take the authoritative
+        # mission-execution path before the free-form provider. Keep this
+        # provider-grounding regression on a genuinely conversational prompt
+        # that still mentions the same strategy family.
+        payload = self._send("단타와 장기투자의 일반적인 차이는 뭐야?")
         self.assertTrue(any("ungrounded_state_claim" in warning for warning in payload["warnings"]))
 
     def test_unrelated_general_reply_is_not_altered(self) -> None:

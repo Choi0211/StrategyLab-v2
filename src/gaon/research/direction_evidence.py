@@ -411,6 +411,7 @@ def acquire_direction_evidence(
     *,
     executor: AutonomousExternalResearchExecutor | None,
     now: str,
+    attempt_key: str | None = None,
 ) -> DirectionEvidenceAcquisition:
     """Candidate-independent orchestration: ResearchDirection -> bounded
     ResearchQuestion(s) -> (optionally) the existing production executor ->
@@ -429,7 +430,15 @@ def acquire_direction_evidence(
     # repository's unique index) - two different sessions that happen to
     # reach the identical direction/analysis fingerprint must still get
     # distinct primary keys, never silently collapse into one row.
-    evidence_acquisition_id = f"direction-evidence:{_stable_hash(direction.session_ref, direction.fingerprint, analysis.fingerprint)}"
+    # The first acquisition keeps the original deterministic fingerprint so
+    # all existing idempotency guarantees and persisted rows remain valid.
+    # A caller may supply an explicit bounded retry key only when stale
+    # evidence is intentionally being re-acquired.  That creates a new,
+    # immutable lineage row instead of overwriting the old failed evidence.
+    fingerprint_parts = [direction.session_ref, direction.fingerprint, analysis.fingerprint]
+    if attempt_key:
+        fingerprint_parts.append(attempt_key)
+    evidence_acquisition_id = f"direction-evidence:{_stable_hash(*fingerprint_parts)}"
     components = FAILURE_CLASS_EVIDENCE_REQUIREMENTS.get(analysis.dominant_failure_class)
     if components is None:
         return DirectionEvidenceAcquisition(

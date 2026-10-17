@@ -77,6 +77,7 @@ _JOB_ID_PREFIX = "autonomous-research:tick"
 _JOB_KIND = "autonomous_research"
 _CONTINUATION_REQUEST_TEXT = "연구 계속해주세요"
 _DEFAULT_INTERVAL_SECONDS = 900
+_EVIDENCE_RETRY_INTERVAL_SECONDS = 24 * 60 * 60
 
 # Only a candidate that stagnated purely because the cycle-stagnation
 # bookkeeping threshold (STAGNATION_CYCLE_THRESHOLD) tripped - not because
@@ -85,6 +86,23 @@ _DEFAULT_INTERVAL_SECONDS = 900
 # keeps the recovery path from ever re-opening a candidate the state
 # machine already decided is a genuine dead end.
 _RECOVERABLE_STAGNATION_REASON = "validation_cycle_exhausted_without_progress"
+
+
+def _evidence_retry_due(created_at: str, now: str, *, interval_seconds: int = _EVIDENCE_RETRY_INTERVAL_SECONDS) -> bool:
+    """Return True only when a persisted failed evidence attempt is old
+    enough for another bounded acquisition attempt. Malformed timestamps
+    fail closed (no retry), and time moving backwards never triggers one.
+    """
+    try:
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        current = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    return current >= created and (current - created).total_seconds() >= interval_seconds
 
 
 def attempt_bounded_stagnation_recovery(
@@ -441,7 +459,45 @@ class AutonomousResearchRuntimeWorker:
 
         policy_repo = EvidenceMutationPolicyRepository(self._connection)
         existing_decisions = policy_repo.list_for_direction(direction.direction_id)
-        if not existing_decisions:
+        # Decisions are evidence-version specific.  A stale-evidence retry
+        # creates a new immutable evidence row, so never let an older blocked
+        # decision continue governing the newest evidence attempt.
+        matching_decisions = tuple(
+            item for item in existing_decisions if item.evidence_acquisition_id == evidence.evidence_acquisition_id
+        )
+        decision = matching_decisions[-1] if matching_decisions else None
+
+        # Production can remain BLOCKED for weeks while the scheduler keeps
+        # re-reading the same failed external search. Providers, indexes and
+        # available sources can change over time, so a BLOCKED_INSUFFICIENT_
+        # EVIDENCE result is retryable on a deliberately slow (daily) cadence.
+        # Historical evidence/policy rows are preserved; no mutation or
+        # deletion occurs. A fresh attempt receives a new lineage key and
+        # the next tick evaluates policy against that exact attempt.
+        if (
+            decision is not None
+            and decision.policy_status is PolicyStatus.BLOCKED_INSUFFICIENT_EVIDENCE
+            and _evidence_retry_due(evidence.created_at, now)
+        ):
+            executor = self._evidence_executor_factory()
+            retry_key = f"retry:{now[:10]}"
+            acquisition = acquire_direction_evidence(
+                direction, analysis, executor=executor, now=now, attempt_key=retry_key
+            )
+            inserted = evidence_repo.save(acquisition)
+            if inserted:
+                self._metrics.increment("autonomous_research_runtime_ticks", status="direction_evidence_reacquired")
+                return AutonomousResearchTickResult(
+                    attempted=True,
+                    action="direction_evidence_reacquired",
+                    mission_status=mission.status.value,
+                    direction_id=direction.direction_id,
+                    direction_status=direction.status.value,
+                    failure_class=analysis.dominant_failure_class.value,
+                    evidence_acquisition_id=acquisition.evidence_acquisition_id,
+                )
+
+        if decision is None:
             decision = evaluate_evidence_mutation_policy(direction, analysis, evidence, now=now)
             policy_repo.save(decision)
             self._metrics.increment("autonomous_research_runtime_ticks", status="policy_decision_created")
@@ -456,7 +512,6 @@ class AutonomousResearchRuntimeWorker:
                 policy_decision_id=decision.decision_id,
                 policy_status=decision.policy_status.value,
             )
-        decision = existing_decisions[-1]
 
         if decision.policy_status is not PolicyStatus.ELIGIBLE_FOR_HYPOTHESIS_RESEARCH:
             self._metrics.increment("autonomous_research_runtime_ticks", status="hypothesis_value_space_exhausted")

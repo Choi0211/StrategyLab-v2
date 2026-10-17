@@ -3,7 +3,7 @@ import unittest
 
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository
-from gaon.runtime.llm_tool_routing import route_read_only_tool
+from gaon.runtime.llm_tool_routing import has_explicit_research_continuation_intent, has_explicit_research_execution_intent, route_read_only_tool
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
 
@@ -26,6 +26,18 @@ class DeterministicToolRoutingTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.connection.close()
+
+    def test_natural_korean_research_imperatives_are_execution_intent(self) -> None:
+        for text in ("연구좀 해주세요", "연구 좀 해주세요", "연구를 진행해주세요", "단타 연구해주세요"):
+            with self.subTest(text=text):
+                self.assertTrue(has_explicit_research_execution_intent(text))
+                self.assertTrue(has_explicit_research_continuation_intent(text))
+
+    def test_research_status_questions_are_not_execution_intent(self) -> None:
+        for text in ("연구 상태 좀 알려주세요", "연구는 잘되고 있나요?", "현재 연구 결과를 설명해주세요"):
+            with self.subTest(text=text):
+                self.assertFalse(has_explicit_research_continuation_intent(text))
+                self.assertFalse(has_explicit_research_execution_intent(text))
 
     def test_champion_status_mappings(self) -> None:
         for text in ("현재 챔피언 상태 알려줘", "지금 챔피언 뭐야?", "champion 상태", "champion 알려줘"):
