@@ -94,6 +94,10 @@ class LiveFeedback:
     open_position_count: int
     classifications: tuple[str,...]
     hypotheses: tuple[dict[str,object],...]
+    total_realized_pnl: float | None = None
+    total_commission: float | None = None
+    partial_fill_count: int = 0
+    source_modes: tuple[str,...] = ()
 
     def to_json(self):
         return {
@@ -104,6 +108,10 @@ class LiveFeedback:
             "open_position_count":self.open_position_count,
             "classifications":list(self.classifications),
             "hypotheses":[dict(x) for x in self.hypotheses],
+            "total_realized_pnl":self.total_realized_pnl,
+            "total_commission":self.total_commission,
+            "partial_fill_count":self.partial_fill_count,
+            "source_modes":list(self.source_modes),
             "strategy_mutated":False,"order_executed":False,
             "champion_promoted":False,"approval_required":True,
         }
@@ -233,7 +241,59 @@ def build_feedback(snapshot: LiveSnapshot, market: str|None=None):
     return LiveFeedback(wanted or "MULTI",len(trips),round(win_rate,6) if win_rate is not None else None,
         failed,unconfirmed,len(unmatched),len(positions),tuple(dict.fromkeys(cls)),_dedupe(hypotheses))
 
+def _binance_feedback(root: str|Path|None=None):
+    base=Path(root or os.environ.get("GAON_BINANCE_RUNTIME_ROOT") or "/opt/binance-trading").resolve(strict=False)
+    events=[]; modes=[]
+    for mode,name in (("paper","trade_events.json"),("live","live_trade_events.json")):
+        path=(base/name).resolve(strict=False)
+        try: path.relative_to(base)
+        except ValueError: continue
+        if not path.is_file() or path.stat().st_size>2_000_000: continue
+        try: data=json.loads(path.read_text(encoding="utf-8"))
+        except Exception: continue
+        if not isinstance(data,list): continue
+        modes.append(mode)
+        for item in data[-1000:]:
+            if not isinstance(item,dict): continue
+            try: pnl=float(item.get("realized_pnl_usdt",0.0))
+            except (TypeError,ValueError): continue
+            events.append((mode,str(item.get("symbol","")).upper(),pnl,str(item.get("closed_at",""))))
+    if not events: return None
+    total=sum(x[2] for x in events); wins=sum(x[2]>0 for x in events)
+    commissions=0.0; partial=0; verified=0
+    verifier=(base/"trade_capture_verification_log.jsonl").resolve(strict=False)
+    if verifier.is_file() and verifier.stat().st_size<=5_000_000:
+        try:
+            lines=verifier.read_text(encoding="utf-8",errors="replace").splitlines()[-1500:]
+            for line in lines:
+                try: row=json.loads(line)
+                except Exception: continue
+                for key in ("paper_results","live_results"):
+                    for result in row.get(key,[]) if isinstance(row,dict) else ():
+                        checks=result.get("checks",{}) if isinstance(result,dict) else {}
+                        for fill_key in ("entry_fill_trace","exit_fill_trace"):
+                            detail=(checks.get(fill_key) or {}).get("detail") if isinstance(checks,dict) else None
+                            if isinstance(detail,dict):
+                                try: commissions+=float(detail.get("total_commission",0.0) or 0.0)
+                                except (TypeError,ValueError): pass
+                                partial+=1 if detail.get("partial_fill_detected") else 0
+                        verified+=1
+        except OSError: pass
+    classes=[]; hypotheses=[]
+    if len(events)<20: classes.append("insufficient_live_sample")
+    if total<0:
+        classes.append("negative_realized_pnl")
+        hypotheses.append(_hyp("binance-negative-realized-pnl","최근 확정 청산 기록의 누적 실현손익이 음수여서 진입 빈도·비용·시장상태 필터를 재검증할 필요가 있다.",tuple(f"binance:{m}:{s}:{t}" for m,s,_p,t in events[-50:])))
+    if commissions>0:
+        classes.append("transaction_cost_observed")
+        hypotheses.append(_hyp("binance-transaction-cost","실제 체결 수수료가 관측되어 백테스트 비용 가정과의 차이를 검증해야 한다.",tuple(f"binance-verifier:{i}" for i in range(min(verified,50)))))
+    if partial: classes.append("partial_fill_observed")
+    return LiveFeedback("BINANCE",len(events),round(wins/len(events),6),0,0,0,0,tuple(dict.fromkeys(classes)),_dedupe(hypotheses),round(total,8),round(commissions,8),partial,tuple(dict.fromkeys(modes)))
+
 def production_feedback(market: str|None=None):
+    if str(market or "").upper() in {"BINANCE","BINANCE_CRYPTO","CRYPTO"}:
+        try: return _binance_feedback()
+        except Exception: return None
     adapter=LiveTradingEvidenceAdapter()
     if not adapter.available(): return None
     try: return build_feedback(adapter.load(),market)
@@ -282,6 +342,9 @@ def live_report_lines(feedback: LiveFeedback|None):
     if feedback.completed_trade_count:
         w=f"{feedback.win_rate*100:.1f}%" if feedback.win_rate is not None else "계산 불가"
         lines.append(f"- 확인 가능한 완료 거래 {feedback.completed_trade_count}건 / 승률 {w}")
+        if feedback.total_realized_pnl is not None: lines.append(f"- 누적 실현손익: {feedback.total_realized_pnl:+.4f} USDT")
+        if feedback.total_commission is not None: lines.append(f"- 확인된 체결 수수료 합계: {feedback.total_commission:.4f} USDT")
+        if feedback.partial_fill_count: lines.append(f"- 부분 체결 관측: {feedback.partial_fill_count}건")
     else: lines.append("- 확인 가능한 완료 거래 표본이 아직 부족합니다.")
     if feedback.open_position_count: lines.append(f"- 열린 포지션 {feedback.open_position_count}건을 상태 파일에서 확인했습니다.")
     return tuple(lines)

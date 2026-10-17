@@ -11,6 +11,11 @@ requires-python = ">=3.11"
 authors = [{ name = "StrategyLab" }]
 dependencies = [
     "tzdata>=2024.1",
+    "beautifulsoup4>=4.12",
+    "pypdf>=5.0",
+    "python-docx>=1.1",
+    "Pillow>=10.0",
+    "yt-dlp>=2025.1",
 ]
 
 [tool.setuptools.packages.find]

@@ -18,10 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from gaon.runtime.gaon_agent.capabilities import (
-    MARKET_DATA_READ,
-    RESEARCH_MISSION_READ,
-    STRATEGY_STATUS_READ,
-    WEB_SEARCH,
+    MARKET_DATA_READ, RESEARCH_MISSION_READ, STRATEGY_STATUS_READ, WEB_SEARCH,
+    URL_FETCH, DOCUMENT_READ, IMAGE_VISION, VIDEO_METADATA, VIDEO_TRANSCRIPT, VIDEO_FRAME_ANALYSIS,
+    EVIDENCE_INGEST, EVIDENCE_VALIDATE, REPOSITORY_READ, CODE_MODIFY_DEV, TEST_RUN, GIT_COMMIT, GIT_PUSH, PULL_REQUEST_CREATE,
 )
 
 # Registered tools that return fixture / normalized-demo payloads, not a
@@ -29,8 +28,6 @@ from gaon.runtime.gaon_agent.capabilities import (
 # use them to answer "what is X right now?".
 FIXTURE_BACKED_TOOLS: frozenset[str] = frozenset(
     {
-        "web_search",
-        "news_search",
         "weather_current",
         "weather_forecast",
         "exchange_rate",
@@ -61,6 +58,27 @@ _PRODUCTION_GRADE_HINTS: frozenset[str] = frozenset(
         "multi_symbol_research",
         "multi_symbol_research_status",
         "multi_symbol_research_history",
+        "url_fetch",
+        "document_read",
+        "image_inspect",
+        "video_info",
+        "paper_search",
+        "evidence_learn",
+        "evidence_recall",
+        "research_paper_discovery",
+        "image_vision",
+        "video_transcript",
+        "video_frame_analysis",
+        "live_execution_feedback",
+        "evidence_validate",
+        "repository_read",
+        "developer_status",
+        "developer_worktree_create",
+        "developer_apply_patch",
+        "developer_run_tests",
+        "developer_commit",
+        "developer_push",
+        "developer_create_pr",
     }
 )
 
@@ -82,8 +100,21 @@ def _capability_for(name: str) -> str | None:
         return STRATEGY_STATUS_READ
     if name in {"research_memory_search", "runtime_status"}:
         return RESEARCH_MISSION_READ
-    if name in {"web_search", "news_search"}:
-        return WEB_SEARCH
+    if name in {"web_search", "news_search"}: return WEB_SEARCH
+    if name == "url_fetch": return URL_FETCH
+    if name == "document_read": return DOCUMENT_READ
+    if name in {"image_inspect", "image_vision"}: return IMAGE_VISION
+    if name == "video_info": return VIDEO_METADATA
+    if name == "video_transcript": return VIDEO_TRANSCRIPT
+    if name == "video_frame_analysis": return VIDEO_FRAME_ANALYSIS
+    if name in {"evidence_learn", "evidence_recall", "research_paper_discovery", "paper_search"}: return EVIDENCE_INGEST
+    if name == "evidence_validate": return EVIDENCE_VALIDATE
+    if name in {"repository_read", "developer_status"}: return REPOSITORY_READ
+    if name in {"developer_worktree_create", "developer_apply_patch"}: return CODE_MODIFY_DEV
+    if name == "developer_run_tests": return TEST_RUN
+    if name == "developer_commit": return GIT_COMMIT
+    if name == "developer_push": return GIT_PUSH
+    if name == "developer_create_pr": return PULL_REQUEST_CREATE
     return None
 
 

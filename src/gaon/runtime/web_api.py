@@ -39,12 +39,13 @@ import os
 import re
 import sqlite3
 import subprocess
+import secrets
 import sys
 from contextlib import contextmanager
 from socketserver import ThreadingMixIn
 from threading import BoundedSemaphore
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Mapping
@@ -74,8 +75,11 @@ from gaon.runtime.llm_conversation import (
     SQLiteConversationRepository,
     SQLiteConversationToolResultRepository,
 )
-from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, default_tool_registry
+from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, ToolRequest, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
+from gaon.runtime.repositories import SQLiteApprovalRepository
+from gaon.research.approval import ApprovalDecision, create_approval_request
+from gaon.runtime.developer_tools import WRITE_ACTIONS
 from gaon.runtime.research_failures import classify_exception, warning_for_failure
 from gaon.control.strategy_console import StrategyConsoleReadModel
 from gaon.runtime.sqlite_lock import DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS
@@ -133,6 +137,7 @@ class GaonWebChatAdapter:
     ) -> None:
         repository = SQLiteConversationRepository(connection)
         context = ConversationContextOrchestrator(connection, repository)
+        self._config = config
         self._metrics = metrics or MetricsCollector()
         self._repository = repository
         self._brain = LLMConversationBrain(
@@ -234,6 +239,60 @@ class GaonWebChatAdapter:
         active = registry.mark_active(strategy_version_id, at=now)
         repo.save(family_id, registry, now=now)
         return {"ok": True, "family_id": family_id, "active": active.to_json(), "active_by_direction": StrategyConsoleReadModel(registry).render()["active_by_direction"], "strategy_mutated": True, "order_executed": False, "live_activated": False, "approval_bypassed": False}
+
+    def issue_developer_approval(self, *, task_id: str, action: str, user_ref: str, now: str) -> Mapping[str, object]:
+        if action not in WRITE_ACTIONS:
+            return {"ok": False, "error": "unsupported developer action"}
+        if not self._config.approval_signing_secret:
+            return {"ok": False, "error": "approval signing is not configured"}
+        token = secrets.token_urlsafe(24)
+        approval_id = f"approval:developer:{uuid4().hex}"
+        proposal_id = f"developer:{action}:{task_id}"
+        actor = f"web-user:{user_ref}"
+        chat_id = f"web:{user_ref}"
+        expires = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
+        request = create_approval_request(approval_id, proposal_id, actor, chat_id, token, now, expires, signing_secret=self._config.approval_signing_secret)
+        decision = ApprovalDecision(approval_id, proposal_id, actor, chat_id, token, True, now)
+        approved = request.approve(decision, now=now, signing_secret=self._config.approval_signing_secret)
+        SQLiteApprovalRepository(self._repository._connection).add(approved)
+        return {"ok": True, "approval_id": approval_id, "approval_token": token, "task_id": task_id, "action": action, "expires_at": expires, "one_shot": True}
+
+    def execute_developer_action(self, *, approval_id: str, approval_token: str, task_id: str, action: str, user_ref: str, arguments: Mapping[str, object], now: str) -> Mapping[str, object]:
+        if action not in WRITE_ACTIONS:
+            return {"ok": False, "error": "unsupported developer action"}
+        if not self._config.approval_signing_secret:
+            return {"ok": False, "error": "approval signing is not configured"}
+        repo = SQLiteApprovalRepository(self._repository._connection)
+        try:
+            approval = repo.get(approval_id)
+        except KeyError:
+            return {"ok": False, "error": "developer approval not found"}
+        expected_proposal = f"developer:{action}:{task_id}"
+        if approval.proposal_id != expected_proposal:
+            return {"ok": False, "error": "developer approval target mismatch"}
+        actor = f"web-user:{user_ref}"
+        chat_id = f"web:{user_ref}"
+        run_id = f"developer-run:{uuid4().hex}"
+        try:
+            consumed = approval.consume(run_id=run_id, actor=actor, chat_id=chat_id, token=approval_token, now=now, signing_secret=self._config.approval_signing_secret)
+        except PermissionError as exc:
+            return {"ok": False, "error": str(exc)}
+        repo.update(consumed)
+        tool_name = {
+            "worktree_create": "developer_worktree_create",
+            "apply_patch": "developer_apply_patch",
+            "run_tests": "developer_run_tests",
+            "commit": "developer_commit",
+            "push": "developer_push",
+            "create_pr": "developer_create_pr",
+        }[action]
+        payload = dict(arguments)
+        payload["task_id"] = task_id
+        executor = SafeToolExecutor(default_tool_registry(self._repository._connection), SQLiteToolAuditRepository(self._repository._connection))
+        result = executor.execute(ToolRequest(tool_name, payload, actor, now, approval_ref=approval_id))
+        operation_ok = result.status == "success" and not (isinstance(result.output, Mapping) and result.output.get("ok") is False)
+        effective_status = result.status if operation_ok or result.status != "success" else "operation_failed"
+        return {"ok": operation_ok, "run_id": run_id, "approval_consumed": True, "tool_name": tool_name, "status": effective_status, "result": result.output, "warnings": list(result.warnings)}
 
     def list_conversations(self, *, user_ref: str, include_archived: bool = True) -> tuple:
         return list_conversations(self._repository._connection, user_ref=f"web-user:{user_ref}", include_archived=include_archived)
@@ -377,6 +436,8 @@ def dispatch_request(
             "pending_approvals": "/gaon/research/pending-approvals",
             "storage_status": "/gaon/storage/status",
             "strategy_version_status": "/gaon/strategy/version_status",
+            "developer_approve": "/gaon/developer/approve",
+            "developer_execute": "/gaon/developer/execute",
             "strategy_mutated": False,
             "order_executed": False,
             "champion_promoted": False,
@@ -423,6 +484,28 @@ def dispatch_request(
             return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id and strategy_version_id are required"}
         confirm = isinstance(body, Mapping) and body.get("confirm") is True
         result = adapter.activate_strategy_version(family_id=family_id, strategy_version_id=version_id, confirm=confirm, now=_utc_now())
+        return (200 if result.get("ok") else 409), result
+    if method == "POST" and route_path == "/gaon/developer/approve":
+        task_id = _require_str_field(body, "task_id")
+        action = _require_str_field(body, "action")
+        user_ref = _require_str_field(body, "user_ref")
+        confirm = isinstance(body, Mapping) and body.get("confirm") is True
+        if task_id is None or action is None or user_ref is None:
+            return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "task_id, action and user_ref are required"}
+        if not confirm:
+            return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "explicit confirm=true is required"}
+        result = adapter.issue_developer_approval(task_id=task_id, action=action, user_ref=user_ref, now=_utc_now())
+        return (200 if result.get("ok") else 409), result
+    if method == "POST" and route_path == "/gaon/developer/execute":
+        approval_id = _require_str_field(body, "approval_id")
+        approval_token = _require_str_field(body, "approval_token")
+        task_id = _require_str_field(body, "task_id")
+        action = _require_str_field(body, "action")
+        user_ref = _require_str_field(body, "user_ref")
+        arguments = body.get("arguments") if isinstance(body, Mapping) and isinstance(body.get("arguments"), Mapping) else {}
+        if None in (approval_id, approval_token, task_id, action, user_ref):
+            return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "approval_id, approval_token, task_id, action and user_ref are required"}
+        result = adapter.execute_developer_action(approval_id=approval_id, approval_token=approval_token, task_id=task_id, action=action, user_ref=user_ref, arguments=arguments, now=_utc_now())
         return (200 if result.get("ok") else 409), result
     if method == "GET" and route_path == "/gaon/chat/conversations":
         return _handle_conversations_list(adapter, query)
