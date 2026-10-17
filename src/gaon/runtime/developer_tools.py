@@ -18,6 +18,7 @@ from uuid import uuid4
 
 REPO_ROOT = Path(os.environ.get("GAON_REPOSITORY_ROOT", "/opt/strategylab-v2")).resolve()
 WORKTREE_ROOT = Path(os.environ.get("GAON_DEVELOPER_WORKTREE_ROOT", "/var/lib/strategylab/dev_worktrees")).resolve()
+DEV_GIT_DIR = Path(os.environ.get("GAON_DEVELOPER_GIT_DIR", "/var/lib/strategylab/developer_repo.git")).resolve()
 PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 MAX_READ_BYTES = 96_000
 MAX_PATCH_BYTES = 250_000
@@ -91,6 +92,49 @@ def _run(args: list[str], *, cwd: Path, timeout: int = 60, input_text: str | Non
     )
 
 
+def _git_command(*args: str) -> list[str]:
+    command = ["git"]
+    if os.environ.get("GH_TOKEN"):
+        command += ["-c", "credential.helper=!/usr/bin/gh auth git-credential"]
+    command += list(args)
+    return command
+
+
+def _remote_url() -> str:
+    configured = os.environ.get("GAON_DEVELOPER_REMOTE_URL", "").strip()
+    if configured:
+        url = configured
+    else:
+        proc = _run(["git", "remote", "get-url", "origin"], cwd=REPO_ROOT, timeout=15)
+        if proc.returncode != 0:
+            raise RuntimeError("developer remote URL unavailable")
+        url = proc.stdout.strip()
+    if url.startswith("git@github.com:"):
+        url = "https://github.com/" + url.split(":", 1)[1]
+    if not url.startswith("https://github.com/") or not url.endswith(".git"):
+        raise PermissionError("developer remote must be an HTTPS GitHub repository")
+    return url
+
+
+def _ensure_dev_repo() -> tuple[bool, str]:
+    WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
+    DEV_GIT_DIR.parent.mkdir(parents=True, exist_ok=True)
+    remote = _remote_url()
+    if not DEV_GIT_DIR.exists():
+        proc = _run(_git_command("clone", "--bare", remote, str(DEV_GIT_DIR)), cwd=WORKTREE_ROOT, timeout=180)
+        if proc.returncode != 0:
+            return False, proc.stdout[-MAX_TEST_OUTPUT:]
+    proc = _run(_git_command("--git-dir", str(DEV_GIT_DIR), "fetch", "origin", "refs/heads/main"), cwd=WORKTREE_ROOT, timeout=120)
+    if proc.returncode != 0:
+        return False, proc.stdout[-MAX_TEST_OUTPUT:]
+    resolved = _run(_git_command("--git-dir", str(DEV_GIT_DIR), "rev-parse", "FETCH_HEAD^{commit}"), cwd=WORKTREE_ROOT, timeout=15)
+    commit = resolved.stdout.strip() if resolved.returncode == 0 else ""
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return False, "remote main did not resolve to a commit"
+    updated = _run(_git_command("--git-dir", str(DEV_GIT_DIR), "update-ref", "refs/heads/main", commit), cwd=WORKTREE_ROOT, timeout=15)
+    return updated.returncode == 0, (proc.stdout + updated.stdout)[-MAX_TEST_OUTPUT:]
+
+
 def _allowed_repo_path(raw: object, *, root: Path = REPO_ROOT) -> Path:
     rel = str(raw or "").strip().lstrip("/")
     if not rel:
@@ -138,17 +182,16 @@ def worktree_create(args: dict[str, object]) -> dict[str, object]:
     WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return DeveloperActionResult(True, "worktree_create", task, str(path), branch, "worktree already exists").to_json()
-    # Refresh refs, then create from origin/main. No checkout in production tree.
-    fetch = _run(["git", "fetch", "origin", "main"], cwd=REPO_ROOT, timeout=60)
-    if fetch.returncode != 0:
-        return DeveloperActionResult(False, "worktree_create", task, detail="git fetch failed", output=fetch.stdout[-MAX_TEST_OUTPUT:]).to_json()
-    check = _run(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=REPO_ROOT, timeout=15)
-    cmd = ["git", "worktree", "add"]
+    ready, output = _ensure_dev_repo()
+    if not ready:
+        return DeveloperActionResult(False, "worktree_create", task, detail="developer bare repository refresh failed", output=output).to_json()
+    check = _run(_git_command("--git-dir", str(DEV_GIT_DIR), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"), cwd=WORKTREE_ROOT, timeout=15)
+    cmd = _git_command("--git-dir", str(DEV_GIT_DIR), "worktree", "add")
     if check.returncode == 0:
         cmd += [str(path), branch]
     else:
-        cmd += ["-b", branch, str(path), "origin/main"]
-    proc = _run(cmd, cwd=REPO_ROOT, timeout=60)
+        cmd += ["-b", branch, str(path), "main"]
+    proc = _run(cmd, cwd=WORKTREE_ROOT, timeout=60)
     return DeveloperActionResult(proc.returncode == 0, "worktree_create", task, str(path) if proc.returncode == 0 else None, branch, output=proc.stdout[-MAX_TEST_OUTPUT:]).to_json()
 
 
@@ -235,7 +278,7 @@ def push_branch(args: dict[str, object]) -> dict[str, object]:
     if not path.is_dir():
         raise FileNotFoundError("developer worktree does not exist")
     branch = _branch(task)
-    proc = _run(["git", "push", "-u", "origin", branch], cwd=path, timeout=120)
+    proc = _run(_git_command("push", "-u", "origin", branch), cwd=path, timeout=120)
     return DeveloperActionResult(proc.returncode == 0, "push", task, str(path), branch, output=proc.stdout[-MAX_TEST_OUTPUT:]).to_json()
 
 
@@ -249,7 +292,9 @@ def create_pr(args: dict[str, object]) -> dict[str, object]:
     if len(title) < 3:
         raise ValueError("PR title required")
     branch = _branch(task)
-    proc = _run(["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body or "Gaon developer-agent generated change for human review."], cwd=path, timeout=120)
+    if not os.environ.get("GH_TOKEN"):
+        return DeveloperActionResult(False, "create_pr", task, str(path), branch, "GitHub credential is not configured").to_json()
+    proc = _run(["/usr/bin/gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body or "Gaon developer-agent generated change for human review."], cwd=path, timeout=120)
     return DeveloperActionResult(proc.returncode == 0, "create_pr", task, str(path), branch, output=proc.stdout[-MAX_TEST_OUTPUT:]).to_json()
 
 
