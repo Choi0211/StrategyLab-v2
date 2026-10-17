@@ -240,6 +240,42 @@ class ChainProgressionTests(unittest.TestCase):
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM research_hypothesis_proposals").fetchone()[0], 0)
         connection.close()
 
+    def test_F2_stale_blocked_evidence_is_reacquired_and_re_evaluated(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        migrate(connection)
+        config = _config()
+        _seed_exhausted_mission(connection, config)
+
+        # First attempt has no provider and therefore persists an honest
+        # blocked evidence/policy lineage.
+        missing = AutonomousResearchRuntimeWorker(
+            config, connection, now_factory=lambda: NOW, evidence_executor_factory=lambda: None
+        )
+        self.assertEqual(missing.tick().action, "research_direction_planned")
+        self.assertEqual(missing.tick().action, "direction_evidence_acquired")
+        blocked_policy = missing.tick()
+        self.assertEqual(blocked_policy.policy_status, "blocked_insufficient_evidence")
+        self.assertEqual(missing.tick().action, "hypothesis_value_space_exhausted")
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM research_direction_evidence").fetchone()[0], 1)
+
+        # More than one bounded retry interval later, a now-available real
+        # evidence provider must get a NEW immutable acquisition row instead
+        # of reusing the old failure forever.
+        later = "2026-08-31T00:00:06Z"
+        retry = AutonomousResearchRuntimeWorker(
+            config, connection, now_factory=lambda: later, evidence_executor_factory=_passing_executor_factory
+        )
+        reacquired = retry.tick()
+        self.assertEqual(reacquired.action, "direction_evidence_reacquired")
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM research_direction_evidence").fetchone()[0], 2)
+        self.assertNotEqual(reacquired.evidence_acquisition_id, blocked_policy.evidence_acquisition_id)
+
+        reevaluated = retry.tick()
+        self.assertEqual(reevaluated.action, "policy_decision_created")
+        self.assertEqual(reevaluated.policy_status, "eligible_for_hypothesis_research")
+        self.assertEqual(reevaluated.evidence_acquisition_id, reacquired.evidence_acquisition_id)
+        connection.close()
+
     def test_G_ready_for_approval_stops_autonomous_progression(self) -> None:
         connection = sqlite3.connect(":memory:")
         migrate(connection)

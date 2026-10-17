@@ -109,6 +109,10 @@ class DirectionQuestionMappingTests(unittest.TestCase):
         component = FAILURE_CLASS_EVIDENCE_REQUIREMENTS[FailureClass.COST_SLIPPAGE_FRAGILITY][0]
         question_a = build_research_question(direction, analysis, component, now=NOW)
         question_b = build_research_question(direction, analysis, component, now=NOW)
+        self.assertIn("transaction costs and slippage", question_a.question)
+        self.assertIn("trading turnover", question_a.question)
+        self.assertIn("strategy performance", question_a.question)
+        self.assertNotIn("fragility", question_a.question.lower())
         self.assertEqual(question_a.question_id, question_b.question_id)
 
     def test_B_different_direction_different_question_id(self) -> None:

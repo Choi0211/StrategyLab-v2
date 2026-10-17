@@ -55,6 +55,16 @@ class SafeContentNormalizerTests(unittest.TestCase):
         self.assertNotIn("menu", record.normalized_text)
         self.assertFalse(record.content_instructions_executed)
 
+    def test_xml_is_normalized_as_text_content(self) -> None:
+        record = SafeContentNormalizer().normalize(
+            acquisition("text/xml"),
+            b"<article><title>Transaction Costs</title><p>Trading strategy evidence</p></article>",
+        )
+
+        self.assertEqual(record.status, ContentNormalizationStatus.NORMALIZED)
+        self.assertIn("Transaction Costs", record.normalized_text)
+        self.assertIn("Trading strategy evidence", record.normalized_text)
+
     def test_json_parses_data_only_and_extracts_bounded_text_values(self) -> None:
         record = SafeContentNormalizer().normalize(
             acquisition("application/json"),

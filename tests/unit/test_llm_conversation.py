@@ -9,6 +9,7 @@ from gaon.runtime.llm_conversation import (
     LLMConversationBrain,
     LLMConversationMessage,
     LLMConversationRequest,
+    LLMConversationSession,
     SQLiteConversationRepository,
 )
 from gaon.runtime.migrations import SCHEMA_VERSION, migrate
@@ -72,6 +73,50 @@ class LLMConversationBrainTests(unittest.TestCase):
         payload["schema_version"] = 999
         with self.assertRaises(ValueError):
             LLMConversationMessage.from_json(payload)
+
+    def test_short_research_imperative_continues_existing_mission_before_provider(self) -> None:
+        from gaon.knowledge.research_mission import extract_or_update_mission
+
+        class _ProviderMustNotRun:
+            @property
+            def capabilities(self):
+                raise NotImplementedError
+
+            def health(self):
+                raise NotImplementedError
+
+            def respond(self, request):
+                raise AssertionError("provider must not claim an explicit existing-mission research command")
+
+        config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="openai-compatible")
+        brain = LLMConversationBrain(config, self.repository, assistant_provider=_ProviderMustNotRun())
+        now = "2026-10-17T04:42:02Z"
+        session_id = "telegram:8767020479"
+        self.repository.upsert_session(
+            LLMConversationSession(session_id, "telegram-user:8767020479", "telegram", "active", now, now, {})
+        )
+        seed_request = LLMConversationRequest(
+            session_id=session_id, user_ref="telegram-user:8767020479", source="telegram",
+            text="국내 주식 전체를 대상으로 단타 전략을 연구해주세요", received_at=now,
+            message_id="telegram:seed",
+        )
+        mission = extract_or_update_mission(seed_request.text, existing=None, now=now)
+        self.assertIsNotNone(mission)
+        brain._remember_mission(seed_request, mission)
+
+        expected = ("continued", "conversation_test_mission_continue", (), (), "deterministic", ("multi_symbol_research",))
+        brain._try_mission_driven_research_cycle = lambda request, mission, warnings, references, **kwargs: expected
+        request = LLMConversationRequest(
+            session_id=session_id, user_ref="telegram-user:8767020479", source="telegram",
+            text="연구 좀 해주세요", received_at=now, message_id="telegram:short-research-command",
+        )
+
+        response = brain.respond(request)
+
+        self.assertEqual(response.route, "conversation_test_mission_continue")
+        self.assertEqual(response.text, "continued")
+        self.assertEqual(response.provider, "deterministic")
+        self.assertEqual(response.tool_calls, ("multi_symbol_research",))
 
     def test_provider_response_is_used_when_enabled(self) -> None:
         config = GaonRuntimeConfig(assistant_enabled=True, assistant_provider="openai-compatible")

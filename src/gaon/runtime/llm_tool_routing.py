@@ -54,14 +54,55 @@ _RESEARCH_EXECUTION_INTENT_TOKENS: tuple[str, ...] = (
 )
 
 
+_FLEXIBLE_RESEARCH_IMPERATIVE_RE = re.compile(
+    r"(?:연구|검증|백테스트|테스트)(?:(?:를|을|좀|계속|진행))*?(?:해줘|해주세요|해봐)"
+)
+_RESEARCH_CONTINUATION_IMPERATIVE_RE = re.compile(
+    r"연구(?:(?:를|을|좀|계속|진행))*?(?:해줘|해주세요|해봐)"
+)
+_ANAPHORIC_RESEARCH_REFERENCE_RE = re.compile(
+    r"(?:그거|그걸|그것|이거|이걸|이것|저거|저걸|저것|그후보|그전략|이후보|이전략)"
+)
+
+
+def has_explicit_research_continuation_intent(text: str) -> bool:
+    """True for a direct Korean imperative to continue/do research itself.
+
+    Unlike the broader execution-intent predicate below, this intentionally
+    does not match generic presentation verbs such as ``분석해주세요``.  It
+    exists for the mission-continuation seam, where a short user command like
+    ``연구 좀 해주세요`` must continue an already-persisted ResearchMission
+    instead of falling through to provider-only conversation/state reads.
+    """
+    normalized = _normalize(text)
+    if not normalized or _ANAPHORIC_RESEARCH_REFERENCE_RE.search(normalized):
+        # Pronoun/candidate references require session-local subject
+        # resolution first.  Treating them as a generic mission continuation
+        # would let a selected candidate from another owner transport/session
+        # leak into a brand-new session.
+        return False
+    return bool(_RESEARCH_CONTINUATION_IMPERATIVE_RE.search(normalized))
+
+
 def has_explicit_research_execution_intent(text: str) -> bool:
     """True only for an explicit imperative request to run/re-run research
     or validation - never for a status/read question or a bare topic noun
-    phrase. See the module note above ``_RESEARCH_EXECUTION_INTENT_TOKENS``."""
+    phrase. See the module note above ``_RESEARCH_EXECUTION_INTENT_TOKENS``.
+
+    Natural Korean commonly inserts polite filler/particles between the
+    research noun and the imperative (``연구 좀 해주세요``,
+    ``연구를 진행해주세요``).  Whitespace normalization alone does not make
+    those strings contain the old literal token ``연구해주세요``; the narrow
+    regex below accepts only those filler tokens while still rejecting status
+    questions such as ``연구 상태 좀 알려주세요``.
+    """
     normalized = _normalize(text)
     if not normalized:
         return False
-    return any(token in normalized for token in _RESEARCH_EXECUTION_INTENT_TOKENS)
+    return bool(
+        any(token in normalized for token in _RESEARCH_EXECUTION_INTENT_TOKENS)
+        or _FLEXIBLE_RESEARCH_IMPERATIVE_RE.search(normalized)
+    )
 
 
 def route_read_only_tool(text: str) -> str | None:
