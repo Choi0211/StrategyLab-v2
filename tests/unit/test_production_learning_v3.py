@@ -146,6 +146,68 @@ class ProductionLearningV3Tests(unittest.TestCase):
         self.assertLessEqual(record.confidence.value, 0.72)
         self.assertFalse(record.confidence.can_approve)
 
+    def test_strategy_attributed_operational_feedback_creates_observational_runtime_memory_only(self) -> None:
+        feedback = SimpleNamespace(to_json=lambda: {
+            "market": "BINANCE",
+            "completed_trade_count": 47,
+            "commission_observation_count": 192,
+            "observed_commission_rate": 0.000448,
+            "slippage_observation_count": 0,
+            "partial_fill_count": 19,
+            "total_realized_pnl": -12.3,
+            "strategy_identity_observation_count": 20,
+            "strategy_identity_total_count": 40,
+            "strategy_performance": [{
+                "mode":"paper", "strategy_id":"flow_rsi30", "completed_trade_count":20,
+                "win_rate":0.55, "total_realized_pnl":1.25, "net_pnl_observation_count":5,
+                "observed_net_pnl_total":0.8, "fee_observation_count":5, "observed_fee_total":-0.2,
+                "long_trade_count":12, "short_trade_count":8,
+                "first_closed_at":"2026-10-01T00:00:00Z", "last_closed_at":"2026-10-17T00:00:00Z",
+                "evidence_refs":["binance-archive:paper:e1","binance-archive:paper:e2"],
+            }],
+        })
+        self.engine.sync_operational_feedback(feedback, now=NOW)
+        records = SQLiteLearningRepository(self.connection).filter(market="BINANCE", strategy="runtime:paper:flow_rsi30")
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record.record_type, LearningRecordType.RESEARCH_OUTCOME)
+        self.assertIn("inference_scope=observational_only", record.content)
+        self.assertIn("completed_trades=20", record.content)
+        self.assertEqual(record.revalidation.frequency, "weekly")
+        self.assertEqual(record.confidence.validation_state, "paper_observed")
+        self.assertLessEqual(record.confidence.value, 0.72)
+        self.assertFalse(record.confidence.can_approve)
+        # Runtime strategy telemetry is never a research-family prior.
+        self.assertEqual(self.engine.family_priors(market="BINANCE"), {})
+
+    def test_strategy_operational_memory_versions_only_when_material_observation_changes(self) -> None:
+        state = {"count": 12, "pnl": -2.0, "refs": ["binance-archive:paper:e1"]}
+        feedback = SimpleNamespace(to_json=lambda: {
+            "market":"BINANCE", "completed_trade_count":12, "commission_observation_count":0,
+            "slippage_observation_count":0, "partial_fill_count":0, "total_realized_pnl":state["pnl"],
+            "strategy_identity_observation_count":state["count"], "strategy_identity_total_count":state["count"],
+            "strategy_performance":[{
+                "mode":"paper","strategy_id":"flow_btc_bear_relvol25",
+                "completed_trade_count":state["count"],"win_rate":0.25,"total_realized_pnl":state["pnl"],
+                "net_pnl_observation_count":0,"fee_observation_count":0,
+                "long_trade_count":state["count"],"short_trade_count":0,
+                "first_closed_at":"2026-10-10T00:00:00Z","last_closed_at":"2026-10-17T00:00:00Z",
+                "evidence_refs":list(state["refs"]),
+            }],
+        })
+        self.engine.sync_operational_feedback(feedback, now=NOW)
+        self.engine.sync_operational_feedback(feedback, now=NOW)
+        record = SQLiteLearningRepository(self.connection).filter(
+            market="BINANCE", strategy="runtime:paper:flow_btc_bear_relvol25"
+        )[0]
+        self.assertEqual(record.version, 1)
+        state["count"] = 13; state["pnl"] = -2.5; state["refs"].append("binance-archive:paper:e2")
+        self.engine.sync_operational_feedback(feedback, now=LATER)
+        record = SQLiteLearningRepository(self.connection).filter(
+            market="BINANCE", strategy="runtime:paper:flow_btc_bear_relvol25"
+        )[0]
+        self.assertEqual(record.version, 2)
+
     def test_generic_learning_query_returns_recent_learning_v3_records(self) -> None:
         candidate = _with_evidence(new_candidate("breakout_standard", sequence=1, now=NOW))
         self.engine.learn_candidate(_mission(), candidate, now=NOW)

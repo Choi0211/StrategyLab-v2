@@ -101,6 +101,9 @@ class LiveFeedback:
     observed_commission_rate: float | None = None
     commission_observation_count: int = 0
     slippage_observation_count: int = 0
+    strategy_performance: tuple[dict[str,object],...] = ()
+    strategy_identity_observation_count: int = 0
+    strategy_identity_total_count: int = 0
 
     def to_json(self):
         return {
@@ -118,6 +121,13 @@ class LiveFeedback:
             "observed_commission_rate":self.observed_commission_rate,
             "commission_observation_count":self.commission_observation_count,
             "slippage_observation_count":self.slippage_observation_count,
+            "strategy_performance":[dict(x) for x in self.strategy_performance],
+            "strategy_identity_observation_count":self.strategy_identity_observation_count,
+            "strategy_identity_total_count":self.strategy_identity_total_count,
+            "strategy_identity_coverage": (
+                round(self.strategy_identity_observation_count / self.strategy_identity_total_count, 6)
+                if self.strategy_identity_total_count > 0 else None
+            ),
             "cost_model_observation_status": (
                 "commission_observed_slippage_missing"
                 if self.commission_observation_count > 0 and self.slippage_observation_count == 0
@@ -256,6 +266,117 @@ def build_feedback(snapshot: LiveSnapshot, market: str|None=None):
     return LiveFeedback(wanted or "MULTI",len(trips),round(win_rate,6) if win_rate is not None else None,
         failed,unconfirmed,len(unmatched),len(positions),tuple(dict.fromkeys(cls)),_dedupe(hypotheses))
 
+def _binance_strategy_performance(base: Path):
+    """Read explicit strategy identity from append-only close-event archives.
+
+    The rolling dashboard files intentionally omit strategy identity. Archive
+    enrichment captures it from the BOT_MANAGED ownership record before that
+    record is forgotten. Only rows with an explicit strategy_id are grouped;
+    older rows without identity remain unclassified instead of being guessed.
+    No trading state is mutated.
+    """
+    grouped: dict[tuple[str,str], list[dict[str,object]]] = {}
+    total = 0
+    identified = 0
+    for mode, name in (("paper", "trade_events.json.archive.jsonl"), ("live", "live_trade_events.json.archive.jsonl")):
+        path = (base / name).resolve(strict=False)
+        try:
+            path.relative_to(base)
+        except ValueError:
+            continue
+        if not path.is_file() or path.stat().st_size > 5_000_000:
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-5000:]
+        except OSError:
+            continue
+        seen: set[str] = set()
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(row, dict):
+                continue
+            event_id = str(row.get("event_id") or "").strip()
+            # Old archives may not have event_id. A stable content key avoids
+            # double counting while still refusing to infer strategy identity.
+            if not event_id:
+                event_id = sha256(json.dumps({
+                    "symbol": row.get("symbol"), "closed_at": row.get("closed_at"),
+                    "realized_pnl_usdt": row.get("realized_pnl_usdt"),
+                }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
+            if event_id in seen:
+                continue
+            seen.add(event_id)
+            try:
+                gross = float(row.get("realized_pnl_usdt"))
+            except (TypeError, ValueError):
+                continue
+            total += 1
+            strategy_id = str(row.get("strategy_id") or "").strip()
+            if not strategy_id:
+                continue
+            # Only explicit bot-managed strategy ownership is accepted when
+            # provenance is present. Legacy enriched rows without the field
+            # remain acceptable because strategy_id itself came from the same
+            # ownership snapshot path.
+            provenance = row.get("ownership_provenance")
+            if provenance not in (None, "", "BOT_MANAGED"):
+                continue
+            identified += 1
+            item = {
+                "event_id": event_id, "mode": mode, "strategy_id": strategy_id,
+                "symbol": str(row.get("symbol") or "").upper(),
+                "side": str(row.get("side") or "").upper(),
+                "closed_at": str(row.get("closed_at") or ""),
+                "realized_pnl_usdt": gross,
+                "net_pnl_usdt": row.get("net_pnl_usdt"),
+                "fee_usdt": row.get("fee_usdt"),
+                "funding_usdt": row.get("funding_usdt"),
+            }
+            grouped.setdefault((mode, strategy_id), []).append(item)
+    results=[]
+    for (mode, strategy_id), rows in sorted(grouped.items()):
+        gross_values=[float(r["realized_pnl_usdt"]) for r in rows]
+        net_values=[]; fee_values=[]
+        for row in rows:
+            try:
+                if row.get("net_pnl_usdt") is not None:
+                    net_values.append(float(row["net_pnl_usdt"]))
+            except (TypeError,ValueError):
+                pass
+            try:
+                if row.get("fee_usdt") is not None:
+                    fee_values.append(float(row["fee_usdt"]))
+            except (TypeError,ValueError):
+                pass
+        side_counts={"LONG":0,"SHORT":0,"UNKNOWN":0}
+        for row in rows:
+            side=str(row.get("side") or "").upper()
+            side_counts[side if side in {"LONG","SHORT"} else "UNKNOWN"] += 1
+        first=min((str(r.get("closed_at") or "") for r in rows), default="")
+        last=max((str(r.get("closed_at") or "") for r in rows), default="")
+        count=len(rows); wins=sum(value>0 for value in gross_values)
+        results.append({
+            "mode": mode, "strategy_id": strategy_id,
+            "completed_trade_count": count, "win_count": wins,
+            "win_rate": round(wins/count, 6) if count else None,
+            "total_realized_pnl": round(sum(gross_values), 8),
+            "average_realized_pnl": round(sum(gross_values)/count, 8) if count else None,
+            "net_pnl_observation_count": len(net_values),
+            "observed_net_pnl_total": round(sum(net_values), 8) if net_values else None,
+            "fee_observation_count": len(fee_values),
+            "observed_fee_total": round(sum(fee_values), 8) if fee_values else None,
+            "long_trade_count": side_counts["LONG"],
+            "short_trade_count": side_counts["SHORT"],
+            "unknown_side_count": side_counts["UNKNOWN"],
+            "first_closed_at": first, "last_closed_at": last,
+            "evidence_refs": [f"binance-archive:{mode}:{r['event_id']}" for r in rows[-50:]],
+            "identity_source": "bot_managed_close_archive",
+        })
+    return tuple(results), identified, total
+
 def _binance_feedback(root: str|Path|None=None):
     base=Path(root or os.environ.get("GAON_BINANCE_RUNTIME_ROOT") or "/opt/binance-trading").resolve(strict=False)
     events=[]; modes=[]
@@ -312,11 +433,15 @@ def _binance_feedback(root: str|Path|None=None):
         hypotheses.append(_hyp("binance-transaction-cost","실제 체결 수수료가 관측되어 백테스트 비용 가정과의 차이를 검증해야 한다.",tuple(f"binance-verifier:{i}" for i in range(min(verified,50)))))
     if partial: classes.append("partial_fill_observed")
     observed_rate = round(commissions / commission_notional, 10) if commission_notional > 0 else None
+    strategy_performance, strategy_identified, strategy_total = _binance_strategy_performance(base)
+    if strategy_identified:
+        classes.append("strategy_identity_observed")
     return LiveFeedback(
         "BINANCE",len(events),round(wins/len(events),6),0,0,0,0,
         tuple(dict.fromkeys(classes)),_dedupe(hypotheses),round(total,8),
         round(commissions,8),partial,tuple(dict.fromkeys(modes)),
         observed_rate,commission_observations,0,
+        strategy_performance,strategy_identified,strategy_total,
     )
 
 def production_feedback(market: str|None=None):
@@ -378,6 +503,15 @@ def live_report_lines(feedback: LiveFeedback|None):
         if feedback.slippage_observation_count == 0 and feedback.commission_observation_count:
             lines.append("- 슬리피지는 아직 직접 계측되지 않아 비용모델 일치 여부를 확정하지 않습니다.")
         if feedback.partial_fill_count: lines.append(f"- 부분 체결 관측: {feedback.partial_fill_count}건")
+        if feedback.strategy_identity_total_count:
+            coverage=feedback.strategy_identity_observation_count/feedback.strategy_identity_total_count
+            lines.append(f"- 전략 identity 확인: {feedback.strategy_identity_observation_count}/{feedback.strategy_identity_total_count}건 ({coverage*100:.1f}%)")
+            for item in feedback.strategy_performance[:3]:
+                lines.append(
+                    f"  · {item.get('mode')} / {item.get('strategy_id')}: "
+                    f"{item.get('completed_trade_count')}건, 승률 {float(item.get('win_rate') or 0)*100:.1f}%, "
+                    f"실현손익 {float(item.get('total_realized_pnl') or 0):+.4f} USDT"
+                )
     else: lines.append("- 확인 가능한 완료 거래 표본이 아직 부족합니다.")
     if feedback.open_position_count: lines.append(f"- 열린 포지션 {feedback.open_position_count}건을 상태 파일에서 확인했습니다.")
     return tuple(lines)

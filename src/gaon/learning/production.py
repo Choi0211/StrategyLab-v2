@@ -57,6 +57,10 @@ def _due_at(now: str) -> str:
     return (_parse_utc(now) + timedelta(days=REVALIDATION_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _due_at_days(now: str, days: int) -> str:
+    return (_parse_utc(now) + timedelta(days=max(1, int(days)))).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class SQLiteLearningRepository:
     """SQLite-backed repository for the existing LearningRecord contract."""
 
@@ -314,6 +318,7 @@ class ProductionLearningEngine:
         if feedback is None:
             return LearningUpdateResult(False, None, None, None, None, None, "operational_feedback_unavailable")
         payload = feedback.to_json() if hasattr(feedback, "to_json") else dict(feedback)
+        self._sync_operational_strategy_records(payload, now=now)
         completed = int(payload.get("completed_trade_count") or 0)
         commission_obs = int(payload.get("commission_observation_count") or 0)
         if completed <= 0 and commission_obs <= 0:
@@ -382,13 +387,115 @@ class ProductionLearningEngine:
             "operational_feedback_updated" if written else "unchanged",
         )
 
+    def _sync_operational_strategy_records(self, payload: Mapping[str, object], *, now: str) -> int:
+        """Persist direct strategy-attributed execution outcomes as advisory memory.
+
+        These records are intentionally ``RESEARCH_OUTCOME`` regardless of
+        PnL sign. A few profitable or losing real trades are observations,
+        not proof of a reusable research success/failure pattern. Runtime
+        strategy records are excluded from research-family priors below.
+        """
+        market = str(payload.get("market") or "UNKNOWN")
+        raw = payload.get("strategy_performance")
+        if not isinstance(raw, (list, tuple)):
+            return 0
+        identity_total = int(payload.get("strategy_identity_total_count") or 0)
+        identity_observed = int(payload.get("strategy_identity_observation_count") or 0)
+        coverage = identity_observed / identity_total if identity_total > 0 else 0.0
+        writes = 0
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            strategy_id = str(item.get("strategy_id") or "").strip()
+            mode = str(item.get("mode") or "unknown").strip().casefold()
+            count = int(item.get("completed_trade_count") or 0)
+            if not strategy_id or mode not in {"paper", "live"} or count <= 0:
+                continue
+            runtime_strategy = f"runtime:{mode}:{strategy_id}"
+            record_id = f"learning:operational:{market}:strategy:{_stable_id(mode, strategy_id)}"
+            previous = self.repository.get(record_id) if self.repository.exists(record_id) else None
+            refs = item.get("evidence_refs")
+            evidence: list[EvidenceRecord] = []
+            if isinstance(refs, (list, tuple)):
+                for ref in refs[:MAX_EVIDENCE_PER_RECORD]:
+                    reference = str(ref or "").strip()
+                    if not reference:
+                        continue
+                    evidence.append(EvidenceRecord(
+                        f"evidence:{_stable_id(record_id, reference)}",
+                        EvidenceType.EXPERIMENT,
+                        reference,
+                        f"direct {mode} closed-trade evidence for runtime strategy {strategy_id}",
+                    ))
+            if not evidence:
+                evidence.append(EvidenceRecord(
+                    f"evidence:{_stable_id(record_id, str(count), str(item.get('last_closed_at')))}",
+                    EvidenceType.EXPERIMENT,
+                    f"runtime:{market}:{mode}:{strategy_id}",
+                    f"strategy-attributed closed trades={count}; archive identity explicitly observed",
+                ))
+            win_rate = item.get("win_rate")
+            gross_pnl = item.get("total_realized_pnl")
+            net_count = int(item.get("net_pnl_observation_count") or 0)
+            net_pnl = item.get("observed_net_pnl_total")
+            fee_count = int(item.get("fee_observation_count") or 0)
+            fee_total = item.get("observed_fee_total")
+            # Paper evidence is useful but capped below live evidence. Identity
+            # coverage also affects confidence so partially-attributed history
+            # cannot look more certain than it is.
+            sample_component = 0.16 * min(math.log10(count + 1) / math.log10(31), 1.0)
+            volume_component = 0.16 * min(count / 30.0, 1.0)
+            coverage_component = 0.12 * min(max(coverage, 0.0), 1.0)
+            confidence_value = 0.28 + sample_component + volume_component + coverage_component
+            confidence_value = min(0.72 if mode == "paper" else 0.88, confidence_value)
+            content = (
+                f"runtime_strategy_observation market={market}; mode={mode}; strategy_id={strategy_id}; "
+                f"completed_trades={count}; win_rate={win_rate if win_rate is not None else 'unknown'}; "
+                f"gross_realized_pnl={gross_pnl if gross_pnl is not None else 'unknown'}; "
+                f"net_pnl_observations={net_count}; observed_net_pnl={net_pnl if net_pnl is not None else 'unknown'}; "
+                f"fee_observations={fee_count}; observed_fee_total={fee_total if fee_total is not None else 'unknown'}; "
+                f"long_trades={int(item.get('long_trade_count') or 0)}; short_trades={int(item.get('short_trade_count') or 0)}; "
+                f"identity_coverage={round(coverage, 6)}; identity_observed={identity_observed}; identity_total={identity_total}; "
+                f"first_closed_at={item.get('first_closed_at') or 'unknown'}; last_closed_at={item.get('last_closed_at') or 'unknown'}; "
+                "inference_scope=observational_only"
+            )
+            version = previous.version + 1 if previous else 1
+            record = LearningRecord(
+                record_id=record_id,
+                record_type=LearningRecordType.RESEARCH_OUTCOME,
+                content=content,
+                scope=LEARNING_SCOPE, project=LEARNING_PROJECT,
+                strategy=runtime_strategy, market=market,
+                created_at=previous.created_at if previous else now, updated_at=now, version=version,
+                evidence=tuple(evidence),
+                confidence=ConfidenceScore(
+                    round(confidence_value, 6),
+                    f"direct {mode} strategy-attributed execution observations; observational only and never promotion authority",
+                    evidence_count=count,
+                    validation_state=f"{mode}_observed", recency=1.0, conflict_penalty=0.0,
+                ),
+                revalidation=RevalidationSchedule(
+                    schedule_id=f"revalidation:{record_id}", target_ref=record_id,
+                    reason="runtime strategy performance changes with market regime and requires fresh execution observations",
+                    due_at=_due_at_days(now, 7), frequency="weekly", status=RevalidationStatus.PENDING,
+                    scope=LEARNING_SCOPE, project=LEARNING_PROJECT, strategy=runtime_strategy, market=market,
+                ),
+                audit_ref=f"audit:{record_id}:v{version}",
+            )
+            written = self.repository.upsert(record)
+            if written:
+                current = self.repository.get(record_id)
+                self.repository.append_audit(_audit_for(current, previous, now))
+                writes += 1
+        return writes
+
     def family_priors(self, *, market: str) -> dict[str, float]:
         return {item.family: item.score for item in self.family_prior_details(market=market)}
 
     def family_prior_details(self, *, market: str) -> tuple[FamilyLearningPrior, ...]:
         by_family: dict[str, list[LearningRecord]] = {}
         for record in self.repository.filter(scope=LEARNING_SCOPE, project=LEARNING_PROJECT, market=market):
-            if record.strategy in {"execution-cost", "autonomous-research"}:
+            if record.strategy in {"execution-cost", "autonomous-research"} or record.strategy.startswith("runtime:"):
                 continue
             by_family.setdefault(record.strategy, []).append(record)
         priors: list[FamilyLearningPrior] = []

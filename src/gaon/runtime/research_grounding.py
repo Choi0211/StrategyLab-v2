@@ -554,6 +554,15 @@ def _render_learning_v3_lesson(content: str) -> str:
             continue
         key, value = part.split("=", 1)
         fields[key.strip()] = value.strip()
+    if "runtime_strategy_observation market" in fields or "strategy_id" in fields and "mode" in fields and "completed_trades" in fields:
+        return (
+            f"{fields.get('mode', 'unknown')} 전략={fields.get('strategy_id', 'unknown')}, "
+            f"완료거래={fields.get('completed_trades', 'unknown')}건, 승률={fields.get('win_rate', 'unknown')}, "
+            f"실현손익={fields.get('gross_realized_pnl', 'unknown')} USDT, "
+            f"net PnL 관측={fields.get('net_pnl_observations', '0')}건, "
+            f"전략 identity coverage={fields.get('identity_coverage', 'unknown')}, "
+            f"범위={fields.get('inference_scope', 'observational_only')}"
+        )
     if "observed_commission_rate" in fields:
         raw = fields.get("observed_commission_rate", "unknown")
         try:
