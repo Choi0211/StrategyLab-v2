@@ -50,15 +50,23 @@ from typing import Callable
 from gaon.knowledge.research_mission import (
     MissionStatus,
     ResearchMission,
+    add_candidate,
     candidate_records,
+    mission_multi_symbol_context_available,
+    next_candidate_sequence,
     set_active_candidate,
     update_candidate,
 )
 from gaon.knowledge.strategy_candidate import (
+    ALL_STRATEGY_FAMILY_TEMPLATES,
+    NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
+    REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+    STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
     EconomicViabilityStatus,
     StrategyCandidateStatus,
     candidate_remaining_blockers,
     evaluate_economic_viability,
+    expand_strategy_space_candidate,
     next_untried_family,
 )
 from gaon.research.research_direction import (
@@ -77,6 +85,14 @@ _JOB_ID_PREFIX = "autonomous-research:tick"
 _JOB_KIND = "autonomous_research"
 _CONTINUATION_REQUEST_TEXT = "연구 계속해주세요"
 _DEFAULT_INTERVAL_SECONDS = 900
+# A genuinely exhausted hypothesis/evidence state changes slowly.  Re-running
+# the identical read-only chain every 15 minutes creates noise and needless
+# provider traffic without adding evidence, so terminal/awaiting-evidence
+# outcomes use a durable six-hour retry cadence.  Any real progress action
+# (new candidate, new evidence, policy, cycle) immediately returns to the
+# normal 15-minute cadence.
+_EXHAUSTED_RETRY_INTERVAL_SECONDS = 6 * 60 * 60
+_BLOCKED_RETRY_INTERVAL_SECONDS = 60 * 60
 _EVIDENCE_RETRY_INTERVAL_SECONDS = 24 * 60 * 60
 
 # Only a candidate that stagnated purely because the cycle-stagnation
@@ -156,6 +172,52 @@ def attempt_bounded_stagnation_recovery(
         recovered_mission = replace(recovered_mission, status=MissionStatus.ACTIVE, blocked_reason=None, updated_at=now)
         return recovered_mission, True
     return mission, False
+
+
+def attempt_bounded_strategy_space_recovery(
+    mission: ResearchMission,
+    *,
+    now: str,
+) -> tuple[ResearchMission, object | None, str | None]:
+    """Resume a hypothesis-exhausted mission when a NEW bounded family
+    has become reachable since the mission was blocked.
+
+    This is intentionally checked again on every blocked mission because a
+    later software release may add engine-native, predeclared research
+    families while the durable mission still carries yesterday's honest
+    ``strategy_hypothesis_space_exhausted`` blocker.  The function never
+    invents a rule or parameter: it delegates to
+    ``expand_strategy_space_candidate`` (the same bounded family selector the
+    normal mission cycle already uses), creates at most ONE research-only
+    candidate, and never runs validation/promotion/order logic itself.
+    """
+    if mission.status is not MissionStatus.BLOCKED:
+        return mission, None, None
+    if not (mission.blocked_reason or "").startswith("strategy_hypothesis_space_exhausted"):
+        return mission, None, None
+    history = candidate_records(mission)
+    used_families = {candidate.strategy_family for candidate in history}
+    pre_upgrade_space = {
+        *(template.family for template in ALL_STRATEGY_FAMILY_TEMPLATES),
+        *(template.family for template in STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES),
+        *(template.family for template in NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES),
+        *(template.family for template in REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES),
+    }
+    if not pre_upgrade_space.issubset(used_families):
+        return mission, None, None
+    expansion = expand_strategy_space_candidate(
+        history,
+        sequence=next_candidate_sequence(mission),
+        now=now,
+        multi_symbol_context_available=mission_multi_symbol_context_available(mission),
+    )
+    candidate = expansion.candidate
+    if candidate is None:
+        return mission, None, expansion.reason
+    updated = add_candidate(mission, candidate, now=now)
+    updated = set_active_candidate(updated, candidate.candidate_id, now=now)
+    updated = replace(updated, status=MissionStatus.ACTIVE, blocked_reason=None, updated_at=now)
+    return updated, candidate, expansion.reason
 
 
 @dataclass(frozen=True)
@@ -285,6 +347,21 @@ class AutonomousResearchRuntimeWorker:
                 recovered_mission, recovered = attempt_bounded_stagnation_recovery(mission, now=now)
                 if not recovered:
                     if (mission.blocked_reason or "").startswith("strategy_hypothesis_space_exhausted"):
+                        expanded_mission, expansion_candidate, expansion_reason = attempt_bounded_strategy_space_recovery(
+                            mission, now=now
+                        )
+                        if expansion_candidate is not None:
+                            request = _continuation_request(session_id, chat_id, now, suffix="strategy-space-expanded")
+                            brain._remember_mission(request, expanded_mission)
+                            self._metrics.increment("autonomous_research_runtime_ticks", status="strategy_space_expanded")
+                            return AutonomousResearchTickResult(
+                                attempted=True,
+                                action="strategy_space_expanded",
+                                mission_status=expanded_mission.status.value,
+                                candidate_id=expansion_candidate.candidate_id,
+                                next_research_action=expansion_reason,
+                                autonomous_progression=True,
+                            )
                         return self._plan_research_direction(mission, session_id, chat_id, brain, now)
                     self._metrics.increment("autonomous_research_runtime_ticks", status="blocked")
                     return AutonomousResearchTickResult(
@@ -684,6 +761,18 @@ def ensure_autonomous_research_job(
     return True
 
 
+def _next_interval_for_result(result: AutonomousResearchTickResult, default_interval_seconds: int) -> int:
+    """Return a durable retry cadence based only on the tick's structured
+    outcome.  Progress always keeps the caller's normal cadence; unchanged
+    terminal research-space/evidence states back off to avoid repeating the
+    same work every 15 minutes."""
+    if result.action in {"hypothesis_value_space_exhausted", "research_direction_awaiting_evidence"}:
+        return max(default_interval_seconds, _EXHAUSTED_RETRY_INTERVAL_SECONDS)
+    if result.action == "blocked_no_recovery":
+        return max(default_interval_seconds, _BLOCKED_RETRY_INTERVAL_SECONDS)
+    return default_interval_seconds
+
+
 def run_due_autonomous_research(
     repository: ScheduledJobRepository,
     worker: AutonomousResearchRuntimeWorker,
@@ -734,7 +823,8 @@ def run_due_autonomous_research(
             result = AutonomousResearchTickResult(attempted=True, action="failed", error_type=exc.__class__.__name__)
             repository.complete_run(run, ScheduledRunStatus.FAILED, completed_at=now, result={}, error=exc.__class__.__name__)
         results.append(result)
-        next_run_at = _advance_by_interval(now, interval_seconds)
+        next_interval_seconds = _next_interval_for_result(result, interval_seconds)
+        next_run_at = _advance_by_interval(now, next_interval_seconds)
         next_job = replace(
             job,
             job_id=f"{_JOB_ID_PREFIX}:{next_run_at}",

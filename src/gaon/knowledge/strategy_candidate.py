@@ -474,6 +474,94 @@ REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = 
 # the minimum-trade-sample gate), which is the honest outcome: "not
 # evaluable here", not "a bad strategy". Wiring the deep pipeline with a
 # real peer universe is a separate, larger change.
+# feature/structural-filter-hypothesis-expansion: once the base non-breakout
+# paradigms and the simple breakout regime family have each been tried,
+# continue with a bounded CROSS of already-supported, entry-restricting
+# filters.  No new indicator math or risk parameter is introduced here:
+# ``volume_gte_ma20`` and ``regime_bullish_only`` are existing predicate
+# rules whose engine semantics can only REMOVE an entry the underlying
+# trigger already wanted.  Crossing them with the three already-supported
+# non-breakout entry triggers therefore creates genuinely new, but still
+# bounded and engine-native, hypotheses without widening leverage/size/stop
+# authority.  The standard breakout trigger gets the same regime/filter
+# combinations so the structural filter effect can be compared against a
+# familiar baseline.
+STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
+    StrategyFamilyTemplate(
+        "mean_reversion_volume_confirmed", "평균회귀 + 거래량 확인",
+        {"mean_reversion_ma_lookback": 20, "mean_reversion_band_pct": 5.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "mean_reversion_regime_filtered", "평균회귀 + 상승 국면 필터",
+        {"mean_reversion_ma_lookback": 20, "mean_reversion_band_pct": 5.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"regime_bullish_only": True, "regime_ma_lookback": 50},
+    ),
+    StrategyFamilyTemplate(
+        "mean_reversion_volume_regime_filtered", "평균회귀 + 거래량 + 상승 국면",
+        {"mean_reversion_ma_lookback": 20, "mean_reversion_band_pct": 5.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"volume_gte_ma20": True, "regime_bullish_only": True, "regime_ma_lookback": 50},
+    ),
+    StrategyFamilyTemplate(
+        "momentum_roc_volume_confirmed", "ROC 모멘텀 + 거래량 확인",
+        {"momentum_roc_lookback": 20, "momentum_min_roc_pct": 10.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "momentum_roc_regime_filtered", "ROC 모멘텀 + 상승 국면 필터",
+        {"momentum_roc_lookback": 20, "momentum_min_roc_pct": 10.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"regime_bullish_only": True, "regime_ma_lookback": 50},
+    ),
+    StrategyFamilyTemplate(
+        "momentum_roc_volume_regime_filtered", "ROC 모멘텀 + 거래량 + 상승 국면",
+        {"momentum_roc_lookback": 20, "momentum_min_roc_pct": 10.0},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"volume_gte_ma20": True, "regime_bullish_only": True, "regime_ma_lookback": 50},
+    ),
+    StrategyFamilyTemplate(
+        "volatility_thrust_volume_confirmed", "변동성 급등 + 거래량 확인",
+        {"volatility_atr_lookback": 20, "volatility_thrust_k": 1.5},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "volatility_thrust_regime_filtered", "변동성 급등 + 상승 국면 필터",
+        {"volatility_atr_lookback": 20, "volatility_thrust_k": 1.5},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"regime_bullish_only": True, "regime_ma_lookback": 50},
+    ),
+    StrategyFamilyTemplate(
+        "volatility_thrust_volume_regime_filtered", "변동성 급등 + 거래량 + 상승 국면",
+        {"volatility_atr_lookback": 20, "volatility_thrust_k": 1.5},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"volume_gte_ma20": True, "regime_bullish_only": True, "regime_ma_lookback": 50},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_regime_volume_confirmed", "돌파 + 상승 국면 + 거래량",
+        {"breakout_lookback": 20},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"regime_bullish_only": True, "regime_ma_lookback": 50, "volume_gte_ma20": True},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_regime_trend_confirmed", "돌파 + 상승 국면 + 추세 확인",
+        {"breakout_lookback": 20, "close_gt_ma20": True, "ma20_gt_ma60": True},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"regime_bullish_only": True, "regime_ma_lookback": 50},
+    ),
+    StrategyFamilyTemplate(
+        "breakout_regime_multi_confirmed", "돌파 + 상승 국면 + 추세 + 거래량",
+        {"breakout_lookback": 20, "close_gt_ma20": True, "ma20_gt_ma60": True},
+        {"protective_stop_pct": -5.0, "channel_exit_lookback": 10},
+        {"regime_bullish_only": True, "regime_ma_lookback": 50, "volume_gte_ma20": True},
+    ),
+)
+
+
 RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES: tuple[StrategyFamilyTemplate, ...] = (
     StrategyFamilyTemplate(
         "breakout_relative_strength", "상대강도 돌파 (동종 대비 강세 한정)",
@@ -495,6 +583,7 @@ _TEMPLATE_BY_FAMILY = {
         *STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES,
         *NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
         *REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES,
+        *STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES,
         *RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES,
     )
 }
@@ -551,6 +640,20 @@ _FAMILY_REQUEST_TEXT: Mapping[str, str] = {
     # does NOT round-trip to the candidate's fingerprint (which carries
     # regime_bullish_only) - candidate-native spec_rules are authoritative.
     "breakout_regime_filtered": "50일 이동평균 위이고 50일 전보다 높은 상승 국면에서만 20 고가 돌파 매수 손절 -5% 10일 저점 이탈 청산",
+    # feature/structural-filter-hypothesis-expansion: descriptions only;
+    # candidate-native spec_rules remain authoritative.
+    "mean_reversion_volume_confirmed": "20일 평균 대비 5% 하락 평균회귀 진입 + 거래량 평균 이상 필터 손절 -5% 10일 저점 청산",
+    "mean_reversion_regime_filtered": "20일 평균 대비 5% 하락 평균회귀 진입 + 50일 상승 국면 필터 손절 -5% 10일 저점 청산",
+    "mean_reversion_volume_regime_filtered": "평균회귀 진입 + 거래량 평균 이상 + 50일 상승 국면 필터 손절 -5% 10일 저점 청산",
+    "momentum_roc_volume_confirmed": "20일 수익률 10% 이상 모멘텀 진입 + 거래량 평균 이상 필터 손절 -5% 10일 저점 청산",
+    "momentum_roc_regime_filtered": "20일 수익률 10% 이상 모멘텀 진입 + 50일 상승 국면 필터 손절 -5% 10일 저점 청산",
+    "momentum_roc_volume_regime_filtered": "ROC 모멘텀 진입 + 거래량 평균 이상 + 50일 상승 국면 필터 손절 -5% 10일 저점 청산",
+    "volatility_thrust_volume_confirmed": "20일 평균 레인지 대비 1.5배 상승 변동성 진입 + 거래량 필터 손절 -5% 10일 저점 청산",
+    "volatility_thrust_regime_filtered": "변동성 급등 진입 + 50일 상승 국면 필터 손절 -5% 10일 저점 청산",
+    "volatility_thrust_volume_regime_filtered": "변동성 급등 진입 + 거래량 + 50일 상승 국면 필터 손절 -5% 10일 저점 청산",
+    "breakout_regime_volume_confirmed": "20 고가 돌파 + 50일 상승 국면 + 거래량 평균 이상 필터 손절 -5% 10일 저점 청산",
+    "breakout_regime_trend_confirmed": "20 고가 돌파 + 종가 > MA20 > MA60 + 50일 상승 국면 필터 손절 -5% 10일 저점 청산",
+    "breakout_regime_multi_confirmed": "20 고가 돌파 + 종가 > MA20 > MA60 + 거래량 + 50일 상승 국면 필터 손절 -5% 10일 저점 청산",
     # feature/relative-strength-strategy-family: description only. The
     # relative-strength gate needs a peer universe and has no
     # UserStrategyParser grammar, so this does not round-trip to the
@@ -709,9 +812,10 @@ def expand_strategy_space_candidate(
     one candidate per paradigm, with ``reason="strategy_paradigm_
     rotation"``.
 
-    Priority 6: the rotation then also visits
-    REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES (safe to validate on a
-    single symbol), and finally RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES
+    The rotation then also visits REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES
+    and the bounded STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES cross of
+    already-supported entry-restricting volume/regime predicates. Finally it
+    may visit RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES
     - but the relative-strength phase is entered ONLY when
     ``multi_symbol_context_available`` is True. A single-symbol mission
     NEVER gets a relative-strength candidate (its engine gate would fail
@@ -740,6 +844,7 @@ def expand_strategy_space_candidate(
         ("strategy_family_space_exhausted", "ranked", STRATEGY_SPACE_EXPANSION_ROUND_2_TEMPLATES),
         ("strategy_paradigm_rotation", "ordered", NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES),
         ("strategy_paradigm_rotation", "ordered", REGIME_FILTERED_STRATEGY_FAMILY_TEMPLATES),
+        ("structural_filter_hypothesis_expansion", "ordered", STRUCTURAL_FILTER_STRATEGY_FAMILY_TEMPLATES),
     ]
     if multi_symbol_context_available:
         phases.append(("strategy_paradigm_rotation", "ordered", RELATIVE_STRENGTH_STRATEGY_FAMILY_TEMPLATES))

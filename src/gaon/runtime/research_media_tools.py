@@ -33,6 +33,8 @@ MAX_TEXT_CHARS = 40_000
 MAX_IMAGE_BYTES = 10_000_000
 MAX_IMAGE_PIXELS = 16_000_000
 MAX_VIDEO_DURATION_SECONDS = 4 * 60 * 60
+DEFAULT_YOUTUBE_COOKIE_FILE = Path("/var/lib/strategylab/secrets/youtube-cookies.txt")
+DEFAULT_YOUTUBE_POT_SERVER_HOME = Path("/var/lib/strategylab/bgutil-ytdlp-pot-provider/server")
 DDG_ENDPOINT = "https://html.duckduckgo.com/html/"
 YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"})
 _SAFE_DOC_SUFFIXES = frozenset({".pdf", ".docx", ".txt", ".md", ".csv", ".json"})
@@ -352,12 +354,64 @@ def _youtube_url(url: str) -> str:
 
 def _youtube_cookie_file() -> str | None:
     raw = os.environ.get("GAON_YOUTUBE_COOKIES_FILE", "").strip()
-    if not raw:
+    configured = Path(raw).expanduser() if raw else DEFAULT_YOUTUBE_COOKIE_FILE
+    if not configured.exists():
+        if raw:
+            raise RuntimeError("configured YouTube cookie file does not exist")
         return None
-    path = Path(raw).expanduser().resolve()
-    if not path.is_file():
-        raise RuntimeError("configured YouTube cookie file does not exist")
+    if configured.is_symlink() or not configured.is_file():
+        raise RuntimeError("YouTube cookie path must be a regular non-symlink file")
+    path = configured.resolve()
+    mode = path.stat().st_mode & 0o777
+    if mode & 0o077:
+        raise RuntimeError("YouTube cookie file permissions must not grant group/other access; use mode 0600")
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:131072]
+    except OSError as exc:
+        raise RuntimeError("YouTube cookie file is not readable") from exc
+    first = head.splitlines()[0].strip() if head.splitlines() else ""
+    if first not in {"# HTTP Cookie File", "# Netscape HTTP Cookie File"}:
+        raise RuntimeError("YouTube cookie file must use Netscape cookie format")
+    if "youtube.com" not in head.casefold():
+        raise RuntimeError("YouTube cookie file contains no youtube.com cookie entries")
     return str(path)
+
+
+def _youtube_extractor_args() -> dict[str, dict[str, list[str]]]:
+    """Bounded yt-dlp extractor configuration.
+
+    Prefer the current yt-dlp recommended mweb-compatible PO-token path
+    when the optional BgUtils provider is installed.  The provider does not
+    weaken authentication: a data-centre IP can still require a user-
+    supplied YouTube-only cookie file, which remains optional and is handled
+    separately above.
+    """
+    args: dict[str, dict[str, list[str]]] = {
+        "youtube": {"player_client": ["mweb,tv,web_safari"]},
+    }
+    raw_home = os.environ.get("GAON_YOUTUBE_POT_SERVER_HOME", "").strip()
+    server_home = Path(raw_home).expanduser() if raw_home else DEFAULT_YOUTUBE_POT_SERVER_HOME
+    build = server_home / "build" / "main.js"
+    if build.is_file():
+        args["youtubepot-bgutilscript"] = {"server_home": [str(server_home.resolve())]}
+    return args
+
+
+def _youtube_runtime_auth_state() -> dict[str, object]:
+    try:
+        cookie_file = _youtube_cookie_file()
+        cookie_state = "configured" if cookie_file else "not_configured"
+        cookie_error = None
+    except RuntimeError as exc:
+        cookie_file = None
+        cookie_state = "invalid"
+        cookie_error = str(exc)
+    extractor_args = _youtube_extractor_args()
+    return {
+        "po_token_provider_configured": "youtubepot-bgutilscript" in extractor_args,
+        "cookie_auth_state": cookie_state,
+        "cookie_error": cookie_error,
+    }
 
 
 def _youtube_info(url: str, *, fmt: str | None = None) -> dict[str, object]:
@@ -373,6 +427,7 @@ def _youtube_info(url: str, *, fmt: str | None = None) -> dict[str, object]:
     cookiefile = _youtube_cookie_file()
     if cookiefile:
         opts["cookiefile"] = cookiefile
+    opts["extractor_args"] = _youtube_extractor_args()
     if fmt:
         opts["format"] = fmt
     try:
@@ -425,6 +480,7 @@ def video_info(args: dict[str, object]) -> dict[str, object]:
             "frame_analysis_available": False,
             "metadata_source": "youtube-oembed",
             "access_limitation": "youtube_bot_challenge_requires_authorized_cookie_file",
+            **_youtube_runtime_auth_state(),
             "untrusted_evidence": True,
         }
     return {
@@ -439,6 +495,7 @@ def video_info(args: dict[str, object]) -> dict[str, object]:
         "transcript_text_available": bool(info.get("subtitles") or info.get("automatic_captions")),
         "frame_analysis_available": bool(os.environ.get("GAON_VISION_MODEL")) and bool(_ffmpeg_path()),
         "metadata_source": "yt-dlp",
+        **_youtube_runtime_auth_state(),
         "untrusted_evidence": True,
     }
 
