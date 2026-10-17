@@ -1346,18 +1346,33 @@ class LLMConversationBrain:
         executed: list[str] = []
         for call in selected:
             arguments = dict(call.arguments)
+            execution_tool_name = call.name
+            # Tool-choice repair for a common provider mistake: an HTTP(S)
+            # URL is sometimes passed to document_read(path=...) even though
+            # document_read is intentionally restricted to the local
+            # research-input directory.  Never weaken that path boundary;
+            # route the request through url_fetch instead, which preserves
+            # the URL allowlist/SSRF/content-size protections.  The provider
+            # protocol still receives the result under its original call
+            # name/call_id, while audit/references expose the tool actually
+            # executed.
+            if call.name == "document_read":
+                raw_path = arguments.get("path")
+                if isinstance(raw_path, str) and re.match(r"^https?://", raw_path.strip(), flags=re.IGNORECASE):
+                    execution_tool_name = "url_fetch"
+                    arguments = {"url": raw_path.strip()}
             if call.name == "research_mission_state":
                 # Session/owner identifiers are runtime-bound context, never
                 # model-selected arguments. Overwrite any provider-supplied
                 # values defensively even though they are omitted from the
                 # provider-facing schema.
                 arguments.update(self._research_mission_tool_context(request))
-            result = self._tool_executor.execute(ToolRequest(call.name, arguments, request.user_ref, request.received_at))
+            result = self._tool_executor.execute(ToolRequest(execution_tool_name, arguments, request.user_ref, request.received_at))
             self._record_tool_result(request.session_id, result, request.received_at)
-            output = sanitize_research_tool_output(call.name, result.output, request.text) if result.status == "success" and is_research_tool(call.name) else result.output
+            output = sanitize_research_tool_output(execution_tool_name, result.output, request.text) if result.status == "success" and is_research_tool(execution_tool_name) else result.output
             results.append(AssistantToolResult(call.call_id, call.name, {"status": result.status, "output": output, "warnings": list(result.warnings)}))
             if result.status == "success":
-                executed.append(call.name)
+                executed.append(execution_tool_name)
         if len(provider_response.tool_calls) > max_calls:
             warnings = (*warnings, "tool call limit reached")
         self._metrics.increment("gaon_llm_tool_roundtrips_total", amount=len(results), provider=provider_response.provider_name)
