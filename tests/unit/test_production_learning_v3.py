@@ -16,7 +16,10 @@ from gaon.knowledge.strategy_candidate import (
     NON_BREAKOUT_STRATEGY_FAMILY_TEMPLATES,
 )
 from gaon.learning.contracts import LearningRecordType
-from gaon.learning.production import ProductionLearningEngine, SQLiteLearningRepository
+from gaon.learning.production import (
+    ProductionLearningEngine, SQLiteLearningRepository,
+    effective_learning_confidence, learning_freshness_multiplier,
+)
 from gaon.runtime.llm_tools import SafeToolExecutor, _research_memory_search, default_tool_registry
 from gaon.runtime.llm_conversation import (
     LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository, _default_tool_arguments,
@@ -207,6 +210,43 @@ class ProductionLearningV3Tests(unittest.TestCase):
             market="BINANCE", strategy="runtime:paper:flow_btc_bear_relvol25"
         )[0]
         self.assertEqual(record.version, 2)
+
+    def test_revalidation_freshness_decays_advisory_confidence_without_deleting_memory(self) -> None:
+        candidate = _with_evidence(new_candidate("breakout_standard", sequence=1, now=NOW), count=10)
+        candidate = mark_rejected(candidate, reason="economic_viability_failed:test", now=NOW)
+        learned = self.engine.learn_candidate(_mission(), candidate, now=NOW)
+        record = SQLiteLearningRepository(self.connection).get(learned.record_id)
+        raw = record.confidence.value
+        self.assertEqual(learning_freshness_multiplier(record, "2026-11-10T00:00:00Z"), 1.0)
+        self.assertEqual(effective_learning_confidence(record, "2026-11-10T00:00:00Z"), raw)
+        self.assertEqual(learning_freshness_multiplier(record, "2026-11-20T00:00:00Z"), 0.85)
+        self.assertAlmostEqual(effective_learning_confidence(record, "2026-11-20T00:00:00Z"), round(raw * 0.85, 6))
+        self.assertEqual(learning_freshness_multiplier(record, "2026-12-01T00:00:00Z"), 0.65)
+        self.assertEqual(learning_freshness_multiplier(record, "2027-03-01T00:00:00Z"), 0.20)
+        # The historical record remains intact; only advisory influence decays.
+        self.assertEqual(SQLiteLearningRepository(self.connection).get(record.record_id).version, record.version)
+
+    def test_stale_failure_prior_weakens_until_revalidated(self) -> None:
+        candidate = _with_evidence(new_candidate("breakout_standard", sequence=1, now=NOW), count=10)
+        candidate = mark_rejected(candidate, reason="economic_viability_failed:test", now=NOW)
+        self.engine.learn_candidate(_mission(), candidate, now=NOW)
+        fresh = self.engine.family_priors(market="KR", reference_time="2026-11-10T00:00:00Z")["breakout_standard"]
+        stale = self.engine.family_priors(market="KR", reference_time="2027-03-01T00:00:00Z")["breakout_standard"]
+        self.assertLess(fresh, 0.0)
+        self.assertLess(stale, 0.0)
+        self.assertLess(abs(stale), abs(fresh))
+
+    def test_memory_search_exposes_effective_confidence_and_revalidation_state(self) -> None:
+        candidate = _with_evidence(new_candidate("breakout_standard", sequence=1, now="2026-01-01T00:00:00Z"), count=5, now="2026-01-01T00:00:00Z")
+        candidate = mark_rejected(candidate, reason="economic_viability_failed:test", now="2026-01-01T00:00:00Z")
+        self.engine.learn_candidate(_mission(), candidate, now="2026-01-01T00:00:00Z")
+        payload = _research_memory_search(self.connection, {"strategy_family":"breakout_standard"})
+        item = next(x for x in payload["results"] if x.get("timeframe") == "learning_v3")
+        confidence = item["confidence"]
+        self.assertIn("effective_value", confidence)
+        self.assertIn("freshness_multiplier", confidence)
+        self.assertEqual(confidence["revalidation_state"], "overdue")
+        self.assertLess(confidence["effective_value"], confidence["value"])
 
     def test_generic_learning_query_returns_recent_learning_v3_records(self) -> None:
         candidate = _with_evidence(new_candidate("breakout_standard", sequence=1, now=NOW))
