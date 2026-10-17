@@ -34,7 +34,14 @@ def _run(args: list[str], *, cwd: Path, timeout: int = 120) -> subprocess.Comple
         stderr=subprocess.STDOUT,
         timeout=timeout,
         check=False,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "HOME": "/root"},
+        env={
+            **os.environ,
+            "GIT_TERMINAL_PROMPT": "0",
+            "HOME": "/root",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": str(cwd),
+        },
     )
 
 
