@@ -20,10 +20,14 @@ def run(*, database, symbols, as_of=None, provider_factory=None):
         provider=provider_factory(market) if provider_factory else None
         candles=fetch_real_daily_bars(market=market,symbol=symbol,
             start_date=start.isoformat(),end_date=end.isoformat(),provider=provider)
-        with sqlite3.connect(database,timeout=10) as conn:
-            result=research_and_record(conn,candles,market=market,account="automated-research",
-                strategy_version_id="offline-equity-v1",timeframe="daily",
-                observed_at=datetime.now(timezone.utc).isoformat())
+        conn=sqlite3.connect(database,timeout=10)
+        try:
+            with conn:
+                result=research_and_record(conn,candles,market=market,account="automated-research",
+                    strategy_version_id="offline-equity-v1",timeframe="daily",
+                    observed_at=datetime.now(timezone.utc).isoformat())
+        finally:
+            conn.close()
         results.append({"market":market,"symbol":symbol,**asdict(result)})
     return results
 
