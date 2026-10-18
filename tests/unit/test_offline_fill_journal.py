@@ -23,10 +23,12 @@ class OfflineFillJournalTests(unittest.TestCase):
                 self.assertEqual(a["run_id"],b["run_id"])
                 self.assertEqual(a["kind"],"offline_simulated_not_exchange_fill")
                 self.assertFalse(a["promotion_allowed"])
+            connection.close()
             with sqlite3.connect(db) as connection:
                 s=summary(connection,market="BINANCE",account="offline",strategy_version_id="v1")
                 self.assertEqual(s["trades"],1)
                 self.assertEqual(s["net_pnl"],a["net_pnl"])
+            connection.close()
 
     def test_rejects_bad_candle_without_write(self):
         with sqlite3.connect(":memory:") as connection:

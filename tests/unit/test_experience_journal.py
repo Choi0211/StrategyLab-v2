@@ -19,8 +19,10 @@ class ExperienceJournalTests(unittest.TestCase):
                 self.assertTrue(record(conn,**entry()))
                 self.assertFalse(record(conn,**entry()))
                 self.assertEqual(summary(conn,market="KR_STOCK",account="paper-a",strategy_version_id="v1")["net_pnl"],-2.5)
+            conn.close()
             with sqlite3.connect(db) as conn:
                 self.assertEqual(summary(conn,market="KR_STOCK",account="paper-a",strategy_version_id="v1")["trades"],1)
+            conn.close()
 
     def test_reject_conflicting_replay(self):
         with sqlite3.connect(":memory:") as conn:

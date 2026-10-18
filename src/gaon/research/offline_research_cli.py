@@ -34,12 +34,16 @@ def main(argv=None):
     if database==path:
         parser.error("database must not overwrite input")
     # No database write occurs until input data has passed pipeline validation.
-    with sqlite3.connect(str(database),timeout=10) as conn:
-        result=research_and_record(conn,data,market=args.market,
-            account=args.account,strategy_version_id=args.strategy_version_id,
-            timeframe=args.timeframe,fee_bps=args.fee_bps,
-            slippage_bps=args.slippage_bps,
-            observed_at=datetime.now(timezone.utc).isoformat())
+    conn=sqlite3.connect(str(database),timeout=10)
+    try:
+        with conn:
+            result=research_and_record(conn,data,market=args.market,
+                account=args.account,strategy_version_id=args.strategy_version_id,
+                timeframe=args.timeframe,fee_bps=args.fee_bps,
+                slippage_bps=args.slippage_bps,
+                observed_at=datetime.now(timezone.utc).isoformat())
+    finally:
+        conn.close()
     print(json.dumps(asdict(result),ensure_ascii=False))
     return 0
 

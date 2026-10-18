@@ -36,6 +36,7 @@ class OfflineResearchCliTests(unittest.TestCase):
                 x=summary(connection,market="BINANCE",account="research",strategy_version_id="candidate-v1")
                 self.assertEqual(x["experiments"],1)
                 self.assertEqual(x["trades"],0)
+            connection.close()
 
     def test_cli_rejects_malformed_file(self):
         with tempfile.TemporaryDirectory() as tmp_path:
