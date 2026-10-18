@@ -262,6 +262,12 @@ def main(argv: list[str] | None = None) -> int:
     import_path_check.add_argument("--json", action="store_true")
     db_check = sub.add_parser("db-check")
     db_check.add_argument("--db", default=":memory:")
+    passkey_bootstrap_grant = sub.add_parser("passkey-bootstrap-grant")
+    passkey_bootstrap_grant.add_argument("--db", default=":memory:")
+    passkey_bootstrap_grant.add_argument("--actor", required=True)
+    promote_candidates = sub.add_parser("promote-strategy-candidates")
+    promote_candidates.add_argument("--db", default=":memory:")
+    promote_candidates.add_argument("--limit", type=int, default=1000)
     health = sub.add_parser("health")
     health.add_argument("--db", default=":memory:")
     ready = sub.add_parser("readiness")
@@ -1129,6 +1135,36 @@ def _run(args: argparse.Namespace) -> int:
         try:
             for check in readiness(load_runtime_config(os.environ), store):
                 print(f"{check.name}: {'ready' if check.ready else 'not-ready'} {check.message}")
+        finally:
+            store.close()
+    elif args.command == "promote-strategy-candidates":
+        from gaon.control.strategy_candidate_promotion import (
+            list_promotable_candidates,
+            promote_eligible_candidates,
+        )
+        from gaon.runtime.serialization import dumps_json
+
+        store = RuntimeStateStore(args.db)
+        try:
+            decisions = list_promotable_candidates(store._connection, limit=args.limit)
+            registered = promote_eligible_candidates(store._connection, now=_utc_now(), limit=args.limit)
+            for decision in decisions:
+                print(f"{decision.run_id}: eligible={decision.eligible} reason={decision.reason}")
+            print(dumps_json({"newly_registered_apply_ready": [v.strategy_version_id for v in registered],
+                               "family_ids": sorted({v.family_id for v in registered})}))
+            print("Note: APPLY_READY grants no trading power. Activation still requires the "
+                  "passkey-signed admin approval flow at /gaon/admin/passkey/login.")
+        finally:
+            store.close()
+    elif args.command == "passkey-bootstrap-grant":
+        from gaon.control.passkey_bootstrap import create_local_grant
+
+        store = RuntimeStateStore(args.db)
+        try:
+            token = create_local_grant(store._connection, actor=args.actor)
+            print(f"bootstrap_token={token} actor={args.actor} expires_in_minutes=10")
+            print("Hand this token to the administrator out-of-band (not over HTTP/Telegram/email). "
+                  "They must use it at /gaon/admin/passkey/enroll within 10 minutes.")
         finally:
             store.close()
     elif args.command in {"run", "status"}:

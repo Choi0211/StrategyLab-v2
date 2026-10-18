@@ -17,6 +17,7 @@ dependencies = [
     "Pillow>=10.0",
     "yt-dlp>=2025.1",
     "bgutil-ytdlp-pot-provider>=2.0.2,<3",
+    "webauthn>=2.7,<3",
 ]
 
 [tool.setuptools.packages.find]

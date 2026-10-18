@@ -221,24 +221,15 @@ class GaonWebChatAdapter:
         }
 
     def activate_strategy_version(self, *, family_id: str, strategy_version_id: str, confirm: bool, now: str) -> Mapping[str, object]:
-        """Persist an explicitly confirmed APPLY_READY/PREVIOUS version as ACTIVE.
+        """Fail closed at the adapter boundary, not merely at the HTTP route.
 
-        Registry-only lifecycle mutation: no Binance/runtime mutation and no order.
-        Direction isolation is enforced by StrategyVersionRegistry.mark_active().
+        Caller-supplied confirmation cannot prove authenticated, durable,
+        exact-version human approval. No registry mutation is permitted until
+        that trusted approval workflow is integrated and tested.
         """
-        if not confirm:
-            return {"ok": False, "error": "explicit confirmation required", "strategy_mutated": False, "order_executed": False, "live_activated": False, "approval_bypassed": False}
-        repo = StrategyVersionSQLiteRepository(self._repository._connection)
-        registry = repo.get(family_id)
-        try:
-            target = registry.get(strategy_version_id)
-        except KeyError:
-            return {"ok": False, "error": "strategy version not found", "strategy_mutated": False, "order_executed": False, "live_activated": False, "approval_bypassed": False}
-        if target.family_id != family_id or target.status.value not in {"apply_ready", "previous"}:
-            return {"ok": False, "error": "strategy version is not selectable", "strategy_mutated": False, "order_executed": False, "live_activated": False, "approval_bypassed": False}
-        active = registry.mark_active(strategy_version_id, at=now)
-        repo.save(family_id, registry, now=now)
-        return {"ok": True, "family_id": family_id, "active": active.to_json(), "active_by_direction": StrategyConsoleReadModel(registry).render()["active_by_direction"], "strategy_mutated": True, "order_executed": False, "live_activated": False, "approval_bypassed": False}
+        return {"ok": False, "error": "authenticated strategy approval workflow required",
+                "strategy_mutated": False, "order_executed": False,
+                "live_activated": False, "approval_bypassed": False}
 
     def issue_developer_approval(self, *, task_id: str, action: str, user_ref: str, now: str) -> Mapping[str, object]:
         if action not in WRITE_ACTIONS:
@@ -443,6 +434,9 @@ def dispatch_request(
             "champion_promoted": False,
             "approval_bypassed": False,
         }
+    if method == "GET" and route_path == "/gaon/admin/passkey/status":
+        from gaon.control.passkey_readiness import readiness
+        return 200, readiness(adapter._repository._connection)
     if method == "GET" and route_path == "/gaon/health":
         return 200, {"schema_version": WEB_API_SCHEMA_VERSION, "status": "ok"}
     if method == "POST" and route_path == "/gaon/chat":
@@ -478,13 +472,12 @@ def dispatch_request(
     if method == "GET" and route_path == "/gaon/strategy/version_status":
         return _handle_strategy_version_status(adapter, query)
     if method == "POST" and route_path == "/gaon/strategy/version/activate":
-        family_id = _require_str_field(body, "family_id")
-        version_id = _require_str_field(body, "strategy_version_id")
-        if family_id is None or version_id is None:
-            return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id and strategy_version_id are required"}
-        confirm = isinstance(body, Mapping) and body.get("confirm") is True
-        result = adapter.activate_strategy_version(family_id=family_id, strategy_version_id=version_id, confirm=confirm, now=_utc_now())
-        return (200 if result.get("ok") else 409), result
+        # Caller-supplied confirm=True is not authenticated human approval.
+        # Fail closed until a durable identity-bound approval flow is wired.
+        return 403, {"schema_version": WEB_API_SCHEMA_VERSION,
+                     "error": "authenticated strategy approval workflow required",
+                     "strategy_mutated": False, "order_executed": False,
+                     "live_activated": False, "approval_bypassed": False}
     if method == "POST" and route_path == "/gaon/developer/approve":
         task_id = _require_str_field(body, "task_id")
         action = _require_str_field(body, "action")
@@ -915,6 +908,225 @@ def build_request_handler(adapter: GaonWebChatAdapter | None, *, adapter_factory
             if is_chat and not chat_slot.acquire(blocking=False):
                 return 503, {"error": "conversation_busy", "text": "다른 대화를 처리 중입니다. 잠시 후 다시 요청해주세요."}
             try:
+                if method == "GET" and urlsplit(self.path).path == "/gaon/admin/strategy/options":
+                    from gaon.control.passkey_session import validate_session
+                    cookies = dict(part.strip().split("=", 1) for part in
+                        self.headers.get("Cookie", "").split(";") if "=" in part)
+                    token = cookies.get("__Host-gaon_admin", "")
+                    try:
+                        def load_options(scoped):
+                            connection = scoped._repository._connection
+                            validate_session(connection, token=token)
+                            rows = connection.execute(
+                                "SELECT family_id,registry_json FROM strategy_version_registries ORDER BY family_id"
+                            ).fetchall()
+                            families = []
+                            for family_id, raw in rows:
+                                registry = json.loads(raw)
+                                versions = []
+                                for item in registry.get("versions", []):
+                                    status = item.get("status")
+                                    versions.append({"id": item.get("strategy_version_id"),
+                                        "status": status})
+                                families.append({"family_id": family_id, "versions": versions})
+                            research = []
+                            for table, kind, id_col, status_col in (
+                                ("strategy_research_reports","research_report","report_id","recommendation"),
+                                ("validation_reports","validation","validation_id","status"),
+                                ("promotion_requests","promotion","promotion_id","status")):
+                                for identifier, state in connection.execute(
+                                    "SELECT "+id_col+","+status_col+" FROM "+table+
+                                    " ORDER BY rowid DESC LIMIT 30").fetchall():
+                                    research.append({"source":kind,"id":identifier,
+                                        "state":state,"approval_eligible":False})
+                            return {"families": families, "research_candidates": research}
+                        if adapter_factory is None:
+                            result = load_options(adapter)
+                        else:
+                            with adapter_factory() as scoped_adapter:
+                                result = load_options(scoped_adapter)
+                        return 200, result
+                    except (PermissionError, ValueError, TypeError):
+                        return 403, {"error": "authentication required"}
+                if method == "POST" and urlsplit(self.path).path == "/gaon/admin/strategy/approval/finish":
+                    import base64
+                    from gaon.control.passkey_origin import validate_origin
+                    from gaon.control.passkey_session import validate_session
+                    from gaon.control.passkey_strategy_finish import finish_strategy_approval
+                    if not isinstance(body, dict):
+                        return 400, {"error": "invalid request"}
+                    try:
+                        origin = validate_origin(self.headers.get("Origin", ""),
+                            request_host=self.headers.get("Host", ""))
+                        cookies = dict(part.strip().split("=", 1) for part in
+                            self.headers.get("Cookie", "").split(";") if "=" in part)
+                        token = cookies.get("__Host-gaon_admin", "")
+                        csrf = self.headers.get("X-Gaon-CSRF", "")
+                        credential = body.get("credential")
+                        if not isinstance(credential, dict):
+                            raise PermissionError("invalid credential")
+                        client_data = credential.get("response", {}).get("clientDataJSON")
+                        if not isinstance(client_data, str):
+                            raise PermissionError("missing client data")
+                        decoded = json.loads(base64.urlsafe_b64decode(
+                            client_data + "=" * (-len(client_data) % 4)))
+                        challenge_b64 = decoded["challenge"]
+                        challenge = base64.urlsafe_b64decode(
+                            challenge_b64 + "=" * (-len(challenge_b64) % 4))
+                        def finish_approval(scoped):
+                            connection = scoped._repository._connection
+                            actor = validate_session(connection, token=token, csrf=csrf,
+                                require_csrf=True)
+                            return finish_strategy_approval(connection,
+                                challenge=challenge, credential=credential, actor=actor,
+                                action=body.get("action"), family_id=body.get("family_id"),
+                                version_id=body.get("version_id"), origin=origin,
+                                request_host=self.headers.get("Host", ""))
+                        if adapter_factory is None:
+                            result = finish_approval(adapter)
+                        else:
+                            with adapter_factory() as scoped_adapter:
+                                result = finish_approval(scoped_adapter)
+                        return 200, result
+                    except (PermissionError, ValueError, TypeError, KeyError, AttributeError):
+                        return 403, {"error": "strategy approval verification failed"}
+                if method == "POST" and urlsplit(self.path).path == "/gaon/admin/strategy/approval/begin":
+                    from gaon.control.passkey_origin import validate_origin
+                    from gaon.control.passkey_session import validate_session
+                    from gaon.control.passkey_strategy_begin import begin_strategy_approval
+                    if not isinstance(body, dict):
+                        return 400, {"error": "invalid request"}
+                    try:
+                        origin = validate_origin(self.headers.get("Origin", ""),
+                            request_host=self.headers.get("Host", ""))
+                        cookies = dict(part.strip().split("=", 1) for part in
+                            self.headers.get("Cookie", "").split(";") if "=" in part)
+                        token = cookies.get("__Host-gaon_admin", "")
+                        csrf = self.headers.get("X-Gaon-CSRF", "")
+                        def begin_approval(scoped):
+                            connection = scoped._repository._connection
+                            actor = validate_session(connection, token=token, csrf=csrf,
+                                require_csrf=True)
+                            options = begin_strategy_approval(connection, actor=actor,
+                                action=body.get("action"), family_id=body.get("family_id"),
+                                version_id=body.get("version_id"), origin=origin,
+                                request_host=self.headers.get("Host", ""))
+                            return json.loads(options)
+                        if adapter_factory is None:
+                            result = begin_approval(adapter)
+                        else:
+                            with adapter_factory() as scoped_adapter:
+                                result = begin_approval(scoped_adapter)
+                        return 200, result
+                    except (PermissionError, ValueError, TypeError, KeyError):
+                        return 403, {"error": "strategy approval not authorized"}
+                if method == "POST" and urlsplit(self.path).path == "/gaon/admin/passkey/logout":
+                    from gaon.control.passkey_origin import validate_origin
+                    from gaon.control.passkey_session import validate_session, revoke_session
+                    try:
+                        validate_origin(self.headers.get("Origin", ""),
+                            request_host=self.headers.get("Host", ""))
+                        cookies = dict(part.strip().split("=", 1) for part in
+                            self.headers.get("Cookie", "").split(";") if "=" in part)
+                        token = cookies.get("__Host-gaon_admin", "")
+                        csrf = self.headers.get("X-Gaon-CSRF", "")
+                        def logout(scoped):
+                            connection = scoped._repository._connection
+                            validate_session(connection, token=token, csrf=csrf,
+                                require_csrf=True)
+                            revoke_session(connection, token=token)
+                        if adapter_factory is None:
+                            logout(adapter)
+                        else:
+                            with adapter_factory() as scoped_adapter:
+                                logout(scoped_adapter)
+                        self._passkey_session_cookie = (
+                            "__Host-gaon_admin=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict")
+                        return 200, {"logged_out": True}
+                    except (PermissionError, ValueError):
+                        return 403, {"error": "logout not authorized"}
+                if method == "POST" and urlsplit(self.path).path in (
+                    "/gaon/admin/passkey/login/begin", "/gaon/admin/passkey/login/finish"):
+                    from gaon.control.passkey_login import begin_login, finish_login
+                    if not isinstance(body, dict) or not isinstance(body.get("actor"), str):
+                        return 400, {"error": "invalid request"}
+                    route = urlsplit(self.path).path
+                    try:
+                        def run_login(scoped):
+                            kw = dict(actor=body["actor"],
+                                origin=self.headers.get("Origin", ""),
+                                request_host=self.headers.get("Host", ""))
+                            if route.endswith("/begin"):
+                                return begin_login(scoped._repository._connection, **kw)
+                            if not isinstance(body.get("credential"), dict):
+                                raise PermissionError("invalid credential")
+                            return finish_login(scoped._repository._connection,
+                                credential=body["credential"], **kw)
+                        if adapter_factory is None:
+                            result = run_login(adapter)
+                        else:
+                            with adapter_factory() as scoped_adapter:
+                                result = run_login(scoped_adapter)
+                        if route.endswith("/finish") and result.get("authenticated") is True:
+                            from gaon.control.passkey_session import create_session
+                            if adapter_factory is None:
+                                token, csrf = create_session(adapter._repository._connection,
+                                    actor=body["actor"], authenticated=True)
+                            else:
+                                with adapter_factory() as scoped_adapter:
+                                    token, csrf = create_session(scoped_adapter._repository._connection,
+                                        actor=body["actor"], authenticated=True)
+                            self._passkey_session_cookie = (
+                                "__Host-gaon_admin=" + token
+                                + "; Path=/; Max-Age=1200; Secure; HttpOnly; SameSite=Strict")
+                            return 200, {"authenticated": True, "csrf_token": csrf}
+                        return 200, result
+                    except (PermissionError, ValueError, TypeError, KeyError):
+                        return 403, {"error": "login verification failed"}
+                if method == "POST" and urlsplit(self.path).path == "/gaon/admin/passkey/enroll/finish":
+                    from gaon.control.passkey_enrollment_finish import finish_trusted_enrollment
+                    if not isinstance(body, dict):
+                        return 400, {"error": "invalid request"}
+                    actor, credential = body.get("actor"), body.get("credential")
+                    if not isinstance(actor, str) or not isinstance(credential, dict):
+                        return 400, {"error": "invalid request"}
+                    try:
+                        if adapter_factory is None:
+                            result = finish_trusted_enrollment(
+                                adapter._repository._connection, actor=actor, credential=credential,
+                                origin=self.headers.get("Origin", ""),
+                                request_host=self.headers.get("Host", ""))
+                        else:
+                            with adapter_factory() as scoped_adapter:
+                                result = finish_trusted_enrollment(
+                                    scoped_adapter._repository._connection, actor=actor, credential=credential,
+                                    origin=self.headers.get("Origin", ""),
+                                    request_host=self.headers.get("Host", ""))
+                        return 200, result
+                    except (PermissionError, ValueError, TypeError, KeyError):
+                        return 403, {"error": "enrollment verification failed"}
+                if method == "POST" and urlsplit(self.path).path == "/gaon/admin/passkey/enroll/begin":
+                    from gaon.control.passkey_enrollment_store import begin_trusted_enrollment
+                    if not isinstance(body, dict):
+                        return 400, {"error": "invalid request"}
+                    actor, token = body.get("actor"), body.get("bootstrap_token")
+                    if not isinstance(actor, str) or not isinstance(token, str):
+                        return 400, {"error": "invalid request"}
+                    try:
+                        if adapter_factory is None:
+                            options = begin_trusted_enrollment(
+                                adapter._repository._connection, actor=actor, token=token,
+                                origin=self.headers.get("Origin", ""),
+                                request_host=self.headers.get("Host", ""))
+                        else:
+                            with adapter_factory() as scoped_adapter:
+                                options = begin_trusted_enrollment(
+                                    scoped_adapter._repository._connection, actor=actor, token=token,
+                                    origin=self.headers.get("Origin", ""),
+                                    request_host=self.headers.get("Host", ""))
+                        return 200, json.loads(options)
+                    except (PermissionError, ValueError):
+                        return 403, {"error": "enrollment not authorized"}
                 if adapter_factory is None:
                     return dispatch_request(adapter, method=method, path=self.path, body=body)
                 with adapter_factory() as scoped_adapter:
@@ -930,11 +1142,38 @@ def build_request_handler(adapter: GaonWebChatAdapter | None, *, adapter_factory
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            if hasattr(self, "_passkey_session_cookie"):
+                self.send_header("Set-Cookie", self._passkey_session_cookie)
+                del self._passkey_session_cookie
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib method name
+            if urlsplit(self.path).path == "/gaon/admin/passkey/login":
+                html = Path(__file__).with_name("passkey_login.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Length", str(len(html)))
+                self.end_headers()
+                self.wfile.write(html)
+                return
+            if urlsplit(self.path).path == "/gaon/admin/passkey/enroll":
+                html = Path(__file__).with_name("passkey_enroll.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Length", str(len(html)))
+                self.end_headers()
+                self.wfile.write(html)
+                return
             status, payload = self._dispatch("GET", None)
             self._write(status, payload)
 
