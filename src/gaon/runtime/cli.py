@@ -1090,6 +1090,12 @@ def main(argv: list[str] | None = None) -> int:
     research_report.add_argument("--format", choices=("markdown", "json"), default="markdown")
     research_resume = sub.add_parser("research-resume")
     research_resume.add_argument("run_id")
+    crypto_fv_run = sub.add_parser("crypto-forward-verification-run")
+    crypto_fv_run.add_argument("--db", default="crypto_forward_verification.sqlite")
+    crypto_fv_run.add_argument("--sleep-seconds", type=float, default=300.0)
+    crypto_fv_run.add_argument("--max-iterations", type=int, default=None)
+    crypto_fv_status = sub.add_parser("crypto-forward-verification-status")
+    crypto_fv_status.add_argument("--db", default="crypto_forward_verification.sqlite")
     sub.add_parser("telegram-check")
     sub.add_parser("assistant-check")
     sub.add_parser("notion-check")
@@ -1167,6 +1173,26 @@ def _run(args: argparse.Namespace) -> int:
                   "They must use it at /gaon/admin/passkey/enroll within 10 minutes.")
         finally:
             store.close()
+    elif args.command == "crypto-forward-verification-run":
+        import sqlite3
+        from gaon.research.crypto_forward_verification import CryptoForwardVerificationRepository, run_forever
+
+        connection = sqlite3.connect(args.db)
+        try:
+            repo = CryptoForwardVerificationRepository(connection)
+            run_forever(repo, sleep_seconds=args.sleep_seconds, max_iterations=args.max_iterations)
+        finally:
+            connection.close()
+    elif args.command == "crypto-forward-verification-status":
+        import sqlite3
+        from gaon.research.crypto_forward_verification import CryptoForwardVerificationRepository, status as fv_status
+
+        connection = sqlite3.connect(args.db)
+        try:
+            repo = CryptoForwardVerificationRepository(connection)
+            print(_dumps_json(fv_status(repo)))
+        finally:
+            connection.close()
     elif args.command in {"run", "status"}:
         store = RuntimeStateStore(args.db)
         try:

@@ -70,6 +70,11 @@ class GaonRuntimeConfig:
     real_market_data_enabled: bool = False
     market_data_provider: str = "fixture"
     market_data_timeout_seconds: float = 20.0
+    # Read-only path to the crypto forward-verification research DB
+    # (gaon.research.crypto_forward_verification) - a dedicated sqlite
+    # file, never the main runtime DB and never a binance-trading state
+    # file. None (default) means the admin UI simply omits this section.
+    crypto_forward_verification_db_path: str | None = None
 
     def __post_init__(self) -> None:
         validate_mode(self.mode)
@@ -176,6 +181,7 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         assistant_supports_tool_calling=parse_bool(
             env.get("GAON_ASSISTANT_SUPPORTS_TOOL_CALLING"), "GAON_ASSISTANT_SUPPORTS_TOOL_CALLING", default=False
         ),
+        crypto_forward_verification_db_path=env.get("GAON_CRYPTO_FV_DB_PATH") or None,
         free_only_mode=parse_bool(env.get("GAON_FREE_ONLY_MODE"), "GAON_FREE_ONLY_MODE", default=True),
         paid_provider_enabled=parse_bool(env.get("GAON_PAID_PROVIDER_ENABLED"), "GAON_PAID_PROVIDER_ENABLED", default=False),
         execution_mode=env.get("GAON_EXECUTION_MODE", "disabled"),
