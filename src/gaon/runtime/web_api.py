@@ -893,6 +893,32 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _crypto_forward_verification_summary(config: GaonRuntimeConfig) -> dict[str, object]:
+    """Read-only admin-UI summary of the crypto forward-verification
+    research run (gaon.research.crypto_forward_verification) - a
+    dedicated, separate sqlite DB, never the main runtime DB and never a
+    binance-trading state file. Opened read-only (mode=ro): this process
+    never writes to that DB, only the forward-verification service does.
+    Never raises - a missing/unconfigured/unreadable DB degrades to a
+    plain status field instead of breaking the whole admin page."""
+    if not config.crypto_forward_verification_db_path:
+        return {"configured": False}
+    import sqlite3
+    from gaon.research.crypto_forward_verification import CryptoForwardVerificationRepository, status as fv_status
+
+    try:
+        connection = sqlite3.connect(f"file:{config.crypto_forward_verification_db_path}?mode=ro", uri=True, timeout=5)
+    except sqlite3.OperationalError as exc:
+        return {"configured": True, "available": False, "error": f"database not yet available: {exc.__class__.__name__}"}
+    try:
+        repo = CryptoForwardVerificationRepository(connection, ensure_schema_=False)
+        return {"configured": True, "available": True, **fv_status(repo)}
+    except Exception as exc:  # noqa: BLE001 - admin page must degrade gracefully, never 500.
+        return {"configured": True, "available": False, "error": f"{exc.__class__.__name__}: {exc}"}
+    finally:
+        connection.close()
+
+
 def build_request_handler(adapter: GaonWebChatAdapter | None, *, adapter_factory=None) -> type[BaseHTTPRequestHandler]:
     """Builds a BaseHTTPRequestHandler subclass bound to one adapter
     instance via closure - kept separate from dispatch_request so the
@@ -939,7 +965,9 @@ def build_request_handler(adapter: GaonWebChatAdapter | None, *, adapter_factory
                                     " ORDER BY rowid DESC LIMIT 30").fetchall():
                                     research.append({"source":kind,"id":identifier,
                                         "state":state,"approval_eligible":False})
-                            return {"families": families, "research_candidates": research}
+                            crypto_forward_verification = _crypto_forward_verification_summary(scoped._config)
+                            return {"families": families, "research_candidates": research,
+                                    "crypto_forward_verification": crypto_forward_verification}
                         if adapter_factory is None:
                             result = load_options(adapter)
                         else:

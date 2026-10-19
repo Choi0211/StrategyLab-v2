@@ -201,6 +201,100 @@ class RealSocketRoundTripTests(unittest.TestCase):
         thread.join(timeout=5)
 
 
+class AdminStrategyOptionsCryptoForwardVerificationTests(unittest.TestCase):
+    """Covers both the pre-existing (previously untested) admin strategy
+    options route and its new read-only crypto-forward-verification
+    summary field - requires a real session cookie, so this needs the
+    real socket/handler wiring, not dispatch_request()."""
+
+    def _serve(self, config: GaonRuntimeConfig, port: int, *, requests: int = 1):
+        started = threading.Event()
+        store_holder: dict[str, object] = {}
+
+        def serve() -> None:
+            from gaon.control.passkey_session import create_session
+            from gaon.runtime.web_api import GaonWebChatAdapter as _Adapter
+            from gaon.runtime.web_api import build_request_handler
+            from http.server import HTTPServer
+
+            store = RuntimeStateStore(":memory:")
+            token, _csrf = create_session(store._connection, actor="owner", authenticated=True)
+            store_holder["token"] = token
+            adapter = _Adapter(config, store._connection)
+            handler_cls = build_request_handler(adapter)
+            httpd = HTTPServer(("127.0.0.1", port), handler_cls)
+            started.set()
+            httpd.timeout = 5
+            for _ in range(requests):
+                httpd.handle_request()
+            httpd.server_close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.assertTrue(started.wait(timeout=5))
+        time.sleep(0.2)
+        return thread, store_holder
+
+    def test_unauthenticated_request_is_rejected(self) -> None:
+        port = 18791
+        thread, _ = self._serve(GaonRuntimeConfig(assistant_enabled=False), port)
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/gaon/admin/strategy/options", timeout=5)
+            self.fail("expected HTTPError")
+        except urllib.error.HTTPError as exc:
+            self.assertEqual(exc.code, 403)
+        thread.join(timeout=5)
+
+    def test_authenticated_request_includes_unconfigured_crypto_forward_verification(self) -> None:
+        port = 18792
+        thread, store_holder = self._serve(GaonRuntimeConfig(assistant_enabled=False), port)
+        time.sleep(0.1)
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/gaon/admin/strategy/options",
+            headers={"Cookie": f"__Host-gaon_admin={store_holder['token']}"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            payload = json.loads(response.read())
+        self.assertIn("families", payload)
+        self.assertIn("research_candidates", payload)
+        self.assertEqual(payload["crypto_forward_verification"], {"configured": False})
+        thread.join(timeout=5)
+
+    def test_authenticated_request_surfaces_a_configured_verification_in_progress_db(self) -> None:
+        import sqlite3
+        from gaon.research.crypto_forward_verification import CryptoForwardVerificationRepository, register_version
+
+        db_path = "/tmp/claude-0/-root/cd8b7eb7-aed2-48c9-a863-d35f360175f2/scratchpad/test_admin_fv.sqlite"
+        import os
+        if os.path.exists(db_path):
+            os.remove(db_path)
+        connection = sqlite3.connect(db_path)
+        CryptoForwardVerificationRepository(connection)
+        register_version(connection, now_iso="2026-10-19T00:00:00Z")
+        connection.close()
+        self.addCleanup(lambda: os.path.exists(db_path) and os.remove(db_path))
+
+        port = 18793
+        thread, store_holder = self._serve(
+            GaonRuntimeConfig(assistant_enabled=False, crypto_forward_verification_db_path=db_path), port,
+        )
+        time.sleep(0.1)
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/gaon/admin/strategy/options",
+            headers={"Cookie": f"__Host-gaon_admin={store_holder['token']}"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read())
+        fv = payload["crypto_forward_verification"]
+        self.assertTrue(fv["configured"])
+        self.assertTrue(fv["available"])
+        self.assertEqual(fv["data_status"], "VERIFICATION_IN_PROGRESS")
+        self.assertEqual(fv["closed_trades"], 0)
+        self.assertFalse(fv["promotion_readiness"]["eligible_for_promotion_review"])
+        thread.join(timeout=5)
+
+
 class GaonWebChatApiReleaseCheckTests(unittest.TestCase):
     def test_release_check_passes(self) -> None:
         payload = production_gaon_web_chat_api_release_check()
