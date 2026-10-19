@@ -73,14 +73,19 @@ class GaonAgentTelegramFoundationTests(unittest.TestCase):
         self.assertEqual(route, "conversation_capability_limited_url")
         self.assertNotIn(_COMPLAINT, text)
         self.assertNotIn("게시물을 확인했습니다", text)
-        self.assertEqual(provider.calls, 0)
 
     def test_current_info_is_not_fabricated(self) -> None:
-        agent, provider = self._agent(_RecordingProvider(text="오늘은 맑고 25도입니다"))
+        # The model is still consulted, but a no-tool-call free-text answer
+        # to a current-info question is never trusted regardless - the
+        # real guarantee is that the fabricated text below never reaches
+        # the user, not that the model was never called; see
+        # gaon.runtime.llm_conversation.LLMConversationBrain._generate.
+        fabricated = "오늘은 맑고 25도입니다"
+        agent, provider = self._agent(_RecordingProvider(text=fabricated))
         text, route, _approval = self._send(agent, "오늘의 날씨는 어떤가요")
         self.assertEqual(route, "conversation_capability_limited_current_info")
         self.assertIn("실시간 정보", text)
-        self.assertEqual(provider.calls, 0)
+        self.assertNotIn(fabricated, text)
 
     def test_video_request_is_truthfully_unavailable(self) -> None:
         agent, _provider = self._agent()

@@ -134,6 +134,7 @@ def default_provider_registry(opener: Callable[..., object] | None = None) -> As
                 timeout_seconds=config.assistant_timeout_seconds,
                 max_output_tokens=config.assistant_max_output_tokens,
                 enabled=config.assistant_enabled,
+                supports_tool_calling=config.assistant_supports_tool_calling,
                 **({"opener": opener} if opener is not None else {}),
             ),
             supports_network=True,

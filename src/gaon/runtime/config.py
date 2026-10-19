@@ -56,6 +56,13 @@ class GaonRuntimeConfig:
     assistant_max_planner_steps: int = 5
     assistant_max_requests_per_minute: int = 12
     assistant_max_context_chars: int = 4000
+    # Fail-closed: only an operator who has actually verified the
+    # configured model/endpoint honors OpenAI-style function-calling
+    # (returns genuine ``tool_calls``, not just prose) should set this
+    # True. Until verified, GaonTurnRouter always gives the honest
+    # capability-limited reply for current-info / URL / media turns
+    # instead of trusting the raw model not to fabricate.
+    assistant_supports_tool_calling: bool = False
     free_only_mode: bool = True
     paid_provider_enabled: bool = False
     execution_mode: str = "disabled"
@@ -166,6 +173,9 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         assistant_max_planner_steps=int(env.get("GAON_ASSISTANT_MAX_PLANNER_STEPS", "5")),
         assistant_max_requests_per_minute=int(env.get("GAON_ASSISTANT_MAX_REQUESTS_PER_MINUTE", "12")),
         assistant_max_context_chars=int(env.get("GAON_ASSISTANT_MAX_CONTEXT_CHARS", "4000")),
+        assistant_supports_tool_calling=parse_bool(
+            env.get("GAON_ASSISTANT_SUPPORTS_TOOL_CALLING"), "GAON_ASSISTANT_SUPPORTS_TOOL_CALLING", default=False
+        ),
         free_only_mode=parse_bool(env.get("GAON_FREE_ONLY_MODE"), "GAON_FREE_ONLY_MODE", default=True),
         paid_provider_enabled=parse_bool(env.get("GAON_PAID_PROVIDER_ENABLED"), "GAON_PAID_PROVIDER_ENABLED", default=False),
         execution_mode=env.get("GAON_EXECUTION_MODE", "disabled"),

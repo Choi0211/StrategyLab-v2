@@ -27,7 +27,7 @@ from gaon.runtime.persona import persona_text
 class DeterministicAssistantProvider:
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities("deterministic", "rule-based", False, True, 500)
+        return ProviderCapabilities("deterministic", "rule-based", False, True, 500, supports_tool_calling=False)
 
     def health(self) -> ProviderHealth:
         return ProviderHealth("deterministic", True, 0)
@@ -54,6 +54,7 @@ class OpenAICompatibleAssistantProvider:
         timeout_seconds: float = 10.0,
         max_output_tokens: int = 500,
         enabled: bool = False,
+        supports_tool_calling: bool = False,
         opener: Callable[..., Any] = urlopen,
     ) -> None:
         self._api_key = api_key
@@ -62,6 +63,7 @@ class OpenAICompatibleAssistantProvider:
         self._timeout_seconds = timeout_seconds
         self._max_output_tokens = max_output_tokens
         self._enabled = enabled
+        self._supports_tool_calling = supports_tool_calling
         self._opener = opener
 
     def __repr__(self) -> str:
@@ -69,7 +71,10 @@ class OpenAICompatibleAssistantProvider:
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities("openai-compatible", self._model, True, False, self._max_output_tokens)
+        return ProviderCapabilities(
+            "openai-compatible", self._model, True, False, self._max_output_tokens,
+            supports_tool_calling=self._supports_tool_calling,
+        )
 
     def health(self) -> ProviderHealth:
         if not self._enabled:

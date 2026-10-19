@@ -7,7 +7,16 @@ from unittest.mock import patch
 from gaon.runtime.assistant_provider import AssistantProviderResponse, AssistantToolCall, ProviderCapabilities, ProviderHealth
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.llm_conversation import LLMConversationBrain, LLMConversationRequest, SQLiteConversationRepository
-from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, ToolResult, default_tool_registry
+from gaon.runtime.llm_tools import (
+    SafeToolExecutor,
+    SQLiteToolAuditRepository,
+    ToolDefinition,
+    ToolRegistry,
+    ToolRequest,
+    ToolResult,
+    ToolRiskLevel,
+    default_tool_registry,
+)
 from gaon.runtime.migrations import migrate
 from gaon.runtime.serialization import dumps_json
 from gaon.knowledge.research_mission import add_candidate, extract_or_update_mission, next_candidate_sequence
@@ -131,6 +140,67 @@ class NativeLLMToolCallingTests(unittest.TestCase):
         self.assertEqual(response.route, "tool_read_only")
         self.assertEqual(response.tool_calls, ("runtime_status",))
 
+    def test_tool_calls_beyond_the_turn_limit_are_audited_as_not_executed(self) -> None:
+        calls = tuple(AssistantToolCall(f"call-{index}", "runtime_status", {}) for index in range(5))
+        provider = FakeToolProvider((calls,), "상한 내에서만 처리했습니다.")
+
+        self._brain(provider).respond(_request("상태 여러 번 알려줘"))
+
+        statuses = [record.status for record in self.audit.list()]
+        self.assertEqual(statuses.count("success"), 3)
+        self.assertEqual(statuses.count("not_executed"), 2)
+
+    def test_timeout_runtime_error_and_policy_denial_are_distinguished(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            ToolDefinition("flaky_timeout", "times out", ToolRiskLevel.READ_ONLY),
+            lambda _args: (_ for _ in ()).throw(TimeoutError("slow upstream")),
+        )
+        registry.register(
+            ToolDefinition("flaky_runtime_error", "errors", ToolRiskLevel.READ_ONLY),
+            lambda _args: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        executor = SafeToolExecutor(registry, self.audit)
+
+        timeout_result = executor.execute(ToolRequest("flaky_timeout", {}, "unit", NOW))
+        runtime_error_result = executor.execute(ToolRequest("flaky_runtime_error", {}, "unit", NOW))
+        policy_denied_result = executor.execute(ToolRequest("flaky_timeout", {"not_an_arg": 1}, "unit", NOW))
+
+        self.assertEqual(timeout_result.status, "denied")
+        self.assertEqual(timeout_result.output["failure_kind"], "timeout")
+        self.assertEqual(runtime_error_result.status, "denied")
+        self.assertEqual(runtime_error_result.output["failure_kind"], "runtime_error")
+        self.assertEqual(policy_denied_result.status, "denied")
+        self.assertEqual(policy_denied_result.output["failure_kind"], "policy_denied")
+
+    def test_trusted_provider_grounds_url_while_research_execution_still_reaches_the_mission_pipeline(self) -> None:
+        # Integration of the real native-tool-calling path with Gaon's
+        # research-execution path: a verified tool-calling provider lets a
+        # URL-shaped turn ground through document_read/url_fetch (never the
+        # honest-limitation reply), and - in the very same brain/session -
+        # an explicit research-execution turn still reaches the real
+        # mission pipeline untouched by that trust flag.
+        provider = FakeToolProvider(
+            ((AssistantToolCall("call-url", "document_read", {"path": "https://www.nber.org/papers/w10144"}),),),
+            "링크 내용을 확인했습니다, 영하님.",
+        )
+        brain = self._brain(provider)
+        with patch.object(
+            self.executor,
+            "execute",
+            side_effect=lambda req: ToolResult("url_fetch", "success", {"source": "https://www.nber.org/papers/w10144", "text": "fixture"}),
+        ):
+            url_response = brain.respond(_request("https://www.nber.org/papers/w10144 이 링크를 읽고 핵심을 알려줘"))
+        self.assertEqual(url_response.route, "provider_tool_call")
+        self.assertEqual(url_response.tool_calls, ("url_fetch",))
+
+        research_response = brain.respond(_request("국내 주식 전체를 대상으로 단타 전략을 연구해줘"))
+        self.assertNotIn("conversation_capability_limited", research_response.route)
+        mission_row = self.connection.execute(
+            "SELECT metadata_json FROM conversation_sessions WHERE session_id = ?", ("session:native-tools",)
+        ).fetchone()
+        self.assertIsNotNone(mission_row)
+
 
 class FakeToolProvider:
     def __init__(self, scripted_tool_calls: tuple[tuple[AssistantToolCall, ...], ...], final_text: str) -> None:
@@ -141,7 +211,11 @@ class FakeToolProvider:
 
     @property
     def capabilities(self):
-        return ProviderCapabilities("fake", "fake-tool", False, False, 500)
+        # This fake deliberately simulates a provider verified to honor
+        # native tool-calling, so GaonTurnRouter trusts it to ground
+        # current-info/URL/media turns instead of giving the honest
+        # capability-limited reply.
+        return ProviderCapabilities("fake", "fake-tool", False, False, 500, supports_tool_calling=True)
 
     def health(self):
         return ProviderHealth("fake", True)

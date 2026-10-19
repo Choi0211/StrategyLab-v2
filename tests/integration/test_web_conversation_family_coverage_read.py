@@ -164,8 +164,44 @@ class IndependentReadOnlySessionsResolveTheSameMission(_Fixture):
         self.assertIn("연구 방향", resp["text"])
         self.assertNotIn("현재 검증 중인 전략 후보가 없습니다", resp["text"])
 
-    def test_relative_strength_reported_fail_closed_without_explicit_peers(self) -> None:
+    def test_relative_strength_reported_as_peer_capable_for_this_market_wide_mission(self) -> None:
+        # gaon.knowledge.research_mission.mission_multi_symbol_context_available:
+        # a KR market_wide mission (this fixture's mission) has a real
+        # multi-symbol peer-acquisition path through the existing KRX
+        # universe pipeline, so relative strength is reported as reachable
+        # on the next rotation - never as a fabricated candidate, and never
+        # as the fail-closed "no peers" message (that is reserved for a
+        # mission that genuinely has neither >=2 explicit symbols nor KR
+        # market-wide scope; see
+        # test_relative_strength_fails_closed_for_a_single_symbol_mission).
         resp = self._chat("돌파 말고 다른 전략도 연구하고 있어?", session_ref="rs")
+        self.assertIn("다중종목 peer 획득 경로가 있어", resp["text"])
+        self.assertIn("다음 로테이션에서 정상 후보로 진입할 수 있습니다", resp["text"])
+        self.assertNotIn("relative_strength_requires_multi_symbol_context", resp["text"])
+
+    def test_relative_strength_fails_closed_for_a_single_symbol_mission(self) -> None:
+        from gaon.knowledge.research_mission import MissionUniverseScope, mission_multi_symbol_context_available
+        from dataclasses import replace
+
+        single_symbol_mission = replace(
+            self.mission,
+            universe_scope=MissionUniverseScope.SELECTED_SYMBOLS,
+            symbols=("005930",),
+            exchanges=(),
+        )
+        self.assertFalse(mission_multi_symbol_context_available(single_symbol_mission))
+        agent = TelegramConversationAgent(self.config, self.store._connection)
+        agent._brain._remember_mission(
+            LLMConversationRequest(
+                session_id=f"telegram:{OWNER_CHAT_ID}",
+                user_ref=f"telegram-user:{OWNER_CHAT_ID}",
+                source="telegram",
+                text="x",
+                received_at=NOW,
+            ),
+            single_symbol_mission,
+        )
+        resp = self._chat("돌파 말고 다른 전략도 연구하고 있어?", session_ref="rs-single")
         self.assertIn("relative_strength_requires_multi_symbol_context", resp["text"])
         self.assertIn("가짜 peer", resp["text"])
 

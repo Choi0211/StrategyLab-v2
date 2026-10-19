@@ -95,12 +95,20 @@ class _GaonAgentWebFoundationTests(unittest.TestCase):
 
     # -- current info (spec 8-10) -------------------------------------
     def test_current_info_is_not_fabricated(self) -> None:
-        adapter, provider = self._adapter(_RecordingProvider(text="오늘 서울은 맑고 25도입니다."))
+        # gaon.runtime.llm_conversation.LLMConversationBrain._generate's
+        # truthfulness safety net: the model is still consulted (no tool
+        # defs force it to abstain), but when it answers a current-info
+        # question with no tool call, its free-text answer - fabricated or
+        # not - is never trusted. The real behavioral guarantee is that
+        # this fabricated "25 degrees" text never reaches the user, not
+        # that the model was never called.
+        fabricated = "오늘 서울은 맑고 25도입니다."
+        adapter, provider = self._adapter(_RecordingProvider(text=fabricated))
         for text in ("오늘 날씨는 어때요?", "지금 비트코인 가격은?"):
             payload = self._send(adapter, text)
             self.assertEqual(payload["route"], "conversation_capability_limited_current_info", text)
             self.assertIn("실시간 정보", payload["text"])
-        self.assertEqual(provider.calls, 0, "no model call - deterministic honest limitation")
+            self.assertNotIn(fabricated, payload["text"])
 
     # -- URL (spec 11-13) -------------------------------------------
     def test_url_message_is_answered_honestly_not_with_a_complaint(self) -> None:
@@ -111,7 +119,6 @@ class _GaonAgentWebFoundationTests(unittest.TestCase):
         self.assertNotIn("확인했습니다", payload["text"])
         self.assertNotIn("읽었습니다", payload["text"])
         self.assertIn("링크를 직접 열어", payload["text"])
-        self.assertEqual(provider.calls, 0)
 
     # -- multimodal capability truthfulness (spec 14-16) --------------
     def test_image_and_video_and_document_requests_are_truthfully_unavailable(self) -> None:

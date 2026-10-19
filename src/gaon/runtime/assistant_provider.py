@@ -31,6 +31,14 @@ class ProviderCapabilities:
     supports_network: bool
     deterministic: bool
     max_output_tokens: int
+    # Whether this provider has been verified to honor the OpenAI-style
+    # function-calling protocol (returns genuine ``tool_calls``, not just
+    # free text that happens to mention a tool). Defaults to False - fail
+    # closed - since a provider that does not actually call tools must
+    # never be trusted to ground current-info / URL / media replies; see
+    # ``gaon.runtime.gaon_agent.turn_router.GaonTurnRouter.classify``'s
+    # ``trust_tool_grounded_capabilities`` parameter.
+    supports_tool_calling: bool = False
 
 
 @dataclass(frozen=True)
