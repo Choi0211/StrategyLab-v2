@@ -1,0 +1,24 @@
+[Unit]
+Description=StrategyLab Gaon Crypto Forward Verification (research-only, no orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=strategylab
+Group=strategylab
+WorkingDirectory=/opt/strategylab-v2
+ExecStart=/opt/strategylab-v2/.venv/bin/python -m gaon.runtime.cli crypto-forward-verification-run --db /var/lib/strategylab/csm_forward_verification.sqlite --sleep-seconds 300
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+# Only this service's own dedicated DB needs to be writable. It never
+# touches gaon-runtime.sqlite, binance-trading's state files, or any
+# exchange API key - it only calls Binance's public, unauthenticated
+# klines/funding endpoints.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/strategylab
+
+[Install]
+WantedBy=multi-user.target

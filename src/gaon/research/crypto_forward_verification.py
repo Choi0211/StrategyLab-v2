@@ -132,6 +132,15 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             PRIMARY KEY (version, rebalance_index, symbol)
         );
+        CREATE TABLE IF NOT EXISTS crypto_fv_poll_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_ms INTEGER NOT NULL,
+            ok INTEGER NOT NULL,
+            opened INTEGER NOT NULL DEFAULT 0,
+            closed INTEGER NOT NULL DEFAULT 0,
+            bars_collected_btc INTEGER NOT NULL DEFAULT 0,
+            error TEXT
+        );
         """
     )
 
@@ -180,6 +189,29 @@ def rolling_mean_dollar_volume(bars: Sequence[tuple], window: int) -> list[float
         if i >= window - 1:
             out[i] = s / window
     return out
+
+
+def count_candle_gaps(rows: Sequence[tuple], *, expected_spacing_ms: int = 60_000) -> int:
+    """Rows are 1-minute bars ordered by open_time_ms. A gap is any
+    consecutive pair that is not exactly one bar-width apart (missing
+    candles from an API error, or a collector restart)."""
+    return sum(1 for prev, cur in zip(rows, rows[1:]) if cur[0] - prev[0] != expected_spacing_ms)
+
+
+def count_duplicate_timestamps(rows: Sequence[tuple]) -> int:
+    """Always expected to be 0 - the (symbol, open_time_ms) primary key
+    already makes a true duplicate row impossible. A nonzero count here
+    means something bypassed the repository and wrote to this table
+    directly, which is itself the corruption signal worth surfacing."""
+    seen: set[int] = set()
+    duplicates = 0
+    for row in rows:
+        t = row[0]
+        if t in seen:
+            duplicates += 1
+        else:
+            seen.add(t)
+    return duplicates
 
 
 @dataclass(frozen=True)
@@ -380,6 +412,28 @@ class CryptoForwardVerificationRepository:
         row = self._connection.execute("SELECT started_at FROM crypto_fv_versions WHERE version = ?", (STRATEGY_VERSION,)).fetchone()
         return row[0] if row else None
 
+    def stored_spec_json(self) -> str | None:
+        row = self._connection.execute("SELECT spec_json FROM crypto_fv_versions WHERE version = ?", (STRATEGY_VERSION,)).fetchone()
+        return row[0] if row else None
+
+    def record_poll_event(self, *, ts_ms: int, ok: bool, opened: int = 0, closed: int = 0,
+                           bars_collected_btc: int = 0, error: str | None = None) -> None:
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO crypto_fv_poll_events(ts_ms, ok, opened, closed, bars_collected_btc, error) VALUES (?, ?, ?, ?, ?, ?)",
+                (ts_ms, 1 if ok else 0, opened, closed, bars_collected_btc, error),
+            )
+
+    def recent_poll_events(self, *, since_ms: int) -> list[dict]:
+        self._connection.row_factory = sqlite3.Row
+        rows = self._connection.execute(
+            "SELECT ts_ms, ok, opened, closed, bars_collected_btc, error FROM crypto_fv_poll_events "
+            "WHERE ts_ms >= ? ORDER BY ts_ms",
+            (since_ms,),
+        ).fetchall()
+        self._connection.row_factory = None
+        return [dict(r) for r in rows]
+
 
 # ---------------------------------------------------------------------------
 # Status (read-only aggregation; requirements 7, 8, 9, 10, 12)
@@ -418,6 +472,83 @@ def status(repo: CryptoForwardVerificationRepository, *, cost_bps: float = 30.0)
         "performance_by_btc_regime": {regime: metric(vals) for regime, vals in by_regime.items()},
         "promotion_readiness": promotion_readiness(trades),
         "note": "This status reflects ONLY newly-collected forward data since this version started; the historical PENDING OOS result (PF 3.112) is never counted toward any number here.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Operational health check - distinct from `status()` (trade/promotion
+# evidence). This answers "is the collector itself healthy": is data still
+# arriving, is it gap-free and duplicate-free, has the DB file degraded, did
+# recent polls error out, and has the frozen spec drifted under our feet.
+# Read-only; safe to run from a `mode=ro` connection via a periodic timer.
+# ---------------------------------------------------------------------------
+
+def health_check(
+    repo: CryptoForwardVerificationRepository,
+    *,
+    now_ms: int,
+    max_staleness_seconds: float = 900.0,
+    poll_error_lookback_seconds: float = 3600.0,
+) -> dict[str, object]:
+    problems: list[str] = []
+    warnings: list[str] = []
+
+    integrity = repo._connection.execute("PRAGMA integrity_check").fetchone()[0]
+    if integrity != "ok":
+        problems.append(f"sqlite integrity_check failed: {integrity}")
+
+    per_symbol: dict[str, dict[str, object]] = {}
+    stale_symbols: list[str] = []
+    gap_total = 0
+    duplicate_total = 0
+    for sym in STRATEGY_SPEC["universe"]:
+        rows = repo.load_1m_rows(sym)
+        if not rows:
+            per_symbol[sym] = {"bars": 0, "age_seconds": None, "gaps": 0, "duplicates": 0}
+            stale_symbols.append(sym)
+            continue
+        age_seconds = (now_ms - rows[-1][0]) / 1000.0
+        gaps = count_candle_gaps(rows)
+        duplicates = count_duplicate_timestamps(rows)
+        gap_total += gaps
+        duplicate_total += duplicates
+        per_symbol[sym] = {"bars": len(rows), "age_seconds": round(age_seconds, 1), "gaps": gaps, "duplicates": duplicates}
+        if age_seconds > max_staleness_seconds:
+            stale_symbols.append(sym)
+
+    if stale_symbols:
+        warnings.append(f"stale or missing data for {len(stale_symbols)}/{len(STRATEGY_SPEC['universe'])} symbol(s): {sorted(stale_symbols)}")
+    if gap_total:
+        warnings.append(f"{gap_total} missing-candle gap(s) detected across the universe")
+    if duplicate_total:
+        problems.append(f"{duplicate_total} duplicate timestamp(s) detected - repository invariant violated")
+
+    recent = repo.recent_poll_events(since_ms=now_ms - int(poll_error_lookback_seconds * 1000))
+    recent_errors = [e for e in recent if not e["ok"]]
+    if recent_errors:
+        warnings.append(f"{len(recent_errors)} poll error(s) in the last {int(poll_error_lookback_seconds // 60)} min")
+    elif not recent:
+        warnings.append("no poll events recorded in the lookback window - the collector loop may be stalled or just restarted")
+
+    stored_spec = repo.stored_spec_json()
+    version_consistent = stored_spec is not None and json.loads(stored_spec) == STRATEGY_SPEC
+    if stored_spec is not None and not version_consistent:
+        problems.append("stored spec for the current STRATEGY_VERSION no longer matches STRATEGY_SPEC - hash collision or data corruption")
+
+    status_label = "ERROR" if problems else ("WARNING" if warnings else "OK")
+    return {
+        "status": status_label,
+        "problems": problems,
+        "warnings": warnings,
+        "db_integrity_check": integrity,
+        "stale_symbols": sorted(stale_symbols),
+        "candle_gaps_total": gap_total,
+        "duplicate_timestamps_total": duplicate_total,
+        "per_symbol": per_symbol,
+        "recent_poll_events_count": len(recent),
+        "recent_poll_errors_count": len(recent_errors),
+        "strategy_version": STRATEGY_VERSION,
+        "version_consistent": version_consistent,
     }
 
 
@@ -523,10 +654,17 @@ def run_forever(
     fetch_funding = fetch_funding or (lambda sym, start_ms: fetch_funding_live(sym, start_ms=start_ms))
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
+        now = now_fn()
+        ts_ms = int(now.timestamp() * 1000)
         try:
-            poll_once(repo, fetch_klines=fetch_klines, fetch_funding=fetch_funding, now_iso=now_fn().isoformat())
+            result = poll_once(repo, fetch_klines=fetch_klines, fetch_funding=fetch_funding, now_iso=now.isoformat())
+            repo.record_poll_event(ts_ms=ts_ms, ok=True, opened=result["opened"], closed=result["closed"], bars_collected_btc=result["bars_collected_btc"])
         except Exception as exc:  # noqa: BLE001 - a transient fetch failure must never crash the service.
             print(f"crypto_forward_verification poll error: {exc.__class__.__name__}: {exc}", flush=True)
+            try:
+                repo.record_poll_event(ts_ms=ts_ms, ok=False, error=f"{exc.__class__.__name__}: {exc}")
+            except Exception as log_exc:  # noqa: BLE001 - health-event logging must never crash the service either.
+                print(f"crypto_forward_verification poll-event logging error: {log_exc.__class__.__name__}: {log_exc}", flush=True)
         iterations += 1
         if max_iterations is not None and iterations >= max_iterations:
             break
