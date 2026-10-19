@@ -82,6 +82,7 @@ from gaon.research.approval import ApprovalDecision, create_approval_request
 from gaon.runtime.developer_tools import WRITE_ACTIONS
 from gaon.runtime.research_failures import classify_exception, warning_for_failure
 from gaon.control.strategy_console import StrategyConsoleReadModel
+from gaon.runtime.paper_observation_repository import PaperObservationSQLiteRepository
 from gaon.runtime.sqlite_lock import DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS
 from gaon.runtime.storage import RuntimeStateStore
 from gaon.runtime.strategy_version_repository import StrategyVersionSQLiteRepository
@@ -217,6 +218,36 @@ class GaonWebChatAdapter:
             "order_executed": False,
             "champion_promoted": False,
             "live_activated": False,
+            "approval_bypassed": False,
+        }
+
+    def report_paper_observation(self, body: Mapping[str, object], *, reported_at: str) -> int:
+        """Append-only: records one Paper-trading stage observation. Never
+        touches ``strategy_version_registries`` or any promotion table -
+        see ``gaon.runtime.paper_observation_repository`` for the ledger
+        this writes to and why it is kept separate from the Champion
+        pipeline. Caller (the HTTP handler) has already checked required
+        fields are present; this still goes through the repository's own
+        ``KeyError``-on-missing-field check as a second fail-closed layer."""
+        repository = PaperObservationSQLiteRepository(self._repository._connection)
+        try:
+            return repository.insert(body, created_at=reported_at)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
+
+    def paper_summary(self, family_id: str) -> Mapping[str, object]:
+        """Read-only: aggregate Paper-trading performance plus the most
+        recent observations for ``family_id``, from the same ledger
+        ``report_paper_observation`` writes to - not a second read path."""
+        repository = PaperObservationSQLiteRepository(self._repository._connection)
+        return {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "family_id": family_id,
+            "aggregate": repository.aggregate_for_family(family_id),
+            "recent_observations": list(repository.list_for_family(family_id, limit=50)),
+            "strategy_mutated": False,
+            "order_executed": False,
+            "champion_promoted": False,
             "approval_bypassed": False,
         }
 
@@ -427,6 +458,8 @@ def dispatch_request(
             "pending_approvals": "/gaon/research/pending-approvals",
             "storage_status": "/gaon/storage/status",
             "strategy_version_status": "/gaon/strategy/version_status",
+            "paper_report": "/gaon/paper/report",
+            "paper_summary": "/gaon/paper/summary",
             "developer_approve": "/gaon/developer/approve",
             "developer_execute": "/gaon/developer/execute",
             "strategy_mutated": False,
@@ -471,6 +504,10 @@ def dispatch_request(
         return _handle_storage_status()
     if method == "GET" and route_path == "/gaon/strategy/version_status":
         return _handle_strategy_version_status(adapter, query)
+    if method == "POST" and route_path == "/gaon/paper/report":
+        return _handle_paper_report(adapter, body)
+    if method == "GET" and route_path == "/gaon/paper/summary":
+        return _handle_paper_summary(adapter, query)
     if method == "POST" and route_path == "/gaon/strategy/version/activate":
         # Caller-supplied confirm=True is not authenticated human approval.
         # Fail closed until a durable identity-bound approval flow is wired.
@@ -660,6 +697,50 @@ def _handle_strategy_version_status(adapter: GaonWebChatAdapter, query: Mapping[
     if family_id is None:
         return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
     return 200, adapter.strategy_version_status(family_id)
+
+
+_PAPER_REPORT_REQUIRED_FIELDS = (
+    "family_id", "strategy_version_id", "spec_fingerprint", "direction", "symbol", "signal_at", "status",
+)
+
+
+def _handle_paper_report(adapter: GaonWebChatAdapter, body: Mapping[str, object] | None) -> tuple[int, Mapping[str, object]]:
+    """Records one Paper-trading stage observation (signal_only /
+    entry_blocked / open / closed / error) reported by an external
+    execution engine. Never mutates any ACTIVE strategy-version state -
+    see ``gaon.runtime.paper_observation_repository`` for what this
+    writes and why it is kept separate from the Champion/promotion
+    pipeline. No approval-token requirement: this is an append-only
+    observation, not a registry mutation."""
+    if not isinstance(body, Mapping):
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "JSON object body is required"}
+    missing = [f for f in _PAPER_REPORT_REQUIRED_FIELDS if not str(body.get(f, "")).strip()]
+    if missing:
+        return 400, {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "error": f"missing required field(s): {missing}",
+        }
+    try:
+        observation_id = adapter.report_paper_observation(body, reported_at=_utc_now())
+    except (TypeError, ValueError) as exc:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": str(exc)}
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "observation_id": observation_id,
+        "family_id": str(body["family_id"]),
+        "status": str(body["status"]),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
+
+
+def _handle_paper_summary(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    family_id = _family_id_from_query(query)
+    if family_id is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
+    return 200, adapter.paper_summary(family_id)
 
 
 def _mission_payload(mission: ResearchMission | None) -> Mapping[str, object]:
