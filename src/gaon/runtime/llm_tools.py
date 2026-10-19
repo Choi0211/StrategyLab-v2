@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 import re
+import socket
 import sqlite3
 from typing import Callable
 from uuid import uuid4
@@ -170,28 +171,61 @@ class SafeToolExecutor:
         self._audit = audit_repository
 
     def execute(self, request: ToolRequest) -> ToolResult:
+        # Pre-execution policy/registry gate - the handler never runs, so
+        # this is unambiguously a POLICY denial, never a tool-reported
+        # failure or timeout.
         try:
             definition = self._registry.get(request.tool_name)
             _validate_arguments(definition, request.arguments)
             _enforce_policy(definition, request)
+        except Exception as exc:  # noqa: BLE001 - denied tool calls must be auditable.
+            result = self._denied_result(request, exc, failure_kind="policy_denied")
+            self._append_audit(request, result)
+            return result
+        # The handler is now genuinely allowed to run. ``status`` stays
+        # "denied" for every outcome below (the conversational contract
+        # several call sites key on - see e.g.
+        # ``gaon.knowledge.telegram_autonomous_learning.
+        # autonomous_learning_safe_failure_payload``'s callers), but
+        # ``output["failure_kind"]`` now distinguishes WHY: "timeout" for a
+        # genuine network/handler timeout vs "runtime_error" for any other
+        # exception the handler itself raised while attempting the call -
+        # as opposed to "policy_denied" above, where the tool was never
+        # attempted at all.
+        try:
             output = self._registry.handler(request.tool_name)(dict(request.arguments))
             result = ToolResult(request.tool_name, "success", output)
+        except (TimeoutError, socket.timeout) as exc:
+            result = self._denied_result(request, exc, failure_kind="timeout")
         except Exception as exc:  # noqa: BLE001 - denied tool calls must be auditable.
-            if request.tool_name == "autonomous_learning_research":
-                from gaon.knowledge.telegram_autonomous_learning import autonomous_learning_safe_failure_payload
-
-                output = autonomous_learning_safe_failure_payload(
-                    str(request.arguments.get("request_text", "")),
-                    symbol=str(request.arguments.get("symbol", "005930")),
-                    mode=str(request.arguments.get("mode", "research")),
-                    error_type=exc.__class__.__name__,
-                    message=str(exc),
-                )
-            else:
-                output = {"error_type": exc.__class__.__name__, "message": str(exc)}
-            result = ToolResult(request.tool_name, "denied", dict(output), warnings=("tool denied",))
+            result = self._denied_result(request, exc, failure_kind="runtime_error")
         self._append_audit(request, result)
         return result
+
+    def record_not_executed(self, request: ToolRequest, *, reason: str) -> ToolResult:
+        """Audit a tool call the caller chose never to attempt (e.g. one
+        past the per-turn tool-call limit) - distinct from ``"denied"``
+        (attempted and rejected/failed): the handler never ran at all."""
+        result = ToolResult(request.tool_name, "not_executed", {"reason": reason}, warnings=(reason,))
+        self._append_audit(request, result)
+        return result
+
+    def _denied_result(self, request: ToolRequest, exc: Exception, *, failure_kind: str) -> ToolResult:
+        if request.tool_name == "autonomous_learning_research":
+            from gaon.knowledge.telegram_autonomous_learning import autonomous_learning_safe_failure_payload
+
+            output = autonomous_learning_safe_failure_payload(
+                str(request.arguments.get("request_text", "")),
+                symbol=str(request.arguments.get("symbol", "005930")),
+                mode=str(request.arguments.get("mode", "research")),
+                error_type=exc.__class__.__name__,
+                message=str(exc),
+            )
+            output = dict(output)
+        else:
+            output = {"error_type": exc.__class__.__name__, "message": str(exc)}
+        output["failure_kind"] = failure_kind
+        return ToolResult(request.tool_name, "denied", output, warnings=("tool denied",))
 
     def definitions(self) -> tuple[ToolDefinition, ...]:
         return self._registry.list()

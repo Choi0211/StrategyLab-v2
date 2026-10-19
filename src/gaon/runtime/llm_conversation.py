@@ -57,7 +57,16 @@ from gaon.runtime.gaon_agent import (
     runtime_capability_note,
 )
 from gaon.runtime.gaon_agent.capabilities import IMAGE_VISION, URL_FETCH, VIDEO_FRAME_ANALYSIS, VIDEO_METADATA, VIDEO_TRANSCRIPT, WEB_SEARCH
-from gaon.runtime.gaon_agent.turn_router import contains_external_url, is_current_info_question, render_external_research_limitation, wants_external_web_research
+from gaon.runtime.gaon_agent.turn_router import (
+    contains_external_url,
+    is_current_info_question,
+    render_current_info_limitation,
+    render_external_research_limitation,
+    render_multimodal_limitation,
+    render_url_limitation,
+    wants_external_web_research,
+)
+from gaon.runtime.gaon_agent.multimodal import describe_multimodal_request
 from gaon.runtime.gaon_agent.multi_intent import recompose_answers
 from gaon.runtime.conversational_research_execution import (
     ConversationalResearchExecutionResult,
@@ -958,6 +967,33 @@ class LLMConversationBrain:
             text = normalize_final_response(provider_response.text, request.text)
             if is_korean_request(request.text) and provider_response.text != text:
                 warnings = (*warnings, "provider response normalized for Korean final answer")
+            # Truthfulness safety net: at this point ``provider_response.
+            # tool_calls`` is empty (a non-empty one already returned via
+            # _execute_provider_tool_calls above) - the model answered this
+            # turn in free text with NO tool actually invoked. A current-
+            # info / URL / media request answered this way can never be
+            # trusted, regardless of what the provider claims in prose:
+            # replace it with the same honest, deterministic limitation
+            # reply GaonTurnRouter gives when the capability is genuinely
+            # unavailable. The real server-native tool fallback remains
+            # reserved for an actual provider failure
+            # (``_try_server_native_external_fallback``), never invoked
+            # speculatively here, so this check never makes an extra
+            # network call of its own.
+            route_override: str | None = None
+            media = describe_multimodal_request(request.text)
+            if media is not None:
+                text = render_multimodal_limitation(media.modality, self._capability_registry)
+                route_override = "conversation_capability_limited_multimodal"
+                warnings = (*warnings, "no tool call for a media request; raw provider text not trusted")
+            elif contains_external_url(request.text):
+                text = render_url_limitation(self._capability_registry)
+                route_override = "conversation_capability_limited_url"
+                warnings = (*warnings, "no tool call for a url request; raw provider text not trusted")
+            elif is_current_info_question(request.text):
+                text = render_current_info_limitation()
+                route_override = "conversation_capability_limited_current_info"
+                warnings = (*warnings, "no tool call for a current-info request; raw provider text not trusted")
             # production hotfix (#217 follow-up, CASE 6/9; the shared gate
             # itself is fix/gaon-mission-continuation-grounding-integrity):
             # this is the raw free-form GENERAL_CONVERSATION draft - no
@@ -974,7 +1010,7 @@ class LLMConversationBrain:
                 warnings = (*warnings, f"raw_provider_response_replaced_{violation}")
             return (
                 text,
-                provider_response.route,
+                route_override or provider_response.route,
                 _dedupe((*warnings, *provider_response.warnings)),
                 _dedupe((*references, *provider_response.references)),
                 provider_response.provider_name,
@@ -1455,6 +1491,11 @@ class LLMConversationBrain:
                 executed.append(execution_tool_name)
         if len(provider_response.tool_calls) > max_calls:
             warnings = (*warnings, "tool call limit reached")
+            for call in provider_response.tool_calls[max_calls:]:
+                self._tool_executor.record_not_executed(
+                    ToolRequest(call.name, dict(call.arguments), request.user_ref, request.received_at),
+                    reason="tool call limit reached",
+                )
         self._metrics.increment("gaon_llm_tool_roundtrips_total", amount=len(results), provider=provider_response.provider_name)
         self._append_provider_event("LLMProviderToolRoundtripCompleted", request, {"provider": provider_response.provider_name, "tool_calls": len(results)})
         try:

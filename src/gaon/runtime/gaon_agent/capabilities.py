@@ -406,6 +406,8 @@ def capability_prompt_summary(registry: CapabilityRegistry) -> str:
             + " ".join(f"- {item}" for item in cannot)
         )
     lines.append(
-        "Only claim a link/image/video/document was inspected when the corresponding tool actually returned evidence in this turn; never fabricate tool results."
+        "Never claim to have opened a link, viewed an image or video, or read a document unless the "
+        "corresponding tool actually returned evidence in this same turn; only claim such evidence "
+        "exists when it does, and never fabricate tool results."
     )
     return "\n".join(lines)
