@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 44
+SCHEMA_VERSION = 45
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -91,6 +91,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         41: _upgrade_v41_to_v42,
         42: _upgrade_v42_to_v43,
         43: _upgrade_v43_to_v44,
+        44: _upgrade_v44_to_v45,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1571,6 +1572,53 @@ def _upgrade_v43_to_v44(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_learning_audit_target
             ON learning_audit_events(target_ref, created_at);
     """)
+
+def _upgrade_v44_to_v45(connection: sqlite3.Connection) -> None:
+    """Gaon<->Paper feedback loop: an append-only observation ledger for
+    Paper-trading stage reports (signal / entry_blocked / open / closed /
+    error) that an EXTERNAL execution engine (binance-trading's Paper
+    loop) reports via ``POST /gaon/paper/report``.
+
+    Deliberately separate from ``champion_registry`` /
+    ``paper_trading_sessions`` / ``gaon.adapters.paper_revalidation`` -
+    that subsystem is purpose-built for the KR-equities Champion
+    promotion workflow (fingerprint-matched ``ChampionRegistryEntry``,
+    LIVE_ELIGIBLE/HOLD/KILL rules) and does not fit a
+    StrategyVersionRegistry-keyed crypto family. This table has no
+    foreign key into any order/deploy/promotion table and no trigger -
+    it cannot mutate a strategy, promote a Champion, or execute a trade.
+    See ``gaon.runtime.paper_observation_repository`` for the repository
+    this table backs."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS paper_trade_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id TEXT NOT NULL,
+            strategy_version_id TEXT NOT NULL,
+            spec_fingerprint TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            signal_at TEXT NOT NULL,
+            entry_at TEXT,
+            exit_at TEXT,
+            entry_price REAL,
+            exit_price REAL,
+            qty REAL,
+            pnl REAL,
+            pnl_pct REAL,
+            fees REAL,
+            status TEXT NOT NULL,
+            reason TEXT,
+            reported_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_paper_trade_observations_family
+            ON paper_trade_observations(family_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_paper_trade_observations_status
+            ON paper_trade_observations(family_id, status, created_at);
+    """
+    )
+
 
 def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     columns = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
