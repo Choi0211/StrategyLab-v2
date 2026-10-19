@@ -292,6 +292,12 @@ class AdminStrategyOptionsCryptoForwardVerificationTests(unittest.TestCase):
         self.assertEqual(fv["data_status"], "VERIFICATION_IN_PROGRESS")
         self.assertEqual(fv["closed_trades"], 0)
         self.assertFalse(fv["promotion_readiness"]["eligible_for_promotion_review"])
+        # Operational-reliability requirement: the admin page must also
+        # expose a live health summary (staleness/gaps/duplicates/poll
+        # errors/version drift), computed over the same read-only connection.
+        self.assertIn("health", fv)
+        self.assertIn(fv["health"]["status"], ("OK", "WARNING", "ERROR"))
+        self.assertIn("stale_symbols", fv["health"])
         thread.join(timeout=5)
 
 

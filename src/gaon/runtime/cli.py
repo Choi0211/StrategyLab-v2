@@ -1096,6 +1096,10 @@ def main(argv: list[str] | None = None) -> int:
     crypto_fv_run.add_argument("--max-iterations", type=int, default=None)
     crypto_fv_status = sub.add_parser("crypto-forward-verification-status")
     crypto_fv_status.add_argument("--db", default="crypto_forward_verification.sqlite")
+    crypto_fv_health = sub.add_parser("crypto-forward-verification-health")
+    crypto_fv_health.add_argument("--db", default="crypto_forward_verification.sqlite")
+    crypto_fv_health.add_argument("--max-staleness-seconds", type=float, default=900.0)
+    crypto_fv_health.add_argument("--poll-error-lookback-seconds", type=float, default=3600.0)
     sub.add_parser("telegram-check")
     sub.add_parser("assistant-check")
     sub.add_parser("notion-check")
@@ -1193,6 +1197,28 @@ def _run(args: argparse.Namespace) -> int:
             print(_dumps_json(fv_status(repo)))
         finally:
             connection.close()
+    elif args.command == "crypto-forward-verification-health":
+        import sqlite3
+        import time as _time
+
+        from gaon.research.crypto_forward_verification import CryptoForwardVerificationRepository, health_check
+
+        connection = sqlite3.connect(args.db)
+        try:
+            try:
+                repo = CryptoForwardVerificationRepository(connection, ensure_schema_=False)
+                result = health_check(
+                    repo,
+                    now_ms=int(_time.time() * 1000),
+                    max_staleness_seconds=args.max_staleness_seconds,
+                    poll_error_lookback_seconds=args.poll_error_lookback_seconds,
+                )
+            except sqlite3.OperationalError as exc:
+                result = {"status": "WARNING", "problems": [], "warnings": [f"database not yet initialized: {exc.__class__.__name__}: {exc}"]}
+        finally:
+            connection.close()
+        print(_dumps_json(result))
+        return 0 if result["status"] == "OK" else 1
     elif args.command in {"run", "status"}:
         store = RuntimeStateStore(args.db)
         try:

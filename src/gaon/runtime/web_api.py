@@ -904,7 +904,9 @@ def _crypto_forward_verification_summary(config: GaonRuntimeConfig) -> dict[str,
     if not config.crypto_forward_verification_db_path:
         return {"configured": False}
     import sqlite3
-    from gaon.research.crypto_forward_verification import CryptoForwardVerificationRepository, status as fv_status
+    import time as _time
+
+    from gaon.research.crypto_forward_verification import CryptoForwardVerificationRepository, health_check, status as fv_status
 
     try:
         connection = sqlite3.connect(f"file:{config.crypto_forward_verification_db_path}?mode=ro", uri=True, timeout=5)
@@ -912,7 +914,8 @@ def _crypto_forward_verification_summary(config: GaonRuntimeConfig) -> dict[str,
         return {"configured": True, "available": False, "error": f"database not yet available: {exc.__class__.__name__}"}
     try:
         repo = CryptoForwardVerificationRepository(connection, ensure_schema_=False)
-        return {"configured": True, "available": True, **fv_status(repo)}
+        health = health_check(repo, now_ms=int(_time.time() * 1000))
+        return {"configured": True, "available": True, "health": health, **fv_status(repo)}
     except Exception as exc:  # noqa: BLE001 - admin page must degrade gracefully, never 500.
         return {"configured": True, "available": False, "error": f"{exc.__class__.__name__}: {exc}"}
     finally:

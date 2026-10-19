@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import pathlib
 import sqlite3
 import unittest
 
+import gaon.research.crypto_forward_verification as crypto_fv_module
 from gaon.research.crypto_forward_verification import (
     STRATEGY_SPEC,
     STRATEGY_VERSION,
     CryptoForwardVerificationRepository,
     RebalanceDecision,
     classify_btc_regime,
+    count_candle_gaps,
+    count_duplicate_timestamps,
     decide_rebalance,
     ensure_schema,
     funding_cost_pct,
+    health_check,
     metric,
     poll_once,
     promotion_readiness,
@@ -249,6 +254,193 @@ class PollOnceEndToEndTests(unittest.TestCase):
         poll_once(self.repo, fetch_klines=lambda sym: data[sym], fetch_funding=lambda sym, start_ms: [], now_iso="2026-01-01T00:05:00Z")
         n2 = len(self.repo.all_trades())
         self.assertEqual(n1, n2)  # same rebalance index, same symbols -> no duplicate trades
+
+
+class GapAndDuplicateDetectionTests(unittest.TestCase):
+    def test_count_candle_gaps_finds_missing_minutes(self) -> None:
+        rows = _one_minute_rows(5, start_ms=0, base_price=100.0, drift_per_min=0.0)
+        self.assertEqual(count_candle_gaps(rows), 0)
+        with_gap = rows[:2] + rows[3:]  # drop the middle minute
+        self.assertEqual(count_candle_gaps(with_gap), 1)
+
+    def test_count_duplicate_timestamps_is_zero_for_well_formed_rows(self) -> None:
+        rows = _one_minute_rows(5, start_ms=0, base_price=100.0, drift_per_min=0.0)
+        self.assertEqual(count_duplicate_timestamps(rows), 0)
+        with_dup = rows + [rows[0]]
+        self.assertEqual(count_duplicate_timestamps(with_dup), 1)
+
+
+class HealthCheckTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
+        self.repo = CryptoForwardVerificationRepository(self.connection)
+        register_version(self.connection, now_iso="2026-01-01T00:00:00Z")
+
+    def test_no_data_at_all_is_reported_as_stale_not_crashed(self) -> None:
+        result = health_check(self.repo, now_ms=1_000_000)
+        self.assertIn(result["status"], ("WARNING", "ERROR"))
+        self.assertEqual(len(result["stale_symbols"]), len(STRATEGY_SPEC["universe"]))
+
+    def test_fresh_full_universe_with_no_poll_history_is_ok_or_warns_only_about_missing_poll_events(self) -> None:
+        now_ms = 10_000_000_000
+        for sym in STRATEGY_SPEC["universe"]:
+            rows = _one_minute_rows(5, start_ms=now_ms - 4 * 60_000, base_price=100.0, drift_per_min=0.0)
+            self.repo.upsert_bars(sym, rows)
+        result = health_check(self.repo, now_ms=now_ms, max_staleness_seconds=900.0)
+        self.assertEqual(result["problems"], [])
+        self.assertEqual(result["stale_symbols"], [])
+        self.assertEqual(result["candle_gaps_total"], 0)
+        self.assertEqual(result["duplicate_timestamps_total"], 0)
+        self.assertTrue(result["version_consistent"])
+
+    def test_stale_data_beyond_the_threshold_is_flagged(self) -> None:
+        rows = _one_minute_rows(5, start_ms=0, base_price=100.0, drift_per_min=0.0)
+        self.repo.upsert_bars("BTCUSDT", rows)
+        result = health_check(self.repo, now_ms=10_000_000_000, max_staleness_seconds=900.0)
+        self.assertIn("BTCUSDT", result["stale_symbols"])
+        self.assertTrue(any("stale" in w for w in result["warnings"]))
+
+    def test_recent_poll_errors_are_surfaced(self) -> None:
+        now_ms = 10_000_000_000
+        for sym in STRATEGY_SPEC["universe"]:
+            self.repo.upsert_bars(sym, _one_minute_rows(5, start_ms=now_ms - 4 * 60_000, base_price=100.0, drift_per_min=0.0))
+        self.repo.record_poll_event(ts_ms=now_ms - 60_000, ok=False, error="URLError: timed out")
+        result = health_check(self.repo, now_ms=now_ms, poll_error_lookback_seconds=3600.0)
+        self.assertEqual(result["recent_poll_errors_count"], 1)
+        self.assertTrue(any("poll error" in w for w in result["warnings"]))
+
+    def test_version_drift_is_detected_as_a_problem(self) -> None:
+        # Simulate corruption: the stored spec no longer matches the frozen
+        # in-code STRATEGY_SPEC for the same version string.
+        with self.connection:
+            self.connection.execute(
+                "UPDATE crypto_fv_versions SET spec_json = ? WHERE version = ?",
+                ('{"tampered": true}', STRATEGY_VERSION),
+            )
+        for sym in STRATEGY_SPEC["universe"]:
+            self.repo.upsert_bars(sym, _one_minute_rows(5, start_ms=0, base_price=100.0, drift_per_min=0.0))
+        result = health_check(self.repo, now_ms=10_000_000_000)
+        self.assertEqual(result["status"], "ERROR")
+        self.assertFalse(result["version_consistent"])
+
+    def test_read_only_connection_can_run_health_check(self) -> None:
+        # Mirrors the Gaon admin page's access pattern: a separate mode=ro
+        # connection must be able to run health_check without ever writing.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = pathlib.Path(tmp) / "fv.sqlite"
+            rw_connection = sqlite3.connect(str(db_path))
+            try:
+                rw_repo = CryptoForwardVerificationRepository(rw_connection)
+                rw_repo.upsert_bars("BTCUSDT", _one_minute_rows(5, start_ms=0, base_price=100.0, drift_per_min=0.0))
+            finally:
+                rw_connection.close()
+
+            ro_connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            try:
+                ro_repo = CryptoForwardVerificationRepository(ro_connection, ensure_schema_=False)
+                result = health_check(ro_repo, now_ms=10_000_000_000)
+                self.assertIn(result["status"], ("OK", "WARNING", "ERROR"))
+            finally:
+                ro_connection.close()
+
+
+class PollEventLoggingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        self.addCleanup(self.connection.close)
+        self.repo = CryptoForwardVerificationRepository(self.connection)
+
+    def test_record_and_fetch_poll_events_round_trip(self) -> None:
+        self.repo.record_poll_event(ts_ms=100, ok=True, opened=1, closed=0, bars_collected_btc=10)
+        self.repo.record_poll_event(ts_ms=200, ok=False, error="boom")
+        events = self.repo.recent_poll_events(since_ms=0)
+        self.assertEqual(len(events), 2)
+        self.assertTrue(events[0]["ok"])
+        self.assertFalse(events[1]["ok"])
+        self.assertEqual(events[1]["error"], "boom")
+
+    def test_recent_poll_events_respects_the_since_cutoff(self) -> None:
+        self.repo.record_poll_event(ts_ms=100, ok=True)
+        self.repo.record_poll_event(ts_ms=5000, ok=True)
+        self.assertEqual(len(self.repo.recent_poll_events(since_ms=1000)), 1)
+
+
+class OrderExecutionPathSeparationTests(unittest.TestCase):
+    """Regression tests (operational-reliability requirement 5): this
+    research module must stay structurally incapable of touching the real
+    order-execution path, no matter what future changes are made to it."""
+
+    @staticmethod
+    def _source_without_module_docstring() -> str:
+        # The module's own top-of-file docstring documents, in prose, the
+        # safety boundary it upholds ("never imports gaon.adapters.binance",
+        # "never touches /opt/binance-trading") - exactly the forbidden
+        # substrings below, but as a negative claim, not a reference. Strip
+        # it so this test scans only executable code.
+        source = pathlib.Path(crypto_fv_module.__file__).read_text(encoding="utf-8")
+        first = source.find('"""')
+        second = source.find('"""', first + 3)
+        return source[second + 3:] if first != -1 and second != -1 else source
+
+    def test_module_has_no_binance_order_capable_imports_or_calls(self) -> None:
+        source = self._source_without_module_docstring()
+        forbidden = (
+            "gaon.adapters.binance",
+            "binance.client",
+            "python-binance",
+            "/opt/binance-trading",
+            "futures_create_order",
+            "futures_cancel_order",
+            "new_order(",
+            "place_order",
+            "AsyncClient(",
+            "Client(",
+        )
+        for needle in forbidden:
+            self.assertNotIn(needle, source, f"forbidden order-capable reference found: {needle!r}")
+
+    def test_only_the_two_public_unauthenticated_endpoints_are_ever_requested(self) -> None:
+        source = self._source_without_module_docstring()
+        for line in source.splitlines():
+            if "fapi.binance.com" in line:
+                self.assertTrue(
+                    "/fapi/v1/klines" in line or "/fapi/v1/fundingRate" in line or line.strip().startswith(("KLINES_URL", "FUNDING_URL")),
+                    f"unexpected Binance endpoint referenced: {line.strip()!r}",
+                )
+
+    def test_no_api_key_or_secret_credential_is_ever_read_from_the_environment(self) -> None:
+        source = self._source_without_module_docstring()
+        self.assertNotIn("os.environ", source)
+        self.assertNotIn("os.getenv", source)
+        for needle in ("API_KEY", "API_SECRET", "apikey", "api_secret"):
+            self.assertNotIn(needle, source)
+
+    def test_fetchers_only_hit_the_declared_public_hosts(self) -> None:
+        self.assertTrue(crypto_fv_module.KLINES_URL.startswith("https://fapi.binance.com/fapi/v1/klines"))
+        self.assertTrue(crypto_fv_module.FUNDING_URL.startswith("https://fapi.binance.com/fapi/v1/fundingRate"))
+
+
+class HealthCheckCliWiringTests(unittest.TestCase):
+    def test_cli_health_subcommand_reports_warning_and_nonzero_exit_on_empty_db(self) -> None:
+        import shutil
+        import tempfile
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from gaon.runtime.cli import main as cli_main
+
+        tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(tmp_dir, ignore_errors=True))
+        db_path = f"{tmp_dir}/health_cli.sqlite"
+
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = cli_main(["crypto-forward-verification-health", "--db", db_path])
+        self.assertEqual(exit_code, 1)  # empty/new DB is never "OK"
+        self.assertIn("status", output.getvalue())
 
 
 if __name__ == "__main__":
