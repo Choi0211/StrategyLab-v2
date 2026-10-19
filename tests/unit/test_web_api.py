@@ -262,18 +262,18 @@ class AdminStrategyOptionsCryptoForwardVerificationTests(unittest.TestCase):
         thread.join(timeout=5)
 
     def test_authenticated_request_surfaces_a_configured_verification_in_progress_db(self) -> None:
+        import shutil
         import sqlite3
+        import tempfile
         from gaon.research.crypto_forward_verification import CryptoForwardVerificationRepository, register_version
 
-        db_path = "/tmp/claude-0/-root/cd8b7eb7-aed2-48c9-a863-d35f360175f2/scratchpad/test_admin_fv.sqlite"
-        import os
-        if os.path.exists(db_path):
-            os.remove(db_path)
+        tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(tmp_dir, ignore_errors=True))
+        db_path = f"{tmp_dir}/test_admin_fv.sqlite"
         connection = sqlite3.connect(db_path)
         CryptoForwardVerificationRepository(connection)
         register_version(connection, now_iso="2026-10-19T00:00:00Z")
         connection.close()
-        self.addCleanup(lambda: os.path.exists(db_path) and os.remove(db_path))
 
         port = 18793
         thread, store_holder = self._serve(
