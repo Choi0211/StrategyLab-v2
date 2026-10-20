@@ -42,40 +42,63 @@ class PaperObservationSQLiteRepository:
         body doesn't carry its own - no caller is required to supply it.
         Raises ``KeyError`` if a genuinely required field is missing -
         callers (the HTTP handler) must validate first and turn that into
-        a 400, never let it surface as a 500."""
+        a 400, never let it surface as a 500.
+
+        Idempotent on (family_id, symbol, status, entry_at, exit_at) via a
+        UNIQUE index (schema v46): a retried report of the exact same trade
+        stage - e.g. the reporting client timed out waiting for a response
+        this call had already committed, then resent the identical payload -
+        returns the EXISTING row's id instead of inserting a second row and
+        double-counting it in aggregate_for_family(). A different payload
+        that happens to collide on this same identity is not expected and
+        is not specially handled - the existing row wins, nothing is
+        overwritten."""
         missing = [f for f in _REQUIRED_FIELDS if observation.get(f) in (None, "")]
         if missing:
             raise KeyError(f"missing required observation field(s): {missing}")
         reported_at = _opt_str(observation.get("reported_at")) or created_at
-        cur = self._connection.execute(
-            """
-            INSERT INTO paper_trade_observations (
-                family_id, strategy_version_id, spec_fingerprint, direction, symbol,
-                signal_at, entry_at, exit_at, entry_price, exit_price, qty,
-                pnl, pnl_pct, fees, status, reason, reported_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(observation["family_id"]),
-                str(observation["strategy_version_id"]),
-                str(observation["spec_fingerprint"]),
-                str(observation["direction"]),
-                str(observation["symbol"]),
-                str(observation["signal_at"]),
-                _opt_str(observation.get("entry_at")),
-                _opt_str(observation.get("exit_at")),
-                _opt_float(observation.get("entry_price")),
-                _opt_float(observation.get("exit_price")),
-                _opt_float(observation.get("qty")),
-                _opt_float(observation.get("pnl")),
-                _opt_float(observation.get("pnl_pct")),
-                _opt_float(observation.get("fees")),
-                str(observation["status"]),
-                _opt_str(observation.get("reason")),
-                reported_at,
-                created_at,
-            ),
-        )
+        entry_at = _opt_str(observation.get("entry_at"))
+        exit_at = _opt_str(observation.get("exit_at"))
+        try:
+            cur = self._connection.execute(
+                """
+                INSERT INTO paper_trade_observations (
+                    family_id, strategy_version_id, spec_fingerprint, direction, symbol,
+                    signal_at, entry_at, exit_at, entry_price, exit_price, qty,
+                    pnl, pnl_pct, fees, status, reason, reported_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(observation["family_id"]),
+                    str(observation["strategy_version_id"]),
+                    str(observation["spec_fingerprint"]),
+                    str(observation["direction"]),
+                    str(observation["symbol"]),
+                    str(observation["signal_at"]),
+                    entry_at,
+                    exit_at,
+                    _opt_float(observation.get("entry_price")),
+                    _opt_float(observation.get("exit_price")),
+                    _opt_float(observation.get("qty")),
+                    _opt_float(observation.get("pnl")),
+                    _opt_float(observation.get("pnl_pct")),
+                    _opt_float(observation.get("fees")),
+                    str(observation["status"]),
+                    _opt_str(observation.get("reason")),
+                    reported_at,
+                    created_at,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            self._connection.rollback()
+            existing = self._connection.execute(
+                "SELECT id FROM paper_trade_observations "
+                "WHERE family_id = ? AND symbol = ? AND status = ? AND entry_at = ? AND exit_at = ?",
+                (str(observation["family_id"]), str(observation["symbol"]), str(observation["status"]), entry_at, exit_at),
+            ).fetchone()
+            if existing is None:
+                raise
+            return int(existing[0])
         self._connection.commit()
         return int(cur.lastrowid)
 
