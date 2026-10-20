@@ -1,0 +1,25 @@
+[Unit]
+Description=Summarize Gaon<->Paper feedback-loop observations into research memory (read + append-only, no orders)
+After=gaon-web.service
+
+[Service]
+Type=oneshot
+User=strategylab
+Group=strategylab
+WorkingDirectory=/opt/strategylab-v2
+# Reads paper_trade_observations (written by the external Paper engine via
+# POST /gaon/paper/report) and appends at most one new research_memories
+# row per run - idempotent via an aggregate fingerprint (scripts/
+# summarize_paper_observations.py), so a no-op run is a normal, silent
+# success (exit 0), not an error. Never touches strategy_version_registries
+# or any ACTIVE strategy state - this only feeds the next research cycle's
+# reading, it cannot promote or mutate anything by itself.
+ExecStart=/opt/strategylab-v2/.venv/bin/python scripts/summarize_paper_observations.py --family-id csm-48h-long --db /var/lib/strategylab/gaon-runtime.sqlite
+StandardOutput=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/strategylab
+
+[Install]
+WantedBy=multi-user.target

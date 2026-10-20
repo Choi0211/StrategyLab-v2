@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic Gaon<->Paper feedback-loop observation summary
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
