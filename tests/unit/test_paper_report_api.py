@@ -115,6 +115,7 @@ class PaperReportApiTests(unittest.TestCase):
         self.assertEqual(payload["paper_hypothesis_backtest_result"], "/gaon/paper/hypothesis_backtest_result")
         self.assertEqual(payload["paper_hypothesis_backtests"], "/gaon/paper/hypothesis_backtests")
         self.assertEqual(payload["paper_failure_hypothesis_propose"], "/gaon/paper/failure_hypothesis")
+        self.assertEqual(payload["paper_research_memories"], "/gaon/paper/research_memories")
 
     def test_propose_hypothesis_missing_required_field_is_400(self) -> None:
         status, payload = dispatch_request(
@@ -233,6 +234,65 @@ class PaperReportApiTests(unittest.TestCase):
         dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=dict(body))
         memories = SQLiteResearchMemoryRepository(self.store._connection).search(tag=FAMILY_ID)
         self.assertEqual(len(memories), 1)
+
+    def test_research_memories_endpoint_requires_family_id(self) -> None:
+        status, payload = dispatch_request(self.adapter, method="GET", path="/gaon/paper/research_memories", body=None)
+        self.assertEqual(status, 400)
+
+    def test_research_memories_endpoint_returns_recorded_backtest_memories_newest_first(self) -> None:
+        for i, (fingerprint, verdict) in enumerate((("sha256:older", "fail"), ("sha256:newer", "pass"))):
+            body = {
+                "family_id": FAMILY_ID, "hypothesis_id": f"hypothesis:{i}", "hypothesis_fingerprint": f"sha256:hyp{i}",
+                "backtest_fingerprint": fingerprint, "verdict": verdict, "metrics": {},
+                "data_source": "local", "tested_at": f"2026-10-2{i}T00:00:00Z",
+            }
+            status, _ = dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+            self.assertEqual(status, 200)
+        status, payload = dispatch_request(
+            self.adapter, method="GET", path=f"/gaon/paper/research_memories?family_id={FAMILY_ID}", body=None
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["memories"]), 2)
+        self.assertEqual(payload["memories"][0]["final_status"], "PENDING_HUMAN_REVIEW")  # newer (verdict=pass) first
+        self.assertEqual(payload["memories"][1]["final_status"], "FAIL")
+        self.assertFalse(payload["strategy_mutated"])
+
+    def test_research_memories_endpoint_exposes_hypothesis_fingerprint_tag(self) -> None:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "hypothesis_fingerprint": "sha256:findme",
+            "backtest_fingerprint": "sha256:tagtest", "verdict": "fail", "metrics": {},
+            "data_source": "local", "tested_at": "2026-10-20T00:00:00Z",
+        }
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+        _, payload = dispatch_request(
+            self.adapter, method="GET", path=f"/gaon/paper/research_memories?family_id={FAMILY_ID}", body=None
+        )
+        self.assertIn("hypothesis_fingerprint:sha256:findme", payload["memories"][0]["tags"])
+
+    def test_research_memories_endpoint_respects_limit(self) -> None:
+        for i in range(3):
+            body = {
+                "family_id": FAMILY_ID, "hypothesis_id": f"hypothesis:{i}", "hypothesis_fingerprint": f"sha256:hyp{i}",
+                "backtest_fingerprint": f"sha256:limit{i}", "verdict": "fail", "metrics": {},
+                "data_source": "local", "tested_at": f"2026-10-2{i}T00:00:00Z",
+            }
+            dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+        _, payload = dispatch_request(
+            self.adapter, method="GET", path=f"/gaon/paper/research_memories?family_id={FAMILY_ID}&limit=2", body=None
+        )
+        self.assertEqual(len(payload["memories"]), 2)
+
+    def test_research_memories_endpoint_never_touches_strategy_version_registry(self) -> None:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "hypothesis_fingerprint": "sha256:h",
+            "backtest_fingerprint": "sha256:regtest", "verdict": "pass", "metrics": {},
+            "data_source": "local", "tested_at": "2026-10-20T00:00:00Z",
+        }
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+        dispatch_request(self.adapter, method="GET", path=f"/gaon/paper/research_memories?family_id={FAMILY_ID}", body=None)
+        version_status = self.adapter.strategy_version_status(FAMILY_ID)
+        self.assertIsNone(version_status["active"])
+        self.assertEqual(version_status["apply_ready"], [])
 
     def test_backtest_result_never_touches_strategy_version_registry(self) -> None:
         body = {

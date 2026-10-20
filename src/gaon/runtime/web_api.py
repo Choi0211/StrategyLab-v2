@@ -354,13 +354,51 @@ class GaonWebChatAdapter:
                 "metrics for the specific shortfall before considering this hypothesis further."
             ),
             final_status="PENDING_HUMAN_REVIEW" if verdict == "pass" else verdict.upper(),
-            tags=(family_id, "hypothesis-backtest", verdict),
+            # The hypothesis_fingerprint:... tag (distinct from this memory's
+            # OWN fingerprint, which is backtest:<backtest_fingerprint>) is
+            # what lets a caller - gaon_hypothesis_backtest.py's own
+            # research_memories_for_family read, see research_memories_for_family
+            # below - find every past verdict for a GIVEN hypothesis without
+            # parsing free text, so a conclusively-failed idea can be
+            # recognized as already-tried even after a local state file is
+            # lost or reset.
+            tags=(family_id, "hypothesis-backtest", verdict, f"hypothesis_fingerprint:{body.get('hypothesis_fingerprint')}"),
             created_at=created_at,
             source_run_id=f"hypothesis_backtest_report:{created_at}",
             fingerprint=memory_fingerprint,
             source_refs=(f"gaon-web:/gaon/paper/hypothesis_backtests?family_id={family_id}",),
         )
         memory_repo.add_memory(entry)
+
+    def research_memories_for_family(self, family_id: str, *, limit: int = 20) -> Mapping[str, object]:
+        """Read-only: past backtest-derived research_memories entries for
+        family_id (written by _record_backtest_research_memory above),
+        newest first - the durable, cross-process record of what has
+        already been tried and with what verdict. Lets
+        gaon_hypothesis_backtest.py's own hypothesis-generation step
+        search its prior success/failure history before proposing
+        something already tried, even across a host restart or a local
+        state-file reset (which only tracks this within one process's
+        own runs). Read-only - never touches strategy_version_registries,
+        never derived from or capable of triggering a mutation."""
+        from gaon.research.self_improving import SQLiteResearchMemoryRepository
+
+        memory_repo = SQLiteResearchMemoryRepository(self._repository._connection)
+        entries = memory_repo.search(strategy_family=f"{family_id}_hypothesis_backtest")
+        ordered = sorted(entries, key=lambda e: e.created_at, reverse=True)[: max(1, int(limit))]
+        return {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "family_id": family_id,
+            "memories": [
+                {
+                    "memory_id": e.memory_id, "fingerprint": e.fingerprint, "tags": list(e.tags),
+                    "final_status": e.final_status, "created_at": e.created_at,
+                    "result_summary": e.result_summary, "improvement_summary": e.improvement_summary,
+                }
+                for e in ordered
+            ],
+            "strategy_mutated": False, "order_executed": False, "champion_promoted": False, "approval_bypassed": False,
+        }
 
     def paper_hypothesis_backtests(self, family_id: str) -> Mapping[str, object]:
         """Read-only: backtest results for `family_id`'s hypotheses, most
@@ -593,6 +631,7 @@ def dispatch_request(
             "paper_failure_hypothesis_propose": "/gaon/paper/failure_hypothesis",
             "paper_hypothesis_backtest_result": "/gaon/paper/hypothesis_backtest_result",
             "paper_hypothesis_backtests": "/gaon/paper/hypothesis_backtests",
+            "paper_research_memories": "/gaon/paper/research_memories",
             "developer_approve": "/gaon/developer/approve",
             "developer_execute": "/gaon/developer/execute",
             "strategy_mutated": False,
@@ -649,6 +688,8 @@ def dispatch_request(
         return _handle_hypothesis_backtest_result(adapter, body)
     if method == "GET" and route_path == "/gaon/paper/hypothesis_backtests":
         return _handle_paper_hypothesis_backtests(adapter, query)
+    if method == "GET" and route_path == "/gaon/paper/research_memories":
+        return _handle_paper_research_memories(adapter, query)
     if method == "POST" and route_path == "/gaon/strategy/version/activate":
         # Caller-supplied confirm=True is not authenticated human approval.
         # Fail closed until a durable identity-bound approval flow is wired.
@@ -968,6 +1009,18 @@ def _handle_paper_hypothesis_backtests(adapter: GaonWebChatAdapter, query: Mappi
     if family_id is None:
         return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
     return 200, adapter.paper_hypothesis_backtests(family_id)
+
+
+def _handle_paper_research_memories(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    family_id = _family_id_from_query(query)
+    if family_id is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
+    limit_values = query.get("limit")
+    try:
+        limit = int(limit_values[0]) if limit_values and limit_values[0].strip() else 20
+    except ValueError:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "limit must be an integer"}
+    return 200, adapter.research_memories_for_family(family_id, limit=limit)
 
 
 def _mission_payload(mission: ResearchMission | None) -> Mapping[str, object]:
