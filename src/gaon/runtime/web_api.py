@@ -251,6 +251,25 @@ class GaonWebChatAdapter:
             "approval_bypassed": False,
         }
 
+    def paper_failure_hypotheses(self, family_id: str) -> Mapping[str, object]:
+        """Read-only: the deterministic failure-analysis hypotheses
+        generated for ``family_id`` (see ``gaon.research.
+        paper_failure_analysis`` / ``scripts.generate_paper_failure_
+        hypotheses``), most recent first. Never mutates anything - this
+        table has no path to strategy_version_registries."""
+        from gaon.runtime.paper_failure_hypothesis_repository import PaperFailureHypothesisSQLiteRepository
+
+        repository = PaperFailureHypothesisSQLiteRepository(self._repository._connection)
+        return {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "family_id": family_id,
+            "hypotheses": list(repository.list_for_family(family_id, limit=50)),
+            "strategy_mutated": False,
+            "order_executed": False,
+            "champion_promoted": False,
+            "approval_bypassed": False,
+        }
+
     def activate_strategy_version(self, *, family_id: str, strategy_version_id: str, confirm: bool, now: str) -> Mapping[str, object]:
         """Fail closed at the adapter boundary, not merely at the HTTP route.
 
@@ -460,6 +479,7 @@ def dispatch_request(
             "strategy_version_status": "/gaon/strategy/version_status",
             "paper_report": "/gaon/paper/report",
             "paper_summary": "/gaon/paper/summary",
+            "paper_failure_hypotheses": "/gaon/paper/failure_hypotheses",
             "developer_approve": "/gaon/developer/approve",
             "developer_execute": "/gaon/developer/execute",
             "strategy_mutated": False,
@@ -508,6 +528,8 @@ def dispatch_request(
         return _handle_paper_report(adapter, body)
     if method == "GET" and route_path == "/gaon/paper/summary":
         return _handle_paper_summary(adapter, query)
+    if method == "GET" and route_path == "/gaon/paper/failure_hypotheses":
+        return _handle_paper_failure_hypotheses(adapter, query)
     if method == "POST" and route_path == "/gaon/strategy/version/activate":
         # Caller-supplied confirm=True is not authenticated human approval.
         # Fail closed until a durable identity-bound approval flow is wired.
@@ -741,6 +763,13 @@ def _handle_paper_summary(adapter: GaonWebChatAdapter, query: Mapping[str, list[
     if family_id is None:
         return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
     return 200, adapter.paper_summary(family_id)
+
+
+def _handle_paper_failure_hypotheses(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    family_id = _family_id_from_query(query)
+    if family_id is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
+    return 200, adapter.paper_failure_hypotheses(family_id)
 
 
 def _mission_payload(mission: ResearchMission | None) -> Mapping[str, object]:

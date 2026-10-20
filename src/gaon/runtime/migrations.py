@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 46
+SCHEMA_VERSION = 47
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -93,6 +93,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         43: _upgrade_v43_to_v44,
         44: _upgrade_v44_to_v45,
         45: _upgrade_v45_to_v46,
+        46: _upgrade_v46_to_v47,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1640,6 +1641,45 @@ def _upgrade_v45_to_v46(connection: sqlite3.Connection) -> None:
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_trade_observations_identity
             ON paper_trade_observations(family_id, symbol, status, entry_at, exit_at);
+    """
+    )
+
+
+def _upgrade_v46_to_v47(connection: sqlite3.Connection) -> None:
+    """Structured storage for deterministic failure-analysis hypotheses
+    generated from closed ``paper_trade_observations`` rows (see
+    ``gaon.research.paper_failure_analysis`` / ``gaon.runtime.
+    paper_failure_hypothesis_repository``) - a different table than
+    ``research_memories`` because a future backtest/revalidation module
+    needs typed, queryable fields (``trade_count``, ``confidence``,
+    ``status``), not another free-text memory blob. This table has no
+    foreign key into any order/deploy/promotion table and no trigger - it
+    cannot mutate a strategy or place an order. A companion
+    ``research_memories`` entry is still written alongside each row (by
+    the generating script, not this migration) purely for discoverability
+    via the existing ``research_memory_search`` tool."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS paper_failure_hypotheses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id TEXT NOT NULL,
+            hypothesis_id TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            pattern_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            statement TEXT NOT NULL,
+            trade_count INTEGER NOT NULL,
+            confidence REAL,
+            evidence_json TEXT NOT NULL,
+            expected_improvement TEXT,
+            verification_required_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_failure_hypotheses_fingerprint
+            ON paper_failure_hypotheses(family_id, fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_paper_failure_hypotheses_family
+            ON paper_failure_hypotheses(family_id, created_at);
     """
     )
 
