@@ -111,6 +111,19 @@ class PaperReportApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["paper_report"], "/gaon/paper/report")
         self.assertEqual(payload["paper_summary"], "/gaon/paper/summary")
+        self.assertEqual(payload["paper_failure_hypotheses"], "/gaon/paper/failure_hypotheses")
+
+    def test_failure_hypotheses_missing_family_id_is_400(self) -> None:
+        status, payload = dispatch_request(self.adapter, method="GET", path="/gaon/paper/failure_hypotheses", body=None)
+        self.assertEqual(status, 400)
+
+    def test_failure_hypotheses_empty_for_a_family_with_no_hypotheses_yet(self) -> None:
+        status, payload = dispatch_request(
+            self.adapter, method="GET", path=f"/gaon/paper/failure_hypotheses?family_id={FAMILY_ID}", body=None
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["hypotheses"], [])
+        self.assertFalse(payload["strategy_mutated"])
 
     def test_report_never_touches_strategy_version_registry(self) -> None:
         """The whole point of keeping this ledger separate: reporting Paper
