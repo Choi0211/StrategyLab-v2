@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 45
+SCHEMA_VERSION = 46
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -92,6 +92,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         42: _upgrade_v42_to_v43,
         43: _upgrade_v43_to_v44,
         44: _upgrade_v44_to_v45,
+        45: _upgrade_v45_to_v46,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1616,6 +1617,29 @@ def _upgrade_v44_to_v45(connection: sqlite3.Connection) -> None:
             ON paper_trade_observations(family_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_paper_trade_observations_status
             ON paper_trade_observations(family_id, status, created_at);
+    """
+    )
+
+
+def _upgrade_v45_to_v46(connection: sqlite3.Connection) -> None:
+    """Prevent a retried ``POST /gaon/paper/report`` (e.g. the client timed
+    out waiting for a response the server had actually already committed)
+    from double-counting the same trade in ``aggregate_for_family()``.
+
+    A UNIQUE index on the natural identity of one reported trade stage.
+    This does not catch a duplicate ``status='open'`` report - SQLite
+    treats every NULL in a UNIQUE index as distinct from every other NULL,
+    and ``exit_at`` is always NULL for an open report - but open rows never
+    contribute to the PnL/win-rate aggregate in the first place (see
+    ``aggregate_for_family``'s ``status = 'closed'`` filter), so the case
+    that actually matters - a closed row, which always has a real
+    ``exit_at`` - is fully covered. See
+    ``gaon.runtime.paper_observation_repository.insert()`` for how a
+    conflict here is turned into an idempotent no-op rather than an error."""
+    connection.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_trade_observations_identity
+            ON paper_trade_observations(family_id, symbol, status, entry_at, exit_at);
     """
     )
 

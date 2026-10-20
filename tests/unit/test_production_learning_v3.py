@@ -72,7 +72,7 @@ class ProductionLearningV3Tests(unittest.TestCase):
         self.engine = ProductionLearningEngine(self.connection)
 
     def test_schema_v44_adds_durable_learning_tables(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 45)
+        self.assertEqual(SCHEMA_VERSION, 46)
         tables = {row[0] for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertIn("learning_records", tables)
         self.assertIn("learning_record_versions", tables)

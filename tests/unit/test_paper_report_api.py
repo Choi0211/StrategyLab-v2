@@ -64,6 +64,20 @@ class PaperReportApiTests(unittest.TestCase):
         status, payload = dispatch_request(self.adapter, method="POST", path="/gaon/paper/report", body=body)
         self.assertEqual(status, 200)
 
+    def test_resent_closed_report_returns_the_same_observation_id_not_a_duplicate(self) -> None:
+        """A client retry after a lost response (schema v46's idempotency
+        guard) must look identical to the caller - 200, same observation_id
+        - not a 500 or a second row."""
+        body = dict(VALID_BODY, status="closed", entry_at="t1", exit_at="t2", pnl=0.5, pnl_pct=0.05)
+        status1, payload1 = dispatch_request(self.adapter, method="POST", path="/gaon/paper/report", body=body)
+        status2, payload2 = dispatch_request(self.adapter, method="POST", path="/gaon/paper/report", body=dict(body))
+        self.assertEqual((status1, status2), (200, 200))
+        self.assertEqual(payload1["observation_id"], payload2["observation_id"])
+        summary_status, summary = dispatch_request(
+            self.adapter, method="GET", path=f"/gaon/paper/summary?family_id={FAMILY_ID}", body=None
+        )
+        self.assertEqual(summary["aggregate"]["closed_trade_count"], 1)
+
     def test_summary_missing_family_id_is_400(self) -> None:
         status, payload = dispatch_request(self.adapter, method="GET", path="/gaon/paper/summary", body=None)
         self.assertEqual(status, 400)
