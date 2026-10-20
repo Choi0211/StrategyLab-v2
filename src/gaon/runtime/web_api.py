@@ -418,6 +418,109 @@ class GaonWebChatAdapter:
             "approval_bypassed": False,
         }
 
+    def register_hypothesis_candidate(self, body: Mapping[str, object], *, now: str) -> Mapping[str, object]:
+        """Turns an already-recorded, verdict='pass' paper_hypothesis_backtests
+        row into an APPLY_READY candidate in strategy_version_registries -
+        the one missing link between this module's own fully-automated
+        research loop (gaon_hypothesis_backtest.py) and the EXISTING,
+        already-live, Passkey-gated activation flow
+        (gaon.control.passkey_strategy_approval / `/gaon/admin/strategy/
+        approval/*`). It does NOT activate anything itself - see
+        `register_apply_ready` on `StrategyVersionRegistry` (append-only,
+        never touches ACTIVE) - a human still has to review and approve
+        with their passkey via the existing admin flow before this
+        candidate can ever affect real trading (and even then, only
+        Paper - binance-trading's Live engine reads a different,
+        unrelated family_id).
+
+        Everything registered here is DERIVED from the stored backtest
+        row, never from this call's own body - spec_rules/validation_summary
+        are built from the row's own hypothesis_id/metrics/data_source/
+        period/fee_assumption/tested_at. A caller cannot assert its own
+        fabricated evidence; it can only point at a real, already-
+        verdict='pass' row by its own backtest_fingerprint. Idempotent on
+        spec_fingerprint (= the row's own hypothesis_fingerprint): calling
+        this again for the same finding is a no-op, not a duplicate
+        candidate."""
+        from gaon.runtime.paper_hypothesis_backtest_repository import PaperHypothesisBacktestSQLiteRepository
+        from gaon.runtime.strategy_version_repository import StrategyVersionSQLiteRepository
+
+        family_id = str(body.get("family_id") or "").strip()
+        backtest_fingerprint = str(body.get("backtest_fingerprint") or "").strip()
+        if not family_id or not backtest_fingerprint:
+            raise ValueError("family_id and backtest_fingerprint are required")
+        direction = body.get("direction")
+
+        backtest_repo = PaperHypothesisBacktestSQLiteRepository(self._repository._connection)
+        row = backtest_repo.get_by_backtest_fingerprint(family_id, backtest_fingerprint)
+        if row is None:
+            raise ValueError("no matching backtest row found for family_id/backtest_fingerprint")
+        if row["verdict"] != "pass":
+            raise ValueError(f"backtest row verdict is {row['verdict']!r}, not 'pass' - nothing to register")
+
+        spec_fingerprint = str(row["hypothesis_fingerprint"])
+        version_repo = StrategyVersionSQLiteRepository(self._repository._connection)
+        registry = version_repo.get(family_id)
+        existing = next((v for v in registry.history() if v.spec_fingerprint == spec_fingerprint), None)
+        if existing is not None:
+            return {
+                "schema_version": WEB_API_SCHEMA_VERSION, "family_id": family_id,
+                "strategy_version_id": existing.strategy_version_id, "status": existing.status.value,
+                "already_registered": True,
+                "strategy_mutated": False, "order_executed": False,
+                "champion_promoted": False, "approval_bypassed": False,
+            }
+
+        spec_rules = {
+            "hypothesis_id": row["hypothesis_id"],
+            "data_source": row["data_source"],
+            "data_period_start": row["data_period_start"],
+            "data_period_end": row["data_period_end"],
+            "symbols_processed": row["symbols_processed"],
+            "fee_assumption_pct": row["fee_assumption_pct"],
+            "slippage_note": row["slippage_note"],
+        }
+        validation_summary = {
+            "status_note": "backtest-only evidence (verdict=pass) - requires independent Paper forward verification, same as every other candidate in this registry",
+            "backtest_fingerprint": backtest_fingerprint,
+            "hypothesis_fingerprint": spec_fingerprint,
+            "metrics": row["metrics"],
+            "oos_validated": row["oos_validated"],
+            "tested_at": row["tested_at"],
+            "source": "gaon_hypothesis_backtest.py (deterministic, real-market-data backtest - not an LLM judgment)",
+        }
+        candidate_id = f"candidate:{family_id}:{spec_fingerprint[7:19] if spec_fingerprint.startswith('sha256:') else spec_fingerprint[:12]}"
+        version = registry.register_apply_ready(
+            family_id=family_id, candidate_id=candidate_id, spec_fingerprint=spec_fingerprint,
+            spec_rules=spec_rules, validation_summary=validation_summary, at=now,
+            direction=str(direction) if direction else None,
+        )
+        version_repo.save(family_id, registry, now=now)
+        return {
+            "schema_version": WEB_API_SCHEMA_VERSION, "family_id": family_id,
+            "strategy_version_id": version.strategy_version_id, "status": version.status.value,
+            "already_registered": False,
+            "strategy_mutated": True, "order_executed": False,
+            "champion_promoted": False, "approval_bypassed": False,
+        }
+
+    def mymoneyguard_status(self) -> Mapping[str, object]:
+        """Read-only: the sanitized MyMoneyGuard (Korean + US stock) snapshot
+        - see `gaon.adapters.mymoneyguard.MyMoneyGuardSnapshotReader`. Never
+        reads MyMoneyGuard's own files directly (this process's user has no
+        filesystem access to /root/MyMoneyGuard anyway) - it reads the
+        already-sanitized export binance-trading's own
+        mymoneyguard_readonly_export.py writes. No secrets, no live KIS
+        calls, no mutation of anything."""
+        from gaon.adapters.mymoneyguard import MyMoneyGuardSnapshotReader
+
+        return {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            **MyMoneyGuardSnapshotReader().read(),
+            "strategy_mutated": False, "order_executed": False,
+            "champion_promoted": False, "approval_bypassed": False,
+        }
+
     def activate_strategy_version(self, *, family_id: str, strategy_version_id: str, confirm: bool, now: str) -> Mapping[str, object]:
         """Fail closed at the adapter boundary, not merely at the HTTP route.
 
@@ -632,6 +735,8 @@ def dispatch_request(
             "paper_hypothesis_backtest_result": "/gaon/paper/hypothesis_backtest_result",
             "paper_hypothesis_backtests": "/gaon/paper/hypothesis_backtests",
             "paper_research_memories": "/gaon/paper/research_memories",
+            "paper_hypothesis_register_candidate": "/gaon/paper/hypothesis_register_candidate",
+            "mymoneyguard_status": "/gaon/mymoneyguard/status",
             "developer_approve": "/gaon/developer/approve",
             "developer_execute": "/gaon/developer/execute",
             "strategy_mutated": False,
@@ -690,6 +795,10 @@ def dispatch_request(
         return _handle_paper_hypothesis_backtests(adapter, query)
     if method == "GET" and route_path == "/gaon/paper/research_memories":
         return _handle_paper_research_memories(adapter, query)
+    if method == "POST" and route_path == "/gaon/paper/hypothesis_register_candidate":
+        return _handle_register_hypothesis_candidate(adapter, body)
+    if method == "GET" and route_path == "/gaon/mymoneyguard/status":
+        return _handle_mymoneyguard_status(adapter)
     if method == "POST" and route_path == "/gaon/strategy/version/activate":
         # Caller-supplied confirm=True is not authenticated human approval.
         # Fail closed until a durable identity-bound approval flow is wired.
@@ -1021,6 +1130,19 @@ def _handle_paper_research_memories(adapter: GaonWebChatAdapter, query: Mapping[
     except ValueError:
         return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "limit must be an integer"}
     return 200, adapter.research_memories_for_family(family_id, limit=limit)
+
+
+def _handle_register_hypothesis_candidate(adapter: GaonWebChatAdapter, body: object) -> tuple[int, Mapping[str, object]]:
+    if not isinstance(body, Mapping):
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "JSON object body is required"}
+    try:
+        return 200, adapter.register_hypothesis_candidate(body, now=_utc_now())
+    except (ValueError, KeyError) as exc:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": str(exc)}
+
+
+def _handle_mymoneyguard_status(adapter: GaonWebChatAdapter) -> tuple[int, Mapping[str, object]]:
+    return 200, adapter.mymoneyguard_status()
 
 
 def _mission_payload(mission: ResearchMission | None) -> Mapping[str, object]:

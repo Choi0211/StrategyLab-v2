@@ -4,6 +4,15 @@ external execution engine (binance-trading's Paper loop) reports to and
 reads from. These never mutate any ``strategy_version_registries`` row
 and never require the approval-token machinery that mutating endpoints
 like ``/gaon/strategy/version/activate`` need.
+
+The one deliberate exception, tested separately below in
+``RegisterHypothesisCandidateTests``: ``POST /gaon/paper/
+hypothesis_register_candidate`` DOES write an APPLY_READY candidate to
+``strategy_version_registries`` - but only ever APPLY_READY (never
+ACTIVE), and only when derived from an already-recorded, verdict='pass'
+row in this same module's own append-only backtest table - never from a
+caller-supplied claim. See its adapter-method docstring in
+``gaon.runtime.web_api`` for the full reasoning.
 """
 
 from __future__ import annotations
@@ -116,6 +125,8 @@ class PaperReportApiTests(unittest.TestCase):
         self.assertEqual(payload["paper_hypothesis_backtests"], "/gaon/paper/hypothesis_backtests")
         self.assertEqual(payload["paper_failure_hypothesis_propose"], "/gaon/paper/failure_hypothesis")
         self.assertEqual(payload["paper_research_memories"], "/gaon/paper/research_memories")
+        self.assertEqual(payload["paper_hypothesis_register_candidate"], "/gaon/paper/hypothesis_register_candidate")
+        self.assertEqual(payload["mymoneyguard_status"], "/gaon/mymoneyguard/status")
 
     def test_propose_hypothesis_missing_required_field_is_400(self) -> None:
         status, payload = dispatch_request(
@@ -324,6 +335,116 @@ class PaperReportApiTests(unittest.TestCase):
         version_status = self.adapter.strategy_version_status(FAMILY_ID)
         self.assertIsNone(version_status["active"])
         self.assertEqual(version_status["apply_ready"], [])
+
+
+class RegisterHypothesisCandidateTests(unittest.TestCase):
+    """POST /gaon/paper/hypothesis_register_candidate is the one
+    deliberate exception to 'this module never touches
+    strategy_version_registries' - see its own adapter-method docstring.
+    It only ever creates an APPLY_READY candidate (never ACTIVE), and only
+    from an already-recorded, verdict='pass' backtest row - never from a
+    caller-supplied claim."""
+
+    def setUp(self) -> None:
+        self.store = RuntimeStateStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.adapter = _adapter(self.store)
+
+    def _report_passing_backtest(self, **overrides) -> dict:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:csm-48h-long:x:abc",
+            "hypothesis_fingerprint": "sha256:hyp-abc", "backtest_fingerprint": "sha256:bt-abc",
+            "verdict": "pass", "metrics": {"oos_pf": 1.6, "oos_n": 120},
+            "data_source": "local_1m_kline_cache", "data_period_start": "2026-03-01T00:00:00Z",
+            "data_period_end": "2026-09-28T23:59:00Z", "symbols_processed": 23,
+            "fee_assumption_pct": 0.30, "oos_validated": True, "tested_at": "2026-10-20T00:00:00Z",
+        }
+        body.update(overrides)
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+        return body
+
+    def test_requires_family_id_and_backtest_fingerprint(self) -> None:
+        status, payload = dispatch_request(
+            self.adapter, method="POST", path="/gaon/paper/hypothesis_register_candidate", body={}
+        )
+        self.assertEqual(status, 400)
+
+    def test_unknown_backtest_fingerprint_is_rejected(self) -> None:
+        status, payload = dispatch_request(
+            self.adapter, method="POST", path="/gaon/paper/hypothesis_register_candidate",
+            body={"family_id": FAMILY_ID, "backtest_fingerprint": "sha256:never-reported"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("error", payload)
+
+    def test_non_passing_verdict_is_rejected(self) -> None:
+        self._report_passing_backtest(backtest_fingerprint="sha256:failed-one", verdict="fail", hypothesis_fingerprint="sha256:hyp-failed")
+        status, payload = dispatch_request(
+            self.adapter, method="POST", path="/gaon/paper/hypothesis_register_candidate",
+            body={"family_id": FAMILY_ID, "backtest_fingerprint": "sha256:failed-one"},
+        )
+        self.assertEqual(status, 400)
+
+    def test_passing_backtest_registers_an_apply_ready_candidate(self) -> None:
+        self._report_passing_backtest()
+        status, payload = dispatch_request(
+            self.adapter, method="POST", path="/gaon/paper/hypothesis_register_candidate",
+            body={"family_id": FAMILY_ID, "backtest_fingerprint": "sha256:bt-abc", "direction": "LONG"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "apply_ready")
+        self.assertFalse(payload["already_registered"])
+        self.assertTrue(payload["strategy_mutated"])
+        self.assertFalse(payload["order_executed"])
+        self.assertFalse(payload["champion_promoted"])
+        version_status = self.adapter.strategy_version_status(FAMILY_ID)
+        self.assertIsNone(version_status["active"])  # still never auto-activated
+        self.assertEqual(len(version_status["apply_ready"]), 1)
+
+    def test_resending_the_same_finding_is_idempotent_not_a_duplicate(self) -> None:
+        self._report_passing_backtest()
+        body = {"family_id": FAMILY_ID, "backtest_fingerprint": "sha256:bt-abc", "direction": "LONG"}
+        first_status, first = dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_register_candidate", body=body)
+        second_status, second = dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_register_candidate", body=dict(body))
+        self.assertEqual((first_status, second_status), (200, 200))
+        self.assertEqual(first["strategy_version_id"], second["strategy_version_id"])
+        self.assertFalse(first["already_registered"])
+        self.assertTrue(second["already_registered"])
+        version_status = self.adapter.strategy_version_status(FAMILY_ID)
+        self.assertEqual(len(version_status["apply_ready"]), 1)
+
+    def test_never_marks_anything_active_by_itself(self) -> None:
+        self._report_passing_backtest()
+        dispatch_request(
+            self.adapter, method="POST", path="/gaon/paper/hypothesis_register_candidate",
+            body={"family_id": FAMILY_ID, "backtest_fingerprint": "sha256:bt-abc"},
+        )
+        version_status = self.adapter.strategy_version_status(FAMILY_ID)
+        self.assertIsNone(version_status["active"])
+        self.assertIsNone(version_status["active_by_direction"]["LONG"])
+        self.assertIsNone(version_status["active_by_direction"]["SHORT"])
+
+
+class MyMoneyGuardStatusTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = RuntimeStateStore(":memory:")
+        self.addCleanup(self.store.close)
+        self.adapter = _adapter(self.store)
+
+    def test_missing_snapshot_is_reported_honestly_not_fabricated(self) -> None:
+        import gaon.adapters.mymoneyguard as mmg_module
+        from unittest.mock import patch
+
+        with patch.object(mmg_module, "DEFAULT_SNAPSHOT_PATH", "/nonexistent/path/snapshot.json"):
+            status, payload = dispatch_request(self.adapter, method="GET", path="/gaon/mymoneyguard/status", body=None)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["available"])
+        self.assertFalse(payload["order_execution_connected"] if "order_execution_connected" in payload else False)
+
+    def test_route_never_touches_strategy_version_registry(self) -> None:
+        dispatch_request(self.adapter, method="GET", path="/gaon/mymoneyguard/status", body=None)
+        version_status = self.adapter.strategy_version_status(FAMILY_ID)
+        self.assertIsNone(version_status["active"])
 
 
 if __name__ == "__main__":
