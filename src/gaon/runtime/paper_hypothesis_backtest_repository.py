@@ -123,6 +123,22 @@ class PaperHypothesisBacktestSQLiteRepository:
         ).fetchall()
         return [_to_dict(row) for row in rows]
 
+    def get_by_backtest_fingerprint(self, family_id: str, backtest_fingerprint: str) -> Mapping[str, object] | None:
+        """Looks up one exact, already-recorded backtest row by its own
+        (family_id, backtest_fingerprint) - the same unique pair `insert`
+        upserts on. Used by `register_hypothesis_candidate` (see
+        `gaon.runtime.web_api`) to require that a strategy-version
+        candidate can ONLY be derived from a real, already-stored verdict
+        - never from a caller-supplied claim - so that writer can't be
+        used to assert its own spec_rules/validation_summary out of thin
+        air."""
+        row = self._connection.execute(
+            f"SELECT {', '.join(_COLUMNS)} FROM paper_hypothesis_backtests "
+            "WHERE family_id = ? AND backtest_fingerprint = ?",
+            (family_id, backtest_fingerprint),
+        ).fetchone()
+        return _to_dict(row) if row else None
+
 
 def _to_dict(row: Sequence[object]) -> dict[str, object]:
     d = dict(zip(_COLUMNS, row))

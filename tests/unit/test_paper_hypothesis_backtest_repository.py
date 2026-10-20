@@ -84,6 +84,20 @@ class PaperHypothesisBacktestRepositoryTests(unittest.TestCase):
         rows = self.repo.list_for_family(FAMILY_ID)
         self.assertFalse(rows[0]["oos_validated"])
 
+    def test_get_by_backtest_fingerprint_finds_the_exact_row(self) -> None:
+        self.repo.insert(_result(backtest_fingerprint="sha256:a"), created_at="t1")
+        self.repo.insert(_result(backtest_fingerprint="sha256:b"), created_at="t2")
+        row = self.repo.get_by_backtest_fingerprint(FAMILY_ID, "sha256:a")
+        self.assertIsNotNone(row)
+        self.assertEqual(row["backtest_fingerprint"], "sha256:a")
+
+    def test_get_by_backtest_fingerprint_missing_is_none(self) -> None:
+        self.assertIsNone(self.repo.get_by_backtest_fingerprint(FAMILY_ID, "sha256:does-not-exist"))
+
+    def test_get_by_backtest_fingerprint_is_scoped_to_family_id(self) -> None:
+        self.repo.insert(_result(backtest_fingerprint="sha256:shared"), created_at="t1")
+        self.assertIsNone(self.repo.get_by_backtest_fingerprint("other-family", "sha256:shared"))
+
 
 if __name__ == "__main__":
     unittest.main()
