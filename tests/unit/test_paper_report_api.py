@@ -112,6 +112,55 @@ class PaperReportApiTests(unittest.TestCase):
         self.assertEqual(payload["paper_report"], "/gaon/paper/report")
         self.assertEqual(payload["paper_summary"], "/gaon/paper/summary")
         self.assertEqual(payload["paper_failure_hypotheses"], "/gaon/paper/failure_hypotheses")
+        self.assertEqual(payload["paper_hypothesis_backtest_result"], "/gaon/paper/hypothesis_backtest_result")
+        self.assertEqual(payload["paper_hypothesis_backtests"], "/gaon/paper/hypothesis_backtests")
+
+    def test_backtest_result_missing_required_field_is_400(self) -> None:
+        status, payload = dispatch_request(
+            self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result",
+            body={"family_id": FAMILY_ID},
+        )
+        self.assertEqual(status, 400)
+
+    def test_backtest_result_unrecognized_verdict_is_400(self) -> None:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "hypothesis_fingerprint": "sha256:h",
+            "backtest_fingerprint": "sha256:b", "verdict": "auto_promote", "metrics": {}, "data_source": "local",
+            "tested_at": "2026-10-20T00:00:00Z",
+        }
+        status, payload = dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+        self.assertEqual(status, 400)
+
+    def test_backtest_result_valid_pass_is_accepted_and_listed(self) -> None:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "hypothesis_fingerprint": "sha256:h",
+            "backtest_fingerprint": "sha256:b", "verdict": "pass",
+            "metrics": {"oos_pf": 1.5, "oos_n": 110}, "data_source": "local_1m_kline_cache",
+            "oos_validated": True, "tested_at": "2026-10-20T00:00:00Z",
+        }
+        status, payload = dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+        self.assertEqual(status, 200)
+        self.assertIn("backtest_id", payload)
+        self.assertFalse(payload["strategy_mutated"])
+        self.assertFalse(payload["champion_promoted"])
+
+        status, listing = dispatch_request(
+            self.adapter, method="GET", path=f"/gaon/paper/hypothesis_backtests?family_id={FAMILY_ID}", body=None
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listing["backtests"]), 1)
+        self.assertEqual(len(listing["passed_pending_revalidation"]), 1)
+
+    def test_backtest_result_never_touches_strategy_version_registry(self) -> None:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "hypothesis_fingerprint": "sha256:h",
+            "backtest_fingerprint": "sha256:b", "verdict": "pass", "metrics": {}, "data_source": "local",
+            "tested_at": "2026-10-20T00:00:00Z",
+        }
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+        version_status = self.adapter.strategy_version_status(FAMILY_ID)
+        self.assertIsNone(version_status["active"])
+        self.assertEqual(version_status["apply_ready"], [])
 
     def test_failure_hypotheses_missing_family_id_is_400(self) -> None:
         status, payload = dispatch_request(self.adapter, method="GET", path="/gaon/paper/failure_hypotheses", body=None)

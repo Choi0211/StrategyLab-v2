@@ -6,7 +6,7 @@ import sqlite3
 
 from gaon.runtime.errors import SchemaVersionMismatchError
 
-SCHEMA_VERSION = 47
+SCHEMA_VERSION = 48
 
 
 def check_schema_version_compatible(connection: sqlite3.Connection) -> None:
@@ -94,6 +94,7 @@ def migrate(connection: sqlite3.Connection) -> None:
         44: _upgrade_v44_to_v45,
         45: _upgrade_v45_to_v46,
         46: _upgrade_v46_to_v47,
+        47: _upgrade_v47_to_v48,
     }
     for version in range(current_version, SCHEMA_VERSION):
         upgrades[version](connection)
@@ -1680,6 +1681,54 @@ def _upgrade_v46_to_v47(connection: sqlite3.Connection) -> None:
             ON paper_failure_hypotheses(family_id, fingerprint);
         CREATE INDEX IF NOT EXISTS idx_paper_failure_hypotheses_family
             ON paper_failure_hypotheses(family_id, created_at);
+    """
+    )
+
+
+def _upgrade_v47_to_v48(connection: sqlite3.Connection) -> None:
+    """Structured storage for backtest results against a
+    `paper_failure_hypotheses` row (see the binance-trading-side
+    `gaon_hypothesis_backtest.py` - a separate, resource-limited job that
+    reads candidate hypotheses via GET /gaon/paper/failure_hypotheses,
+    replays the strategy's historical data with the hypothesis's implied
+    change, and reports the result here via POST
+    /gaon/paper/hypothesis_backtest_result).
+
+    Records data provenance (source, period, fee/slippage assumptions,
+    whether a genuine out-of-sample fold was used) alongside the verdict
+    so a stale or under-specified backtest is visibly distinguishable
+    from a properly out-of-sample-validated one - never just a bare
+    pass/fail. verdict is one of 'pass', 'fail', 'insufficient_data', or
+    'needs_revalidation' (data/assumptions too weak, or in-sample vs
+    out-of-sample performance degraded enough to suspect overfitting) -
+    only 'pass' rows are eligible for the (still human-reviewed, never
+    automatic) Paper-revalidation queue. This table has no foreign key
+    into strategy_version_registries and no trigger - it cannot promote
+    or activate anything by itself."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS paper_hypothesis_backtests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            family_id TEXT NOT NULL,
+            hypothesis_id TEXT NOT NULL,
+            hypothesis_fingerprint TEXT NOT NULL,
+            backtest_fingerprint TEXT NOT NULL,
+            verdict TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            data_source TEXT NOT NULL,
+            data_period_start TEXT,
+            data_period_end TEXT,
+            symbols_processed INTEGER,
+            fee_assumption_pct REAL,
+            slippage_note TEXT,
+            oos_validated INTEGER NOT NULL DEFAULT 0,
+            tested_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_hypothesis_backtests_fingerprint
+            ON paper_hypothesis_backtests(family_id, backtest_fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_paper_hypothesis_backtests_hypothesis
+            ON paper_hypothesis_backtests(family_id, hypothesis_fingerprint, created_at);
     """
     )
 

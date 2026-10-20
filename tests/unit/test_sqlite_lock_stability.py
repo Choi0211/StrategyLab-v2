@@ -123,8 +123,8 @@ class ExplicitBusyTimeoutTests(unittest.TestCase):
 
 
 class MigrationOwnershipTests(unittest.TestCase):
-    def test_K_schema_version_is_47(self) -> None:
-        self.assertEqual(SCHEMA_VERSION, 47)
+    def test_K_schema_version_is_48(self) -> None:
+        self.assertEqual(SCHEMA_VERSION, 48)
 
     def test_owner_migrates_on_fresh_database(self) -> None:
         path = _temp_db_path()

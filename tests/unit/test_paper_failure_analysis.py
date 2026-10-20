@@ -144,6 +144,18 @@ class GenerateHypothesesTests(unittest.TestCase):
         self.assertAlmostEqual(early.evidence["scheduled_exit_win_rate"], 1.0)
         self.assertAlmostEqual(early.evidence["early_exit_win_rate"], 0.0)
 
+    def test_stop_loss_and_take_profit_reasons_are_both_counted_as_early_exit(self) -> None:
+        obs = [_win(reason="48h_timed_exit") for _ in range(MIN_GROUP_TRADES + 2)]
+        obs += [_loss(reason="stop_loss") for _ in range(MIN_GROUP_TRADES - 2)]
+        obs += [_loss(reason="take_profit") for _ in range(2)]
+        records = collect_trade_records(obs)
+        hyps = generate_hypotheses(FAMILY_ID, records, now=NOW)
+        early = next(h for h in hyps if h.pattern_type == "early_exit_vs_scheduled")
+        self.assertEqual(early.evidence["early_exit_trade_count"], MIN_GROUP_TRADES)
+        self.assertEqual(early.evidence["early_exit_reason_counts"]["stop_loss"], MIN_GROUP_TRADES - 2)
+        self.assertEqual(early.evidence["early_exit_reason_counts"]["take_profit"], 2)
+        self.assertEqual(early.evidence["early_exit_reason_counts"]["closed_externally"], 0)
+
     def test_early_exit_insufficient_evidence_when_one_group_too_small(self) -> None:
         obs = [_win(reason="48h_timed_exit") for _ in range(MIN_GROUP_TRADES + 5)]
         obs += [_loss(reason="closed_externally") for _ in range(MIN_GROUP_TRADES - 1)]
