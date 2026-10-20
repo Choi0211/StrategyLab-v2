@@ -272,18 +272,74 @@ class GaonWebChatAdapter:
 
     def report_hypothesis_backtest(self, body: Mapping[str, object], *, created_at: str) -> int:
         """Append-only: records one backtest result against a
-        `paper_failure_hypotheses` row. Never touches
-        `strategy_version_registries` or any promotion table - see
-        `gaon.runtime.paper_hypothesis_backtest_repository` for why, and
-        for the `verdict` contract (`pass` is eligible for the human-
-        reviewed Paper-revalidation queue; nothing else is)."""
+        `paper_failure_hypotheses` row, AND (idempotently, keyed on the
+        same backtest_fingerprint) writes a companion research_memories
+        entry summarizing it - closing the loop so a backtest finding is
+        discoverable via the existing research_memory_search tool the
+        next research cycle already uses, the same way
+        generate_paper_failure_hypotheses.py's own findings are. Never
+        touches `strategy_version_registries` or any promotion table -
+        see `gaon.runtime.paper_hypothesis_backtest_repository` for why,
+        and for the `verdict` contract (`pass` is eligible for the
+        human-reviewed Paper-revalidation queue; nothing else is - that
+        framing is repeated in the memory's own improvement_summary so a
+        human reading it never mistakes 'pass' for 'promoted')."""
         from gaon.runtime.paper_hypothesis_backtest_repository import PaperHypothesisBacktestSQLiteRepository
 
         repository = PaperHypothesisBacktestSQLiteRepository(self._repository._connection)
         try:
-            return repository.insert(body, created_at=created_at)
+            backtest_id = repository.insert(body, created_at=created_at)
         except (KeyError, ValueError) as exc:
             raise ValueError(str(exc)) from exc
+        self._record_backtest_research_memory(body, created_at=created_at)
+        return backtest_id
+
+    def _record_backtest_research_memory(self, body: Mapping[str, object], *, created_at: str) -> None:
+        from uuid import uuid4
+
+        from gaon.research.self_improving import ResearchMemoryEntry, SQLiteResearchMemoryRepository
+
+        family_id = str(body["family_id"])
+        backtest_fingerprint = str(body["backtest_fingerprint"])
+        verdict = str(body["verdict"])
+        memory_fingerprint = f"backtest:{backtest_fingerprint}"
+        memory_repo = SQLiteResearchMemoryRepository(self._repository._connection)
+        if memory_repo.find_by_fingerprint(memory_fingerprint) is not None:
+            return  # unchanged result already recorded - idempotent no-op
+        metrics = body.get("metrics") if isinstance(body.get("metrics"), Mapping) else {}
+        entry = ResearchMemoryEntry(
+            memory_id=f"memory:{family_id}:backtest:{uuid4().hex}",
+            strategy_family=f"{family_id}_hypothesis_backtest",
+            market="BINANCE",
+            timeframe="5m",
+            hypothesis=(
+                f"Backtest of {body.get('hypothesis_id')!s} against real historical market data "
+                f"({body.get('data_source')}, {body.get('data_period_start')} to {body.get('data_period_end')}, "
+                f"{body.get('symbols_processed')} symbols)."
+            ),
+            result_summary=f"verdict={verdict}; metrics={json.dumps(metrics, sort_keys=True)}",
+            critic_summary=(
+                "Backtest-only evidence from real historical data (out-of-sample where oos_validated=True) - "
+                "not a Live/Paper promotion decision by itself. See paper_hypothesis_backtests for the full "
+                f"structured record. Fee assumption: {body.get('fee_assumption_pct')}%% round-trip. "
+                f"{body.get('slippage_note')}."
+            ),
+            improvement_summary=(
+                "verdict='pass' makes this eligible for a human to review for the existing, reviewed, "
+                "one-off Paper forward-revalidation wiring (register_csm_48h_long.py's own pattern) - "
+                "never auto-activated, never auto-promoted to Live."
+                if verdict == "pass" else
+                f"Does not currently clear the backtest gate (verdict={verdict}) - see the structured "
+                "metrics for the specific shortfall before considering this hypothesis further."
+            ),
+            final_status="PENDING_HUMAN_REVIEW" if verdict == "pass" else verdict.upper(),
+            tags=(family_id, "hypothesis-backtest", verdict),
+            created_at=created_at,
+            source_run_id=f"hypothesis_backtest_report:{created_at}",
+            fingerprint=memory_fingerprint,
+            source_refs=(f"gaon-web:/gaon/paper/hypothesis_backtests?family_id={family_id}",),
+        )
+        memory_repo.add_memory(entry)
 
     def paper_hypothesis_backtests(self, family_id: str) -> Mapping[str, object]:
         """Read-only: backtest results for `family_id`'s hypotheses, most
