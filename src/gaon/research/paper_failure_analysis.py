@@ -337,9 +337,13 @@ def _fee_drag_hypothesis(family_id: str, records: Sequence[TradeRecord], now: st
     )
 
 
+EARLY_EXIT_REASONS = ("closed_externally", "stop_loss", "take_profit")
+
+
 def _early_exit_hypothesis(family_id: str, records: Sequence[TradeRecord], now: str) -> Hypothesis | None:
     scheduled = [r for r in records if r.reason == "48h_timed_exit" and r.is_win is not None]
-    early = [r for r in records if r.reason == "closed_externally" and r.is_win is not None]
+    early = [r for r in records if r.reason in EARLY_EXIT_REASONS and r.is_win is not None]
+    reason_counts = {reason: sum(1 for r in early if r.reason == reason) for reason in EARLY_EXIT_REASONS}
     total = len(scheduled) + len(early)
     if len(scheduled) < MIN_GROUP_TRADES or len(early) < MIN_GROUP_TRADES:
         evidence = {
@@ -367,6 +371,7 @@ def _early_exit_hypothesis(family_id: str, records: Sequence[TradeRecord], now: 
     evidence = {
         "scheduled_exit_trade_count": len(scheduled), "scheduled_exit_win_rate": round(scheduled_win_rate, 4),
         "early_exit_trade_count": len(early), "early_exit_win_rate": round(early_win_rate, 4),
+        "early_exit_reason_counts": reason_counts,
         "win_rate_gap": round(gap, 4),
     }
     fingerprint = _fingerprint(family_id, "early_exit_vs_scheduled", evidence)

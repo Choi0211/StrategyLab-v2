@@ -270,6 +270,39 @@ class GaonWebChatAdapter:
             "approval_bypassed": False,
         }
 
+    def report_hypothesis_backtest(self, body: Mapping[str, object], *, created_at: str) -> int:
+        """Append-only: records one backtest result against a
+        `paper_failure_hypotheses` row. Never touches
+        `strategy_version_registries` or any promotion table - see
+        `gaon.runtime.paper_hypothesis_backtest_repository` for why, and
+        for the `verdict` contract (`pass` is eligible for the human-
+        reviewed Paper-revalidation queue; nothing else is)."""
+        from gaon.runtime.paper_hypothesis_backtest_repository import PaperHypothesisBacktestSQLiteRepository
+
+        repository = PaperHypothesisBacktestSQLiteRepository(self._repository._connection)
+        try:
+            return repository.insert(body, created_at=created_at)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+
+    def paper_hypothesis_backtests(self, family_id: str) -> Mapping[str, object]:
+        """Read-only: backtest results for `family_id`'s hypotheses, most
+        recent first, plus the subset currently eligible for the (still
+        human-reviewed, never automatic) Paper-revalidation queue."""
+        from gaon.runtime.paper_hypothesis_backtest_repository import PaperHypothesisBacktestSQLiteRepository
+
+        repository = PaperHypothesisBacktestSQLiteRepository(self._repository._connection)
+        return {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "family_id": family_id,
+            "backtests": list(repository.list_for_family(family_id, limit=50)),
+            "passed_pending_revalidation": list(repository.list_passed_for_family(family_id, limit=50)),
+            "strategy_mutated": False,
+            "order_executed": False,
+            "champion_promoted": False,
+            "approval_bypassed": False,
+        }
+
     def activate_strategy_version(self, *, family_id: str, strategy_version_id: str, confirm: bool, now: str) -> Mapping[str, object]:
         """Fail closed at the adapter boundary, not merely at the HTTP route.
 
@@ -480,6 +513,8 @@ def dispatch_request(
             "paper_report": "/gaon/paper/report",
             "paper_summary": "/gaon/paper/summary",
             "paper_failure_hypotheses": "/gaon/paper/failure_hypotheses",
+            "paper_hypothesis_backtest_result": "/gaon/paper/hypothesis_backtest_result",
+            "paper_hypothesis_backtests": "/gaon/paper/hypothesis_backtests",
             "developer_approve": "/gaon/developer/approve",
             "developer_execute": "/gaon/developer/execute",
             "strategy_mutated": False,
@@ -530,6 +565,10 @@ def dispatch_request(
         return _handle_paper_summary(adapter, query)
     if method == "GET" and route_path == "/gaon/paper/failure_hypotheses":
         return _handle_paper_failure_hypotheses(adapter, query)
+    if method == "POST" and route_path == "/gaon/paper/hypothesis_backtest_result":
+        return _handle_hypothesis_backtest_result(adapter, body)
+    if method == "GET" and route_path == "/gaon/paper/hypothesis_backtests":
+        return _handle_paper_hypothesis_backtests(adapter, query)
     if method == "POST" and route_path == "/gaon/strategy/version/activate":
         # Caller-supplied confirm=True is not authenticated human approval.
         # Fail closed until a durable identity-bound approval flow is wired.
@@ -770,6 +809,49 @@ def _handle_paper_failure_hypotheses(adapter: GaonWebChatAdapter, query: Mapping
     if family_id is None:
         return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
     return 200, adapter.paper_failure_hypotheses(family_id)
+
+
+_HYPOTHESIS_BACKTEST_REQUIRED_FIELDS = (
+    "family_id", "hypothesis_id", "hypothesis_fingerprint", "backtest_fingerprint",
+    "verdict", "metrics", "data_source", "tested_at",
+)
+
+
+def _handle_hypothesis_backtest_result(adapter: GaonWebChatAdapter, body: Mapping[str, object] | None) -> tuple[int, Mapping[str, object]]:
+    """Records one backtest result against a `paper_failure_hypotheses`
+    row, reported by the external, resource-limited backtest job. Never
+    mutates any ACTIVE strategy-version state and never requires the
+    approval-token machinery `/gaon/strategy/version/activate` needs -
+    this only appends a result; see `report_hypothesis_backtest`."""
+    if not isinstance(body, Mapping):
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "JSON object body is required"}
+    missing = [f for f in _HYPOTHESIS_BACKTEST_REQUIRED_FIELDS if body.get(f) in (None, "")]
+    if missing:
+        return 400, {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "error": f"missing required field(s): {missing}",
+        }
+    try:
+        backtest_id = adapter.report_hypothesis_backtest(body, created_at=_utc_now())
+    except (TypeError, ValueError) as exc:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": str(exc)}
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "backtest_id": backtest_id,
+        "family_id": str(body["family_id"]),
+        "verdict": str(body["verdict"]),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
+
+
+def _handle_paper_hypothesis_backtests(adapter: GaonWebChatAdapter, query: Mapping[str, list[str]]) -> tuple[int, Mapping[str, object]]:
+    family_id = _family_id_from_query(query)
+    if family_id is None:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
+    return 200, adapter.paper_hypothesis_backtests(family_id)
 
 
 def _mission_payload(mission: ResearchMission | None) -> Mapping[str, object]:
