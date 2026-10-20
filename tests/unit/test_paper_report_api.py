@@ -114,6 +114,56 @@ class PaperReportApiTests(unittest.TestCase):
         self.assertEqual(payload["paper_failure_hypotheses"], "/gaon/paper/failure_hypotheses")
         self.assertEqual(payload["paper_hypothesis_backtest_result"], "/gaon/paper/hypothesis_backtest_result")
         self.assertEqual(payload["paper_hypothesis_backtests"], "/gaon/paper/hypothesis_backtests")
+        self.assertEqual(payload["paper_failure_hypothesis_propose"], "/gaon/paper/failure_hypothesis")
+
+    def test_propose_hypothesis_missing_required_field_is_400(self) -> None:
+        status, payload = dispatch_request(
+            self.adapter, method="POST", path="/gaon/paper/failure_hypothesis", body={"family_id": FAMILY_ID}
+        )
+        self.assertEqual(status, 400)
+
+    def test_propose_hypothesis_valid_candidate_is_accepted_and_listed(self) -> None:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "fingerprint": "sha256:refine1",
+            "pattern_type": "symbol_concentration", "status": "candidate",
+            "statement": "Backtest fold 2 shows PUMPUSDT at 30% concentration.",
+            "trade_count": 130, "confidence": 0.5, "evidence": {"fold": 2, "top_symbol": "PUMPUSDT"},
+            "verification_required": ["backtest with the symbol excluded"], "generated_at": "2026-10-20T00:00:00Z",
+        }
+        status, payload = dispatch_request(self.adapter, method="POST", path="/gaon/paper/failure_hypothesis", body=body)
+        self.assertEqual(status, 200)
+        self.assertIn("hypothesis_db_id", payload)
+        self.assertFalse(payload["strategy_mutated"])
+
+        status, listing = dispatch_request(
+            self.adapter, method="GET", path=f"/gaon/paper/failure_hypotheses?family_id={FAMILY_ID}", body=None
+        )
+        self.assertEqual(len(listing["hypotheses"]), 1)
+        self.assertEqual(listing["hypotheses"][0]["pattern_type"], "symbol_concentration")
+
+    def test_propose_hypothesis_resent_identical_fingerprint_is_idempotent(self) -> None:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "fingerprint": "sha256:refine2",
+            "pattern_type": "symbol_concentration", "status": "candidate", "statement": "x",
+            "trade_count": 130, "evidence": {}, "verification_required": [], "generated_at": "2026-10-20T00:00:00Z",
+        }
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/failure_hypothesis", body=dict(body))
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/failure_hypothesis", body=dict(body))
+        status, listing = dispatch_request(
+            self.adapter, method="GET", path=f"/gaon/paper/failure_hypotheses?family_id={FAMILY_ID}", body=None
+        )
+        self.assertEqual(len(listing["hypotheses"]), 1)
+
+    def test_propose_hypothesis_never_touches_strategy_version_registry(self) -> None:
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "fingerprint": "sha256:refine3",
+            "pattern_type": "symbol_concentration", "status": "candidate", "statement": "x",
+            "trade_count": 130, "evidence": {}, "verification_required": [], "generated_at": "2026-10-20T00:00:00Z",
+        }
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/failure_hypothesis", body=body)
+        version_status = self.adapter.strategy_version_status(FAMILY_ID)
+        self.assertIsNone(version_status["active"])
+        self.assertEqual(version_status["apply_ready"], [])
 
     def test_backtest_result_missing_required_field_is_400(self) -> None:
         status, payload = dispatch_request(

@@ -270,6 +270,27 @@ class GaonWebChatAdapter:
             "approval_bypassed": False,
         }
 
+    def propose_failure_hypothesis(self, body: Mapping[str, object], *, created_at: str) -> int:
+        """Append-only: records one hypothesis proposed by an EXTERNAL
+        source (e.g. gaon_hypothesis_backtest.py's own backtest-driven
+        refinement proposals, derived from a real diagnosed backtest
+        finding - never a live-trade observation) into the SAME
+        paper_failure_hypotheses table generate_paper_failure_hypotheses.py
+        writes to. Idempotent on (family_id, fingerprint) - same as every
+        other writer of that table. This is what closes the research
+        loop structurally: a hypothesis proposed here is picked up by
+        gaon_hypothesis_backtest.py's own next run (it already polls
+        GET /gaon/paper/failure_hypotheses for status='candidate' rows)
+        and backtested like any other - never auto-applied, never a path
+        to strategy_version_registries."""
+        from gaon.runtime.paper_failure_hypothesis_repository import PaperFailureHypothesisSQLiteRepository
+
+        repository = PaperFailureHypothesisSQLiteRepository(self._repository._connection)
+        try:
+            return repository.insert(body, created_at=created_at)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
+
     def report_hypothesis_backtest(self, body: Mapping[str, object], *, created_at: str) -> int:
         """Append-only: records one backtest result against a
         `paper_failure_hypotheses` row, AND (idempotently, keyed on the
@@ -569,6 +590,7 @@ def dispatch_request(
             "paper_report": "/gaon/paper/report",
             "paper_summary": "/gaon/paper/summary",
             "paper_failure_hypotheses": "/gaon/paper/failure_hypotheses",
+            "paper_failure_hypothesis_propose": "/gaon/paper/failure_hypothesis",
             "paper_hypothesis_backtest_result": "/gaon/paper/hypothesis_backtest_result",
             "paper_hypothesis_backtests": "/gaon/paper/hypothesis_backtests",
             "developer_approve": "/gaon/developer/approve",
@@ -621,6 +643,8 @@ def dispatch_request(
         return _handle_paper_summary(adapter, query)
     if method == "GET" and route_path == "/gaon/paper/failure_hypotheses":
         return _handle_paper_failure_hypotheses(adapter, query)
+    if method == "POST" and route_path == "/gaon/paper/failure_hypothesis":
+        return _handle_propose_failure_hypothesis(adapter, body)
     if method == "POST" and route_path == "/gaon/paper/hypothesis_backtest_result":
         return _handle_hypothesis_backtest_result(adapter, body)
     if method == "GET" and route_path == "/gaon/paper/hypothesis_backtests":
@@ -865,6 +889,42 @@ def _handle_paper_failure_hypotheses(adapter: GaonWebChatAdapter, query: Mapping
     if family_id is None:
         return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "family_id query parameter is required"}
     return 200, adapter.paper_failure_hypotheses(family_id)
+
+
+_PROPOSE_HYPOTHESIS_REQUIRED_FIELDS = (
+    "family_id", "hypothesis_id", "fingerprint", "pattern_type", "status",
+    "statement", "trade_count", "evidence", "verification_required", "generated_at",
+)
+
+
+def _handle_propose_failure_hypothesis(adapter: GaonWebChatAdapter, body: Mapping[str, object] | None) -> tuple[int, Mapping[str, object]]:
+    """Records one hypothesis proposed by an external source (e.g. a
+    real backtest finding) - never mutates strategy_version_registries,
+    never requires the approval-token machinery mutating endpoints need.
+    See propose_failure_hypothesis for the idempotency contract."""
+    if not isinstance(body, Mapping):
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "JSON object body is required"}
+    missing = [f for f in _PROPOSE_HYPOTHESIS_REQUIRED_FIELDS if body.get(f) in (None, "")]
+    if missing:
+        return 400, {
+            "schema_version": WEB_API_SCHEMA_VERSION,
+            "error": f"missing required field(s): {missing}",
+        }
+    try:
+        hypothesis_db_id = adapter.propose_failure_hypothesis(body, created_at=_utc_now())
+    except (TypeError, ValueError) as exc:
+        return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": str(exc)}
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "hypothesis_db_id": hypothesis_db_id,
+        "family_id": str(body["family_id"]),
+        "pattern_type": str(body["pattern_type"]),
+        "status": str(body["status"]),
+        "strategy_mutated": False,
+        "order_executed": False,
+        "champion_promoted": False,
+        "approval_bypassed": False,
+    }
 
 
 _HYPOTHESIS_BACKTEST_REQUIRED_FIELDS = (
