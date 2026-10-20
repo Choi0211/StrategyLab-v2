@@ -151,6 +151,39 @@ class PaperReportApiTests(unittest.TestCase):
         self.assertEqual(len(listing["backtests"]), 1)
         self.assertEqual(len(listing["passed_pending_revalidation"]), 1)
 
+    def test_backtest_result_writes_a_discoverable_research_memory(self) -> None:
+        """Closes the auto-cycle: a reported backtest result must also
+        land in research_memories so the next research cycle can find it
+        via the existing research_memory_search tool - not just sit in
+        the structured table unseen."""
+        from gaon.research.self_improving import SQLiteResearchMemoryRepository
+
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "baseline_validation:csm-48h-long",
+            "hypothesis_fingerprint": "baseline:csm-48h-long", "backtest_fingerprint": "sha256:mem1",
+            "verdict": "pass", "metrics": {"overall": {"pf": 1.56, "n": 500}},
+            "data_source": "local_1m_kline_cache", "oos_validated": True, "tested_at": "2026-10-20T00:00:00Z",
+        }
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+        memories = SQLiteResearchMemoryRepository(self.store._connection).search(tag=FAMILY_ID)
+        self.assertEqual(len(memories), 1)
+        self.assertIn("pass", memories[0].result_summary)
+        self.assertEqual(memories[0].final_status, "PENDING_HUMAN_REVIEW")
+        self.assertIn("never auto-activated", memories[0].improvement_summary)
+
+    def test_resent_backtest_result_does_not_duplicate_the_research_memory(self) -> None:
+        from gaon.research.self_improving import SQLiteResearchMemoryRepository
+
+        body = {
+            "family_id": FAMILY_ID, "hypothesis_id": "x", "hypothesis_fingerprint": "sha256:h",
+            "backtest_fingerprint": "sha256:mem2", "verdict": "fail", "metrics": {},
+            "data_source": "local", "tested_at": "2026-10-20T00:00:00Z",
+        }
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=dict(body))
+        dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=dict(body))
+        memories = SQLiteResearchMemoryRepository(self.store._connection).search(tag=FAMILY_ID)
+        self.assertEqual(len(memories), 1)
+
     def test_backtest_result_never_touches_strategy_version_registry(self) -> None:
         body = {
             "family_id": FAMILY_ID, "hypothesis_id": "hypothesis:x", "hypothesis_fingerprint": "sha256:h",
