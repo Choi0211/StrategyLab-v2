@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 from gaon.knowledge.research_mission import MissionStatus, extract_or_update_mission
 from gaon.runtime import llm_conversation
@@ -284,7 +285,10 @@ class _RuntimeTruthMixin:
             self.assertIn("url_fetch", payload["tool_calls"])
             self.assertIn("링크를 직접 읽었습니다", payload["text"])
 
-    def test_current_info_request_offline_uses_server_native_web_search(self) -> None:
+    @patch("gaon.runtime.research_media_tools._search_duckduckgo", return_value=[
+        {"title": "Test evidence", "url": "https://example.com/research", "snippet": "Deterministic market news and weather evidence"}
+    ])
+    def test_current_info_request_offline_uses_server_native_web_search(self, search) -> None:
         self._seed_mission()
         payload = self._send("오늘 날씨는 어때요?")
         self.assertEqual(payload["route"], "tool_server_native_fallback")

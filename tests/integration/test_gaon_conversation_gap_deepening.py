@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 from gaon.knowledge.research_mission import MissionStatus, extract_or_update_mission
 from gaon.runtime import llm_conversation
@@ -226,7 +227,15 @@ class GaonConversationGapDeepeningTests(unittest.TestCase):
         self.assertNotIn("아직 링크를 직접 열어", payload["text"])
         self.assertNotIn("단타", payload["text"])
 
-    def test_case5_bare_reference_after_successful_url_reuses_external_read_not_mission_blocker(self) -> None:
+    @patch("gaon.knowledge.content_acquisition.socket.getaddrinfo", return_value=[
+        (2, 1, 6, "", ("93.184.216.34", 443))
+    ])
+    @patch("gaon.runtime.research_media_tools._opener")
+    def test_case5_bare_reference_after_successful_url_reuses_external_read_not_mission_blocker(self, fetch, dns) -> None:
+        response = fetch.return_value.open.return_value.__enter__.return_value
+        response.read.return_value = b"<html><body>Deterministic equity research paper evidence.</body></html>"
+        response.headers.get_content_type.return_value = "text/html"
+        response.geturl.return_value = "https://www.nber.org/papers/w10144"
         self._seed_mission(blocked=True)
         first = self._send("https://www.nber.org/papers/w10144")
         self.assertEqual(first["route"], "tool_server_native_fallback")

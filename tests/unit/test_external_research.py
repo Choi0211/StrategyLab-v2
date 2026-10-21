@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from gaon.runtime.external_research import ExternalResearchError, ExternalResearchTool, FreshnessStatus, structured_data, validate_external_url, validate_redirect_chain
 from gaon.runtime.llm_tools import SafeToolExecutor, ToolRequest, default_tool_registry
@@ -33,7 +34,10 @@ class ExternalResearchTests(unittest.TestCase):
         self.assertEqual(fx["freshness"], "unknown")
         self.assertEqual(fx["data"]["status"], "provider_not_configured")
 
-    def test_external_tools_are_read_only_and_audited(self) -> None:
+    @patch("gaon.runtime.research_media_tools._search_duckduckgo", return_value=[
+        {"title": "Test evidence", "url": "https://example.com/research", "snippet": "Deterministic market news and weather evidence"}
+    ])
+    def test_external_tools_are_read_only_and_audited(self, search) -> None:
         store = RuntimeStateStore(":memory:")
         try:
             executor = SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit)

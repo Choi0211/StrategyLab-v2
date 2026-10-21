@@ -157,11 +157,23 @@ def validate(connection: sqlite3.Connection, args: dict[str, object]) -> dict[st
     if market in {"KR", "KR_STOCK", "KOSPI", "KOSDAQ"} and symbol:
         from gaon.research.krx_real_pipeline import krx_real_research_payload
         report = krx_real_research_payload(connection, f"외부 근거 독립 검증. 자료의 주장과 무관하게 실제 시장 데이터로 {symbol} 전략 특성을 검증해줘. 참고 텍스트: {excerpt}", symbol=symbol)
-        validation.update({"status": "market_evidence_collected", "independent_market_evidence": True, "provider": report.get("source") or report.get("provider"), "report": report})
+        metadata = report.get("dataset", {}).get("metadata", {})
+        usable = report.get("quality", {}).get("status") in {"pass", "pass_with_warnings"} and report.get("backtest", {}).get("status") == "completed"
+        _attach_market_evidence(validation, report, metadata, usable=usable)
     elif market in {"US", "US_STOCK"} and symbol:
         from gaon.research.multi_symbol import multi_symbol_research_payload
         report = multi_symbol_research_payload(connection, f"미국 주식 {symbol} 실제 데이터로 외부 연구 근거를 독립 검증해줘. 참고 텍스트: {excerpt}", symbols=(symbol,), universe_type="explicit")
-        validation.update({"status": "market_evidence_collected", "independent_market_evidence": True, "provider": report.get("request", {}).get("provider") if isinstance(report.get("request"), dict) else None, "report": report})
+        request = report.get("request", {})
+        # Multi-symbol uses source="real" for backtest provenance and
+        # provider="real:..." for the data provider (KR dataset metadata
+        # uses source="real:..." directly). Keep both checks explicit.
+        metadata = {"source": request.get("provider") if request.get("source") == "real" else None,
+                    "fixture_backed": request.get("fixture_backed")}
+        usable = any(item.get("eligible") is True and item.get("fixture_backed") is False
+                     and item.get("source") == "real"
+                     and str(item.get("provider", "")).startswith("real:")
+                     for item in report.get("evidence", []) if isinstance(item, Mapping))
+        _attach_market_evidence(validation, report, metadata, usable=usable)
     elif market in {"BINANCE", "BINANCE_CRYPTO", "CRYPTO"}:
         from gaon.research.live_trading_intelligence import production_feedback
         feedback = production_feedback("BINANCE")
@@ -186,3 +198,15 @@ def validate(connection: sqlite3.Connection, args: dict[str, object]) -> dict[st
         "automatic_strategy_change": False,
         "automatic_promotion": False,
     }
+
+
+def _attach_market_evidence(validation, report, metadata, *, usable):
+    """A returned report alone does not establish independent real evidence."""
+    real = (isinstance(metadata, Mapping) and metadata.get("fixture_backed") is False
+            and str(metadata.get("source", "")).startswith("real:") and usable)
+    validation.update({
+        "status": "market_evidence_collected" if real else "market_evidence_unverified",
+        "independent_market_evidence": bool(real),
+        "provider": metadata.get("source") if isinstance(metadata, Mapping) else None,
+        "report": report,
+    })

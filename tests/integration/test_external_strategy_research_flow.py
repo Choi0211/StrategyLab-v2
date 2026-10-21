@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from gaon.research.strategy_research import StrategyResearchOrchestrator
 from gaon.runtime.agent_planner import AgentPlanExecutor, AgentPlanPolicy, AgentPlanner
@@ -10,7 +11,10 @@ NOW = "2026-07-20T00:00:00Z"
 
 
 class ExternalStrategyResearchFlowTests(unittest.TestCase):
-    def test_multi_tool_external_research_plan_executes_and_strategy_report_is_created(self) -> None:
+    @patch("gaon.runtime.research_media_tools._search_duckduckgo", return_value=[
+        {"title": "Test evidence", "url": "https://example.com/research", "snippet": "Deterministic market news and weather evidence"}
+    ])
+    def test_multi_tool_external_research_plan_executes_and_strategy_report_is_created(self, search) -> None:
         store = RuntimeStateStore(":memory:")
         try:
             executor = SafeToolExecutor(default_tool_registry(store._connection), store.tool_audit)

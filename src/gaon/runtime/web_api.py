@@ -7,12 +7,9 @@ future unified web dashboard) can ask Gaon natural-language questions
 and share the same Gaon core/research state Telegram uses - not a
 second, parallel conversation implementation.
 
-Deliberately uses only the Python standard library (``http.server``).
-This codebase's ``pyproject.toml`` has almost no external dependencies
-by design (only ``tzdata``), and Flask/FastAPI/etc. are not installed
-in this environment - adding one would be a bigger decision than this
-module's scope, so a small ``BaseHTTPRequestHandler`` server is used
-instead. The actual routing/dispatch logic (``dispatch_request``) is a
+The HTTP transport uses the Python standard library (``http.server``);
+content research and WebAuthn dependencies are declared in pyproject.toml.
+The actual routing/dispatch logic (``dispatch_request``) is a
 plain function with no socket dependency, so it can be - and is -
 tested in-process without opening a real port.
 
@@ -22,13 +19,13 @@ nonblocking admission, while health/read requests can finish independently.
 In-memory runtimes retain the single-threaded server. Browser identity is
 conversation scoping, not authentication; this is not a public multi-tenant API.
 
-Safety: every response carries the same
-strategy_mutated/order_executed/champion_promoted/approval_bypassed
-invariants every other module in this codebase surfaces, always False
-here, since this layer never does any of those things - it only calls
-``LLMConversationBrain.respond``, the exact function Telegram already
-uses, which already enforces every approval/promotion gate itself.
-This module adds no new mutation path.
+Paper routes append observations, hypotheses, backtest evidence and
+review-ready candidate versions. Admin strategy activation requires the
+dedicated Passkey flow; conversation identity/confirm flags cannot authorize
+it. Legacy developer HTTP approval/execution routes fail closed. Research
+writes are not automatic strategy activation, and this server places no
+orders. General chat/history/Paper routes still require a trusted network
+and external access control; they are not authenticated by user_ref.
 """
 
 from __future__ import annotations
@@ -807,27 +804,14 @@ def dispatch_request(
                      "strategy_mutated": False, "order_executed": False,
                      "live_activated": False, "approval_bypassed": False}
     if method == "POST" and route_path == "/gaon/developer/approve":
-        task_id = _require_str_field(body, "task_id")
-        action = _require_str_field(body, "action")
-        user_ref = _require_str_field(body, "user_ref")
-        confirm = isinstance(body, Mapping) and body.get("confirm") is True
-        if task_id is None or action is None or user_ref is None:
-            return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "task_id, action and user_ref are required"}
-        if not confirm:
-            return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "explicit confirm=true is required"}
-        result = adapter.issue_developer_approval(task_id=task_id, action=action, user_ref=user_ref, now=_utc_now())
-        return (200 if result.get("ok") else 409), result
+        # Conversation identity and confirm=true are not authentication.
+        # Keep this legacy HMAC issuance path closed until a dedicated,
+        # exact-action Passkey flow exists for developer operations.
+        return 403, {"schema_version": WEB_API_SCHEMA_VERSION,
+                     "error": "authenticated developer approval workflow required"}
     if method == "POST" and route_path == "/gaon/developer/execute":
-        approval_id = _require_str_field(body, "approval_id")
-        approval_token = _require_str_field(body, "approval_token")
-        task_id = _require_str_field(body, "task_id")
-        action = _require_str_field(body, "action")
-        user_ref = _require_str_field(body, "user_ref")
-        arguments = body.get("arguments") if isinstance(body, Mapping) and isinstance(body.get("arguments"), Mapping) else {}
-        if None in (approval_id, approval_token, task_id, action, user_ref):
-            return 400, {"schema_version": WEB_API_SCHEMA_VERSION, "error": "approval_id, approval_token, task_id, action and user_ref are required"}
-        result = adapter.execute_developer_action(approval_id=approval_id, approval_token=approval_token, task_id=task_id, action=action, user_ref=user_ref, arguments=arguments, now=_utc_now())
-        return (200 if result.get("ok") else 409), result
+        return 403, {"schema_version": WEB_API_SCHEMA_VERSION,
+                     "error": "authenticated developer approval workflow required"}
     if method == "GET" and route_path == "/gaon/chat/conversations":
         return _handle_conversations_list(adapter, query)
     if method == "GET" and route_path == "/gaon/chat/messages":
@@ -1463,7 +1447,7 @@ def build_request_handler(adapter: GaonWebChatAdapter | None, *, adapter_factory
                     except (PermissionError, ValueError, TypeError):
                         return 403, {"error": "authentication required"}
                 if method == "POST" and urlsplit(self.path).path == "/gaon/admin/strategy/approval/finish":
-                    import base64
+                    from gaon.control.passkey_assertion import client_challenge
                     from gaon.control.passkey_origin import validate_origin
                     from gaon.control.passkey_session import validate_session
                     from gaon.control.passkey_strategy_finish import finish_strategy_approval
@@ -1479,14 +1463,7 @@ def build_request_handler(adapter: GaonWebChatAdapter | None, *, adapter_factory
                         credential = body.get("credential")
                         if not isinstance(credential, dict):
                             raise PermissionError("invalid credential")
-                        client_data = credential.get("response", {}).get("clientDataJSON")
-                        if not isinstance(client_data, str):
-                            raise PermissionError("missing client data")
-                        decoded = json.loads(base64.urlsafe_b64decode(
-                            client_data + "=" * (-len(client_data) % 4)))
-                        challenge_b64 = decoded["challenge"]
-                        challenge = base64.urlsafe_b64decode(
-                            challenge_b64 + "=" * (-len(challenge_b64) % 4))
+                        challenge = client_challenge(credential)
                         def finish_approval(scoped):
                             connection = scoped._repository._connection
                             actor = validate_session(connection, token=token, csrf=csrf,
