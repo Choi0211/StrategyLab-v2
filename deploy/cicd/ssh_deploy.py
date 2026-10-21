@@ -159,7 +159,8 @@ class Deployment:
             self.import_check()
             since = int(time.time())
             self.control.call('start-runtime')
-            if self.control.call('inspect')['schema_version'] != old_schema:
+            result['db_schema_version'] = self.control.call('inspect')['schema_version']
+            if result['db_schema_version'] != old_schema:
                 raise ValueError('post-start schema mismatch')
             self.control.call('start-web')
             result['stage'] = 'verify'
@@ -196,6 +197,15 @@ class Deployment:
                         except BaseException:
                             pass
         finally:
+            if stopped and result['status'] != 'success':
+                try:
+                    result.update(self.control.call('status', str(int(time.time()))))
+                except BaseException:
+                    result['services'] = {unit: {'state': 'unknown'} for unit in UNITS}
+                try:
+                    result['db_schema_version'] = self.control.call('inspect')['schema_version']
+                except BaseException:
+                    result['db_schema_version'] = None
             result['finished_at'] = stamp()
         return result
 

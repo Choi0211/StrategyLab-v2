@@ -242,6 +242,23 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertTrue(result['manual_recovery_required'])
         self.assertFalse(result['rollback_succeeded'])
         self.assertTrue(all(pid == 0 for pid in self.control.pids.values()))
+        self.assertTrue(all(service['state'] == 'inactive' for service in result['services'].values()))
+
+    def test_unexpected_db_schema_drift_never_restores_database(self):
+        original = self.control.call
+        def call(operation, *args):
+            value = original(operation, *args)
+            if operation == 'start-runtime' and self.head() == self.target:
+                with sqlite3.connect(self.db) as db:
+                    db.execute('UPDATE schema_version SET version=49')
+            return value
+        self.control.call = call
+        result = self.execute()
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['db_schema_version'], 49)
+        self.assertFalse(result['db_restored'])
+        self.assertTrue(result['manual_recovery_required'])
+        self.assertTrue(all(pid == 0 for pid in self.control.pids.values()))
 
 
 class PrivilegedBrokerTests(unittest.TestCase):
