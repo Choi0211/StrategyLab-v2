@@ -35,6 +35,7 @@ family.
 from __future__ import annotations
 
 import sqlite3
+import math
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -62,50 +63,80 @@ class PromotionDecision:
     spec_fingerprint: str | None = None
 
 
-def _family_id_for_strategy(strategy: Mapping[str, object]) -> str:
+def _family_id_for_strategy(strategy: Mapping[str, object], *, market: str = "KR") -> str:
     """Group research runs that tune the same strategy shape into one
     family, independent of the specific parameter values tried."""
     entry_keys = sorted((strategy.get("entry") or {}).keys())
     exit_keys = sorted((strategy.get("exit") or {}).keys())
-    return "kr-equity-research:" + "-".join(entry_keys) + "__" + "-".join(exit_keys)
+    return f"{market.lower()}-equity-research:" + "-".join(entry_keys) + "__" + "-".join(exit_keys)
 
 
 def evaluate_run(payload: Mapping[str, object]) -> PromotionDecision:
     """Pure function: apply the absolute promotion bar to one research
     run's full payload (as returned by
     ``SQLiteMultiSymbolResearchRepository.get_payload``)."""
-    run_id = str(payload.get("run_id"))
+    run_id = str(payload.get("run_id") or "")
+    if not run_id.strip():
+        return PromotionDecision(run_id, False, "research run has no identity")
     if payload.get("final_recommendation") != REQUIRED_RECOMMENDATION:
         return PromotionDecision(run_id, False, "recommendation is not candidate_preferred")
 
-    summary = dict(payload.get("summary") or {})
+    raw_summary = payload.get("summary")
+    if not isinstance(raw_summary, Mapping):
+        return PromotionDecision(run_id, False, "invalid research summary")
+    summary = dict(raw_summary)
     if summary.get("sample_confidence") != REQUIRED_SAMPLE_CONFIDENCE:
         return PromotionDecision(run_id, False, "sample_confidence is not high")
 
-    if summary.get("concentration_decision") not in ALLOWED_CONCENTRATION:
+    concentration = summary.get("concentration_decision")
+    if not isinstance(concentration, str) or concentration not in ALLOWED_CONCENTRATION:
         return PromotionDecision(run_id, False, "symbol/return concentration too narrow")
 
     trade_count = summary.get("aggregate_trade_count")
-    if not isinstance(trade_count, (int, float)) or isinstance(trade_count, bool) or trade_count < MIN_TRADE_COUNT:
+    if not _finite_number(trade_count) or trade_count < MIN_TRADE_COUNT or trade_count % 1:
         return PromotionDecision(run_id, False, "insufficient trade sample")
 
     profitable_ratio = summary.get("profitable_symbol_ratio")
-    if not isinstance(profitable_ratio, (int, float)) or isinstance(profitable_ratio, bool) or profitable_ratio < MIN_PROFITABLE_SYMBOL_RATIO:
+    if not _finite_number(profitable_ratio) or not MIN_PROFITABLE_SYMBOL_RATIO <= profitable_ratio <= 1:
         return PromotionDecision(run_id, False, "majority of symbols are not profitable")
 
     median_return = summary.get("median_return")
-    if not isinstance(median_return, (int, float)) or isinstance(median_return, bool) or median_return <= 0:
+    if not _finite_number(median_return) or median_return <= 0:
         return PromotionDecision(run_id, False, "median return is not positive")
 
-    strategy = dict(payload.get("strategy") or {})
+    raw_strategy = payload.get("strategy")
+    if not isinstance(raw_strategy, Mapping):
+        return PromotionDecision(run_id, False, "invalid strategy")
+    strategy = dict(raw_strategy)
+    if any(not isinstance(strategy.get(key, {}), Mapping) for key in ("entry", "exit", "filters")):
+        return PromotionDecision(run_id, False, "invalid strategy rules")
     fingerprint = strategy.get("fingerprint")
     if not isinstance(fingerprint, str) or not fingerprint:
         return PromotionDecision(run_id, False, "strategy has no fingerprint")
 
+    # Legacy runs predate universe market metadata and belong to the KR
+    # research track. Explicit overseas runs must never enter a KR family.
+    request = payload.get("request", {})
+    universe = request.get("universe", {}) if isinstance(request, Mapping) else None
+    if not isinstance(universe, Mapping):
+        return PromotionDecision(run_id, False, "invalid research market scope")
+    market = universe.get("market", "KR")
+    if market not in ("KR", "US"):
+        return PromotionDecision(run_id, False, "unsupported research market scope")
+
     return PromotionDecision(
         run_id, True, "meets absolute promotion bar: profitable, broad-sample, high-confidence",
-        family_id=_family_id_for_strategy(strategy), spec_fingerprint=fingerprint,
+        family_id=_family_id_for_strategy(strategy, market=market), spec_fingerprint=fingerprint,
     )
+
+
+def _finite_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def list_promotable_candidates(connection: sqlite3.Connection, *, limit: int = 1000) -> tuple[PromotionDecision, ...]:

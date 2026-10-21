@@ -2474,6 +2474,11 @@ def mission_blocked_message(mission: ResearchMission, *, technical: bool = False
         render_blocked_reason_explanation(mission.blocked_reason, technical=technical),
         "",
         "임의로 결과를 만들지 않고, 연구가 다시 가능해지면 이어서 진행하겠습니다.",
+        "",
+        "[Safety]",
+        "- 자동 주문 없음",
+        "- Champion 자동 승격 없음",
+        "- 승인 없는 config 변경 없음",
     ]
     return "\n".join(lines)
 

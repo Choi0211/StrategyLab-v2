@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime,timezone,timedelta
 import secrets
 from webauthn import generate_registration_options,verify_registration_response
+from webauthn.helpers.exceptions import WebAuthnException
 from webauthn.helpers import options_to_json
 from webauthn.helpers.structs import AuthenticatorSelectionCriteria,UserVerificationRequirement
 
@@ -39,6 +40,9 @@ def finish_enrollment(*,pending,credential,rp_id,origin,actor,now=None):
     if actor!=pending.actor:
         raise PermissionError("enrollment actor mismatch")
     pending.consumed=True
-    return verify_registration_response(credential=credential,
-        expected_challenge=pending.challenge,expected_rp_id=rp_id,
-        expected_origin=origin,require_user_verification=True)
+    try:
+        return verify_registration_response(credential=credential,
+            expected_challenge=pending.challenge,expected_rp_id=rp_id,
+            expected_origin=origin,require_user_verification=True)
+    except WebAuthnException as exc:
+        raise PermissionError("passkey enrollment verification failed") from exc

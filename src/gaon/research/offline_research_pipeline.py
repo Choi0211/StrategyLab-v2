@@ -8,6 +8,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from gaon.research.market_feature_engine import extract_features
 from gaon.research.indicator_hypotheses import propose
 from gaon.research.indicator_walkforward import evaluate
@@ -28,7 +29,17 @@ def research_and_record(connection: sqlite3.Connection, bars, *,
                         timeframe: str, observed_at: str,
                         fee_bps: float = 5.0, slippage_bps: float = 5.0):
     candles=list(bars)
-    validate_closed_bars(candles)
+    periods = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+               "1h": 3600, "4h": 14400, "1d": 86400, "daily": 86400}
+    if timeframe not in periods:
+        raise ValueError("unsupported closed-candle timeframe")
+    try:
+        observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("invalid observed_at") from exc
+    if observed.tzinfo is None or observed > datetime.now(timezone.utc):
+        raise ValueError("observed_at must be timezone-aware and not in the future")
+    validate_closed_bars(candles, as_of=observed, timeframe_seconds=periods[timeframe])
     features=extract_features(candles,market=market,timeframe=timeframe)
     hypothesis=propose(features)
     test=evaluate(candles,market=market,timeframe=timeframe,

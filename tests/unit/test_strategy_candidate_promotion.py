@@ -51,6 +51,29 @@ def _insert_run(connection, run_id, payload, *, artifact=False):
 
 
 class EvaluateRunTests(unittest.TestCase):
+    def test_nonfinite_and_invalid_metrics_fail_closed(self):
+        for key in ("aggregate_trade_count", "profitable_symbol_ratio", "median_return"):
+            for value in (float("nan"), float("inf"), -float("inf"), True, "0.9", None):
+                with self.subTest(key=key, value=value):
+                    self.assertFalse(evaluate_run(_payload("bad", summary={**GOOD_SUMMARY, key: value})).eligible)
+        for key, value in (("profitable_symbol_ratio", 1.1), ("aggregate_trade_count", 30.5)):
+            self.assertFalse(evaluate_run(_payload("bad", summary={**GOOD_SUMMARY, key: value})).eligible)
+
+    def test_malformed_payloads_are_not_offered_for_approval(self):
+        for change in ({"run_id": None}, {"summary": [1]}, {"strategy": [1]},
+                       {"strategy": {**STRATEGY, "entry": [1]}}):
+            with self.subTest(change=change):
+                self.assertFalse(evaluate_run({**_payload("bad"), **change}).eligible)
+
+    def test_market_families_are_isolated_and_unknown_markets_fail_closed(self):
+        kr = evaluate_run({**_payload("kr"), "request": {"universe": {"market": "KR"}}})
+        us = evaluate_run({**_payload("us"), "request": {"universe": {"market": "US"}}})
+        self.assertNotEqual(kr.family_id, us.family_id)
+        self.assertTrue(us.family_id.startswith("us-equity-research:"))
+        for request in ({"universe": {"market": "MULTI"}}, {"universe": []}, []):
+            self.assertFalse(evaluate_run({**_payload("bad"), "request": request}).eligible)
+        self.assertFalse(evaluate_run(_payload("bad", summary={**GOOD_SUMMARY, "concentration_decision": []})).eligible)
+
     def test_good_candidate_is_eligible(self):
         decision = evaluate_run(_payload("r1"))
         self.assertTrue(decision.eligible)

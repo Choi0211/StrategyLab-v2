@@ -1,9 +1,9 @@
 """One-time administrator passkey login assertion; no session issued here."""
 from __future__ import annotations
-import base64,json
+import json
 from gaon.control.passkey_origin import RP_ID,validate_origin
 from gaon.control.passkey_repository import credential_for_actor,accept_verified_assertion
-from gaon.control.passkey_assertion import begin_assertion,finish_assertion
+from gaon.control.passkey_assertion import begin_assertion,finish_assertion,client_challenge
 from gaon.control.passkey_challenge_store import store,consume
 
 def begin_login(connection,*,actor,origin,request_host,now=None):
@@ -22,15 +22,7 @@ def finish_login(connection,*,actor,credential,origin,request_host,now=None):
     validate_origin(origin,request_host=request_host)
     if not isinstance(actor,str) or not isinstance(credential,dict):
         raise PermissionError("invalid login")
-    data=credential.get("response",{}).get("clientDataJSON")
-    if not isinstance(data,str):
-        raise PermissionError("missing client data")
-    try:
-        parsed=json.loads(base64.urlsafe_b64decode(data+"="*(-len(data)%4)))
-        encoded=parsed["challenge"]
-        challenge=base64.urlsafe_b64decode(encoded+"="*(-len(encoded)%4))
-    except (ValueError,KeyError,TypeError,UnicodeDecodeError) as exc:
-        raise PermissionError("invalid login data") from exc
+    challenge=client_challenge(credential)
     pending=consume(connection,challenge=challenge,actor=actor,action="login",
         family_id="admin",version_id="session",now=now)
     row=credential_for_actor(connection,actor)
