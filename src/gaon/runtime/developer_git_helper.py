@@ -4,17 +4,24 @@ The helper exposes exactly two actions over a local Unix socket: push the
 already-created ``gaon-dev/<task>`` branch, and create a PR from that branch
 to ``main``. It cannot merge PRs, checkout or update production code, deploy,
 control services, touch trading state, or execute caller-provided commands.
+
+Importing is portable; operations require Unix group ownership, chown and
+Unix sockets. Windows operations fail before filesystem or command changes.
 """
 from __future__ import annotations
 
 import argparse
-import grp
+try:
+    import grp
+except ImportError:  # Windows has no Unix group database.
+    grp = None
 import json
 import os
 from pathlib import Path
 import re
 import socket
 import subprocess
+import sys
 from typing import Mapping
 
 SOCKET_PATH = Path(os.environ.get("GAON_DEVELOPER_GIT_SOCKET", "/run/strategylab/gaon-dev-git.sock"))
@@ -25,7 +32,15 @@ MAX_REQUEST_BYTES = 20_000
 MAX_OUTPUT_CHARS = 20_000
 
 
+def _require_unix_permissions() -> None:
+    if (sys.platform == "win32" or grp is None
+            or not callable(getattr(os, "chown", None))
+            or not hasattr(socket, "AF_UNIX")):
+        raise RuntimeError("developer Git helper requires Unix group ownership and socket permissions; unsupported on this platform")
+
+
 def _run(args: list[str], *, cwd: Path, timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    _require_unix_permissions()
     return subprocess.run(
         args,
         cwd=str(cwd),
@@ -100,6 +115,7 @@ def handle_request(request: Mapping[str, object]) -> dict[str, object]:
     action = str(request.get("action") or "").strip()
     if action not in {"push", "create_pr"}:
         raise PermissionError("unsupported helper action")
+    _require_unix_permissions()
     task = _task(request.get("task_id"))
     path = _worktree(task)
     branch = _verify_repo(path, task)
@@ -136,6 +152,7 @@ def _read_request(conn: socket.socket) -> Mapping[str, object]:
 
 
 def serve(path: Path = SOCKET_PATH) -> None:
+    _require_unix_permissions()
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() or path.is_symlink():
         path.unlink()
