@@ -1,0 +1,149 @@
+name: Gaon production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gaon-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify exact production SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e .
+      - run: bash scripts/check_workflows.sh
+      - name: Run full CI (fail closed)
+        run: python scripts/verify_release.py --report-json report/ci.json
+      - name: Publish test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gaon-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: report/ci.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: CI summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads(Path('report/ci.json').read_text()) if Path('report/ci.json').exists() else {'status': 'unavailable'}
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('## Gaon CI\n\n```json\n' + json.dumps(report, indent=2) + '\n```\n')
+          PY
+
+  deploy:
+    name: Approved Gaon deployment (disabled until configured)
+    needs: verify
+    if: github.ref == 'refs/heads/main' && needs.verify.result == 'success'
+    runs-on: ${{ vars.GAON_DEPLOY_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    environment:
+      name: gaon-production
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      DEPLOY_ENABLED: ${{ vars.GAON_DEPLOY_ENABLED }}
+      DEPLOY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: gaon-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: report
+      - name: Check activation, exact CI SHA and merged PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads(Path('report/ci.json').read_text())
+          assert report['status'] == 'passed' and report['sha'] == os.environ['GITHUB_SHA']
+          assert report.get('source_dirty') is False
+          assert set(report['suites']) == {'unit', 'integration'}
+          assert all(s['passed'] and s['executed'] > 0 for s in report['suites'].values())
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" > report/prs.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          prs = [p['number'] for p in json.loads(Path('report/prs.json').read_text())
+                 if p.get('merged_at') and p['base']['ref'] == 'main' and p.get('merge_commit_sha') == os.environ['GITHUB_SHA']]
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('PR_NUMBERS=' + json.dumps(prs) + '\n')
+              output.write('DEPLOY_PRS=' + ','.join(map(str, prs)) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('ready=' + str(bool(prs) and os.environ.get('DEPLOY_ENABLED') == 'true').lower() + '\n')
+          PY
+      - name: Transport reviewed code (no server packages, no DB restore)
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.GAON_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.GAON_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.GAON_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.GAON_DEPLOY_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$DEPLOY_KEY" && test -n "$KNOWN_HOSTS"
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] && (( DEPLOY_PORT > 0 && DEPLOY_PORT < 65536 ))
+          key_dir=$(mktemp -d)
+          trap 'rm -rf "$key_dir"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$key_dir/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$key_dir/known_hosts"
+          git bundle create "$key_dir/release.bundle" HEAD
+          ssh_rc=0
+          ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$key_dir/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -i "$key_dir/key" -p "$DEPLOY_PORT" "gaon-deploy@$DEPLOY_HOST" \
+            "deploy $GITHUB_SHA $DEPLOY_RUN_ID $DEPLOY_PRS" \
+            < "$key_dir/release.bundle" > report/remote.json || ssh_rc=$?
+          printf '%s\n' "$ssh_rc" > report/transport-exit.txt
+          exit "$ssh_rc"
+      - name: Structured deployment report and summary
+        if: always()
+        run: python deploy/cicd/report.py report
+      - name: Publish deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gaon-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            report/deployment.json
+            report/ci.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Require a verified successful deployment when enabled
+        if: always() && env.DEPLOY_ENABLED == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          assert json.loads(Path('report/deployment.json').read_text())['status'] == 'success'
+          PY
