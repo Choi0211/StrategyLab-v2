@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 from typing import Iterable
 import urllib.parse
@@ -409,6 +410,16 @@ def _youtube_url(url: str) -> str:
     return str(url).strip()
 
 
+def _require_private_youtube_cookie(path: Path) -> None:
+    # Windows chmod/stat expose read-only flags, not the effective NTFS ACL.
+    # Until ACL validation is implemented, refuse cookie authentication there.
+    if sys.platform == "win32":
+        raise RuntimeError("YouTube cookie authentication is unsupported on Windows: private ACL validation is unavailable")
+    mode = path.stat().st_mode & 0o777
+    if mode & 0o077:
+        raise RuntimeError("YouTube cookie file permissions must not grant group/other access; use mode 0600")
+
+
 def _youtube_cookie_file() -> str | None:
     raw = os.environ.get("GAON_YOUTUBE_COOKIES_FILE", "").strip()
     configured = Path(raw).expanduser() if raw else DEFAULT_YOUTUBE_COOKIE_FILE
@@ -419,9 +430,7 @@ def _youtube_cookie_file() -> str | None:
     if configured.is_symlink() or not configured.is_file():
         raise RuntimeError("YouTube cookie path must be a regular non-symlink file")
     path = configured.resolve()
-    mode = path.stat().st_mode & 0o777
-    if mode & 0o077:
-        raise RuntimeError("YouTube cookie file permissions must not grant group/other access; use mode 0600")
+    _require_private_youtube_cookie(path)
     try:
         head = path.read_text(encoding="utf-8", errors="replace")[:131072]
     except OSError as exc:

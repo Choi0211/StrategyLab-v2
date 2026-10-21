@@ -1,8 +1,10 @@
 from __future__ import annotations
 import tempfile
+import sys
+from types import SimpleNamespace
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from PIL import Image
 import gaon.runtime.research_media_tools as tools
 
@@ -77,11 +79,43 @@ class ResearchMediaToolTests(unittest.TestCase):
             )
             cookie.chmod(0o600)
             with patch.dict("os.environ", {"GAON_YOUTUBE_COOKIES_FILE": str(cookie)}, clear=False):
-                self.assertEqual(tools._youtube_cookie_file(), str(cookie.resolve()))
-            cookie.chmod(0o644)
-            with patch.dict("os.environ", {"GAON_YOUTUBE_COOKIES_FILE": str(cookie)}, clear=False):
-                with self.assertRaisesRegex(RuntimeError, "0600"):
+                if sys.platform == "win32":
+                    with self.assertRaisesRegex(RuntimeError, "unsupported on Windows"):
+                        tools._youtube_cookie_file()
+                else:
+                    self.assertEqual(tools._youtube_cookie_file(), str(cookie.resolve()))
+                    cookie.chmod(0o644)
+                    with self.assertRaisesRegex(RuntimeError, "0600"):
+                        tools._youtube_cookie_file()
+
+    def test_posix_cookie_permissions_reject_every_group_and_other_access_bit(self):
+        for mode in (0o600, 0o400, 0o640, 0o620, 0o610, 0o604, 0o602, 0o601, 0o666):
+            with self.subTest(mode=oct(mode)), patch.object(tools.sys, "platform", "linux"):
+                path = Mock()
+                path.stat.return_value = SimpleNamespace(st_mode=mode)
+                if mode & 0o077:
+                    with self.assertRaisesRegex(RuntimeError, "0600"):
+                        tools._require_private_youtube_cookie(path)
+                else:
+                    tools._require_private_youtube_cookie(path)
+
+    def test_windows_refuses_cookie_auth_before_reading_even_with_private_mode(self):
+        path = Mock()
+        path.stat.return_value = SimpleNamespace(st_mode=0o600)
+        with patch.object(tools.sys, "platform", "win32"):
+            with self.assertRaisesRegex(RuntimeError, "private ACL validation is unavailable"):
+                tools._require_private_youtube_cookie(path)
+        path.stat.assert_not_called()
+        with tempfile.TemporaryDirectory() as tmp:
+            cookie = Path(tmp) / "cookies.txt"
+            cookie.write_text("secret fixture", encoding="utf-8")
+            cookie.chmod(0o600)
+            with patch.object(tools.sys, "platform", "win32"), patch.dict(
+                "os.environ", {"GAON_YOUTUBE_COOKIES_FILE": str(cookie)}
+            ), patch.object(Path, "read_text") as read:
+                with self.assertRaisesRegex(RuntimeError, "unsupported on Windows"):
                     tools._youtube_cookie_file()
+                read.assert_not_called()
 
     def test_youtube_cookie_file_rejects_non_youtube_cookie_content(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,9 +125,13 @@ class ResearchMediaToolTests(unittest.TestCase):
                 encoding="utf-8",
             )
             cookie.chmod(0o600)
-            with patch.dict("os.environ", {"GAON_YOUTUBE_COOKIES_FILE": str(cookie)}, clear=False):
+            # Isolate content validation from the separately tested OS security gate.
+            with patch.dict("os.environ", {"GAON_YOUTUBE_COOKIES_FILE": str(cookie)}, clear=False), patch.object(
+                tools, "_require_private_youtube_cookie"
+            ) as permissions:
                 with self.assertRaisesRegex(RuntimeError, "youtube.com"):
                     tools._youtube_cookie_file()
+                permissions.assert_called_once_with(cookie.resolve())
 
     def test_youtube_po_token_provider_is_added_only_when_built(self):
         with tempfile.TemporaryDirectory() as tmp:
