@@ -165,17 +165,17 @@ class Session:
             if not all(item['state'] == 'active' and item['pid'] > 0 for item in self.before.values()):
                 raise ValueError('original services must be active')
             self.schema_version = int(args[1])
-            self.previous = args[0]
-            save(self.journal, {'previous_sha': self.previous, 'target_sha': self.target,
+            save(self.journal, {'previous_sha': args[0], 'target_sha': self.target,
                                'run_id': self.run_id, 'prs': self.prs, 'stopped': False})
+            self.previous = args[0]
             return {'ok': True}
         if operation in self.control.OPERATIONS:
             if args or not self.previous:
                 raise ValueError('service mutation without checkpoint')
             if operation.startswith('stop-') and not self.stopped:
-                self.stopped = True
                 save(self.journal, {'previous_sha': self.previous, 'target_sha': self.target,
                                    'run_id': self.run_id, 'prs': self.prs, 'stopped': True})
+                self.stopped = True
         elif operation == 'backup':
             if args != [self.run_id] or self.recovering:
                 raise ValueError('backup identity mismatch')

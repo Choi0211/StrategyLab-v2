@@ -140,6 +140,19 @@ class DeploymentPermissionTests(unittest.TestCase):
             self.request('stop-web')
         self.assertTrue(self.session.stopped)
 
+    def test_checkpoint_fsync_failure_never_enables_service_mutation(self):
+        with patch.object(supervisor, 'head', return_value=OLD), patch.object(supervisor, 'authorize'), patch.object(
+            supervisor, 'save', side_effect=OSError('disk full')
+        ), self.assertRaises(OSError):
+            self.request('prepare', OLD, '48')
+        self.assertIsNone(self.session.previous)
+        self.control.dispatch.reset_mock()
+        for operation in ('stop-web', 'start-runtime'):
+            with self.assertRaises(ValueError):
+                self.request(operation)
+        self.control.dispatch.assert_not_called()
+        self.assertFalse(self.session.stopped)
+
     def test_rpc_denies_arbitrary_commands_units_paths_and_unprepared_start(self):
         for operation, args in (('start-web', []), ('systemctl', ['restart', 'MyMoneyGuard.service']),
                                 ('restore', []), ('backup', ['../elsewhere']), ('inspect', ['/etc/shadow']),
