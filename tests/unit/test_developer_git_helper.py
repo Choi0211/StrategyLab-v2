@@ -2,6 +2,7 @@ from __future__ import annotations
 import unittest
 import subprocess
 import sys
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from pathlib import Path
 import gaon.runtime.developer_git_helper as helper
@@ -68,7 +69,9 @@ with patch.object(Path, "mkdir") as mkdir, patch.object(helper.socket, "socket")
         group.getgrnam.return_value.gr_gid = 1234
         with patch.object(helper.sys, "platform", "linux"), patch.object(helper, "grp", group), patch.object(
             helper.os, "chown", create=True
-        ) as chown, patch.object(helper.os, "chmod") as chmod, patch.object(helper.socket, "socket") as socket:
+        ) as chown, patch.object(helper.os, "chmod") as chmod, patch.object(
+            helper.socket, "AF_UNIX", 1, create=True
+        ), patch.object(helper.socket, "socket") as socket:
             server = socket.return_value.__enter__.return_value
             server.accept.side_effect = RuntimeError("stop test server")
             with self.assertRaisesRegex(RuntimeError, "stop test server"):
@@ -77,5 +80,17 @@ with patch.object(Path, "mkdir") as mkdir, patch.object(helper.socket, "socket")
             chown.assert_called_once_with(path, 0, 1234)
             chmod.assert_called_once_with(path, 0o660)
             server.listen.assert_called_once_with(8)
+
+    def test_missing_unix_socket_support_refuses_before_filesystem_changes(self):
+        path = Mock()
+        socket = Mock()
+        with patch.object(helper.sys, "platform", "linux"), patch.object(helper, "grp", Mock()), patch.object(
+            helper.os, "chown", create=True
+        ), patch.object(helper, "socket", SimpleNamespace(socket=socket)):
+            with self.assertRaisesRegex(RuntimeError, "requires Unix group ownership and socket permissions"):
+                helper.serve(path)
+        path.parent.mkdir.assert_not_called()
+        path.unlink.assert_not_called()
+        socket.assert_not_called()
 
 if __name__ == '__main__': unittest.main()
