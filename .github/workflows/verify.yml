@@ -29,6 +29,44 @@ env:
   PYTHONIOENCODING: "utf-8"
 
 jobs:
+  gaon-tailscale-connectivity:
+    name: Approved Tailscale SSH connectivity probe (no deployment)
+    if: github.event.pull_request.number == 257 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment:
+      name: gaon-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Connect ephemeral Tailscale runner
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:gaon-deploy
+          ping: 100.99.127.60
+      - name: Verify TCP/22 and pinned SSH host identity without logging in
+        env:
+          DEPLOY_HOST: ${{ vars.GAON_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.GAON_DEPLOY_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.GAON_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test "$DEPLOY_HOST" = "100.99.127.60"
+          test "$DEPLOY_PORT" = "22"
+          test -n "$KNOWN_HOSTS"
+          observed=$(mktemp)
+          expected=$(mktemp)
+          trap 'rm -f "$observed" "$expected"' EXIT
+          ssh-keyscan -T 15 -p "$DEPLOY_PORT" -t ed25519 "$DEPLOY_HOST" 2>/dev/null > "$observed"
+          printf '%s\\n' "$KNOWN_HOSTS" | awk '$2 == "ssh-ed25519" {print}' > "$expected"
+          test -s "$observed"
+          test -s "$expected"
+          diff -u "$expected" "$observed" >/dev/null
+          echo "PASS: Tailscale SSH endpoint and pinned host key match. No SSH login or deployment performed."
+
   workflow-contract:
     name: Deployment workflow syntax and expressions
     runs-on: ubuntu-latest
