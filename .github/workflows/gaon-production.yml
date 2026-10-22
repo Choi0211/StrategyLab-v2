@@ -115,7 +115,7 @@ jobs:
           DEPLOY_PORT: ${{ vars.GAON_DEPLOY_PORT || '22' }}
         run: |
           test "$DEPLOY_HOST" = '100.99.127.60'
-          timeout 20 bash -c 'echo > /dev/tcp/"$1"/"$2"' _ "$DEPLOY_HOST" "$DEPLOY_PORT"
+          timeout 20 bash -c "echo > /dev/tcp/\$1/\$2" _ "$DEPLOY_HOST" "$DEPLOY_PORT"
       - name: Transport reviewed code (no server packages, no DB restore)
         if: steps.gate.outputs.ready == 'true'
         env:
