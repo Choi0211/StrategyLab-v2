@@ -61,10 +61,16 @@ jobs:
           expected=$(mktemp)
           trap 'rm -f "$observed" "$expected"' EXIT
           ssh-keyscan -T 15 -p "$DEPLOY_PORT" -t ed25519 "$DEPLOY_HOST" 2>/dev/null > "$observed"
-          printf '%s\\n' "$KNOWN_HOSTS" | awk '$2 == "ssh-ed25519" {print}' > "$expected"
-          test -s "$observed"
-          test -s "$expected"
-          diff -u "$expected" "$observed" >/dev/null
+          printf '%s\n' "$KNOWN_HOSTS" | tr -d '\r' | awk '$2 == "ssh-ed25519" {print $1, $2, $3}' > "$expected"
+          test -s "$observed" || { echo "FAIL: SSH port 22 did not return an ED25519 host key"; exit 1; }
+          test -s "$expected" || { echo "FAIL: GAON_DEPLOY_KNOWN_HOSTS has no valid ED25519 key line"; exit 1; }
+          awk '$2 == "ssh-ed25519" {print $1, $2, $3}' "$observed" > "${observed}.normalized"
+          if ! cmp -s "$expected" "${observed}.normalized"; then
+            echo "FAIL: SSH host identity differs from pinned key (key values intentionally hidden)"
+            echo "Expected host field: $(awk 'NR==1 {print $1}' "$expected")"
+            echo "Observed host field: $(awk 'NR==1 {print $1}' "${observed}.normalized")"
+            exit 1
+          fi
           echo "PASS: Tailscale SSH endpoint and pinned host key match. No SSH login or deployment performed."
 
   workflow-contract:
