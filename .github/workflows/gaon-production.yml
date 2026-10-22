@@ -88,12 +88,14 @@ jobs:
           assert set(report['suites']) == {'unit', 'integration'}
           assert all(s['passed'] and s['executed'] > 0 for s in report['suites'].values())
           PY
-          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" > report/prs.json
+          # Look up merged PRs using the GitHub CLI GraphQL API; fail closed if unavailable.
+          gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --limit 100 --json number,mergeCommit > report/prs.json
+          test -s report/prs.json
           python - <<'PY'
           import json, os
           from pathlib import Path
           prs = sorted({p['number'] for p in json.loads(Path('report/prs.json').read_text())
-                        if p.get('merged_at') and p['base']['ref'] == 'main' and p.get('merge_commit_sha') == os.environ['GITHUB_SHA']})
+                        if (p.get('mergeCommit') or {}).get('oid') == os.environ['GITHUB_SHA']})
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('PR_NUMBERS=' + json.dumps(prs) + '\n')
               output.write('DEPLOY_PRS=' + ','.join(map(str, prs)) + '\n')
