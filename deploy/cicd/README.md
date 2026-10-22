@@ -30,7 +30,14 @@ flowchart TD
   없거나 CI 아티팩트의 SHA가 다르면 배포하지 않는다. `continue-on-error`는 없다.
 - 배포 job은 `gaon-production` Environment 승인 후에만 진행한다. 기본 변수 미설정은
   disabled다. root-owned `/etc/gaon-deploy/enabled`도 없으면 서버는 배포하지 않는다.
-- concurrency는 `gaon-production`, 실행 중 취소는 false다. 서버도 flock으로 직렬화한다.
+- concurrency는 `gaon-production`, 실행 중 취소는 false다. root broker의 별도 flock으로 직렬화한다.
+- SSH 계정은 checkout 쓰기 권한이 없다. root 소유 `deployment_broker.py`가 root 소유
+  `deploy_worker.py`만 `/usr/bin/python3 -I`로 실행하며, **exec 전에 strategylab UID/GID로
+  내리고 supplementary groups를 비운다**. root가 checkout/venv/애플리케이션 스크립트를 실행하지 않는다.
+- broker는 공개 GitHub API에서 현재 main SHA, 병합 PR, 정확한 run/attempt/workflow/main,
+  CI 성공 job, Environment gate를 지난 실행 중인 배포 job을 독립 대조한다. SSH 인자로 받은
+  PR 번호나 실행 번호 자체는 승인 증거가 아니다. API 오류·rate limit·대기/완료된 job은 거부한다.
+  현재 공개 저장소를 대상으로 하며 서버에서 api.github.com HTTPS 접근이 필요하다.
 - 서버는 pip/apt 설치를 하지 않는다. 기존 venv의 editable import와 `pip check`만 검사한다.
   의존성 선언, migration 소스, DB 버전 변경은 **자동 배포 불가**다. 별도 검토·수동 준비가 필요하다.
 - 원래 서비스 두 개가 정상인 상태만 시작점으로 허용한다. 실제 실행 중인 HEAD를 기록하고
@@ -84,29 +91,43 @@ Environment가 없는 상태에서 workflow가 이름만으로 생성하는 환�
 `<REVIEWED_HELPER_CHECKOUT>`은 병합·검토된 이 PR의 helper 소스가 있는 별도 경로다.
 운영 checkout을 먼저 바꾸거나 기존 .env/venv/deploy_backups를 덮어쓰지 않는다.
 
+서버 확인 결과(2026-10-22, PR 작성자 제공)는 checkout 소유자가
+`strategylab:strategylab`, mode 0755, 두 unit의 User가 `strategylab`,
+gaon-deploy UID 995, 실행 HEAD `04a65f8`이다. 클라우드에서 서버를 재검증하지 않았다.
+기존 gaon-deploy를 다시 만들거나 checkout 소유권을 변경하지 않는다.
+
 ```bash
-sudo useradd --system --create-home --shell /bin/sh gaon-deploy
-sudo install -d -m 700 -o gaon-deploy -g gaon-deploy /var/lib/gaon-deploy
+id gaon-deploy
+id strategylab
+/usr/bin/python3 --version  # Python >= 3.11
+/usr/bin/git --version     # 보안 업데이트된 배포판 Git
+sudo stat -c '%U:%G %a %n' /opt/strategylab-v2 /opt/strategylab-v2/.git
+sudo install -d -m 700 -o root -g root /var/lib/gaon-deploy-root
+sudo install -d -m 700 -o strategylab -g strategylab /var/lib/gaon-deploy-worker
 sudo install -d -m 755 -o root -g root /usr/local/libexec /etc/gaon-deploy
 sudo install -m 644 -o root -g root \
   <REVIEWED_HELPER_CHECKOUT>/deploy/cicd/ssh_deploy.py /usr/local/libexec/gaon-ssh-deploy.py
 sudo install -m 644 -o root -g root \
   <REVIEWED_HELPER_CHECKOUT>/deploy/cicd/service_control.py /usr/local/libexec/gaon-service-control.py
+sudo install -m 644 -o root -g root \
+  <REVIEWED_HELPER_CHECKOUT>/deploy/cicd/deploy_worker.py /usr/local/libexec/gaon-deploy-worker.py
+sudo install -m 644 -o root -g root \
+  <REVIEWED_HELPER_CHECKOUT>/deploy/cicd/deployment_broker.py /usr/local/libexec/gaon-deployment-broker.py
+sudo install -m 755 -o root -g root \
+  <REVIEWED_HELPER_CHECKOUT>/deploy/cicd/deployment-broker /usr/local/sbin/gaon-deployment-broker
 ```
 
-이미 계정이 있으면 useradd를 반복하지 않고 그 계정의 권한부터 검사한다. checkout의 Git 및
-**추적 코드**를 gaon-deploy가 갱신할 최소 파일 권한이 필요하다. 기존 소유권을 확인해 관리자에게
-한정된 위임을 요청한다. `chown -R /opt`나 무차별 chmod/ACL은 사용하지 않는다.
-venv는 읽기/실행만 필요하며 Secrets 파일/DB/기존 백업에 읽기 권한을 추가하지 않는다.
-`deploy_backups/`의 내용·소유권·권한을 보존한다. gaon-deploy를 sudo/docker/adm/운영 데이터 그룹에
-넣지 않는다. 코드 배포 권한은 Gaon 사용자로 실행되는 코드를 바꿀 권한이므로 배포 키와 리뷰가
-중요한 신뢰 경계다. 일반 사용자 파일까지 보호하는 완전한 격리 계정이라고 주장하지 않는다.
+gaon-deploy에는 `.git`, `src/gaon`의 쓰기 권한이나 strategylab 그룹을 추가하지 않는다.
+`chown -R`, 광범위 ACL, `sudo -u strategylab python/bash/git` 허용은 금지한다.
+venv·DB·기존 백업·거래 키의 권한을 변경하지 않는다. `deploy_backups/`를 보존한다.
+root broker와 상위 디렉터리는 root 소유이며 group/other 쓰기·symlink가 없어야 한다.
+worker도 root 소유지만 **실행 자격은 strategylab**이다. root는 writable venv Python을 실행하지 않는다.
 
-root-owned `/usr/local/sbin/gaon-service-control` (0755) 내용:
+`deployment-broker` wrapper 내용은 다음 고정 exec뿐이다. 인자에 경로나 명령을 받지 않는다.
 
 ```sh
 #!/bin/sh
-exec /usr/bin/python3 -I /usr/local/libexec/gaon-service-control.py "$@"
+exec /usr/bin/python3 -I /usr/local/libexec/gaon-deployment-broker.py "$@"
 ```
 
 `sudo visudo -f /etc/sudoers.d/gaon-deploy`로 다음 **하나의 broker만** 허용한다.
@@ -114,15 +135,39 @@ exec /usr/bin/python3 -I /usr/local/libexec/gaon-service-control.py "$@"
 ```sudoers
 Defaults:gaon-deploy env_reset
 Defaults:gaon-deploy secure_path=/usr/sbin:/usr/bin:/sbin:/bin
-gaon-deploy ALL=(root) NOPASSWD: /usr/local/sbin/gaon-service-control
+gaon-deploy ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/gaon-deployment-broker deploy *
 ```
 
-broker는 정확한 인자 개수/operation만 받는다. systemctl은 `start/stop`과
+이전 `/usr/local/sbin/gaon-service-control` 직접 sudo 허용 항목이 있으면 관리자가 해당 항목만
+제거한다. worker/strategylab에는 sudo 권한을 추가하지 않는다. wrapper 뒤 wildcard는 shell
+해석이 아니라 sudo 인자 매칭이며, Python broker가 **deploy SHA run-attempt PRs 네 인자만**
+재검증한다. 임의 shell·경로·추가 인자를 거부한다. `sudo visudo -cf /etc/sudoers.d/gaon-deploy`로 검사한다.
+
+root broker가 `service_control.py`를 root 소유 고정 경로에서만 읽는다. systemctl은 `start/stop`과
 `strategylab-gaon.service`, `gaon-web.service` 두 unit만 허용한다. backup/inspect/status는
 고정 DB와 고정 백업 위치만 사용한다. 임의 명령·경로·unit·DB 복원 operation은 없다.
 deploy 계정에 `systemctl *`, `sudo bash`, `sudo python`, `ALL=(ALL) ALL`은 부여하지 않는다.
 root helper와 그 상위 디렉터리는 deploy/runtime 사용자가 수정할 수 없어야 한다.
 helper 업데이트도 자동 CD가 아니라 별도 관리자 리뷰/설치 작업이다.
+
+다음은 관리자 계정에서 수행하는 **읽기·거부 검사**이며 서비스 재시작은 하지 않는다.
+
+```bash
+sudo -u gaon-deploy test ! -w /opt/strategylab-v2/.git
+sudo -u gaon-deploy test ! -w /opt/strategylab-v2/src/gaon
+sudo -u gaon-deploy /usr/bin/git -c safe.directory=/opt/strategylab-v2 -C /opt/strategylab-v2 rev-parse HEAD
+sudo -u strategylab /opt/strategylab-v2/.venv/bin/python -I -c \
+  'import pathlib,gaon; assert pathlib.Path(gaon.__file__).resolve().parent == pathlib.Path("/opt/strategylab-v2/src/gaon")'
+sudo -u gaon-deploy sudo -n -u strategylab /usr/bin/id  # 거부되어야 함
+sudo -u gaon-deploy sudo -n /usr/local/sbin/gaon-deployment-broker restart MyMoneyGuard.service  # 거부
+sudo -u gaon-deploy sudo -n /usr/local/sbin/gaon-deployment-broker deploy invalid 1-1 257  # 거부
+sudo test ! -e /etc/gaon-deploy/enabled
+```
+
+Git safe.directory 예외는 위 읽기 명령에만 한정한다. root Git을 실행하거나 `safe.directory=*`를
+추가하지 않는다. root broker의 Git 조회/worker Git 쓰기는 모두 strategylab UID/GID다.
+`/var/lib/gaon-deploy-root`는 root lock·체크포인트·보고서·수신 spool, worker 디렉터리는
+strategylab의 임시 bundle·코드 백업이다. 두 경로를 gaon-deploy에 개방하지 않는다.
 
 root가 관리하는 SSH 설정의 해당 계정 범위에만 적용한다 (기존 다른 서비스/로그인은 바꾸지 않음).
 
@@ -168,6 +213,55 @@ Match User gaon-deploy
 Gaon 서비스 상태를 확인한다. 운영 DB 복구는 절대 자동 수행하지 않으며 기존
 [수동 복구 절차](../../docs/operations/GaonAuditDeployment.md)를 따른다.
 
+## 신뢰 경계·중단·복구 검증
+
+- SSH 입구는 최대 256 MiB의 v2 bundle과 선언된 HEAD를 검사한다. root broker는 별도
+  root 전용 spool로 다시 복사하고 180초/256 MiB를 제한한다. 입구가 제공한 파일 경로는
+  받지 않고, root가 연 read-only stdin만 worker에 넘긴다. 실제 Git pack 파싱은 root가
+  아니라 strategylab worker의 **새 빈 bare quarantine**에서 수행한다. 기존 객체 캐시로
+  손상 pack 검사가 생략되지 않도록 quarantine에서 `bundle verify`, `fetch HEAD`, 정확한
+  FETCH_HEAD SHA, commit 타입, `fsck --strict`를 모두 통과한 객체만 checkout으로 옮긴다.
+  CI가 만드는 전체 history bundle만 지원하며 prerequisite가 필요한 incremental bundle은 거부한다.
+- Git hook/fsmonitor/외부 diff·submodule 재귀를 끄고 로컬 filter/diff/url rewrite/include/worktree/sshCommand 구성을
+  거부한다. 의존성·migration·`.env`·`.venv`·`deploy_backups` 변경도 계속 거부한다.
+  Git parser 자체의 보안 업데이트와 디스크 용량 관리가 필요하며, 압축 파일 크기 제한은
+  완전한 압축폭탄/자원 격리가 아니다. 검토·승인된 main 코드만 허용하는 것이 코드 실행 신뢰 경계다.
+- root의 API 조회는 main SHA/병합 PR뿐 아니라 run-attempt, workflow 경로, main branch,
+  CI 성공, 실행 중인 Environment 배포 job을 확인하고 중단 직전에 다시 확인한다.
+  main이 그 사이 바뀌거나 승인 대기/완료된 run을 재사용하면 거부한다. Environment의
+  required reviewers/main 전용 정책은 관리자가 실제 설정해야 하며 job 이름만으로 보호 설정
+  완료를 주장하지 않는다. GitHub API 장애/공개 API rate limit에서는 배포를 중단한다.
+- 서비스 중단 전에 root가 기존 HEAD·schema를 독립 조회하고
+  `/var/lib/gaon-deploy-root/active.json`에 이전 SHA/대상/run을 fsync한다. 부분 stop도
+  stopped 상태를 먼저 기록한다. worker의 SIGTERM/SIGHUP는 RPC/Git 작업 종료 후 전달해
+  미수신 응답이나 중간 Git lock으로 롤백이 어긋나지 않게 한다.
+- SSH 단절/worker crash/강제 종료 후 root supervisor는 이전 SHA의 **고정 recover 작업**을
+  strategylab worker로 수행한다. DB는 복원하지 않는다. 코드 import·DB schema·health가
+  맞지 않으면 두 Gaon unit만 중단하고 `manual_recovery_required`와 체크포인트를 남긴다.
+  root 자체의 SIGKILL/서버 전원 장애는 자동 복구를 보장하지 않는다. 남은 active.json은
+  다음 자동 배포를 차단하므로 관리자가 상태를 확인하기 전 삭제하지 않는다.
+- 원래 strategylab 계정은 checkout/DB/venv의 신뢰된 소유자다. 동일 UID가 이미 침해된 경우의
+  checkout 경합·worker 조작까지 차단하는 sandbox가 아니다. worker는 새 supplementary
+  group을 받지 않으며 root 코드를 실행하지 않는다. 다른 실거래/MyMoneyGuard 키 파일은
+  원래부터 strategylab/gaon-deploy가 읽지 못하는 별도 소유권이어야 한다. 관리자가 경로의
+  `test ! -r`만 확인하고 키 내용은 출력하지 않는다. 해당 서비스/키의 설정을 이 PR로 바꾸지 않는다.
+
+격리된 staging에서 먼저 실제 UID 전환, SSH 강제 명령, sudoers, 승인 API 응답, 정상 배포,
+부분 stop/단절/실패 import/불일치 bundle/복구 실패를 검증한다. 클라우드 테스트는 실제
+서버 root 권한·sshd·systemd·Environment 설정을 대신 검증하지 않는다.
+
+root supervisor 자체가 죽은 경우의 **관리자 수동 복구 초안**(운영에서는 별도 승인 후 수행):
+
+1. `GAON_DEPLOY_ENABLED=false`, enabled 파일 없음 상태로 두고 root 보고서와 active.json을 읽는다.
+2. journal의 `previous_sha`가 정확한 40자리 SHA이고 해당 객체가 있는지 관리자 계정으로 확인한다.
+   journal이 없거나 SHA/DB schema를 확인할 수 없으면 임의 SHA를 선택하지 않는다.
+3. 관리자만 고정 service_control.py의 `stop-web`, `stop-runtime`을 실행한다. 다른 unit은 금지한다.
+4. 관리자만 `sudo -u strategylab /usr/bin/git -C /opt/strategylab-v2 switch --detach <검증한 previous_sha>`로
+   코드 복구 후 위의 venv `-I` import와 `-I -m pip check`, DB inspect/schema 호환성을 검사한다.
+   강제 checkout/reset/clean, lock 임의 삭제, DB 복원을 하지 않는다. 실패하면 서비스를 중단 상태로 둔다.
+5. 호환될 때만 관리자에게 두 unit의 start와 loopback `/gaon/health`, PID/cwd/최근 오류 검증을 요청한다.
+   결과를 기록하고 체크포인트는 관리자 검증 후 별도 보관한다. 이 절차는 자동 실행되지 않는다.
+
 ## ChatGPT가 읽을 증거 경로
 
 인증된 GitHub 연결에는 이 저장소의 **Actions read**, contents read, PR read가 필요하다.
@@ -196,7 +290,7 @@ gh run download <run_id> --repo Choi0211/StrategyLab-v2 \
 배포 시작/종료 UTC 시각, 서비스별 PID/state/cwd, API health, DB schema, 코드·DB 백업,
 최근 오류 개수, rollback 시도/성공, `db_restored=false`, 실행 URL, 활성화 상태를 포함한다.
 workflow Summary에도 핵심 결과가 표시된다. 서버에는 같은 실행 ID의 보고서가
-`/var/lib/gaon-deploy/reports/`에 남는다. GitHub 연결 도구가 Actions/artifact 다운로드를
+root 전용 `/var/lib/gaon-deploy-root/reports/`에 남는다. GitHub 연결 도구가 Actions/artifact 다운로드를
 지원하는지는 별도 확인해야 한다. 이 채팅에서의 실제 GitHub API/운영 배포 검증은 미완료다.
 
 이전 `upgrade_service.sh`/`rollback_service.sh`는 레거시 수동 도구이며 새 CD에서 호출하지 않는다.

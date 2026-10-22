@@ -91,8 +91,8 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          prs = [p['number'] for p in json.loads(Path('report/prs.json').read_text())
-                 if p.get('merged_at') and p['base']['ref'] == 'main' and p.get('merge_commit_sha') == os.environ['GITHUB_SHA']]
+          prs = sorted({p['number'] for p in json.loads(Path('report/prs.json').read_text())
+                        if p.get('merged_at') and p['base']['ref'] == 'main' and p.get('merge_commit_sha') == os.environ['GITHUB_SHA']})
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('PR_NUMBERS=' + json.dumps(prs) + '\n')
               output.write('DEPLOY_PRS=' + ','.join(map(str, prs)) + '\n')
@@ -116,7 +116,7 @@ jobs:
           trap 'rm -rf "$key_dir"' EXIT
           printf '%s\n' "$DEPLOY_KEY" > "$key_dir/key"
           printf '%s\n' "$KNOWN_HOSTS" > "$key_dir/known_hosts"
-          git bundle create "$key_dir/release.bundle" HEAD
+          git bundle create --version=2 "$key_dir/release.bundle" HEAD
           ssh_rc=0
           ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$key_dir/known_hosts" \

@@ -5,6 +5,7 @@ Install outside the writable checkout; see README.md. No arbitrary paths,
 units, commands, environment configuration, or DB restore operation exist.
 """
 import json
+import http.client
 import os
 from pathlib import Path
 import re
@@ -22,6 +23,22 @@ OPERATIONS = {f'{verb}-{name}': (verb, unit)
               for verb in ('stop', 'start')
               for name, unit in zip(('runtime', 'web'), UNITS)}
 RUN_ID = re.compile(r'^[1-9][0-9]{0,19}-[1-9][0-9]{0,5}$')
+
+
+def health():
+    # Fixed loopback endpoint, no proxy, redirects, credentials or caller URL.
+    connection = http.client.HTTPConnection('127.0.0.1', 8765, timeout=5)
+    try:
+        connection.request('GET', '/gaon/health')
+        response = connection.getresponse()
+        if response.status != 200:
+            return False
+        payload = json.loads(response.read(8192))
+        return isinstance(payload, dict) and payload.get('status') == 'ok'
+    except (OSError, ValueError, http.client.HTTPException):
+        return False
+    finally:
+        connection.close()
 
 
 def command(args):

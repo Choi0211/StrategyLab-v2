@@ -24,7 +24,7 @@ def module(name, path):
     return loaded
 
 
-deploy = module('gaon_cicd_deploy', 'deploy/cicd/ssh_deploy.py')
+deploy = module('gaon_cicd_deploy', 'deploy/cicd/deploy_worker.py')
 broker = module('gaon_cicd_broker', 'deploy/cicd/service_control.py')
 reporter = module('gaon_cicd_report', 'deploy/cicd/report.py')
 verifier = module('gaon_cicd_verify', 'scripts/verify_release.py')
@@ -48,6 +48,8 @@ class LocalControl:
         if operation == 'inspect':
             with sqlite3.connect(self.test.db) as db:
                 return {'schema_version': db.execute('SELECT MAX(version) FROM schema_version').fetchone()[0], 'integrity': 'ok'}
+        if operation == 'prepare':
+            return {'ok': True}
         if operation == 'backup':
             copy = self.test.base / ('db-backup-' + args[0])
             with sqlite3.connect(self.test.db) as source, sqlite3.connect(copy) as target:
@@ -137,7 +139,47 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertTrue(Path(result['database_backup']['backup']).is_file())
         self.assertEqual((self.code / 'deploy_backups/keep').read_text(), 'existing backup')
         self.assertFalse(result['db_restored'])
-        self.assertTrue(all(op in {'inspect', 'backup', 'status', *broker.OPERATIONS} for op in self.control.calls))
+        self.assertTrue(all(op in {'inspect', 'backup', 'status', 'prepare', *broker.OPERATIONS} for op in self.control.calls))
+
+    def test_interrupt_after_partial_stop_rolls_back_real_git_and_preserves_db(self):
+        original = self.control.call
+        interrupted = False
+        def call(operation, *args):
+            nonlocal interrupted
+            result = original(operation, *args)
+            if operation == 'stop-runtime' and not interrupted:
+                interrupted = True
+                raise InterruptedError('synthetic disconnect')
+            return result
+        with patch.object(self.control, 'call', side_effect=call):
+            result = self.execute()
+        self.assertEqual(result['status'], 'failed')
+        self.assertTrue(result['rollback_succeeded'])
+        self.assertFalse(result['db_restored'])
+        self.assertEqual(self.head(), self.previous)
+        self.assertTrue(all(pid > 0 for pid in self.control.pids.values()))
+
+    def test_declared_correct_sha_with_corrupt_git_pack_never_stops_services(self):
+        header = self.bundle.read_bytes().split(b'\n\n', 1)[0]
+        self.bundle.write_bytes(header + b'\n\nPACKcorrupt')
+        result = self.execute()
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['rollback_attempted'])
+        self.assertEqual(self.head(), self.previous)
+        self.assertFalse(any(op.startswith('stop-') for op in self.control.calls))
+
+    def test_checkout_race_after_backup_aborts_before_service_stop(self):
+        original = self.control.call
+        def call(operation, *args):
+            result = original(operation, *args)
+            if operation == 'backup':
+                (self.code / 'application.py').write_text('concurrent unreviewed edit\n')
+            return result
+        with patch.object(self.control, 'call', side_effect=call):
+            result = self.execute()
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['rollback_attempted'])
+        self.assertFalse(any(op.startswith('stop-') for op in self.control.calls))
 
     def test_disabled_has_no_git_or_service_changes(self):
         self.enabled.unlink()
