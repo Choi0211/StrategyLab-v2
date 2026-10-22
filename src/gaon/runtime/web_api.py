@@ -370,7 +370,9 @@ class GaonWebChatAdapter:
     def research_memories_for_family(self, family_id: str, *, limit: int = 20) -> Mapping[str, object]:
         """Read-only: past backtest-derived research_memories entries for
         family_id (written by _record_backtest_research_memory above),
-        newest first - the durable, cross-process record of what has
+        newest receipt time first (not caller-supplied tested_at), with
+        reverse insertion order for equal instants - the durable,
+        cross-process record of what has
         already been tried and with what verdict. Lets
         gaon_hypothesis_backtest.py's own hypothesis-generation step
         search its prior success/failure history before proposing
@@ -381,8 +383,8 @@ class GaonWebChatAdapter:
         from gaon.research.self_improving import SQLiteResearchMemoryRepository
 
         memory_repo = SQLiteResearchMemoryRepository(self._repository._connection)
-        entries = memory_repo.search(strategy_family=f"{family_id}_hypothesis_backtest")
-        ordered = sorted(entries, key=lambda e: e.created_at, reverse=True)[: max(1, int(limit))]
+        entries = memory_repo.search(strategy_family=f"{family_id}_hypothesis_backtest", newest_first=True)
+        ordered = entries[: max(1, int(limit))]
         return {
             "schema_version": WEB_API_SCHEMA_VERSION,
             "family_id": family_id,

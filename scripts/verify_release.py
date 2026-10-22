@@ -54,6 +54,7 @@ def _verify(report) -> int:
             print(f"{name} tests failed")
             print(tests.stdout)
             print(tests.stderr)
+            _annotate_test_failures(name, tests.stderr)
             return tests.returncode
     cli = subprocess.run(
         [sys.executable, "-m", "gaon.runtime.cli", "v5-status", "--db", ":memory:"],
@@ -135,6 +136,15 @@ def _verify(report) -> int:
     print("CLI importability: PASS")
     print("Required files: PASS")
     return 0
+
+
+def _annotate_test_failures(suite: str, stderr: str) -> None:
+    """Expose failing test names on GitHub without copying fixture data/secrets."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    for test in re.findall(r"^(?:FAIL|ERROR): (.+)$", stderr, re.MULTILINE):
+        message = test.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error title={suite} test failed::{message}")
 
 
 def main(report_json=None) -> int:

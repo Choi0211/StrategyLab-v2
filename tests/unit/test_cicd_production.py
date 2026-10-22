@@ -297,6 +297,18 @@ class PrivilegedBrokerTests(unittest.TestCase):
 
 
 class DeploymentReportTests(unittest.TestCase):
+    def test_failed_test_names_are_public_annotations_without_traceback_data(self):
+        stderr = ('FAIL: test_order (test_reports.ReportTests.test_order)\n'
+                  'AssertionError: private fixture data\n'
+                  'ERROR: test_import (test_reports.ReportTests.test_import)\n')
+        output = StringIO()
+        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}), redirect_stdout(output):
+            verifier._annotate_test_failures('unit', stderr)
+        self.assertEqual(output.getvalue().count('::error title=unit test failed::'), 2)
+        self.assertIn('test_order', output.getvalue())
+        self.assertIn('test_import', output.getvalue())
+        self.assertNotIn('private fixture', output.getvalue())
+
     def test_ci_zero_tests_and_failed_suite_stop_the_runner(self):
         for count, exit_code in ((0, 0), (2, 2)):
             with self.subTest(count=count):

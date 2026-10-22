@@ -18,6 +18,8 @@ caller-supplied claim. See its adapter-method docstring in
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+from uuid import UUID
 
 from gaon.runtime.config import GaonRuntimeConfig
 from gaon.runtime.storage import RuntimeStateStore
@@ -257,7 +259,12 @@ class PaperReportApiTests(unittest.TestCase):
                 "backtest_fingerprint": fingerprint, "verdict": verdict, "metrics": {},
                 "data_source": "local", "tested_at": f"2026-10-2{i}T00:00:00Z",
             }
-            status, _ = dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
+            # Simulate coarse Windows clock resolution and UUID order that
+            # disagrees with reverse insertion order.
+            with patch("gaon.runtime.web_api._utc_now", return_value="2026-10-22T00:00:00Z"), patch(
+                "uuid.uuid4", return_value=UUID(int=i)
+            ):
+                status, _ = dispatch_request(self.adapter, method="POST", path="/gaon/paper/hypothesis_backtest_result", body=body)
             self.assertEqual(status, 200)
         status, payload = dispatch_request(
             self.adapter, method="GET", path=f"/gaon/paper/research_memories?family_id={FAMILY_ID}", body=None

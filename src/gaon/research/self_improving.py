@@ -591,12 +591,23 @@ class SQLiteResearchMemoryRepository:
                 (entry.memory_id, entry.fingerprint, entry.strategy_family, entry.market, entry.timeframe, entry.final_status, _json(entry.to_json()), entry.created_at, entry.source_run_id),
             )
 
-    def list_memories(self) -> tuple[ResearchMemoryEntry, ...]:
-        rows = self._connection.execute("SELECT payload_json FROM research_memories ORDER BY created_at, memory_id").fetchall()
-        return tuple(ResearchMemoryEntry.from_json(json.loads(str(row[0]))) for row in rows)
+    def list_memories(self, *, newest_first: bool = False) -> tuple[ResearchMemoryEntry, ...]:
+        # This is a normal SQLite rowid table. Equal timestamps use persisted
+        # insertion order, never random UUIDs or the host clock's resolution.
+        order = "rowid DESC" if newest_first else "created_at, memory_id"
+        rows = self._connection.execute(f"SELECT payload_json FROM research_memories ORDER BY {order}").fetchall()
+        entries = tuple(ResearchMemoryEntry.from_json(json.loads(str(row[0]))) for row in rows)
+        if newest_first:
+            # Compare instants, including microseconds and UTC offsets. Stable
+            # sorting retains descending rowid for identical instants.
+            def instant(entry: ResearchMemoryEntry) -> datetime:
+                value = datetime.fromisoformat(entry.created_at.replace("Z", "+00:00"))
+                return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+            return tuple(sorted(entries, key=instant, reverse=True))
+        return entries
 
-    def search(self, *, strategy_family: str | None = None, market: str | None = None, timeframe: str | None = None, query: str | None = None, tag: str | None = None) -> tuple[ResearchMemoryEntry, ...]:
-        rows = self.list_memories()
+    def search(self, *, strategy_family: str | None = None, market: str | None = None, timeframe: str | None = None, query: str | None = None, tag: str | None = None, newest_first: bool = False) -> tuple[ResearchMemoryEntry, ...]:
+        rows = self.list_memories(newest_first=newest_first)
         q = query.casefold() if query else None
         results: list[ResearchMemoryEntry] = []
         for item in rows:
