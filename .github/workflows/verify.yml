@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     environment:
-      name: gaon-production
+      name: gaon-connectivity-test
     permissions:
       contents: read
       id-token: write
