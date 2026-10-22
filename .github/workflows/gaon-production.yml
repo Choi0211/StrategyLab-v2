@@ -59,6 +59,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      id-token: write # Tailscale workload identity federation
     env:
       DEPLOY_ENABLED: ${{ vars.GAON_DEPLOY_ENABLED }}
       DEPLOY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -99,6 +100,22 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('ready=' + str(bool(prs) and os.environ.get('DEPLOY_ENABLED') == 'true').lower() + '\n')
           PY
+      - name: Join Tailscale for approved deployment
+        if: steps.gate.outputs.ready == 'true'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:gaon-deploy
+          ping: 100.99.127.60
+      - name: Verify private deployment endpoint
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          DEPLOY_HOST: ${{ vars.GAON_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.GAON_DEPLOY_PORT || '22' }}
+        run: |
+          test "$DEPLOY_HOST" = '100.99.127.60'
+          timeout 20 bash -c 'echo > /dev/tcp/"$1"/"$2"' _ "$DEPLOY_HOST" "$DEPLOY_PORT"
       - name: Transport reviewed code (no server packages, no DB restore)
         if: steps.gate.outputs.ready == 'true'
         env:
