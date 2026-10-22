@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+from dataclasses import replace
 
 from gaon.research.self_improving import (
     AutonomousResearchOrchestrator,
@@ -101,6 +102,27 @@ class ResearchSelfCriticTests(unittest.TestCase):
         self.assertEqual(repository.find_by_fingerprint(candidate_fingerprint(candidate)).memory_id, entry.memory_id)  # type: ignore[union-attr]
         self.assertEqual(len(repository.search(strategy_family="breakout", market="KRX", timeframe="daily")), 1)
         self.assertEqual(len(repository.search(query="overfit_gap")), 0)
+
+    def test_newest_memory_order_uses_instants_then_insertion_not_uuid(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        migrate(connection)
+        repository = SQLiteResearchMemoryRepository(connection)
+        candidate = fixture_candidate("balanced")
+        critique = ResearchCritic().evaluate(candidate, created_at=NOW)
+        plan = StrategyImprovementPlanner().plan(candidate, critique, created_at=NOW)
+        quality = ResearchQualityScorer().score(candidate, critique, created_at=NOW)
+        base = build_memory_entry(candidate, critique, plan, quality, run_id="order", created_at=NOW)
+        for key, timestamp in (("z", "2026-10-22T00:00:00Z"),
+                               ("a", "2026-10-22T09:00:00+09:00"),
+                               ("m", "2026-10-22T00:00:00.000001Z")):
+            repository.add_memory(replace(base, memory_id=key, fingerprint=key, created_at=timestamp))
+        for reverse in (0, 1):
+            connection.execute(f"PRAGMA reverse_unordered_selects={reverse}")
+            # Fresh repository objects use persisted order, not Python state.
+            records = SQLiteResearchMemoryRepository(connection).search(newest_first=True)
+            self.assertEqual([entry.memory_id for entry in records], ["m", "a", "z"])
+            self.assertEqual([entry.final_status for entry in records], [base.final_status] * 3)
 
     def test_novelty_detection(self) -> None:
         candidate = fixture_candidate("balanced")

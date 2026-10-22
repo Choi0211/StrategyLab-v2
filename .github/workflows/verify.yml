@@ -17,6 +17,9 @@ name: PR Fast Verify
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: pr-fast-verify-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -26,6 +29,61 @@ env:
   PYTHONIOENCODING: "utf-8"
 
 jobs:
+  gaon-tailscale-connectivity:
+    name: Approved Tailscale SSH connectivity probe (no deployment)
+    if: github.event.pull_request.number == 257 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment:
+      name: gaon-connectivity-test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Connect ephemeral Tailscale runner
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:gaon-deploy
+          ping: 100.99.127.60
+      - name: Verify TCP/22 and pinned SSH host identity without logging in
+        env:
+          DEPLOY_HOST: ${{ vars.GAON_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.GAON_DEPLOY_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.GAON_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test "$DEPLOY_HOST" = "100.99.127.60"
+          test "$DEPLOY_PORT" = "22"
+          test -n "$KNOWN_HOSTS"
+          observed=$(mktemp)
+          expected=$(mktemp)
+          trap 'rm -f "$observed" "$expected"' EXIT
+          ssh-keyscan -T 15 -p "$DEPLOY_PORT" -t ed25519 "$DEPLOY_HOST" 2>/dev/null > "$observed"
+          printf '%s\n' "$KNOWN_HOSTS" | tr -d '\r' | awk '$2 == "ssh-ed25519" {print $1, $2, $3}' > "$expected"
+          test -s "$observed" || { echo "FAIL: SSH port 22 did not return an ED25519 host key"; exit 1; }
+          test -s "$expected" || { echo "FAIL: GAON_DEPLOY_KNOWN_HOSTS has no valid ED25519 key line"; exit 1; }
+          awk '$2 == "ssh-ed25519" {print $1, $2, $3}' "$observed" > "${observed}.normalized"
+          if ! cmp -s "$expected" "${observed}.normalized"; then
+            echo "FAIL: SSH host identity differs from pinned key (key values intentionally hidden)"
+            echo "Expected host field: $(awk 'NR==1 {print $1}' "$expected")"
+            echo "Observed host field: $(awk 'NR==1 {print $1}' "${observed}.normalized")"
+            exit 1
+          fi
+          echo "PASS: Tailscale SSH endpoint and pinned host key match. No SSH login or deployment performed."
+
+  workflow-contract:
+    name: Deployment workflow syntax and expressions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: bash scripts/check_workflows.sh
+
   test:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -42,10 +100,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -55,4 +115,12 @@ jobs:
         run: python -m pip install -e .
 
       - name: Verify release
-        run: python scripts/verify_release.py
+        run: python scripts/verify_release.py --report-json report/ci.json
+
+      - name: Publish structured CI report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gaon-pr-ci-${{ matrix.os }}-${{ matrix.python-version }}
+          path: report/ci.json
+          if-no-files-found: error
