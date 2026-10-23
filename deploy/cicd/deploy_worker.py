@@ -179,12 +179,18 @@ class Deployment:
                 raise ValueError('tracked changes present')
             previous = self.git('rev-parse', 'HEAD')
             result['previous_sha'] = previous
+            if previous == target:
+                result.update(status='blocked_duplicate', reason='target_already_checked_out')
+                return result
+            result['stage'] = 'current_health'
             before = self.healthy(int(time.time()))['services']
             db = self.control.call('inspect')
             result['db_schema_version'] = db['schema_version']
             if db['schema_version'] != schema(self.p.code):
                 raise ValueError('current schema incompatible')
+            result['stage'] = 'bundle_validation'
             self.receive_objects(target, bundle)
+            result['stage'] = 'compatibility'
             # No server pip/apt install: dependency changes require a separately reviewed rollout.
             if self.git('diff', previous, target, '--', 'pyproject.toml', 'uv.lock', 'requirements.txt', 'requirements.lock'):
                 raise ValueError('dependency change requires manual provisioning')
@@ -200,6 +206,9 @@ class Deployment:
                             if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'SCHEMA_VERSION' for t in n.targets)]
             if declarations != [old_schema]:
                 raise ValueError('automatic schema changes prohibited')
+            result['stage'] = 'current_imports_dependencies'
+            self.import_check()  # Reject an already broken venv before stopping either service.
+            result['stage'] = 'backup'
             destination = self.p.state / 'backups' / run_id
             destination.mkdir(parents=True, mode=0o700)
             archive = destination / 'code.tar'
@@ -209,13 +218,16 @@ class Deployment:
             result['database_backup'] = self.control.call('backup', run_id)
             if self.git('rev-parse', 'HEAD') != previous or self.git('status', '--porcelain', '--untracked-files=no'):
                 raise ValueError('checkout changed during preflight')
+            result['stage'] = 'authorization_checkpoint'
             self.control.call('prepare', previous, str(old_schema))
             result['stage'] = 'switch'
             stopped = True  # Even a partial stop must recover the old services.
             self.control.call('stop-web')
             self.control.call('stop-runtime')
             self.git('switch', '--detach', target)
+            result['stage'] = 'imports_dependencies'
             self.import_check()
+            result['stage'] = 'restart'
             since = int(time.time())
             self.control.call('start-runtime')
             result['db_schema_version'] = self.control.call('inspect')['schema_version']
@@ -233,6 +245,7 @@ class Deployment:
                           running_sha_evidence='exact HEAD + fresh service PIDs + service cwd + editable import path')
         except BaseException as exc:
             result['error_type'] = type(exc).__name__
+            result['failure_stage'] = result['stage']
             # Never include exception strings, command stdout, environment or raw journal logs.
             if stopped and previous:
                 result['rollback_attempted'] = True

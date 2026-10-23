@@ -8,9 +8,8 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: gaon-production
-  cancel-in-progress: false
+# Approval waits must not own a global workflow slot. Service mutation is
+# serialized by the root broker lock; never cancel a running deployment.
 
 jobs:
   verify:
@@ -79,30 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          report = json.loads(Path('report/ci.json').read_text())
-          assert report['status'] == 'passed' and report['sha'] == os.environ['GITHUB_SHA']
-          assert report.get('source_dirty') is False
-          assert set(report['suites']) == {'unit', 'integration'}
-          assert all(s['passed'] and s['executed'] > 0 for s in report['suites'].values())
-          PY
-          # Look up merged PRs using the GitHub CLI GraphQL API; fail closed if unavailable.
-          gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main --limit 100 --json number,mergeCommit > report/prs.json
-          test -s report/prs.json
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          prs = sorted({p['number'] for p in json.loads(Path('report/prs.json').read_text())
-                        if (p.get('mergeCommit') or {}).get('oid') == os.environ['GITHUB_SHA']})
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write('PR_NUMBERS=' + json.dumps(prs) + '\n')
-              output.write('DEPLOY_PRS=' + ','.join(map(str, prs)) + '\n')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('ready=' + str(bool(prs) and os.environ.get('DEPLOY_ENABLED') == 'true').lower() + '\n')
-          PY
+        run: python deploy/cicd/workflow_gate.py report
       - name: Join Tailscale for approved deployment
         if: steps.gate.outputs.ready == 'true'
         uses: tailscale/github-action@v4
@@ -119,6 +95,11 @@ jobs:
         run: |
           test "$DEPLOY_HOST" = '100.99.127.60'
           timeout 20 bash -c "echo > /dev/tcp/\$1/\$2" _ "$DEPLOY_HOST" "$DEPLOY_PORT"
+      - name: Recheck current main immediately before transport
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python deploy/cicd/workflow_gate.py report --latest-only
       - name: Transport reviewed code (no server packages, no DB restore)
         if: steps.gate.outputs.ready == 'true'
         env:
@@ -157,6 +138,7 @@ jobs:
           path: |
             report/deployment.json
             report/ci.json
+            report/gate.json
           if-no-files-found: error
           retention-days: 90
       - name: Require a verified successful deployment when enabled

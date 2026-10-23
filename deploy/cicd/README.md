@@ -295,3 +295,9 @@ root 전용 `/var/lib/gaon-deploy-root/reports/`에 남는다. GitHub 연결 도
 
 이전 `upgrade_service.sh`/`rollback_service.sh`는 레거시 수동 도구이며 새 CD에서 호출하지 않는다.
 특히 레거시 rollback의 DB 자동 복원 동작을 이 파이프라인에 연결하지 않는다.
+
+## 대기열 및 복구 보완
+
+[배포 대기열·중복·실패 보고와 남은 서버 검증](../../docs/operations/gaon-deployment-recovery.md)을
+함께 확인한다. 승인 대기는 전역 workflow 슬롯을 점유하지 않으며, 실제 서비스 변경은
+기존 root broker lock과 journal로 직렬화한다. 자동 승인을 추가하지 않는다.

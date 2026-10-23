@@ -127,6 +127,9 @@ class DeploymentPermissionTests(unittest.TestCase):
                 supervisor.authorize(TARGET, PRS, RUN)
 
     def test_checkpoint_precedes_partial_stop_and_is_bound_to_actual_head(self):
+        with self.assertRaises(ValueError):
+            self.request('prepare', TARGET, '48')
+        self.control.dispatch.assert_not_called()
         with patch.object(supervisor, 'head', return_value=TARGET), self.assertRaises(ValueError):
             self.request('prepare', OLD, '48')
         self.assertFalse(self.session.journal.exists())
@@ -317,6 +320,24 @@ class DeploymentPermissionTests(unittest.TestCase):
             supervisor.fcntl.flock(first, supervisor.fcntl.LOCK_EX | supervisor.fcntl.LOCK_NB)
             with self.assertRaises(BlockingIOError):
                 supervisor.fcntl.flock(second, supervisor.fcntl.LOCK_EX | supervisor.fcntl.LOCK_NB)
+            with self.assertRaises(supervisor.DeploymentBusy):
+                supervisor.acquire(second, timeout=0)
+
+    def test_short_lock_contention_retries_without_cancelling_first_deployment(self):
+        locks = SimpleNamespace(LOCK_EX=2, LOCK_NB=4,
+                                flock=Mock(side_effect=[BlockingIOError(), None]))
+        with patch.object(supervisor, 'fcntl', locks), patch.object(supervisor.time, 'sleep') as sleep:
+            supervisor.acquire(99)
+        self.assertEqual(locks.flock.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_contended_lock_has_bounded_deadline_on_all_test_platforms(self):
+        locks = SimpleNamespace(LOCK_EX=2, LOCK_NB=4, flock=Mock(side_effect=BlockingIOError()))
+        with patch.object(supervisor, 'fcntl', locks), patch.object(supervisor.time, 'sleep') as sleep, patch.object(
+                supervisor.time, 'monotonic', side_effect=[0, 119, 120]):
+            with self.assertRaises(supervisor.DeploymentBusy):
+                supervisor.acquire(99)
+        sleep.assert_called_once_with(1)
 
 
 def stat_mode(mode):
