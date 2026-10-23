@@ -38,6 +38,50 @@ Actions run `39942446931`의 Ubuntu/Windows × Python 3.11/3.12 4개 job도 모�
 
 아래 첫 조사 시점의 접근 실패 기록은 이 후속 조사와 구분해 읽어야 한다.
 
+## Windows Archive Sync 후속 검증 요청 처리
+
+GitHub의 `tools/pc_archive_sync/WINDOWS_CODEX_TASK.md`를 먼저 확인했다. GitHub blob SHA
+`2112daadfe6486b40bf2eac4029adae4b1431cf4`와 로컬 파일 hash가 같아 당시 원격 지시서와
+동일함을 확인했다. 이번 작업도 Linux 클라우드에서 실행 중이며 Windows에 연결된 도구나
+승인된 원격 호스트 정보가 추가되지 않았다. 현재 환경의 부족은 Windows 관리자 권한 거부가
+아니라 **Windows 실행 세션/접속 경로 자체가 제공되지 않은 것**이다.
+
+| 사용자 요청 | 이번 확인 결과 |
+| --- | --- |
+| 작업 스케줄러 등록·활성 상태 | Windows 접속 미제공으로 미확인; task 재등록 없음 |
+| 마지막 실행·결과·로그·PC 보관 위치 | 실제 PC 값 미확인; 코드 기본값을 운영 값으로 간주하지 않음 |
+| 기존 SSH/Tailscale 설정 | cloud에 사용자 SSH 설정·Tailscale 클라이언트 없음; 실제 PC 설정 미확인 |
+| `100.99.127.60:22` 거부 원인 | 현재 장치 신원/주소부터 확인 필요; VPS sshd 장애로 확정하지 않음 |
+| VPS 전체·디렉터리별 디스크 | 서버 접근이 없어 미측정; cloud 사용량으로 대체하지 않음 |
+| 실제 PC↔VPS 전송·hash·retry·Manifest | 미실행; 기존 모의/local fixture 및 CI 결과와 구분 |
+| 이미 이전된 자료·서버 잔존 비교 | 양쪽 실제 manifest/파일 접근이 없어 미실행 |
+| Windows 로그인 자동 실행 보완 | 등록 상태·기존 인자 확인 전 변경 없음; 실제 로그인 증거 미확인 |
+| 운영 보고서 | 이 절에 확인 사실·미완료 이유 기록 |
+| 서버 삭제·거래 변경·Live 활성화 금지 | 해당 작업 모두 미실행 |
+
+현재 cloud의 `ip route get 100.99.127.60`은 eth0 기본 게이트웨이를 선택했고 로컬 Tailscale
+인터페이스는 없다. 플랫폼 외부 VPN 경로 유무는 이 관찰만으로 확정할 수 없다.
+주소는 shared CGNAT 범위 `100.64.0.0/10`에 속하지만 그 자체는 Tailscale 장치 신원 또는
+현재 주소의 증거가 아니다. 저장소 workflow의 고정 IP도 현재 장치 목록을 대신하지 못한다.
+따라서 이번에는 주소가 미확인인 상태에서 새 SSH probe나 포트 탐색을 추가하지 않았다.
+이전 TCP refusal은 경로에서 관측된 사실이며, 응답 주체가 실제 VPS인지는 미확인이다.
+
+과거 성공 run `39784441708`을 step 단위로 재조회했다. verify는 성공했지만
+Join Tailscale / Verify private endpoint / Transport 단계는 모두 skipped였다.
+이 실행의 success는 실배포 또는 연결 성공 증거가 아니다. 실패 run `39893801765`도
+download-artifact 단계 실패여서 SSH 거부 원인을 증명하지 않는다.
+
+기존 PC 작업 지시서에 `tailscale status --json`에서 mymoneyguard peer 이름·현재 IP·Online을
+확인한 후 ping/TCP/host key/인증을 차례로 구분하는 읽기 전용 절차를 추가했다.
+기존 연결이 없으면 설치·재인증·ACL 변경·신규 SSH 시스템을 만들지 않는다.
+수정은 기존 PR #2의 `daffcdd` 커밋으로 전달했다. PowerShell 예시는 현재 cloud에서 실행된
+결과가 아니며 실제 장치에서 검증해야 한다. 코드 자체는 변경하지 않았다.
+
+재개에 필요한 환경은 다음과 같다. 사용자 Windows PC의 기존 저장소를 연 로컬 Codex 실행
+세션 또는 승인된 기존 원격 연결이 필요하다. 그 세션에서 기존 Tailscale peer 상태와 task를
+직접 읽어야 한다. 확인된 peer에 대해서도 SSH가 불가하면 기존 VPS 관리 세션/콘솔의
+읽기 전용 listener·tailscaled 상태가 필요하다. 새 비밀번호·키 값을 채팅으로 요청하지 않는다.
+
 ## A. 전체 현황과 체크리스트
 
 | 우선순위 | 작업 | 상태 | 확인 근거 / 다음 조건 |
