@@ -160,12 +160,8 @@ class Deployment:
         previous = None
         stopped = False
         try:
-            # The root-owned broker validates the deployment enable flag before
-            # authorizing this unprivileged worker. Do not re-read its 0600
-            # root-only file as strategylab: that raises PermissionError.
-            # Keep the file-presence guard without weakening its permissions.
-            if not self.p.enabled.is_file():
-                raise ValueError('server deployment enable marker missing')
+            # The root-owned broker already validated the 0600 enable marker.
+            # The unprivileged worker cannot traverse its root-only parent.
             if self.p.code.is_symlink() or (self.p.code / '.git').is_symlink() or not (self.p.code / '.git').is_dir():
                 raise ValueError('symlink checkout denied')
             if Path(self.git('rev-parse', '--show-toplevel')).resolve() != self.p.code.resolve():
