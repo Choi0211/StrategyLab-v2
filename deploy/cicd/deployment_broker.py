@@ -39,6 +39,24 @@ ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
 
 
+class DeploymentBusy(Exception):
+    pass
+
+
+def acquire(lock, timeout=120):
+    """Absorb short overlaps, but never occupy the deployment queue forever."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DeploymentBusy('deployment_lock_timeout') from None
+            time.sleep(min(1, remaining))
+
+
 def metadata(args):
     if (len(args) != 4 or args[0] != 'deploy' or not SHA.fullmatch(args[1])
             or not RUN.fullmatch(args[2]) or not PRS.fullmatch(args[3])):
@@ -156,6 +174,8 @@ class Session:
         if not isinstance(operation, str) or not all(isinstance(v, str) for v in args):
             raise ValueError('invalid operation types')
         if operation == 'prepare':
+            if args and args[0] == self.target:
+                raise ValueError('duplicate target deployment denied')
             if self.previous or self.recovering or len(args) != 2 or not SHA.fullmatch(args[0]) or not args[1].isdecimal():
                 raise ValueError('invalid rollback checkpoint')
             if head(self.credentials) != args[0] or self.control.dispatch(['inspect'])['schema_version'] != int(args[1]):
@@ -333,7 +353,7 @@ def main():
                 or info.st_mode & forbidden):
             raise ValueError('unexpected runtime directory ownership or permissions')
     with (STATE / 'deploy.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        acquire(lock)
         reports = STATE / 'reports'
         reports.mkdir(mode=0o700, exist_ok=True)
         trusted(reports, directory=True)
@@ -370,6 +390,9 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
+    except DeploymentBusy:
+        print('{"status":"blocked_busy","error":"deployment_lock_timeout","db_restored":false}')
+        sys.exit(1)
     except Exception:
         print('{"status":"unknown","error":"deployment_broker_rejected"}')
         sys.exit(1)

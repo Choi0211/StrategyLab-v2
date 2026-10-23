@@ -188,6 +188,36 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertEqual(self.control.calls, [])
         self.assertEqual(self.head(), self.previous)
 
+    def test_duplicate_sha_does_not_restart_or_backup_or_claim_health(self):
+        result = self.engine.execute(self.previous, '124-1', '257', self.bundle)
+        self.assertEqual(result['status'], 'blocked_duplicate')
+        self.assertEqual(result['reason'], 'target_already_checked_out')
+        self.assertEqual(self.control.calls, [])
+        self.assertFalse(result['api_healthy'])
+        self.assertFalse(result['rollback_attempted'])
+        self.assertEqual(self.head(), self.previous)
+
+    def test_current_broken_venv_is_rejected_before_backup_or_stop(self):
+        with patch.object(self.engine, 'import_check', side_effect=ImportError('SECRET')):
+            result = self.execute()
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['failure_stage'], 'current_imports_dependencies')
+        self.assertFalse(result['rollback_attempted'])
+        self.assertNotIn('backup', self.control.calls)
+        self.assertFalse(any(op.startswith('stop-') for op in self.control.calls))
+        self.assertNotIn('SECRET', json.dumps(result))
+
+    def test_worker_never_reads_root_only_activation_marker(self):
+        read_text = Path.read_text
+        def guarded(path, *args, **kwargs):
+            if path == self.enabled:
+                raise PermissionError('root-only marker content')
+            return read_text(path, *args, **kwargs)
+        self.enabled.chmod(0o600)
+        with patch.object(Path, 'read_text', guarded):
+            result = self.execute()
+        self.assertEqual(result['status'], 'success')
+
     def test_bad_sha_and_shell_injection_rejected(self):
         for value in ('main', self.target + ';id', '../main'):
             with self.assertRaises(ValueError):

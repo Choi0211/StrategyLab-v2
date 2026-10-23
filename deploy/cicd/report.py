@@ -38,6 +38,12 @@ def assemble(directory):
               'reported_at': datetime.now(timezone.utc).isoformat(),
               'workflow_run_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
               'environment': 'gaon-production', 'db_restored': False}
+    try:
+        gate = json.loads((root / 'gate.json').read_text())
+        if gate.get('target_sha') == target and gate.get('status') == 'blocked':
+            report.update(status='blocked_gate', gate=gate)
+    except (OSError, ValueError, AttributeError):
+        pass
     if ci.get('status') != 'passed' or ci.get('sha') != target:
         report['status'] = 'blocked_ci'
     elif not report['deployment_enabled']:
@@ -46,6 +52,8 @@ def assemble(directory):
     summary = '\n'.join(['## Gaon production deployment', '',
         f"- Status: `{report['status']}`", f"- SHA: `{target}`",
         f"- PRs: `{prs}`", f"- CI: `{ci.get('status')}`",
+        f"- Failure stage: `{report.get('failure_stage', report.get('stage'))}`",
+        f"- Reason: `{report.get('gate', {}).get('reason') or report.get('reason') or report.get('error') or report.get('error_type')}`",
         f"- Finished: `{report.get('finished_at', report['reported_at'])}`",
         f"- Running SHA: `{report.get('running_sha')}`",
         f"- Services: `{json.dumps(report.get('services', {}), sort_keys=True)}`",
@@ -58,6 +66,8 @@ def assemble(directory):
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
             output.write(summary)
+    if report['deployment_enabled'] and report['status'] != 'success':
+        print('::error title=Gaon deployment unsuccessful::See deployment.json and the Actions Summary; production health is not confirmed.')
     return report
 
 
