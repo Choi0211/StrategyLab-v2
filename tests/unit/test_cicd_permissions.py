@@ -91,6 +91,18 @@ class DeploymentPermissionTests(unittest.TestCase):
         self.assertTrue(result['ok'])
         self.assertEqual(events, [0, 'write', 'read', 1])
 
+    def test_enable_marker_is_verified_only_by_privileged_broker(self):
+        # The worker runs as strategylab; /etc/gaon-deploy is root-only.
+        # Rechecking its marker in the worker raises PermissionError before
+        # a backup can be taken, despite the broker having admitted the run.
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        broker = (root / 'deploy/cicd/deployment_broker.py').read_text()
+        worker = (root / 'deploy/cicd/deploy_worker.py').read_text()
+        self.assertIn("ENABLED.read_text().strip() != 'enabled'", broker)
+        self.assertNotIn('self.p.enabled.is_file()', worker)
+        self.assertNotIn('self.p.enabled.read_text()', worker)
+
     def test_root_metadata_denies_commands_units_paths_duplicate_prs(self):
         self.assertEqual(supervisor.metadata(['deploy', TARGET, RUN, PRS]), [TARGET, RUN, PRS])
         for args in (['bash'], ['restart', 'binance-trading-live.service'],
