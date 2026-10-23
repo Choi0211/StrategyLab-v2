@@ -117,7 +117,12 @@ jobs:
           trap 'rm -rf "$key_dir"' EXIT
           printf '%s\n' "$DEPLOY_KEY" > "$key_dir/key"
           printf '%s\n' "$KNOWN_HOSTS" > "$key_dir/known_hosts"
+          # A bundle must be self-contained and verifiable in an empty repository.
+          # Reject shallow/partial checkout artifacts before any server transport.
+          test "$(git rev-parse --is-shallow-repository)" = false
           git bundle create --version=2 "$key_dir/release.bundle" HEAD
+          git init --bare --quiet "$key_dir/verify.git"
+          git -C "$key_dir/verify.git" bundle verify "$key_dir/release.bundle"
           ssh_rc=0
           ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$key_dir/known_hosts" \
