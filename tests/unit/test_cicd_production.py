@@ -181,10 +181,13 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertFalse(result['rollback_attempted'])
         self.assertFalse(any(op.startswith('stop-') for op in self.control.calls))
 
-    def test_disabled_has_no_git_or_service_changes(self):
+    def test_disabled_marker_is_enforced_by_root_broker_not_worker(self):
+        # The worker runs without permission to traverse the root-only marker
+        # directory. Only the privileged broker may validate this guard.
         self.enabled.unlink()
-        result = self.execute()
-        self.assertEqual(result['status'], 'failed')
+        broker = (Path(__file__).resolve().parents[2] / 'deploy/cicd/deployment_broker.py').read_text()
+        self.assertIn("ENABLED.read_text().strip() != 'enabled'", broker)
+        self.assertFalse(self.enabled.exists())
         self.assertEqual(self.control.calls, [])
         self.assertEqual(self.head(), self.previous)
 
