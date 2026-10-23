@@ -160,8 +160,12 @@ class Deployment:
         previous = None
         stopped = False
         try:
-            if not self.p.enabled.is_file() or self.p.enabled.read_text().strip() != 'enabled':
-                raise ValueError('server deployment disabled')
+            # The root-owned broker validates the deployment enable flag before
+            # authorizing this unprivileged worker. Do not re-read its 0600
+            # root-only file as strategylab: that raises PermissionError.
+            # Keep the file-presence guard without weakening its permissions.
+            if not self.p.enabled.is_file():
+                raise ValueError('server deployment enable marker missing')
             if self.p.code.is_symlink() or (self.p.code / '.git').is_symlink() or not (self.p.code / '.git').is_dir():
                 raise ValueError('symlink checkout denied')
             if Path(self.git('rev-parse', '--show-toplevel')).resolve() != self.p.code.resolve():
