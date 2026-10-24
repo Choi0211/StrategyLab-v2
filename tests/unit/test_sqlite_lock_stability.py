@@ -181,6 +181,54 @@ class MigrationOwnershipTests(unittest.TestCase):
             checker_connection.close()
             os.remove(path)
 
+    def test_owner_migration_is_serialized_within_a_process(self) -> None:
+        # Force a measurable overlap window before the actual DDL. The
+        # migration startup path must never execute concurrently in different
+        # threads of the same process, even before SQLite takes its file lock.
+        path = _temp_db_path()
+        active = 0
+        max_active = 0
+        guard = threading.Lock()
+        errors: list[BaseException] = []
+        from gaon.runtime import storage as storage_module
+        real_migrate = migrate
+
+        def measured_migrate(connection):
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.03)
+                return real_migrate(connection)
+            finally:
+                with guard:
+                    active -= 1
+
+        def open_store():
+            try:
+                store = RuntimeStateStore(path)
+                try:
+                    self.assertEqual(store.status().schema_version, SCHEMA_VERSION)
+                finally:
+                    store.close()
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=open_store) for _ in range(4)]
+        try:
+            with patch.object(storage_module, "migrate", side_effect=measured_migrate):
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=30)
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(max_active, 1, "one migration owner per process")
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_H_simultaneous_migration_contention_is_bounded_and_schema_ends_correct(self) -> None:
         path = _temp_db_path()
         errors: list[BaseException] = []
