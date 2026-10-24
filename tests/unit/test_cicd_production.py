@@ -141,6 +141,19 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertFalse(result['db_restored'])
         self.assertTrue(all(op in {'inspect', 'backup', 'status', 'prepare', *broker.OPERATIONS} for op in self.control.calls))
 
+    def test_post_start_integrity_scan_waits_for_both_services(self):
+        original = self.control.call
+        def call(operation, *args):
+            if (operation == 'inspect' and self.head() == self.target
+                    and 'start-web' not in self.control.calls):
+                raise RuntimeError('SQLite startup read/write lock collision')
+            return original(operation, *args)
+        with patch.object(self.control, 'call', side_effect=call):
+            result = self.execute()
+        self.assertEqual(result['status'], 'success')
+        self.assertLess(self.control.calls.index('start-web'),
+                        len(self.control.calls) - 1 - self.control.calls[::-1].index('inspect'))
+
     def test_interrupt_after_partial_stop_rolls_back_real_git_and_preserves_db(self):
         original = self.control.call
         interrupted = False
