@@ -1,4 +1,4 @@
-"""Gaon LLM conversation brain with deterministic fallback."""
+﻿"""Gaon LLM conversation brain with deterministic fallback."""
 
 from __future__ import annotations
 
@@ -779,7 +779,12 @@ class LLMConversationBrain:
             if snapshot is not None:
                 return snapshot, "conversation_binance_snapshot", (), ("dashboard_state_snapshot",), "deterministic", ()
         # Pure greetings never inherit stale research intent or execute tools.
-        if not approval_required and request.text.strip().casefold().rstrip(".!?") in {
+        # Web read_only mode appends a bounded "readonly" marker for write
+        # safety. It must not turn a harmless greeting into a research query.
+        greeting_text = request.text.strip().casefold()
+        if greeting_text.endswith(" readonly"):
+            greeting_text = greeting_text[: -len(" readonly")].rstrip()
+        if not approval_required and greeting_text.rstrip(".!?") in {
             "안녕", "안녕하세요", "가온아 안녕", "hello", "hi"
         }:
             return render_greeting(), "conversation_greeting", (), (), "deterministic", ()
