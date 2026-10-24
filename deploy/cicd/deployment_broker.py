@@ -236,9 +236,23 @@ class Session:
         parent, child = socket.socketpair()
         process = subprocess.Popen(['/usr/bin/python3', '-I', str(WORKER), mode, target,
                                     self.run_id, self.prs, str(child.fileno())],
-                                   stdin=bundle, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   stdin=subprocess.PIPE if mode == 'deploy' else subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                    pass_fds=(child.fileno(),), start_new_session=True,
                                    cwd='/', env=ENV, **self.credentials)
+        # Never share a seekable file offset across privilege boundaries.
+        # The worker consumes all stdin before using its control channel.
+        if mode == 'deploy':
+            bundle.seek(0)
+            try:
+                while chunk := bundle.read(1024 * 1024):
+                    process.stdin.write(chunk)
+                process.stdin.close()
+            except BaseException:
+                process.kill()
+                process.wait()
+                child.close()
+                raise
         child.close()
         interrupted = False
         def interrupt(*_):
