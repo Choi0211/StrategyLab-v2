@@ -226,12 +226,14 @@ class Deployment:
             result['stage'] = 'restart'
             since = int(time.time())
             self.control.call('start-runtime')
-            result['db_schema_version'] = self.control.call('inspect')['schema_version']
-            if result['db_schema_version'] != old_schema:
-                raise ValueError('post-start schema mismatch')
             self.control.call('start-web')
             result['stage'] = 'verify'
             observed = self.healthy(since, before)
+            # A full SQLite integrity scan during startup can hold a read lock
+            # while runtime recovery needs its initial write transaction.
+            result['db_schema_version'] = self.control.call('inspect')['schema_version']
+            if result['db_schema_version'] != old_schema:
+                raise ValueError('post-start schema mismatch')
             if self.git('rev-parse', 'HEAD') != target:
                 raise ValueError('checkout drift')
             if self.git('status', '--porcelain', '--untracked-files=no'):
