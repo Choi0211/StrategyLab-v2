@@ -12,6 +12,25 @@ from gaon.runtime.web_api import build_server, GaonWebChatAdapter
 
 
 class CognitiveWebFlowTests(unittest.TestCase):
+    def test_read_only_greeting_does_not_route_to_provider_or_mission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RuntimeStateStore(str(Path(directory) / "runtime.sqlite"))
+            try:
+                adapter = GaonWebChatAdapter(
+                    GaonRuntimeConfig(assistant_enabled=True, assistant_provider="deterministic"),
+                    store._connection,
+                )
+                response = adapter.handle(
+                    message="안녕하세요.", session_ref="greeting-readonly", user_ref="greeting-readonly",
+                    read_only=True, received_at="2026-10-24T00:00:00Z",
+                )
+                self.assertEqual(response["route"], "conversation_greeting")
+                self.assertEqual(response["provider"], "deterministic")
+                self.assertFalse(response["tool_calls"])
+                self.assertIn("안녕하세요", response["text"])
+            finally:
+                store.close()
+
     def test_busy_chat_does_not_block_health_or_execute_second_chat(self):
         from gaon.runtime import web_api
         entered, release = threading.Event(), threading.Event()

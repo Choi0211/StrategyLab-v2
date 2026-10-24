@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
 import os
+import threading
 
 from gaon.runtime.migrations import SCHEMA_VERSION, check_schema_version_compatible, migrate
 from gaon.runtime.conversation_context import SQLiteConversationSummaryRepository
@@ -16,6 +17,13 @@ from gaon.runtime.agent_planner import SQLiteAgentPlanRepository
 from gaon.runtime.repositories import SQLiteAuditEventRepository, SQLiteTelegramStateRepository
 from gaon.runtime.serialization import loads_json
 from gaon.runtime.sqlite_lock import DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS, retry_on_lock
+
+
+# Serialize schema-owner startup within a Python process. SQLite busy_timeout
+# and bounded retry still protect against other processes: this lock does not
+# weaken the fail-closed non-owner schema check. Schema migration is startup-
+# only, so a simple process-wide lock avoids a growing registry of DB paths.
+_MIGRATION_OWNER_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -46,7 +54,8 @@ class RuntimeStateStore:
         try:
             self._connection.execute(f"PRAGMA busy_timeout = {int(DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS * 1000)}")
             if owns_migration:
-                retry_on_lock(lambda: migrate(self._connection))
+                with _MIGRATION_OWNER_LOCK:
+                    retry_on_lock(lambda: migrate(self._connection))
             else:
                 check_schema_version_compatible(self._connection)
         except BaseException:
