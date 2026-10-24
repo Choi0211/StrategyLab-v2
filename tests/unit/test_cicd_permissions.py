@@ -56,20 +56,28 @@ class DeploymentPermissionTests(unittest.TestCase):
             self.request('prepare', OLD, '48')
 
     def test_ingress_has_only_fixed_broker_command_and_clean_environment(self):
+        class CapturedPipe(BytesIO):
+            def close(self):
+                self.flush()  # Keep bytes readable after the simulated close.
+        pipe = CapturedPipe()
+        process = SimpleNamespace(stdin=pipe, wait=lambda timeout=None: 0, kill=lambda: None)
+        payload = b'# v2 git bundle\n' + TARGET.encode() + b' HEAD\n\nPACK'
         with patch.dict(os.environ, {'SSH_ORIGINAL_COMMAND': f'deploy {TARGET} {RUN} {PRS}',
                                      'LD_PRELOAD': 'attacker', 'GIT_DIR': '/tmp/attacker'}), patch.object(
-            ingress.sys, 'stdin', SimpleNamespace(buffer=BytesIO(b'# v2 git bundle\n' + TARGET.encode() + b' HEAD\n\nPACK'))
-        ), patch.object(ingress.subprocess, 'call', return_value=0) as call:
+            ingress.sys, 'stdin', SimpleNamespace(buffer=BytesIO(payload))
+        ), patch.object(ingress.subprocess, 'Popen', return_value=process) as popen:
             self.assertEqual(ingress.main(), 0)
-        args, kwargs = call.call_args
+        args, kwargs = popen.call_args
         self.assertEqual(args[0], ['/usr/bin/sudo', '-n', '/usr/local/sbin/gaon-deployment-broker',
                                   'deploy', TARGET, RUN, PRS])
         self.assertEqual(kwargs['env'], {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+        self.assertEqual(kwargs['stdin'], ingress.subprocess.PIPE)
+        self.assertEqual(pipe.getvalue(), payload)
         for original in ('bash', 'deploy ../x 123-1 257', f'deploy {TARGET} {RUN} {PRS};id',
                          f'deploy {TARGET} {RUN} {PRS} /arbitrary/path'):
-            with patch.dict(os.environ, {'SSH_ORIGINAL_COMMAND': original}), patch.object(ingress.subprocess, 'call') as call:
+            with patch.dict(os.environ, {'SSH_ORIGINAL_COMMAND': original}), patch.object(ingress.subprocess, 'Popen') as popen:
                 self.assertEqual(ingress.main(), 2)
-                call.assert_not_called()
+                popen.assert_not_called()
 
     def test_ingress_rejects_missing_mismatched_or_oversized_bundle_before_sudo(self):
         for data in (b'not a bundle', b'# v2 git bundle\n' + OLD.encode() + b' HEAD\n\nPACK',
