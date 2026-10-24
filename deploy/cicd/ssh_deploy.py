@@ -46,9 +46,21 @@ def main():
     # No checkout writes, shell, service sudo, or configurable executable.
     with tempfile.TemporaryFile() as bundle:
         receive(sys.stdin.buffer, bundle, parts[1])
-        return subprocess.call(['/usr/bin/sudo', '-n', '/usr/local/sbin/gaon-deployment-broker', *parts],
-                               stdin=bundle,
-                               env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+        # Stream through a dedicated pipe instead of sharing a seekable
+        # temporary file descriptor across sudo and the privileged broker.
+        process = subprocess.Popen(
+            ['/usr/bin/sudo', '-n', '/usr/local/sbin/gaon-deployment-broker', *parts],
+            stdin=subprocess.PIPE, env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
+        try:
+            bundle.seek(0)
+            while chunk := bundle.read(1024 * 1024):
+                process.stdin.write(chunk)
+            process.stdin.close()
+            return process.wait(timeout=1200)
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
 
 
 if __name__ == '__main__':
