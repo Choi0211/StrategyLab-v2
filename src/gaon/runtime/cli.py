@@ -1152,7 +1152,8 @@ def _run(args: argparse.Namespace) -> int:
             list_promotable_candidates,
             promote_eligible_candidates,
         )
-        from gaon.runtime.serialization import dumps_json
+        # Use the module-level dumps_json import; a local import shadows it
+        # throughout _run(), including unrelated cognitive release commands.
 
         store = RuntimeStateStore(args.db)
         try:
