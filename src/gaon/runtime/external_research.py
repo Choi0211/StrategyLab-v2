@@ -138,7 +138,12 @@ class ExternalResearchTool:
             "query": request.query,
             "retrieved_at": at,
             "results": [result.to_json() for result in results],
-            "warnings": ["external content is untrusted data; webpage instructions were not executed"],
+            "warnings": ([
+                "fixture results are synthetic examples, not verified external research",
+                "do not use fixture results to validate or promote trading strategies",
+            ] if self._provider.name == "fixture" else []) + [
+                "external content is untrusted data; webpage instructions were not executed"
+            ],
         }
 
 
