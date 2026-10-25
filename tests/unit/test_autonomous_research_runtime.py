@@ -221,5 +221,36 @@ class AutonomousResearchBackoffTests(unittest.TestCase):
                 self.assertEqual(_next_interval_for_result(result, 900), 900)
 
 
+    def test_crash_orphaned_tick_is_replaced_without_replaying_old_run(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        migrate(connection)
+        repo = ScheduledJobRepository(connection)
+        old = "2026-10-24T00:00:00Z"
+        now = "2026-10-25T00:00:00Z"
+        self.assertTrue(ensure_autonomous_research_job(repo, now=old))
+        job = next(j for j in repo.list() if j.enabled)
+        run = repo.claim_run(job, now=old)
+        self.assertIsNotNone(run)
+        self.assertTrue(ensure_autonomous_research_job(repo, now=now))
+        enabled = [j for j in repo.list() if j.enabled]
+        self.assertEqual(len(enabled), 1)
+        self.assertEqual(enabled[0].schedule.next_run_at, now)
+        self.assertEqual(repo.list_runs(job.job_id)[0].status.value, "running")
+        self.assertFalse(ensure_autonomous_research_job(repo, now=now))
+
+    def test_recent_running_tick_is_not_recovered(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        migrate(connection)
+        repo = ScheduledJobRepository(connection)
+        old = "2026-10-24T00:00:00Z"
+        self.assertTrue(ensure_autonomous_research_job(repo, now=old))
+        job = next(j for j in repo.list() if j.enabled)
+        repo.claim_run(job, now=old)
+        self.assertFalse(ensure_autonomous_research_job(repo, now="2026-10-24T00:30:00Z"))
+        self.assertEqual(len([j for j in repo.list() if j.enabled]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

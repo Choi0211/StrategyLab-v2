@@ -783,7 +783,24 @@ def ensure_autonomous_research_job(
     """Idempotently registers the first due tick job if none is pending."""
     existing = tuple(job for job in repository.list() if (job.metadata or {}).get("kind") == _JOB_KIND and job.enabled)
     if existing:
-        return False
+        # Retire a crash-orphaned one-attempt tick without replaying its
+        # possibly non-idempotent research work. Keep the run as audit data.
+        from datetime import timedelta
+        from gaon.runtime.scheduled_automation import ScheduledRunStatus
+        for old_job in existing:
+            if old_job.schedule.next_run_at > now:
+                continue
+            runs = repository.list_runs(old_job.job_id)
+            if not runs or runs[-1].status != ScheduledRunStatus.RUNNING:
+                continue
+            started = datetime.strptime(runs[-1].started_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+            current = datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+            if current - started < timedelta(hours=2):
+                continue
+            repository.set_enabled(old_job.job_id, False, updated_at=now)
+        existing = tuple(job for job in repository.list() if (job.metadata or {}).get("kind") == _JOB_KIND and job.enabled)
+        if existing:
+            return False
     job = ScheduledJob(
         f"{_JOB_ID_PREFIX}:{now}",
         "Gaon Autonomous Research Tick",
