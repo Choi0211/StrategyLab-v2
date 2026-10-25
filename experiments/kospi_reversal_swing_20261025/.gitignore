@@ -1,0 +1,10 @@
+.venv/
+data/
+duckdb_tmp/
+__pycache__/
+results/research_snapshot.json.gz
+results/run-log.txt
+results/trades_A_limit.csv
+results/trades_B_next_open.csv
+results/equity_A_limit.csv
+results/equity_B_next_open.csv
