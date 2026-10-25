@@ -34,7 +34,7 @@ from gaon.runtime.daily_research import DailyResearchPipeline, DailyResearchProf
 from gaon.runtime.errors import ConfigurationError, GaonRuntimeError
 from gaon.runtime.event_store import DurableEvent, SQLiteEventStore
 from gaon.runtime.executive_planner import AgentSelection, DeterministicExecutivePlanner, ExecutivePlan, ExecutiveRequest, RoutingDecision, ToolSelection, executive_plan_event
-from gaon.runtime.external_research import ExternalResearchError, ExternalResearchTool, validate_external_url
+from gaon.runtime.external_research import ExternalResearchError, ExternalResearchTool, create_external_research_tool, validate_external_url
 from gaon.runtime.health import readiness
 from gaon.runtime.llm_tools import SafeToolExecutor, SQLiteToolAuditRepository, ToolDefinition, ToolRegistry, ToolResult, ToolRiskLevel, default_tool_registry
 from gaon.runtime.metrics import MetricsCollector
@@ -4428,6 +4428,7 @@ def _run(args: argparse.Namespace) -> int:
     elif args.command == "external-research-release-check":
         store = RuntimeStateStore(args.db)
         try:
+            config = load_runtime_config(os.environ)
             blocked = False
             try:
                 validate_external_url("http://127.0.0.1/latest")
@@ -4435,12 +4436,18 @@ def _run(args: argparse.Namespace) -> int:
                 blocked = True
             if not blocked:
                 raise ConfigurationError("external research SSRF guard did not block loopback")
-            payload = ExternalResearchTool().search("Korea market breakout", max_results=2, retrieved_at=_utc_now())
+            research_provider_name = config.effective_external_research_provider
+            research_tool = create_external_research_tool(
+                provider_name=research_provider_name,
+                api_key=config.external_research_api_key,
+                timeout_seconds=config.external_research_timeout_seconds,
+            )
+            payload = research_tool.search("Korea market breakout", max_results=2, retrieved_at=_utc_now())
             tool_names = {tool.name for tool in default_tool_registry(store._connection).list()}
             required = {"web_search", "news_search", "weather_current", "weather_forecast", "exchange_rate", "market_data"}
             if not required.issubset(tool_names):
                 raise ConfigurationError("external research tools are not registered")
-            report = StrategyResearchOrchestrator(store._connection).run(
+            report = StrategyResearchOrchestrator(store._connection, external_tool=research_tool).run(
                 "Research a safer breakout challenger",
                 run_id="external-research-release-check",
                 actor_ref="cli",
@@ -4454,7 +4461,18 @@ def _run(args: argparse.Namespace) -> int:
     elif args.command == "strategy-research-demo":
         store = RuntimeStateStore(args.db)
         try:
-            report = StrategyResearchOrchestrator(store._connection, repository=SQLiteStrategyResearchRepository(store._connection)).run(
+            config = load_runtime_config(os.environ)
+            research_provider_name = config.effective_external_research_provider
+            research_tool = create_external_research_tool(
+                provider_name=research_provider_name,
+                api_key=config.external_research_api_key,
+                timeout_seconds=config.external_research_timeout_seconds,
+            )
+            report = StrategyResearchOrchestrator(
+                store._connection,
+                repository=SQLiteStrategyResearchRepository(store._connection),
+                external_tool=research_tool,
+            ).run(
                 args.request,
                 run_id=args.run_id,
                 actor_ref="cli",
