@@ -70,11 +70,27 @@ class GaonRuntimeConfig:
     real_market_data_enabled: bool = False
     market_data_provider: str = "fixture"
     market_data_timeout_seconds: float = 20.0
+    external_research_provider: str = "fixture"
+    external_research_api_key: str | None = None
+    external_research_timeout_seconds: float = 10.0
     # Read-only path to the crypto forward-verification research DB
     # (gaon.research.crypto_forward_verification) - a dedicated sqlite
     # file, never the main runtime DB and never a binance-trading state
     # file. None (default) means the admin UI simply omits this section.
     crypto_forward_verification_db_path: str | None = None
+
+    @property
+    def effective_external_research_provider(self) -> str:
+        """external_research_provider, gated by the paid-provider opt-in.
+
+        A paid provider (brave_search) is only actually used when the
+        operator has explicitly enabled paid providers; otherwise this
+        safely reads back as "fixture" regardless of what was configured,
+        so a half-configured deployment never silently makes paid calls.
+        """
+        if self.external_research_provider == "brave_search" and not self.paid_provider_enabled:
+            return "fixture"
+        return self.external_research_provider
 
     def __post_init__(self) -> None:
         validate_mode(self.mode)
@@ -126,6 +142,10 @@ class GaonRuntimeConfig:
             raise ConfigurationError("real market data requires GAON_MARKET_DATA_PROVIDER=yahoo-chart")
         if self.market_data_timeout_seconds < 1 or self.market_data_timeout_seconds > 120:
             raise ConfigurationError("market_data_timeout_seconds must be between 1 and 120")
+        if self.external_research_provider not in {"fixture", "brave_search"}:
+            raise ConfigurationError("external_research_provider must be fixture or brave_search")
+        if self.external_research_timeout_seconds < 1 or self.external_research_timeout_seconds > 60:
+            raise ConfigurationError("external_research_timeout_seconds must be between 1 and 60")
 
     def __repr__(self) -> str:
         return (
@@ -142,7 +162,9 @@ class GaonRuntimeConfig:
             f"assistant_api_key={mask_secret(self.assistant_api_key)!r}, "
             f"free_only_mode={self.free_only_mode!r}, paid_provider_enabled={self.paid_provider_enabled!r}, "
             f"execution_mode={self.execution_mode!r}, live_trading_enabled={self.live_trading_enabled!r}, "
-            f"real_market_data_enabled={self.real_market_data_enabled!r}, market_data_provider={self.market_data_provider!r})"
+            f"real_market_data_enabled={self.real_market_data_enabled!r}, market_data_provider={self.market_data_provider!r}, "
+            f"external_research_provider={self.external_research_provider!r}, "
+            f"external_research_api_key={mask_secret(self.external_research_api_key)!r})"
         )
 
 
@@ -189,6 +211,9 @@ def load_runtime_config(env: dict[str, str]) -> GaonRuntimeConfig:
         real_market_data_enabled=parse_bool(env.get("GAON_REAL_MARKET_DATA_ENABLED"), "GAON_REAL_MARKET_DATA_ENABLED", default=False),
         market_data_provider=env.get("GAON_MARKET_DATA_PROVIDER", "fixture"),
         market_data_timeout_seconds=float(env.get("GAON_MARKET_DATA_TIMEOUT_SECONDS", "20")),
+        external_research_provider=env.get("GAON_EXTERNAL_RESEARCH_PROVIDER", "fixture"),
+        external_research_api_key=env.get("GAON_BRAVE_SEARCH_API_KEY"),
+        external_research_timeout_seconds=float(env.get("GAON_EXTERNAL_RESEARCH_TIMEOUT_SECONDS", "10")),
     )
 
 
