@@ -55,7 +55,7 @@ from gaon.knowledge.strategy_candidate import (
     evaluate_economic_viability,
     next_blocker_driven_research_action,
 )
-from gaon.runtime.config import GaonRuntimeConfig
+from gaon.runtime.config import GaonRuntimeConfig, load_runtime_config
 from gaon.runtime.conversation_context import ConversationContextOrchestrator
 from gaon.runtime.conversation_lifecycle import (
     archive_conversation,
@@ -726,6 +726,7 @@ def dispatch_request(
             "research_mission": "/gaon/research/mission",
             "pending_approvals": "/gaon/research/pending-approvals",
             "storage_status": "/gaon/storage/status",
+            "external_research_status": "/gaon/research/external_provider_status",
             "strategy_version_status": "/gaon/strategy/version_status",
             "paper_report": "/gaon/paper/report",
             "paper_summary": "/gaon/paper/summary",
@@ -778,6 +779,8 @@ def dispatch_request(
         return _handle_candidate_detail(adapter, query, detail_match.group("candidate_id"))
     if method == "GET" and route_path == "/gaon/storage/status":
         return _handle_storage_status()
+    if method == "GET" and route_path == "/gaon/research/external_provider_status":
+        return _handle_external_research_status()
     if method == "GET" and route_path == "/gaon/strategy/version_status":
         return _handle_strategy_version_status(adapter, query)
     if method == "POST" and route_path == "/gaon/paper/report":
@@ -1316,6 +1319,33 @@ def _handle_pending_approvals(adapter: GaonWebChatAdapter, query: Mapping[str, l
         "order_executed": False,
         "champion_promoted": False,
         "approval_bypassed": False,
+    }
+
+
+def _handle_external_research_status() -> tuple[int, Mapping[str, object]]:
+    """Read-only status of the strategy-research external search provider,
+    so dashboards can plainly show whether real search is connected or
+    everything is still running on fixture-only (synthetic) data. Never
+    executes a search itself - just reports the current configuration."""
+    config = load_runtime_config(os.environ)
+    effective = config.effective_external_research_provider
+    real_connected = effective != "fixture"
+    if real_connected:
+        reason = "connected"
+    elif config.external_research_provider != "brave_search":
+        reason = "fixture_configured"
+    elif not config.external_research_api_key:
+        reason = "no_api_key"
+    elif not config.paid_provider_enabled:
+        reason = "paid_provider_not_enabled"
+    else:
+        reason = "unavailable"
+    return 200, {
+        "schema_version": WEB_API_SCHEMA_VERSION,
+        "configured_provider": config.external_research_provider,
+        "effective_provider": effective,
+        "real_search_connected": real_connected,
+        "reason": reason,
     }
 
 
