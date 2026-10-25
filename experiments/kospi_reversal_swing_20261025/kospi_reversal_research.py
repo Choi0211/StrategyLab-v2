@@ -40,6 +40,36 @@ MAX_POSITIONS=5
 C_PENETRATION=0.002
 C_ENTRY_BUFFER=0.001
 C_EXIT_SLIP=0.001
+TICK_POLICY='off'  # enable 'historical' to floor a limit to a legal KRX tick
+
+def krx_tick_size(day: str, price: float) -> int:
+    # KOSPI ordinary shares. 2023-01-25 exchange-wide tick change.
+    # Source: KRX regulation and Yuanta/Dashin broker notices.
+    if day < '2023-01-25':
+        if price < 1000: return 1
+        if price < 5000: return 5
+        if price < 10000: return 10
+        if price < 50000: return 50
+        if price < 100000: return 100
+        if price < 500000: return 500
+        return 1000
+    if price < 2000: return 1
+    if price < 5000: return 5
+    if price < 20000: return 10
+    if price < 50000: return 50
+    if price < 200000: return 100
+    if price < 500000: return 500
+    return 1000
+
+def legal_buy_limit(day: str, requested_price: float) -> float:
+    if TICK_POLICY == 'off': return requested_price
+    if TICK_POLICY != 'historical':raise ValueError(TICK_POLICY)
+    tick=krx_tick_size(day,requested_price)
+    value=math.floor(requested_price/tick)*tick
+    # Resolve boundary cases where the rounded value enters a new tick band.
+    while value>0 and value%krx_tick_size(day,value)!=0:
+        value-=1
+    return float(value)
 def sale_tax(day):
     if TAX_POLICY == 'flat20': return 0.002
     if TAX_POLICY == 'flat30': return 0.003
@@ -228,6 +258,7 @@ def run_variant(label,candidates,index,bars):
     positions={}
     events=[]
     equity_series=[]
+    daily_exposure=[]
     missing_exit=0;attempted=filled=unfilled=0;skip_slots=0
     plan_exits={}
     prev_date=None
@@ -270,7 +301,7 @@ def run_variant(label,candidates,index,bars):
             bar=bars.get((day,code))
             if not bar or bar['v']<=0:
                 unfilled+=1;continue
-            limit=signal['close']*.99
+            limit=legal_buy_limit(day,signal['close']*.99)
             extra_entry_buffer=0.0
             if label=='B_next_open':
                 entry_px=bar['o']*1.0005
@@ -320,8 +351,11 @@ def run_variant(label,candidates,index,bars):
             elif pos['days']>=MAX_DAYS:plan_exits[code]='time_7_sessions'
         equity=cash+sum(pos['qty']*last_known.get(code,pos['entry_price']) for code,pos in positions.items())
         equity_series.append((day,round(equity,2)))
+        invested_value=equity-cash
+        daily_exposure.append((day,round(100*invested_value/equity,3) if equity>0 else None,len(positions)))
         prev_date=day
     return {'name':label,'events':events,'equity_series':equity_series,
+            'daily_exposure':daily_exposure,
             'attempted':attempted,'filled':filled,'unfilled':unfilled,
             'skipped_capacity':skip_slots,'remaining_positions':len(positions),
             'missing_exit_bars':missing_exit}
@@ -342,8 +376,12 @@ def metrics(run,index,begin,end):
     lost=-sum(e['pnl'] for e in losses)
     idx=[(d,v) for d,v in index if d0<=d<=dn]
     kospi=idx[-1][1]/idx[0][1]-1 if len(idx)>=2 else None
+    exposure=[(d,e,n) for d,e,n in run.get('daily_exposure',[]) if begin<=d<=end]
     return {
       'start':d0,'end':dn,'start_equity':round(v0,2),'end_equity':round(vn,2),
+      'average_invested_pct':round(sum(e for _,e,_ in exposure if e is not None)/len(exposure),2) if exposure else None,
+      'active_sessions_pct':round(100*sum(n>0 for _,_,n in exposure)/len(exposure),2) if exposure else None,
+      'maximum_simultaneous_positions':max((n for _,_,n in exposure),default=0),
       'total_return_pct':round((vn/v0-1)*100,2),
       'cagr_pct':round(((vn/v0)**(1/years)-1)*100,2),
       'mdd_pct':round(dd*100,2),
