@@ -1,0 +1,11 @@
+[Unit]
+Description=Protect Gaon backups created since last check
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+Unit=gaon-backup-permissions.service
+
+[Install]
+WantedBy=timers.target

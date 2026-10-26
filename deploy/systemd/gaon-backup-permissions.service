@@ -1,0 +1,22 @@
+[Unit]
+Description=Gaon backup file permission guard (metadata-only, no deletions)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/strategylab-v2
+ExecStart=/usr/bin/python3 /opt/strategylab-v2/scripts/gaon_backup_permission_guard.py
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/strategylab-v2/deploy_backups /var/lib/strategylab/backups /var/lib/strategylab/gaon-runtime-pre-learning-v3-20261018.sqlite /var/lib/strategylab/gaon-runtime-pre-research-fix-20261017.sqlite
+MemoryMax=64M
+CPUQuota=20%
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
