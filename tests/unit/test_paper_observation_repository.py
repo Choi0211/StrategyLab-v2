@@ -73,6 +73,33 @@ class PaperObservationRepositoryTests(unittest.TestCase):
         self.assertEqual(agg["status_counts"]["entry_blocked"], 1)
         self.assertEqual(agg["status_counts"]["closed"], 2)
 
+    def test_near_impossible_price_vs_pnl_excluded_without_mutating_row(self) -> None:
+        self.repo.insert(
+            _observation(status="closed",symbol="NEARUSDT",pnl=0.031,
+                pnl_pct=0.0002237637,direction="LONG",entry_price=5.257,
+                exit_price=4.468,qty=38.0),
+            created_at="nearbadhistorical",
+        )
+        self.repo.insert(
+            _observation(status="closed",symbol="APTUSDT",pnl=-21.12174,
+                pnl_pct=-0.105314,direction="LONG",entry_price=0.8199,
+                exit_price=0.7357,qty=243.9),
+            created_at="aptconsistent",
+        )
+        a=self.repo.aggregate_for_family(FAMILY_ID)
+        self.assertEqual(a["closed_trade_count"],1)
+        self.assertEqual(a["excluded_price_pnl_mismatch_count"],1)
+        self.assertAlmostEqual(a["total_pnl"],-21.12174)
+        self.assertFalse(a["promotion_evidence_ready"])
+        self.assertEqual(len(self.repo.list_for_family(FAMILY_ID)),2)
+
+    def test_unknown_fill_prices_are_not_claimed_verified(self) -> None:
+        self.repo.insert(_observation(status="closed",pnl=2.0,exit_price=None),created_at="unknownfill")
+        a=self.repo.aggregate_for_family(FAMILY_ID)
+        self.assertEqual(a["unverified_fill_price_count"],1)
+        self.assertFalse(a["promotion_evidence_ready"])
+        self.assertEqual(a["total_pnl"],2.0)
+
     def test_aggregate_profit_factor_is_none_not_infinite_when_no_losses(self) -> None:
         self.repo.insert(_observation(status="closed", pnl=5.0, pnl_pct=0.01), created_at="t1")
         agg = self.repo.aggregate_for_family(FAMILY_ID)
