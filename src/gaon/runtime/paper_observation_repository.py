@@ -19,6 +19,7 @@ See the table this backs: ``gaon.runtime.migrations._upgrade_v44_to_v45``.
 from __future__ import annotations
 
 import sqlite3
+import math
 from collections.abc import Mapping, Sequence
 
 _COLUMNS = (
@@ -112,12 +113,41 @@ class PaperObservationSQLiteRepository:
 
     def aggregate_for_family(self, family_id: str) -> Mapping[str, object]:
         closed_rows = self._connection.execute(
-            "SELECT pnl, pnl_pct FROM paper_trade_observations "
+            "SELECT pnl, pnl_pct, entry_price, exit_price, qty, direction "
+            "FROM paper_trade_observations "
             "WHERE family_id = ? AND status = 'closed' AND pnl IS NOT NULL",
             (family_id,),
         ).fetchall()
-        pnls = [float(r[0]) for r in closed_rows]
-        pnl_pcts = [float(r[1]) for r in closed_rows if r[1] is not None]
+        eligible = []
+        inconsistent_price_pnl = 0
+        unverified_fill_prices = 0
+        for pnl, pnl_pct, entry, exit_, qty, direction in closed_rows:
+            try:
+                pnl = float(pnl)
+                if not math.isfinite(pnl):
+                    inconsistent_price_pnl += 1
+                    continue
+                has_prices = (entry is not None and exit_ is not None and
+                              qty is not None and str(direction).upper() in ("LONG","SHORT"))
+                if not has_prices:
+                    unverified_fill_prices += 1
+                else:
+                    entry, exit_, qty = float(entry), float(exit_), abs(float(qty))
+                    if not all(map(math.isfinite, (entry,exit_,qty))) or entry <= 0 or exit_ <= 0 or qty <= 0:
+                        inconsistent_price_pnl += 1
+                        continue
+                    implied = (exit_-entry)*qty*(1 if direction=="LONG" else -1)
+                    # Fees/slippage and signal-price vs fill-price differences
+                    # can be small but not 15% of position notional (NEAR).
+                    tolerance = max(1.0, 0.02*entry*qty)
+                    if abs(pnl-implied)>tolerance:
+                        inconsistent_price_pnl += 1
+                        continue
+                eligible.append((pnl,pnl_pct))
+            except (ValueError,TypeError,OverflowError):
+                inconsistent_price_pnl += 1
+        pnls = [float(r[0]) for r in eligible]
+        pnl_pcts = [float(r[1]) for r in eligible if r[1] is not None and math.isfinite(float(r[1]))]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
         gross_profit = sum(wins)
@@ -139,6 +169,11 @@ class PaperObservationSQLiteRepository:
             "mean_pnl_pct": (sum(pnl_pcts) / len(pnl_pcts)) if pnl_pcts else None,
             "total_pnl": sum(pnls) if pnls else 0.0,
             "status_counts": {str(s): int(c) for s, c in status_rows},
+            "excluded_price_pnl_mismatch_count": inconsistent_price_pnl,
+            "unverified_fill_price_count": unverified_fill_prices,
+            # This is a data-quality gate, not authorization for promotion:
+            # only a future independent execution-fill check can certify it.
+            "promotion_evidence_ready": False,
         }
 
 
