@@ -1,0 +1,17 @@
+{
+  "trade_count": 805,
+  "bars_joined": 3959,
+  "anomalies": [
+    {
+      "trade_id": 56,
+      "code": "017800",
+      "name": "현대엘리베이",
+      "date": "2015-08-03T00:00:00",
+      "share_ratio": 1.2547,
+      "price_ratio": 1.0025,
+      "trade_return_pct": 0.746,
+      "held_from": "2015-07-30T00:00:00",
+      "held_to": "2015-08-04T00:00:00"
+    }
+  ]
+}
