@@ -202,7 +202,15 @@ def _disk_usage_for(root_paths: list[Path]) -> dict[str, object]:
             "total_bytes": usage.total,
             "used_bytes": usage.used,
             "free_bytes": usage.free,
-            "used_pct": round(usage.used / usage.total * 100, 1) if usage.total else 0.0,
+            # POSIX df Use% is used / (used + available), not used / total:
+            # ext4 reserved blocks are unavailable to unprivileged services.
+            # Align threshold alerts with actual usable capacity so 80% is
+            # not silently misreported as 75-79% on reserve-enabled disks.
+            "used_pct": round(usage.used / (usage.used + usage.free) * 100, 1)
+                        if (usage.used + usage.free) else 0.0,
+            "capacity_used_pct": round(usage.used / usage.total * 100, 1)
+                                 if usage.total else 0.0,
+            "reserved_bytes": max(0, usage.total - usage.used - usage.free),
         })
         entry["probed_paths"].append(str(probe))
         entry["paths"].append(str(root))
