@@ -239,6 +239,25 @@ class ReportTests(unittest.TestCase):
             self.assertFalse(report["destructive_action_taken"])
             self.assertTrue(f.exists(), "--report must never delete anything")
 
+    def test_reserved_disk_space_triggers_df_compatible_warning(self) -> None:
+        # Emulate ext4 with 10 reserved bytes: total=100, used=75,
+        # available=15, so df-compatible usage is 75/(75+15)=83.3%.
+        # Old used/total logic gave 75% and MISSED the 80% warning.
+        from unittest.mock import patch
+        from collections import namedtuple
+        fake=namedtuple("usage","total used free")(100,75,15)
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp)/"strategylab"
+            root.mkdir()
+            with patch.object(slm.shutil,"disk_usage",return_value=fake):
+                stats=slm._disk_usage_for([root])
+            self.assertEqual(len(stats),1)
+            usage=next(iter(stats.values()))
+            self.assertEqual(usage["used_pct"],83.3)
+            self.assertEqual(usage["capacity_used_pct"],75.0)
+            self.assertEqual(usage["reserved_bytes"],10)
+            self.assertGreaterEqual(usage["used_pct"],80)
+
     def test_disk_usage_warning_fires_past_a_low_threshold(self) -> None:
         """Uses --warn-at 0 (guaranteed to be crossed by any real disk) to
         deterministically prove the warning path fires, rather than
