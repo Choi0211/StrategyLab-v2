@@ -432,7 +432,7 @@ class ComposeUnresolvedResearchReviewTests(unittest.TestCase):
     def test_no_records_is_honestly_empty(self) -> None:
         review = compose_unresolved_research_review(())
         self.assertEqual(review["unresolved_count"], 0)
-        self.assertEqual(render_unresolved_research_review_ko(review, generated_at="2026-08-16T09:00:00Z"), "🔎 [국내주식·가온] 미해결 연구 점검\n기준 시각: 2026-08-16 18:00 KST\n\n뉴스 기반 후속 조치가 필요한 연구는 없습니다.")
+        self.assertEqual(render_unresolved_research_review_ko(review, generated_at="2026-08-16T09:00:00Z"), "🔎 [국내주식·가온] 미해결 연구 점검\n기준 시각: 2026-08-16 18:00 KST\n\n후속 조치가 필요한 연구는 없습니다.")
 
 
 class DailyBriefingSchedulerTests(unittest.TestCase):

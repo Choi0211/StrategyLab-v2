@@ -327,6 +327,22 @@ _BLOCKER_KO = {
 }
 
 
+_REASON_KO = (
+    ("evidence strength is", "근거가 부족해 판단하기 어려워요"),
+    ("observation period is not yet long enough", "관찰 기간이 아직 짧아 신뢰하기 어려워요"),
+)
+_UNRESOLVED_SHOW_MAX = 10
+
+
+def _ko_reason(reason: object) -> str:
+    text = str(reason or "")
+    low = text.lower()
+    for key, korean in _REASON_KO:
+        if key in low:
+            return korean
+    return text or "사유 없음"
+
+
 def _ko_term(value: object, table: Mapping[str, str]) -> str:
     text = str(value)
     return table.get(text.strip().lower(), text)
@@ -484,12 +500,20 @@ def render_unresolved_research_review_ko(
 ) -> str:
     lines = ["🔎 [국내주식·가온] 미해결 연구 점검", f"기준 시각: {_kst_or_raw(generated_at)}", ""]
     items = review.get("unresolved") or []
-    if not items:
-        lines.append("뉴스 기반 후속 조치가 필요한 연구는 없습니다.")
+    if review.get("unavailable"):
+        lines.append("연구 기록을 읽지 못해 이번에는 점검하지 못했어요. 가온 서비스 상태를 확인해 주세요.")
+    elif not items:
+        lines.append("후속 조치가 필요한 연구는 없습니다.")
     else:
-        lines.append(f"후속 조치가 필요한 연구 {len(items)}건:")
+        groups: dict[tuple[str, str], list[str]] = {}
         for item in items:
-            lines.append(f"- {item.get('symbol')}: {item.get('action')} - {item.get('reason')}")
+            key = (_ko_term(item.get("action"), _ACTION_KO), _ko_reason(item.get("reason")))
+            groups.setdefault(key, []).append(str(item.get("symbol")))
+        lines.append(f"후속 조치가 필요한 연구 {len(items)}건")
+        for (label, reason), symbols in sorted(groups.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+            more = f" 외 {len(symbols) - _UNRESOLVED_SHOW_MAX}건" if len(symbols) > _UNRESOLVED_SHOW_MAX else ""
+            lines.append(f"- {label} {len(symbols)}건: {reason}")
+            lines.append(f"  {', '.join(symbols[:_UNRESOLVED_SHOW_MAX])}{more}")
     if research_mission is not None:
         lines.extend(("", "[연구 미션]"))
         lines.extend(_render_research_mission_briefing_lines(research_mission))
@@ -660,6 +684,7 @@ class DailyBriefingRuntimeWorker:
         metrics: MetricsCollector | None = None,
         now_factory: Callable[[], str] | None = None,
         research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+        audit_records_provider: Callable[[], tuple[object, ...]] | None = None,
     ) -> None:
         self._config = config
         self._repository = repository
@@ -669,6 +694,12 @@ class DailyBriefingRuntimeWorker:
         self._research_mission_provider = research_mission_provider or (
             lambda: latest_research_mission_from_connection(self._repository._connection)
         )
+        self._audit_records_provider = audit_records_provider or self._default_audit_records
+
+    def _default_audit_records(self) -> tuple[object, ...]:
+        from gaon.runtime.llm_tools import SQLiteToolAuditRepository
+
+        return SQLiteToolAuditRepository(self._repository._connection).list(tool_name="autonomous_learning_research")
 
     def tick(self) -> DailyBriefingRuntimeTickResult:
         now = self._now_factory()
@@ -687,7 +718,11 @@ class DailyBriefingRuntimeWorker:
                 chat_id=self._config.telegram_allowed_chat_ids[0],
                 compose_pre_market=lambda: _compose_runtime_pre_market(now, research_mission_provider=self._research_mission_provider),
                 compose_post_market=lambda: _compose_runtime_post_market(now, research_mission_provider=self._research_mission_provider),
-                compose_unresolved_review=lambda: _compose_runtime_unresolved_review(now, research_mission_provider=self._research_mission_provider),
+                compose_unresolved_review=lambda: _compose_runtime_unresolved_review(
+                    now,
+                    research_mission_provider=self._research_mission_provider,
+                    audit_records_provider=self._audit_records_provider,
+                ),
                 dry_run=self._config.dry_run,
             )
             results = scheduler.run_due(now=now)
@@ -845,10 +880,17 @@ def _compose_runtime_unresolved_review(
     now: str,
     *,
     research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+    audit_records_provider: Callable[[], tuple[object, ...]] | None = None,
 ) -> str:
     mission = research_mission_provider() if research_mission_provider else None
+    review: dict[str, object] = {"unresolved_count": 0, "unresolved": []}
+    if audit_records_provider is not None:
+        try:
+            review = compose_unresolved_research_review(tuple(audit_records_provider()))
+        except Exception:  # noqa: BLE001 - 기록을 못 읽었을 때 '없음'이라고 거짓으로 알리지 않는다
+            review = {"unresolved_count": 0, "unresolved": [], "unavailable": True}
     return render_unresolved_research_review_ko(
-        {"unresolved_count": 0, "unresolved": []},
+        review,
         generated_at=now,
         research_mission=_research_mission_briefing_state(mission),
     )
