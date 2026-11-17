@@ -223,10 +223,13 @@ def render_pre_market_briefing_ko(briefing: PreMarketBriefing, *, max_news_items
     return "\n".join(lines)
 
 
-def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
+def render_post_market_briefing_ko(briefing: PostMarketBriefing, *, extra_lines: Sequence[str] = ()) -> str:
     lines = [f"🌆 [{_market_label_ko(briefing.market)}·가온] 장후 브리핑", f"기준 시각: {_kst_or_raw(briefing.generated_at)}", ""]
+    feedback_unavailable = "live_feedback_unavailable" in briefing.execution_classifications
     lines.append("[전략 성과 - 확정 왕복 거래 기준]")
-    if briefing.completed_trade_count:
+    if feedback_unavailable:
+        lines.append("- 주문 기록을 읽지 못해 성과를 계산하지 못했습니다.")
+    elif briefing.completed_trade_count:
         win_rate_text = f"{briefing.win_rate * 100:.1f}%" if briefing.win_rate is not None else "알 수 없음"
         lines.append(f"- 확정 왕복 거래 {briefing.completed_trade_count}건, 승률 {win_rate_text}")
     else:
@@ -235,7 +238,9 @@ def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
         lines.append(f"- 보유 중인 미청산 포지션 {briefing.open_position_count}건은 성과 계산에서 제외했습니다.")
     lines.append("")
     lines.append("[주문 실행 이슈 - 전략 성과와 분리]")
-    if briefing.failed_order_count or briefing.unconfirmed_order_count or briefing.unmatched_sell_count:
+    if feedback_unavailable:
+        lines.append("- 주문 기록을 읽지 못해 실행 이슈를 확인하지 못했습니다.")
+    elif briefing.failed_order_count or briefing.unconfirmed_order_count or briefing.unmatched_sell_count:
         if briefing.failed_order_count:
             lines.append(f"- 주문 실패 {briefing.failed_order_count}건 (전략 손익이 아닌 실행 리스크로 분류)")
         if briefing.unconfirmed_order_count:
@@ -252,6 +257,9 @@ def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
             lines.append(f"- {decision.action.value}: {decision.reason}")
     else:
         lines.append("장중 실행 이슈에서 파생된 후속 연구 항목은 없습니다.")
+    if extra_lines:
+        lines.append("")
+        lines.extend(extra_lines)
     if briefing.research_mission is not None:
         lines.extend(("", "[연구 미션]"))
         lines.extend(_render_research_mission_briefing_lines(briefing.research_mission))
@@ -341,6 +349,40 @@ def _ko_reason(reason: object) -> str:
         if key in low:
             return korean
     return text or "사유 없음"
+
+
+# 주문 기록(order_ledger.json)의 시장 코드는 KR/US 이다. 브리핑의 시장 이름(KOSPI 등)을 그대로 넘기면
+# 아무것도 걸리지 않아 '거래 없음·이슈 없음'으로 잘못 보고된다.
+_LIVE_MARKET_CODE = {"KOSPI": "KR", "KOSDAQ": "KR", "KRX": "KR", "KR": "KR", "US": "US"}
+
+
+def _render_market_live_block_ko(label: str, feedback: Mapping[str, object]) -> list[str]:
+    lines = [f"[{label} - 확정 왕복 거래 기준]"]
+    count = int(feedback.get("completed_trade_count", 0) or 0)
+    win_rate = feedback.get("win_rate")
+    if count:
+        win_text = f"{float(win_rate) * 100:.1f}%" if isinstance(win_rate, (int, float)) else "알 수 없음"
+        lines.append(f"- 확정 왕복 거래 {count}건, 승률 {win_text}")
+    else:
+        lines.append("- 확정된 왕복 거래가 없습니다.")
+    open_count = int(feedback.get("open_position_count", 0) or 0)
+    if open_count:
+        lines.append(f"- 보유 중인 미청산 포지션 {open_count}건은 성과 계산에서 제외했습니다.")
+    failed = int(feedback.get("failed_order_count", 0) or 0)
+    unconfirmed = int(feedback.get("unconfirmed_order_count", 0) or 0)
+    unmatched = int(feedback.get("unmatched_sell_count", 0) or 0)
+    if failed or unconfirmed or unmatched:
+        parts = []
+        if failed:
+            parts.append(f"주문 실패 {failed}건")
+        if unconfirmed:
+            parts.append(f"체결 미확인 {unconfirmed}건")
+        if unmatched:
+            parts.append(f"진입 확인 불가 매도 {unmatched}건")
+        lines.append("- " + " · ".join(parts) + " (전략 손익이 아닌 실행 리스크로 분류)")
+    else:
+        lines.append("- 주문 실행 이슈가 확인되지 않았습니다.")
+    return lines
 
 
 def _ko_term(value: object, table: Mapping[str, str]) -> str:
@@ -861,18 +903,27 @@ def _compose_runtime_post_market(
     *,
     research_mission_provider: Callable[[], ResearchMission | None] | None = None,
 ) -> str:
+    market = "KOSPI"
     feedback_json: Mapping[str, object] = {"classifications": ("live_feedback_unavailable",)}
+    extra_lines: list[str] = []
     try:
         from gaon.research.live_trading_intelligence import production_feedback
 
-        feedback = production_feedback("KOSPI")
+        feedback = production_feedback(_LIVE_MARKET_CODE.get(market, market))
         if feedback is not None:
             feedback_json = feedback.to_json()
+        try:
+            us_feedback = production_feedback("US")
+            if us_feedback is not None:
+                extra_lines = _render_market_live_block_ko("미국 주식", us_feedback.to_json())
+        except Exception:  # noqa: BLE001 - 미국 블록 실패가 국내 브리핑을 막지 않는다
+            extra_lines = []
     except Exception:
         feedback_json = {"classifications": ("live_feedback_unavailable",)}
     mission = research_mission_provider() if research_mission_provider else None
     return render_post_market_briefing_ko(
-        compose_post_market_briefing(generated_at=now, market="KOSPI", live_feedback_json=feedback_json, research_mission=mission)
+        compose_post_market_briefing(generated_at=now, market=market, live_feedback_json=feedback_json, research_mission=mission),
+        extra_lines=extra_lines,
     )
 
 
