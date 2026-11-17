@@ -541,6 +541,15 @@ def render_unresolved_research_review_ko(
     research_mission: ResearchMissionBriefingState | None = None,
 ) -> str:
     lines = ["🔎 [국내주식·가온] 미해결 연구 점검", f"기준 시각: {_kst_or_raw(generated_at)}", ""]
+    lines.extend(_unresolved_review_body_lines_ko(review))
+    if research_mission is not None:
+        lines.extend(("", "[연구 미션]"))
+        lines.extend(_render_research_mission_briefing_lines(research_mission))
+    return "\n".join(lines)
+
+
+def _unresolved_review_body_lines_ko(review: Mapping[str, object]) -> list[str]:
+    lines: list[str] = []
     items = review.get("unresolved") or []
     if review.get("unavailable"):
         lines.append("연구 기록을 읽지 못해 이번에는 점검하지 못했어요. 가온 서비스 상태를 확인해 주세요.")
@@ -556,10 +565,7 @@ def render_unresolved_research_review_ko(
             more = f" 외 {len(symbols) - _UNRESOLVED_SHOW_MAX}건" if len(symbols) > _UNRESOLVED_SHOW_MAX else ""
             lines.append(f"- {label} {len(symbols)}건: {reason}")
             lines.append(f"  {', '.join(symbols[:_UNRESOLVED_SHOW_MAX])}{more}")
-    if research_mission is not None:
-        lines.extend(("", "[연구 미션]"))
-        lines.extend(_render_research_mission_briefing_lines(research_mission))
-    return "\n".join(lines)
+    return lines
 
 
 def _advance_by_one_day(iso_utc: str) -> str:
@@ -643,7 +649,7 @@ class DailyBriefingScheduler:
             composer = self._composers.get(briefing_kind)
             try:
                 text = composer() if composer is not None else ""
-                if not _krx_open_at_utc(now, job.schedule.timezone):
+                if not text.strip() or not _krx_open_at_utc(now, job.schedule.timezone):
                     sent = ()
                 else:
                     sent = send_daily_briefing(self._client, self._chat_id, text, kind=briefing_kind, dry_run=self._dry_run)
@@ -759,12 +765,13 @@ class DailyBriefingRuntimeWorker:
                 client,
                 chat_id=self._config.telegram_allowed_chat_ids[0],
                 compose_pre_market=lambda: _compose_runtime_pre_market(now, research_mission_provider=self._research_mission_provider),
-                compose_post_market=lambda: _compose_runtime_post_market(now, research_mission_provider=self._research_mission_provider),
-                compose_unresolved_review=lambda: _compose_runtime_unresolved_review(
+                compose_post_market=lambda: _compose_runtime_post_market(
                     now,
                     research_mission_provider=self._research_mission_provider,
                     audit_records_provider=self._audit_records_provider,
                 ),
+                # 미해결 연구 점검은 15:40 장후 브리핑에 합쳤다. 16:10 작업은 유지하되 별도 메시지는 보내지 않는다.
+                compose_unresolved_review=lambda: "",
                 dry_run=self._config.dry_run,
             )
             results = scheduler.run_due(now=now)
@@ -898,10 +905,21 @@ def _compose_runtime_pre_market(
     return render_pre_market_briefing_ko(compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=mission))
 
 
+def _runtime_unresolved_review(audit_records_provider) -> Mapping[str, object]:
+    review: dict[str, object] = {"unresolved_count": 0, "unresolved": []}
+    if audit_records_provider is not None:
+        try:
+            review = compose_unresolved_research_review(tuple(audit_records_provider()))
+        except Exception:  # noqa: BLE001 - 기록을 못 읽었을 때 '없음'이라고 거짓으로 알리지 않는다
+            review = {"unresolved_count": 0, "unresolved": [], "unavailable": True}
+    return review
+
+
 def _compose_runtime_post_market(
     now: str,
     *,
     research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+    audit_records_provider: Callable[[], tuple[object, ...]] | None = None,
 ) -> str:
     market = "KOSPI"
     feedback_json: Mapping[str, object] = {"classifications": ("live_feedback_unavailable",)}
@@ -920,6 +938,9 @@ def _compose_runtime_post_market(
             extra_lines = []
     except Exception:
         feedback_json = {"classifications": ("live_feedback_unavailable",)}
+    if audit_records_provider is not None:
+        extra_lines = [*extra_lines, *([""] if extra_lines else []), "[미해결 연구 점검]",
+                       *_unresolved_review_body_lines_ko(_runtime_unresolved_review(audit_records_provider))]
     mission = research_mission_provider() if research_mission_provider else None
     return render_post_market_briefing_ko(
         compose_post_market_briefing(generated_at=now, market=market, live_feedback_json=feedback_json, research_mission=mission),
