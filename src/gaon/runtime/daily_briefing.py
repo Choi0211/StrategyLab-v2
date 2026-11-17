@@ -203,7 +203,7 @@ def _needs_followup(decision: ResearchDirectorDecision) -> bool:
 
 
 def render_pre_market_briefing_ko(briefing: PreMarketBriefing, *, max_news_items: int = 5) -> str:
-    lines = [f"[가온 장전 브리핑 - {briefing.market}]", f"기준 시각: {_format_market_time_kst(briefing.generated_at)}", "", "[뉴스]"]
+    lines = [f"🌅 [{_market_label_ko(briefing.market)}·가온] 장전 브리핑", f"기준 시각: {_format_market_time_kst(briefing.generated_at)}", "", "[뉴스]"]
     if not briefing.important_news:
         lines.append("- 반영할 만한 새 뉴스 근거가 없습니다.")
     else:
@@ -218,13 +218,13 @@ def render_pre_market_briefing_ko(briefing: PreMarketBriefing, *, max_news_items
     else:
         lines.append("- 새 뉴스에서 파생된 추가 연구 항목은 없습니다.")
     if briefing.research_mission is not None:
-        lines.extend(("", "[Research Mission]"))
+        lines.extend(("", "[연구 미션]"))
         lines.extend(_render_research_mission_briefing_lines(briefing.research_mission))
     return "\n".join(lines)
 
 
 def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
-    lines = [f"[가온 장후 브리핑 - {briefing.market}]", f"기준 시각: {briefing.generated_at}", ""]
+    lines = [f"🌆 [{_market_label_ko(briefing.market)}·가온] 장후 브리핑", f"기준 시각: {_kst_or_raw(briefing.generated_at)}", ""]
     lines.append("[전략 성과 - 확정 왕복 거래 기준]")
     if briefing.completed_trade_count:
         win_rate_text = f"{briefing.win_rate * 100:.1f}%" if briefing.win_rate is not None else "알 수 없음"
@@ -253,7 +253,7 @@ def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
     else:
         lines.append("장중 실행 이슈에서 파생된 후속 연구 항목은 없습니다.")
     if briefing.research_mission is not None:
-        lines.extend(("", "[Research Mission]"))
+        lines.extend(("", "[연구 미션]"))
         lines.extend(_render_research_mission_briefing_lines(briefing.research_mission))
     return "\n".join(lines)
 
@@ -294,25 +294,74 @@ def _mission_status_label_ko(status: str) -> str:
     }.get(status, status)
 
 
+_ACTION_KO = {
+    "collect_more_evidence": "근거 추가 수집",
+    "expand_symbols": "종목 범위 확대",
+    "expand_period": "검증 기간 확대",
+    "test_counter_hypothesis": "반대 가설 검증",
+    "run_oos": "표본 외 검증 실행",
+    "run_walk_forward": "워크포워드 검증 실행",
+    "test_regime": "장세별 검증",
+    "test_costs": "거래비용 검증",
+    "run_monte_carlo": "몬테카를로 검증",
+    "inspect_live_execution": "실거래 체결 점검",
+    "hold": "보류",
+    "reject_candidate": "후보 폐기",
+    "request_human_promotion_review": "사용자 승격 검토 요청",
+}
+_BLOCKER_KO = {
+    "minimum_trade_sample": "최소 거래 표본",
+    "out_of_sample": "표본 외 검증",
+    "regime_validation": "장세 검증",
+    "walk_forward": "워크포워드",
+    "parameter_sensitivity": "파라미터 민감도",
+    "out_of_sample_blocker": "표본 외 검증 미통과",
+    "regime_blocker": "장세 검증 미통과",
+    "walk_forward_blocker": "워크포워드 미통과",
+    "parameter_sensitivity_blocker": "파라미터 민감도 미통과",
+    "monte_carlo_blocker": "몬테카를로 미통과",
+    "transaction_cost_blocker": "거래비용 검증 미통과",
+    "quality_blocker": "데이터 품질 문제",
+    "source_blocker": "데이터 출처 문제",
+    "provider_acquisition_blocker": "데이터 제공처 확보 문제",
+}
+
+
+def _ko_term(value: object, table: Mapping[str, str]) -> str:
+    text = str(value)
+    return table.get(text.strip().lower(), text)
+
+
+def _market_label_ko(market: str) -> str:
+    return "국내주식" if str(market).upper() in {"KOSPI", "KOSDAQ", "KRX", "KR"} else str(market)
+
+
+def _kst_or_raw(iso_utc: str) -> str:
+    try:
+        return _format_market_time_kst(iso_utc)
+    except Exception:  # noqa: BLE001 - 시각 표기 실패가 알림을 막지 않게 한다
+        return iso_utc
+
+
 def _render_research_mission_briefing_lines(state: ResearchMissionBriefingState) -> list[str]:
     lines = [
         f"- {state.scope_label}",
-        f"- active candidate: {state.active_candidate_id or '없음'}",
-        f"- promotion-ready: {state.progress_label}",
-        f"- research status: {_mission_status_label_ko(state.status)}",
+        f"- 진행 후보: {state.active_candidate_id or '없음'}",
+        f"- 승격 준비: {state.progress_label}",
+        f"- 연구 상태: {_mission_status_label_ko(state.status)}",
     ]
     if state.status == MissionStatus.ACTIVE.value:
-        next_action = state.next_action or "확인 필요"
-        reason = f" ({state.next_action_reason})" if state.next_action_reason else ""
-        lines.append(f"- next research action: {next_action}{reason}")
+        next_action = _ko_term(state.next_action, _ACTION_KO) if state.next_action else "확인 필요"
+        reason = f" ({_ko_term(state.next_action_reason, _BLOCKER_KO)})" if state.next_action_reason else ""
+        lines.append(f"- 다음 연구 작업: {next_action}{reason}")
     elif state.status == MissionStatus.AWAITING_HUMAN_APPROVAL.value:
-        lines.append("- next research action: 사용자 승격 승인 대기")
+        lines.append("- 다음 연구 작업: 사용자 승격 승인 대기")
     elif state.status == MissionStatus.COMPLETED.value:
-        lines.append("- next research action: 완료 상태")
+        lines.append("- 다음 연구 작업: 완료 상태")
     elif state.status == MissionStatus.BLOCKED.value:
-        lines.append("- next research action: blocker 해소 필요")
+        lines.append("- 다음 연구 작업: 막힌 항목 해소 필요")
     if state.unresolved_blockers:
-        lines.append(f"- unresolved blockers: {', '.join(state.unresolved_blockers[:5])}")
+        lines.append(f"- 해결할 항목: {', '.join(_ko_term(b, _BLOCKER_KO) for b in state.unresolved_blockers[:5])}")
     return lines
 
 
@@ -433,7 +482,7 @@ def render_unresolved_research_review_ko(
     generated_at: str,
     research_mission: ResearchMissionBriefingState | None = None,
 ) -> str:
-    lines = [f"[가온 미해결 연구 점검 - {generated_at}]", ""]
+    lines = ["🔎 [국내주식·가온] 미해결 연구 점검", f"기준 시각: {_kst_or_raw(generated_at)}", ""]
     items = review.get("unresolved") or []
     if not items:
         lines.append("뉴스 기반 후속 조치가 필요한 연구는 없습니다.")
@@ -442,7 +491,7 @@ def render_unresolved_research_review_ko(
         for item in items:
             lines.append(f"- {item.get('symbol')}: {item.get('action')} - {item.get('reason')}")
     if research_mission is not None:
-        lines.extend(("", "[Research Mission]"))
+        lines.extend(("", "[연구 미션]"))
         lines.extend(_render_research_mission_briefing_lines(research_mission))
     return "\n".join(lines)
 
@@ -945,7 +994,7 @@ def production_daily_briefing_release_check() -> Mapping[str, object]:
         "fixture_news_excluded_from_briefing": fixture_item not in pre_market.important_news
         and news_item in pre_market.important_news,
         "news_ranked_by_importance": True,
-        "pre_market_text_is_korean_executive_summary": pre_text.startswith("[가온 장전 브리핑")
+        "pre_market_text_is_korean_executive_summary": pre_text.startswith("🌅 [국내주식·가온] 장전 브리핑")
         and news_item.headline in pre_text,
         "post_market_separates_strategy_from_execution": "[전략 성과" in post_text and "[주문 실행 이슈" in post_text,
         "post_market_never_claims_order_or_mutation": post_market.to_json()["strategy_mutated"] is False
@@ -1051,18 +1100,18 @@ def production_morning_briefing_research_state_consistency_release_check() -> Ma
     checks = {
         "news_followup_is_scoped_to_news": "새 뉴스에서 파생된 추가 연구 항목은 없습니다" in active_text,
         "global_no_research_phrase_removed": "추가로 필요한 연구가 없습니다" not in active_text,
-        "active_research_state_visible": "research status: 진행 중" in active_text and "promotion-ready: 0/3" in active_text,
-        "active_candidate_visible": f"active candidate: {active.candidate_id}" in active_text,
-        "next_action_visible_read_only": "next research action:" in active_text,
-        "awaiting_human_approval_visible": "promotion-ready: 3/3" in approval_text and "research status: 승격 승인 대기" in approval_text,
-        "restart_reads_canonical_mission": "promotion-ready: 0/3" in restart_text and f"active candidate: {active.candidate_id}" in restart_text,
+        "active_research_state_visible": "연구 상태: 진행 중" in active_text and "승격 준비: 0/3" in active_text,
+        "active_candidate_visible": f"진행 후보: {active.candidate_id}" in active_text,
+        "next_action_visible_read_only": "다음 연구 작업:" in active_text,
+        "awaiting_human_approval_visible": "승격 준비: 3/3" in approval_text and "연구 상태: 승격 승인 대기" in approval_text,
+        "restart_reads_canonical_mission": "승격 준비: 0/3" in restart_text and f"진행 후보: {active.candidate_id}" in restart_text,
         "kst_user_facing_time": "기준 시각: 2026-08-22 09:00 KST" in active_text,
         "post_market_shows_active_mission_not_contradictory": (
-            "research status: 진행 중" in active_post_market_text
+            "연구 상태: 진행 중" in active_post_market_text
             and "추가 연구 없이 관찰을 계속합니다" not in active_post_market_text
         ),
         "unresolved_review_shows_active_mission_not_contradictory": (
-            "research status: 진행 중" in active_unresolved_text
+            "연구 상태: 진행 중" in active_unresolved_text
             and "후속 조치가 필요한 연구가 없습니다" not in active_unresolved_text
         ),
         "strategy_not_mutated": True,
