@@ -223,10 +223,13 @@ def render_pre_market_briefing_ko(briefing: PreMarketBriefing, *, max_news_items
     return "\n".join(lines)
 
 
-def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
+def render_post_market_briefing_ko(briefing: PostMarketBriefing, *, extra_lines: Sequence[str] = ()) -> str:
     lines = [f"🌆 [{_market_label_ko(briefing.market)}·가온] 장후 브리핑", f"기준 시각: {_kst_or_raw(briefing.generated_at)}", ""]
+    feedback_unavailable = "live_feedback_unavailable" in briefing.execution_classifications
     lines.append("[전략 성과 - 확정 왕복 거래 기준]")
-    if briefing.completed_trade_count:
+    if feedback_unavailable:
+        lines.append("- 주문 기록을 읽지 못해 성과를 계산하지 못했습니다.")
+    elif briefing.completed_trade_count:
         win_rate_text = f"{briefing.win_rate * 100:.1f}%" if briefing.win_rate is not None else "알 수 없음"
         lines.append(f"- 확정 왕복 거래 {briefing.completed_trade_count}건, 승률 {win_rate_text}")
     else:
@@ -235,7 +238,9 @@ def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
         lines.append(f"- 보유 중인 미청산 포지션 {briefing.open_position_count}건은 성과 계산에서 제외했습니다.")
     lines.append("")
     lines.append("[주문 실행 이슈 - 전략 성과와 분리]")
-    if briefing.failed_order_count or briefing.unconfirmed_order_count or briefing.unmatched_sell_count:
+    if feedback_unavailable:
+        lines.append("- 주문 기록을 읽지 못해 실행 이슈를 확인하지 못했습니다.")
+    elif briefing.failed_order_count or briefing.unconfirmed_order_count or briefing.unmatched_sell_count:
         if briefing.failed_order_count:
             lines.append(f"- 주문 실패 {briefing.failed_order_count}건 (전략 손익이 아닌 실행 리스크로 분류)")
         if briefing.unconfirmed_order_count:
@@ -252,6 +257,9 @@ def render_post_market_briefing_ko(briefing: PostMarketBriefing) -> str:
             lines.append(f"- {decision.action.value}: {decision.reason}")
     else:
         lines.append("장중 실행 이슈에서 파생된 후속 연구 항목은 없습니다.")
+    if extra_lines:
+        lines.append("")
+        lines.extend(extra_lines)
     if briefing.research_mission is not None:
         lines.extend(("", "[연구 미션]"))
         lines.extend(_render_research_mission_briefing_lines(briefing.research_mission))
@@ -325,6 +333,56 @@ _BLOCKER_KO = {
     "source_blocker": "데이터 출처 문제",
     "provider_acquisition_blocker": "데이터 제공처 확보 문제",
 }
+
+
+_REASON_KO = (
+    ("evidence strength is", "근거가 부족해 판단하기 어려워요"),
+    ("observation period is not yet long enough", "관찰 기간이 아직 짧아 신뢰하기 어려워요"),
+)
+_UNRESOLVED_SHOW_MAX = 10
+
+
+def _ko_reason(reason: object) -> str:
+    text = str(reason or "")
+    low = text.lower()
+    for key, korean in _REASON_KO:
+        if key in low:
+            return korean
+    return text or "사유 없음"
+
+
+# 주문 기록(order_ledger.json)의 시장 코드는 KR/US 이다. 브리핑의 시장 이름(KOSPI 등)을 그대로 넘기면
+# 아무것도 걸리지 않아 '거래 없음·이슈 없음'으로 잘못 보고된다.
+_LIVE_MARKET_CODE = {"KOSPI": "KR", "KOSDAQ": "KR", "KRX": "KR", "KR": "KR", "US": "US"}
+
+
+def _render_market_live_block_ko(label: str, feedback: Mapping[str, object]) -> list[str]:
+    lines = [f"[{label} - 확정 왕복 거래 기준]"]
+    count = int(feedback.get("completed_trade_count", 0) or 0)
+    win_rate = feedback.get("win_rate")
+    if count:
+        win_text = f"{float(win_rate) * 100:.1f}%" if isinstance(win_rate, (int, float)) else "알 수 없음"
+        lines.append(f"- 확정 왕복 거래 {count}건, 승률 {win_text}")
+    else:
+        lines.append("- 확정된 왕복 거래가 없습니다.")
+    open_count = int(feedback.get("open_position_count", 0) or 0)
+    if open_count:
+        lines.append(f"- 보유 중인 미청산 포지션 {open_count}건은 성과 계산에서 제외했습니다.")
+    failed = int(feedback.get("failed_order_count", 0) or 0)
+    unconfirmed = int(feedback.get("unconfirmed_order_count", 0) or 0)
+    unmatched = int(feedback.get("unmatched_sell_count", 0) or 0)
+    if failed or unconfirmed or unmatched:
+        parts = []
+        if failed:
+            parts.append(f"주문 실패 {failed}건")
+        if unconfirmed:
+            parts.append(f"체결 미확인 {unconfirmed}건")
+        if unmatched:
+            parts.append(f"진입 확인 불가 매도 {unmatched}건")
+        lines.append("- " + " · ".join(parts) + " (전략 손익이 아닌 실행 리스크로 분류)")
+    else:
+        lines.append("- 주문 실행 이슈가 확인되지 않았습니다.")
+    return lines
 
 
 def _ko_term(value: object, table: Mapping[str, str]) -> str:
@@ -483,17 +541,31 @@ def render_unresolved_research_review_ko(
     research_mission: ResearchMissionBriefingState | None = None,
 ) -> str:
     lines = ["🔎 [국내주식·가온] 미해결 연구 점검", f"기준 시각: {_kst_or_raw(generated_at)}", ""]
-    items = review.get("unresolved") or []
-    if not items:
-        lines.append("뉴스 기반 후속 조치가 필요한 연구는 없습니다.")
-    else:
-        lines.append(f"후속 조치가 필요한 연구 {len(items)}건:")
-        for item in items:
-            lines.append(f"- {item.get('symbol')}: {item.get('action')} - {item.get('reason')}")
+    lines.extend(_unresolved_review_body_lines_ko(review))
     if research_mission is not None:
         lines.extend(("", "[연구 미션]"))
         lines.extend(_render_research_mission_briefing_lines(research_mission))
     return "\n".join(lines)
+
+
+def _unresolved_review_body_lines_ko(review: Mapping[str, object]) -> list[str]:
+    lines: list[str] = []
+    items = review.get("unresolved") or []
+    if review.get("unavailable"):
+        lines.append("연구 기록을 읽지 못해 이번에는 점검하지 못했어요. 가온 서비스 상태를 확인해 주세요.")
+    elif not items:
+        lines.append("후속 조치가 필요한 연구는 없습니다.")
+    else:
+        groups: dict[tuple[str, str], list[str]] = {}
+        for item in items:
+            key = (_ko_term(item.get("action"), _ACTION_KO), _ko_reason(item.get("reason")))
+            groups.setdefault(key, []).append(str(item.get("symbol")))
+        lines.append(f"후속 조치가 필요한 연구 {len(items)}건")
+        for (label, reason), symbols in sorted(groups.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+            more = f" 외 {len(symbols) - _UNRESOLVED_SHOW_MAX}건" if len(symbols) > _UNRESOLVED_SHOW_MAX else ""
+            lines.append(f"- {label} {len(symbols)}건: {reason}")
+            lines.append(f"  {', '.join(symbols[:_UNRESOLVED_SHOW_MAX])}{more}")
+    return lines
 
 
 def _advance_by_one_day(iso_utc: str) -> str:
@@ -577,7 +649,7 @@ class DailyBriefingScheduler:
             composer = self._composers.get(briefing_kind)
             try:
                 text = composer() if composer is not None else ""
-                if not _krx_open_at_utc(now, job.schedule.timezone):
+                if not text.strip() or not _krx_open_at_utc(now, job.schedule.timezone):
                     sent = ()
                 else:
                     sent = send_daily_briefing(self._client, self._chat_id, text, kind=briefing_kind, dry_run=self._dry_run)
@@ -660,6 +732,7 @@ class DailyBriefingRuntimeWorker:
         metrics: MetricsCollector | None = None,
         now_factory: Callable[[], str] | None = None,
         research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+        audit_records_provider: Callable[[], tuple[object, ...]] | None = None,
     ) -> None:
         self._config = config
         self._repository = repository
@@ -669,6 +742,12 @@ class DailyBriefingRuntimeWorker:
         self._research_mission_provider = research_mission_provider or (
             lambda: latest_research_mission_from_connection(self._repository._connection)
         )
+        self._audit_records_provider = audit_records_provider or self._default_audit_records
+
+    def _default_audit_records(self) -> tuple[object, ...]:
+        from gaon.runtime.llm_tools import SQLiteToolAuditRepository
+
+        return SQLiteToolAuditRepository(self._repository._connection).list(tool_name="autonomous_learning_research")
 
     def tick(self) -> DailyBriefingRuntimeTickResult:
         now = self._now_factory()
@@ -686,8 +765,13 @@ class DailyBriefingRuntimeWorker:
                 client,
                 chat_id=self._config.telegram_allowed_chat_ids[0],
                 compose_pre_market=lambda: _compose_runtime_pre_market(now, research_mission_provider=self._research_mission_provider),
-                compose_post_market=lambda: _compose_runtime_post_market(now, research_mission_provider=self._research_mission_provider),
-                compose_unresolved_review=lambda: _compose_runtime_unresolved_review(now, research_mission_provider=self._research_mission_provider),
+                compose_post_market=lambda: _compose_runtime_post_market(
+                    now,
+                    research_mission_provider=self._research_mission_provider,
+                    audit_records_provider=self._audit_records_provider,
+                ),
+                # 미해결 연구 점검은 15:40 장후 브리핑에 합쳤다. 16:10 작업은 유지하되 별도 메시지는 보내지 않는다.
+                compose_unresolved_review=lambda: "",
                 dry_run=self._config.dry_run,
             )
             results = scheduler.run_due(now=now)
@@ -821,23 +905,46 @@ def _compose_runtime_pre_market(
     return render_pre_market_briefing_ko(compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=mission))
 
 
+def _runtime_unresolved_review(audit_records_provider) -> Mapping[str, object]:
+    review: dict[str, object] = {"unresolved_count": 0, "unresolved": []}
+    if audit_records_provider is not None:
+        try:
+            review = compose_unresolved_research_review(tuple(audit_records_provider()))
+        except Exception:  # noqa: BLE001 - 기록을 못 읽었을 때 '없음'이라고 거짓으로 알리지 않는다
+            review = {"unresolved_count": 0, "unresolved": [], "unavailable": True}
+    return review
+
+
 def _compose_runtime_post_market(
     now: str,
     *,
     research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+    audit_records_provider: Callable[[], tuple[object, ...]] | None = None,
 ) -> str:
+    market = "KOSPI"
     feedback_json: Mapping[str, object] = {"classifications": ("live_feedback_unavailable",)}
+    extra_lines: list[str] = []
     try:
         from gaon.research.live_trading_intelligence import production_feedback
 
-        feedback = production_feedback("KOSPI")
+        feedback = production_feedback(_LIVE_MARKET_CODE.get(market, market))
         if feedback is not None:
             feedback_json = feedback.to_json()
+        try:
+            us_feedback = production_feedback("US")
+            if us_feedback is not None:
+                extra_lines = _render_market_live_block_ko("미국 주식", us_feedback.to_json())
+        except Exception:  # noqa: BLE001 - 미국 블록 실패가 국내 브리핑을 막지 않는다
+            extra_lines = []
     except Exception:
         feedback_json = {"classifications": ("live_feedback_unavailable",)}
+    if audit_records_provider is not None:
+        extra_lines = [*extra_lines, *([""] if extra_lines else []), "[미해결 연구 점검]",
+                       *_unresolved_review_body_lines_ko(_runtime_unresolved_review(audit_records_provider))]
     mission = research_mission_provider() if research_mission_provider else None
     return render_post_market_briefing_ko(
-        compose_post_market_briefing(generated_at=now, market="KOSPI", live_feedback_json=feedback_json, research_mission=mission)
+        compose_post_market_briefing(generated_at=now, market=market, live_feedback_json=feedback_json, research_mission=mission),
+        extra_lines=extra_lines,
     )
 
 
@@ -845,10 +952,17 @@ def _compose_runtime_unresolved_review(
     now: str,
     *,
     research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+    audit_records_provider: Callable[[], tuple[object, ...]] | None = None,
 ) -> str:
     mission = research_mission_provider() if research_mission_provider else None
+    review: dict[str, object] = {"unresolved_count": 0, "unresolved": []}
+    if audit_records_provider is not None:
+        try:
+            review = compose_unresolved_research_review(tuple(audit_records_provider()))
+        except Exception:  # noqa: BLE001 - 기록을 못 읽었을 때 '없음'이라고 거짓으로 알리지 않는다
+            review = {"unresolved_count": 0, "unresolved": [], "unavailable": True}
     return render_unresolved_research_review_ko(
-        {"unresolved_count": 0, "unresolved": []},
+        review,
         generated_at=now,
         research_mission=_research_mission_briefing_state(mission),
     )
