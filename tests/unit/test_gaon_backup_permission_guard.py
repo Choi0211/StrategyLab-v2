@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 import stat
 import tempfile
@@ -10,6 +11,7 @@ guard=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 
 class BackupGuardTests(unittest.TestCase):
+    @unittest.skipUnless(os.name=="posix","POSIX permission modes are not meaningful on Windows")
     def test_dry_run_and_enforced_permissions_preserve_file_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -37,6 +39,7 @@ class BackupGuardTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(normal.stat().st_mode),0o644)
             again=guard.audit(roots=(root,),old_snapshots=(),dry_run=False)
             self.assertEqual(again["restricted"],0)
+    @unittest.skipUnless(os.name=="posix","POSIX permission modes are not meaningful on Windows")
     def test_does_not_follow_symlinks_or_modify_external_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp)
