@@ -161,11 +161,11 @@ class DailyBriefingTests(unittest.TestCase):
         text = render_pre_market_briefing_ko(briefing)
         self.assertIn("[뉴스]", text)
         self.assertIn("새 뉴스에서 파생된 추가 연구 항목은 없습니다", text)
-        self.assertIn("[Research Mission]", text)
-        self.assertIn("promotion-ready: 0/3", text)
-        self.assertIn(f"active candidate: {candidate.candidate_id}", text)
-        self.assertIn("research status: 진행 중", text)
-        self.assertIn("next research action:", text)
+        self.assertIn("[연구 미션]", text)
+        self.assertIn("승격 준비: 0/3", text)
+        self.assertIn(f"진행 후보: {candidate.candidate_id}", text)
+        self.assertIn("연구 상태: 진행 중", text)
+        self.assertIn("다음 연구 작업:", text)
         self.assertNotIn("추가로 필요한 연구가 없습니다", text)
 
     def test_pre_market_briefing_shows_awaiting_approval_state(self) -> None:
@@ -194,9 +194,9 @@ class DailyBriefingTests(unittest.TestCase):
         text = render_pre_market_briefing_ko(
             compose_pre_market_briefing(generated_at="2026-08-22T00:00:05Z", market="KOSPI", research_mission=mission)
         )
-        self.assertIn("promotion-ready: 3/3", text)
-        self.assertIn("research status: 승격 승인 대기", text)
-        self.assertIn("next research action: 사용자 승격 승인 대기", text)
+        self.assertIn("승격 준비: 3/3", text)
+        self.assertIn("연구 상태: 승격 승인 대기", text)
+        self.assertIn("다음 연구 작업: 사용자 승격 승인 대기", text)
 
     def test_latest_research_mission_read_model_survives_restart(self) -> None:
         import json
@@ -235,8 +235,8 @@ class DailyBriefingTests(unittest.TestCase):
         text = render_pre_market_briefing_ko(
             compose_pre_market_briefing(generated_at="2026-08-22T00:00:05Z", market="KOSPI", research_mission=restored)
         )
-        self.assertIn("promotion-ready: 0/3", text)
-        self.assertIn(f"active candidate: {candidate.candidate_id}", text)
+        self.assertIn("승격 준비: 0/3", text)
+        self.assertIn(f"진행 후보: {candidate.candidate_id}", text)
 
     def test_terminal_hold_from_budget_exhaustion_still_surfaces_as_followup(self) -> None:
         decision = _hold_decision()
@@ -268,8 +268,8 @@ class DailyBriefingTests(unittest.TestCase):
             )
         )
         self.assertNotIn("추가 연구 없이 관찰을 계속합니다", post_market_text)
-        self.assertIn("[Research Mission]", post_market_text)
-        self.assertIn("research status: 진행 중", post_market_text)
+        self.assertIn("[연구 미션]", post_market_text)
+        self.assertIn("연구 상태: 진행 중", post_market_text)
 
         unresolved_text = render_unresolved_research_review_ko(
             {"unresolved_count": 0, "unresolved": []},
@@ -277,8 +277,8 @@ class DailyBriefingTests(unittest.TestCase):
             research_mission=ResearchMissionBriefingState.from_mission(mission),
         )
         self.assertNotIn("현재 후속 조치가 필요한 연구가 없습니다.", unresolved_text)
-        self.assertIn("[Research Mission]", unresolved_text)
-        self.assertIn("research status: 진행 중", unresolved_text)
+        self.assertIn("[연구 미션]", unresolved_text)
+        self.assertIn("연구 상태: 진행 중", unresolved_text)
 
     def test_schedule_daily_briefing_jobs_reuses_existing_scheduler(self) -> None:
         connection = sqlite3.connect(":memory:")
@@ -432,7 +432,7 @@ class ComposeUnresolvedResearchReviewTests(unittest.TestCase):
     def test_no_records_is_honestly_empty(self) -> None:
         review = compose_unresolved_research_review(())
         self.assertEqual(review["unresolved_count"], 0)
-        self.assertEqual(render_unresolved_research_review_ko(review, generated_at="2026-08-16T09:00:00Z"), "[가온 미해결 연구 점검 - 2026-08-16T09:00:00Z]\n\n뉴스 기반 후속 조치가 필요한 연구는 없습니다.")
+        self.assertEqual(render_unresolved_research_review_ko(review, generated_at="2026-08-16T09:00:00Z"), "🔎 [국내주식·가온] 미해결 연구 점검\n기준 시각: 2026-08-16 18:00 KST\n\n뉴스 기반 후속 조치가 필요한 연구는 없습니다.")
 
 
 class DailyBriefingSchedulerTests(unittest.TestCase):
