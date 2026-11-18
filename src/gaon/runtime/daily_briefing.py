@@ -733,6 +733,7 @@ class DailyBriefingRuntimeWorker:
         now_factory: Callable[[], str] | None = None,
         research_mission_provider: Callable[[], ResearchMission | None] | None = None,
         audit_records_provider: Callable[[], tuple[object, ...]] | None = None,
+        news_items_provider: Callable[[], tuple[NewsIntelligenceItem, ...]] | None = None,
     ) -> None:
         self._config = config
         self._repository = repository
@@ -743,6 +744,7 @@ class DailyBriefingRuntimeWorker:
             lambda: latest_research_mission_from_connection(self._repository._connection)
         )
         self._audit_records_provider = audit_records_provider or self._default_audit_records
+        self._news_items_provider = news_items_provider or (lambda: _default_news_items(self._now_factory()))
 
     def _default_audit_records(self) -> tuple[object, ...]:
         from gaon.runtime.llm_tools import SQLiteToolAuditRepository
@@ -764,7 +766,11 @@ class DailyBriefingRuntimeWorker:
                 self._repository,
                 client,
                 chat_id=self._config.telegram_allowed_chat_ids[0],
-                compose_pre_market=lambda: _compose_runtime_pre_market(now, research_mission_provider=self._research_mission_provider),
+                compose_pre_market=lambda: _compose_runtime_pre_market(
+                    now,
+                    research_mission_provider=self._research_mission_provider,
+                    news_items_provider=self._news_items_provider,
+                ),
                 compose_post_market=lambda: _compose_runtime_post_market(
                     now,
                     research_mission_provider=self._research_mission_provider,
@@ -896,13 +902,28 @@ def _next_daily_utc(now: str, hhmm: str, tz_name: str) -> str:
     return candidate.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _default_news_items(now: str) -> tuple[NewsIntelligenceItem, ...]:
+    from gaon.runtime.briefing_news import collect_pre_market_news
+
+    return collect_pre_market_news(now)
+
+
 def _compose_runtime_pre_market(
     now: str,
     *,
     research_mission_provider: Callable[[], ResearchMission | None] | None = None,
+    news_items_provider: Callable[[], tuple[NewsIntelligenceItem, ...]] | None = None,
 ) -> str:
     mission = research_mission_provider() if research_mission_provider else None
-    return render_pre_market_briefing_ko(compose_pre_market_briefing(generated_at=now, market="KOSPI", research_mission=mission))
+    news_items: tuple[NewsIntelligenceItem, ...] = ()
+    if news_items_provider is not None:
+        try:
+            news_items = tuple(news_items_provider())
+        except Exception:  # noqa: BLE001 - 뉴스 실패가 브리핑 발송을 막지 않는다.
+            news_items = ()
+    return render_pre_market_briefing_ko(
+        compose_pre_market_briefing(generated_at=now, market="KOSPI", news_items=news_items, research_mission=mission)
+    )
 
 
 def _runtime_unresolved_review(audit_records_provider) -> Mapping[str, object]:
